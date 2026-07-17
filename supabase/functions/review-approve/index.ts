@@ -807,14 +807,36 @@ async function ensureLeaseReviewDrafts(
         // Re-run scenario: overwrite the stale draft's extracted fields with
         // the fresh pipeline output, but only while the lease is still "draft"
         // (i.e. the reviewer hasn't approved/rejected it yet).
-        const fullPayload = buildLeaseReviewDraftPayload(fileRecord, row, reviewedOutput, user, now, rowIndex);
+        //
+        // Azure+Vertex Phase 4E (local implementation): a re-run must never
+        // silently wipe a reviewer's prior field-by-field decisions.
+        // extraction_data is still rebuilt from scratch every time (so
+        // untouched automated fields keep refreshing from the fresh
+        // extraction) but the existing extraction_data.field_reviews value
+        // is read first and overlaid back onto the fresh payload afterward.
+        // field_reviews is confirmed (by reading every migration that
+        // targets an extraction_data sub-key) to be the SOLE human-owned key
+        // inside extraction_data — no other sub-key is written by any RPC.
+        const { data: existingLeaseRow } = await supabaseAdmin
+          .from("leases")
+          .select("extraction_data")
+          .eq("id", existingLeaseId)
+          .maybeSingle();
+        const existingFieldReviews = existingLeaseRow?.extraction_data?.field_reviews;
+
+        const fullPayload = buildLeaseReviewDraftPayload(fileRecord, row, reviewedOutput, user, now, rowIndex, existingFieldReviews);
         const { org_id: _o, created_by: _cb, created_at: _ca, status: _s, ...patchFields } = fullPayload as any;
         await supabaseAdmin
           .from("leases")
           .update({ ...patchFields, updated_at: now })
           .eq("id", existingLeaseId)
           .eq("status", "draft");
-        console.log(`[review-approve] Updated existing draft lease ${existingLeaseId} with fresh extraction data`);
+        console.log(
+          `[review-approve] Updated existing draft lease ${existingLeaseId} with fresh extraction data` +
+          (existingFieldReviews && Object.keys(existingFieldReviews).length > 0
+            ? ` (preserved ${Object.keys(existingFieldReviews).length} existing reviewer field_reviews)`
+            : ""),
+        );
       }
       await syncLeaseWorkflowArtifacts(
         supabaseAdmin,
@@ -912,6 +934,7 @@ function buildLeaseReviewDraftPayload(
   user: any,
   now: string,
   rowIndex = 0,
+  existingFieldReviews?: Record<string, unknown> | null,
 ) {
   // Merge confidence sources: per-row field confidence (from reviewer audit)
   // plus the workflow's per-field confidence_score. The workflow scores are
@@ -1054,6 +1077,14 @@ function buildLeaseReviewDraftPayload(
       extraction_debug: extractionDebug,
       reviewed_at: reviewedOutput?.reviewed_at ?? now,
       reviewed_by: reviewedOutput?.reviewed_by ?? user.id,
+      // Preserve prior reviewer decisions exactly across an automated
+      // re-run — see the allowUpdate call site's comment. Only overlaid
+      // when the caller actually found an existing non-empty value; a
+      // fresh/first-time draft build (existingFieldReviews undefined) does
+      // not add this key at all, matching pre-Phase-4E payload shape.
+      ...(existingFieldReviews && Object.keys(existingFieldReviews).length > 0
+        ? { field_reviews: existingFieldReviews }
+        : {}),
     },
     confidence_score: averageConfidence(confidenceScores),
     low_confidence_fields: lowConfidenceFields,
@@ -1833,3 +1864,8 @@ function humanizeFieldName(fieldName: string): string {
     .replace(/_/g, " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
+
+// Test hook (same pattern as lease-extraction-worker/index.ts's __test__).
+export const __test__ = {
+  buildLeaseReviewDraftPayload,
+};

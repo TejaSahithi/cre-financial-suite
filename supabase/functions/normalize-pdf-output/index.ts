@@ -26,6 +26,7 @@ import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { isInternalCall } from "../_shared/internal-auth.ts";
 import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
 import { runVertexFactLedgerPipeline } from "../_shared/extraction/vertex-fact-ledger/orchestrator.ts";
+import { runBusinessExtraction } from "../_shared/extraction/business-extraction-orchestrator.ts";
 import { isAzureLayoutOutput } from "../_shared/extraction/extraction-provider.ts";
 import { getFieldGroups, getSchema } from "../_shared/extraction/schemas.ts";
 import { buildLeaseWorkflowAbstraction } from "../_shared/extraction/lease-workflow.ts";
@@ -123,17 +124,164 @@ function buildPipelineLayoutInput(
  * request can never set it. Used for one-off live provider comparisons
  * without making vertex_fact_ledger the project's live default.
  */
+// Azure+Vertex Phase 4E (local implementation): adds vertex_primary_legacy_fallback
+// as a new, opt-in-only mode. The project default is unchanged -- an unset
+// or unrecognized BUSINESS_EXTRACTION_PROVIDER still resolves to legacy_hybrid.
 function resolveBusinessExtractionProvider(
   internalDebugOverride?: string | null,
-): "legacy_hybrid" | "vertex_fact_ledger" {
+): "legacy_hybrid" | "vertex_fact_ledger" | "vertex_primary_legacy_fallback" {
+  const RECOGNIZED = new Set(["legacy_hybrid", "vertex_fact_ledger", "vertex_primary_legacy_fallback"]);
   const override = String(internalDebugOverride ?? "").trim().toLowerCase();
-  if (override === "vertex_fact_ledger" || override === "legacy_hybrid") {
-    return override;
+  if (RECOGNIZED.has(override)) {
+    return override as "legacy_hybrid" | "vertex_fact_ledger" | "vertex_primary_legacy_fallback";
   }
   const raw = String(Deno.env.get("BUSINESS_EXTRACTION_PROVIDER") ?? "").trim().toLowerCase();
-  return raw === "vertex_fact_ledger" ? "vertex_fact_ledger" : "legacy_hybrid";
+  return RECOGNIZED.has(raw) ? (raw as "legacy_hybrid" | "vertex_fact_ledger" | "vertex_primary_legacy_fallback") : "legacy_hybrid";
 }
 
+/**
+ * Azure+Vertex Phase 4E (local implementation): local-only, test-only mock
+ * injection for the business-extraction orchestrator's Vertex call. Never a
+ * production capability. Requires all gates simultaneously:
+ *   (a) isInternalCall(req) -- existing internal-auth check
+ *   (b) ENABLE_LOCAL_PROVIDER_MOCKS=true -- explicit opt-in env var
+ *   (c) DISABLE_EXTERNAL_PROVIDER_CALLS=true -- provider kill switch
+ *   (d) SUPABASE_URL is loopback/localhost, or it is the local Supabase Docker
+ *       hostname kong:8000 plus LOCAL_SUPABASE_RUNTIME=true
+ * `kong` alone is not proof of locality: a remote self-hosted stack could use
+ * the same internal hostname. If mocks are requested/enabled without the full
+ * gate, the request is rejected rather than silently making a real call.
+ */
+function envFlagEnabled(name: string): boolean {
+  return String(Deno.env.get(name) ?? "").toLowerCase() === "true";
+}
+
+function externalProviderCallsDisabled(): boolean {
+  return envFlagEnabled("DISABLE_EXTERNAL_PROVIDER_CALLS");
+}
+
+function localProviderMocksEnabled(): boolean {
+  return envFlagEnabled("ENABLE_LOCAL_PROVIDER_MOCKS");
+}
+
+function explicitLocalRuntimeMarkerEnabled(): boolean {
+  return envFlagEnabled("LOCAL_SUPABASE_RUNTIME");
+}
+
+function isLocalSupabaseUrl(): boolean {
+  const raw = String(Deno.env.get("SUPABASE_URL") ?? "").trim();
+  try {
+    const host = new URL(raw).hostname.toLowerCase();
+    return host === "127.0.0.1" || host === "localhost" ||
+      (host === "kong" && explicitLocalRuntimeMarkerEnabled());
+  } catch {
+    return false;
+  }
+}
+function resolveMockVertexScenario(req: Request, body: Record<string, unknown>, requestedProvider?: string): string | undefined {
+  const mocksEnabled = localProviderMocksEnabled();
+  const requestedScenario = isInternalCall(req) ? String((body as any)?.debug_vertex_mock_scenario ?? "").trim() : "";
+
+  if (!mocksEnabled) {
+    if (requestedScenario) {
+      // A caller asked for a mock but mocks are not enabled -- fail loudly
+      // rather than silently making a real call with an ignored parameter.
+      throw new Error("debug_vertex_mock_scenario was provided but ENABLE_LOCAL_PROVIDER_MOCKS is not set to true");
+    }
+    return undefined;
+  }
+
+  if (!externalProviderCallsDisabled()) {
+    throw new Error("ENABLE_LOCAL_PROVIDER_MOCKS=true also requires DISABLE_EXTERNAL_PROVIDER_CALLS=true");
+  }
+
+  if (!isLocalSupabaseUrl()) {
+    // Fail-closed: mocks requested/enabled in a configuration that is not
+    // provably local. Never silently proceed with a real provider call.
+    throw new Error("ENABLE_LOCAL_PROVIDER_MOCKS=true is only permitted against a verified local Supabase runtime (127.0.0.1, localhost, or kong:8000 with LOCAL_SUPABASE_RUNTIME=true)");
+  }
+
+  const disableExternalCalls = true;
+  if (!requestedScenario) {
+    if (disableExternalCalls && requestedProvider !== "legacy_hybrid") {
+      throw new Error("DISABLE_EXTERNAL_PROVIDER_CALLS=true requires a valid debug_vertex_mock_scenario on every internal call");
+    }
+    return undefined;
+  }
+
+  const VALID_SCENARIOS = new Set([
+    "success", "timeout", "rate_limited", "server_error", "malformed_response",
+    "empty_extraction", "auth_error", "low_evidence", "conflicting_facts",
+  ]);
+  if (!VALID_SCENARIOS.has(requestedScenario)) {
+    throw new Error(`Unrecognized debug_vertex_mock_scenario: ${requestedScenario}`);
+  }
+  return requestedScenario;
+}
+
+function resolveLocalDebugDelayMs(req: Request, body: Record<string, unknown>, key: string): number {
+  if (!isInternalCall(req) || !localProviderMocksEnabled() || !externalProviderCallsDisabled() || !isLocalSupabaseUrl()) return 0;
+  const raw = Number((body as any)?.[key] ?? 0);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.min(Math.floor(raw), 5000);
+}
+
+function delayMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function stampBusinessExtractionPersistedAt(result: { metadata?: Record<string, unknown> }, persistedAt: string): void {
+  const metadata = (result.metadata ?? {}) as Record<string, unknown>;
+  const provenance = (metadata as any).provenance;
+  if (!provenance || typeof provenance !== "object") return;
+  result.metadata = {
+    ...metadata,
+    provenance: {
+      ...provenance,
+      result_persisted_at: persistedAt,
+    },
+  };
+}
+
+function readBusinessExtractionProvenance(value: unknown): Record<string, unknown> | null {
+  const provenance = (value as any)?.metadata?.provenance;
+  return provenance && typeof provenance === "object" ? provenance as Record<string, unknown> : null;
+}
+
+function readDurableBusinessExtractionProvenance(row: Record<string, unknown> | null | undefined): Record<string, unknown> | null {
+  return readBusinessExtractionProvenance((row as any)?.normalized_output) ?? readBusinessExtractionProvenance((row as any)?.ui_review_payload);
+}
+
+function compareRaceWinnerMetadata(current: Record<string, unknown> | null, winner: Record<string, unknown> | null): {
+  compatible: boolean;
+  reason: string;
+  currentAttemptId: string | null;
+  winnerAttemptId: string | null;
+} {
+  const currentAttemptId = current?.attempt_id != null ? String(current.attempt_id) : null;
+  const winnerAttemptId = winner?.attempt_id != null ? String(winner.attempt_id) : null;
+  if (!current || !winner) {
+    return { compatible: false, reason: "missing_provenance", currentAttemptId, winnerAttemptId };
+  }
+  if (!currentAttemptId || !winnerAttemptId) {
+    return { compatible: false, reason: "missing_attempt_id", currentAttemptId, winnerAttemptId };
+  }
+  const keys = [
+    "correlation_id",
+    "requested_provider",
+    "semantic_schema_version",
+    "canonical_layout_schema_version",
+    "source_content_hash",
+  ];
+  for (const key of keys) {
+    const currentValue = current[key];
+    const winnerValue = winner[key];
+    if (currentValue == null || winnerValue == null || String(currentValue) !== String(winnerValue)) {
+      return { compatible: false, reason: `mismatch_${key}`, currentAttemptId, winnerAttemptId };
+    }
+  }
+  return { compatible: true, reason: "compatible_attempt_schema_hash", currentAttemptId, winnerAttemptId };
+}
 function toExtractionModuleType(moduleType: string): ExtractionModuleType {
   switch (moduleType) {
     case "leases": return "lease";
@@ -1884,21 +2032,19 @@ Deno.serve(async (req: Request) => {
             page_count: 1,
             extraction_method: "dry_run",
           };
-          const result = dryRunProvider === "vertex_fact_ledger"
-            ? await runVertexFactLedgerPipeline({
-              moduleType: "lease",
-              fileName: "dry_run_sample.txt",
-              docling: dryRunDocling,
-              documentSubtype: null,
-            })
-            : await runExtractionPipeline(
-              {
-                moduleType: "lease",
-                fileName: "dry_run_sample.txt",
-                docling: dryRunDocling,
-              },
-              { maxLLMChunks: 1, chunkSize: 3000, llmTemperature: 0 },
-            );
+          // Azure+Vertex Phase 4E: routed through the same orchestrator as the
+          // real path so a dryRunProvider of vertex_primary_legacy_fallback
+          // is handled correctly instead of silently falling to legacy (the
+          // old two-branch ternary here had no third case).
+          const result = await runBusinessExtraction({
+            requestedProvider: dryRunProvider,
+            moduleType: "lease",
+            fileName: "dry_run_sample.txt",
+            docling: dryRunDocling,
+            documentSubtype: null,
+            correlationId: "dry_run",
+          });
+      stampBusinessExtractionPersistedAt(result, new Date().toISOString());
           extraction = {
             rows: result.rows?.length ?? 0,
             method: result.method ?? "unknown",
@@ -2273,6 +2419,9 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    const beforeValidatingDelayMs = resolveLocalDebugDelayMs(req, body as Record<string, unknown>, "debug_before_validating_delay_ms");
+    if (beforeValidatingDelayMs > 0) await delayMs(beforeValidatingDelayMs);
+
     // Transition to 'validating' while the pipeline runs.
     // (pdf_parsed → validating is allowed in the FSM.)
     const { error: validatingStatusError } = await setStatus(supabaseAdmin, file_id, "validating");
@@ -2288,31 +2437,24 @@ Deno.serve(async (req: Request) => {
       // Run the canonical extraction pipeline.
       // Rule → Table → LLM(missing only) → Merge → Validate → Calculate.
       const pipelineDocling = buildPipelineLayoutInput(fileRecord.docling_raw as Record<string, unknown> | null);
-      const result = businessExtractionProvider === "vertex_fact_ledger"
-        ? await runVertexFactLedgerPipeline({
-          moduleType: extractionModuleType,
-          fileName,
-          docling: pipelineDocling,
-          documentSubtype: fileRecord.document_subtype ?? null,
-          ...(fileBase64 && !azureLayoutMode ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
-        })
-        : await runExtractionPipeline(
-          {
-            moduleType: extractionModuleType,
-            fileName,
-            docling: pipelineDocling,
-            ...(fileBase64 && !azureLayoutMode ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
-          },
-          {
-            // maxLLMChunks: 50 — Increased per user request to ensure the entire document
-            // is read by the LLM so deep expense/CAM clauses are not missed.
-            // Note: Very large leases may occasionally hit the Edge Function 546
-            // memory limit due to accumulating Gemini response buffers.
-            maxLLMChunks: 50,
-            chunkSize: 3000,
-            llmTemperature: 0,
-          },
-        );
+      // Azure+Vertex Phase 4E (local implementation): single call through the
+      // business-extraction orchestrator replaces the direct provider
+      // ternary. Returns the exact same ExtractionPipelineResult shape both
+      // providers already produced -- buildReviewPayload/buildLeaseWorkflowAbstraction/
+      // persistence below are unmodified and unaware this replaced a ternary.
+      const mockVertexScenario = resolveMockVertexScenario(req, body as Record<string, unknown>, businessExtractionProvider);
+      const result = await runBusinessExtraction({
+        requestedProvider: businessExtractionProvider,
+        moduleType: extractionModuleType,
+        fileName,
+        docling: pipelineDocling,
+        documentSubtype: fileRecord.document_subtype ?? null,
+        ...(fileBase64 && !azureLayoutMode ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
+        correlationId: file_id,
+        canonicalLayoutSchemaVersion: (fileRecord.docling_raw as any)?.layout_contract_version ?? null,
+        ...(mockVertexScenario ? { mockVertexScenario } : {}),
+      });
+      stampBusinessExtractionPersistedAt(result, new Date().toISOString());
       console.log(`[normalize-pdf-output] STAGE pipeline_done file_id=${file_id} rows=${result.rows?.length ?? 0} method=${result.method} provider=${businessExtractionProvider}`);
       console.log(
         `[normalize-pdf-output] core_extraction_done file_id=${file_id} rows=${result.rows?.length ?? 0} ` +
@@ -2473,6 +2615,8 @@ Deno.serve(async (req: Request) => {
       // non-fallback payload and completes the job instead of overwriting it
       // with manual_review_fallback.
       console.log(`[normalize-pdf-output] STAGE minimal_payload_start file_id=${file_id}`);
+      const beforeMinimalPersistDelayMs = resolveLocalDebugDelayMs(req, body as Record<string, unknown>, "debug_before_minimal_persist_delay_ms");
+      if (beforeMinimalPersistDelayMs > 0) await delayMs(beforeMinimalPersistDelayMs);
       const minimalPayload = buildMinimalReviewPayload({
         fileId: file_id,
         fileName,
@@ -2502,6 +2646,25 @@ Deno.serve(async (req: Request) => {
         .filter((f: any) => f.status === "auto_populated" || f.status === "pending_enrichment").length;
       const minimalValueCount = (minimalPayload.records[0]?.standard_fields ?? [])
         .filter((f: any) => f.value != null && f.value !== "").length;
+      // Azure+Vertex Phase 4E (local implementation): CAS token-chaining.
+      // The minimal persist above and the final persist below are BOTH in
+      // this same invocation and both go through setStatus(), which
+      // unconditionally sets updated_at -- so a CAS token captured once at
+      // request-start would spuriously "lose" against this invocation's OWN
+      // earlier write, a false-positive race, not a real one (confirmed by
+      // reading setStatus()'s patch construction this session). Capture the
+      // token freshly, right after the write whose result it will guard.
+      let casExpectedUpdatedAt: string | null = null;
+      if (!minimalPersistError) {
+        const { data: freshRow } = await supabaseAdmin
+          .from("uploaded_files")
+          .select("updated_at")
+          .eq("id", file_id)
+          .maybeSingle();
+        casExpectedUpdatedAt = freshRow?.updated_at ?? null;
+      }
+      const afterMinimalPersistDelayMs = resolveLocalDebugDelayMs(req, body as Record<string, unknown>, "debug_after_minimal_persist_delay_ms");
+      if (afterMinimalPersistDelayMs > 0) await delayMs(afterMinimalPersistDelayMs);
       if (minimalPersistError) {
         // Non-fatal — log and continue to the full enrichment pass below.
         // Worst case this run loses the early-persist safety net; extraction
@@ -2769,6 +2932,73 @@ Deno.serve(async (req: Request) => {
       // the UI can stop showing the "enriching evidence" affordance.
       (uiReviewPayload as Record<string, unknown>).enrichment_status = "completed";
 
+      // Azure+Vertex Phase 4E (local implementation): conditional-write CAS
+      // guard, chained from the minimal persist's own updated_at (not a
+      // request-start value - see the capture site above). Zero affected rows
+      // is always treated as a real race. A durable result is reused only when
+      // it is meaningful and its attempt/correlation/provider/schema/hash
+      // provenance matches this attempt; incompatible race winners are not
+      // overwritten.
+      if (casExpectedUpdatedAt) {
+        const { data: casClaim, error: casClaimError } = await supabaseAdmin
+          .from("uploaded_files")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("id", file_id)
+          .eq("updated_at", casExpectedUpdatedAt)
+          .select("id")
+          .maybeSingle();
+        if (casClaimError || !casClaim) {
+          const { data: raceRow } = await supabaseAdmin
+            .from("uploaded_files")
+            .select("ui_review_payload, parsed_data, normalized_output")
+            .eq("id", file_id)
+            .maybeSingle();
+          const currentProvenance = readBusinessExtractionProvenance(result);
+          const winnerProvenance = readDurableBusinessExtractionProvenance(raceRow as Record<string, unknown> | null);
+          const raceComparison = compareRaceWinnerMetadata(currentProvenance, winnerProvenance);
+          const raceRowHasMeaningfulValues = raceRow ? uploadedFileRowHasMeaningfulValues(raceRow) : false;
+          if (raceRowHasMeaningfulValues && raceComparison.compatible) {
+            console.warn(
+              `[normalize-pdf-output] cas_race_detected_reusing_compatible_durable_result file_id=${file_id} ` +
+              `winner_attempt_id=${raceComparison.winnerAttemptId} current_attempt_id=${raceComparison.currentAttemptId} ` +
+              `reason=${raceComparison.reason}`,
+            );
+            return jsonResponse({
+              error: false,
+              file_id,
+              processing_status: fileRecord.status,
+              module_type: moduleType,
+              race_lost: true,
+              race_winner_attempt_id: raceComparison.winnerAttemptId,
+              current_attempt_id: raceComparison.currentAttemptId,
+              race_compare_reason: raceComparison.reason,
+              message: "A compatible concurrent normalization already completed for this file; this attempt's result was discarded to avoid overwriting it.",
+            });
+          }
+          if (raceRowHasMeaningfulValues) {
+            console.warn(
+              `[normalize-pdf-output] cas_race_detected_incompatible_durable_result file_id=${file_id} ` +
+              `reason=${raceComparison.reason} winner_attempt_id=${raceComparison.winnerAttemptId} ` +
+              `current_attempt_id=${raceComparison.currentAttemptId}; refusing to overwrite`,
+            );
+            return jsonResponse({
+              error: true,
+              file_id,
+              error_code: "CAS_RACE_INCOMPATIBLE_RESULT",
+              race_lost: true,
+              race_winner_attempt_id: raceComparison.winnerAttemptId,
+              current_attempt_id: raceComparison.currentAttemptId,
+              race_compare_reason: raceComparison.reason,
+              message: "A concurrent normalization wrote a non-compatible result for this file; this attempt was discarded to avoid overwriting it.",
+            }, 409);
+          }
+          console.warn(
+            `[normalize-pdf-output] cas_race_detected_no_durable_result file_id=${file_id} reason=${raceComparison.reason} - ` +
+            `proceeding with this attempt's own write (no meaningful compatible durable result found to reuse)`,
+          );
+        }
+      }
+
       const { error: validatedErr } = await setStatus(
         supabaseAdmin,
         file_id,
@@ -2873,4 +3103,8 @@ export const __test__ = {
   rejectMarkupValue,
   buildReviewField,
   resolveBusinessExtractionProvider,
+  resolveMockVertexScenario,
+  isLocalSupabaseUrl,
+  localProviderMocksEnabled,
+  externalProviderCallsDisabled,
 };

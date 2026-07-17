@@ -33,6 +33,7 @@ import { mapFactsToStandardFields } from "./fact-field-mapper.ts";
 import { surfaceDynamicFacts } from "./dynamic-fact-surfacer.ts";
 import { computeProfileApprovalBlockers } from "./approval-blockers.ts";
 import type { VertexFactLedgerInput, VertexFactLedgerOptions } from "./types.ts";
+import { VertexProviderError } from "../../vertex-ai.ts";
 
 function emptyMetadata(processingTimeMs: number) {
   return {
@@ -46,13 +47,28 @@ function emptyMetadata(processingTimeMs: number) {
   };
 }
 
-function fallbackResult(warning: string, startTime: number): ExtractionPipelineResult {
+function fallbackResult(
+  warning: string,
+  startTime: number,
+  failureClassification?: string,
+  failureHttpStatus?: number,
+): ExtractionPipelineResult {
   return {
     rows: [],
     method: "fallback",
     warnings: [warning],
     validationErrors: [],
-    metadata: emptyMetadata(Date.now() - startTime),
+    metadata: {
+      ...emptyMetadata(Date.now() - startTime),
+      // Azure+Vertex Phase 4E: structured, not string-parsed, failure signal
+      // for the business-extraction acceptance/fallback-eligibility layer.
+      extractionDebug: {
+        vertex_fact_ledger: {
+          failure_classification: failureClassification ?? "unknown",
+          failure_http_status: failureHttpStatus ?? null,
+        },
+      },
+    },
   };
 }
 
@@ -110,6 +126,7 @@ export async function runVertexFactLedgerPipeline(
       fileBase64: input.fileBase64 ?? null,
       fileMimeType: input.fileMimeType ?? null,
       fileModeOverride: options.fileMode,
+      deadlineAt: options.deadlineAt,
     });
 
     // Phase 6 Task E: when the canonical layout index was actually used,
@@ -190,6 +207,13 @@ export async function runVertexFactLedgerPipeline(
             // Phase 6 Task G: diagnostic-only, not read by any business logic.
             document_index_source: indexResolution.indexSource,
             document_index_fallback_reason: indexResolution.fallbackReason,
+            // Azure+Vertex Phase 4E: structured failure signal, only present
+            // when the chunk-aggregation in fact-ledger-extractor.ts decided
+            // the document produced nothing usable overall (never set merely
+            // because some individual chunks failed while others succeeded).
+            ...(factLedger.failureClassification
+              ? { failure_classification: factLedger.failureClassification, failure_http_status: factLedger.failureHttpStatus ?? null }
+              : {}),
             // Phase 6 Task E: available whenever the canonical layout index
             // ran, so a future phase can persist block-level evidence into
             // document_claim_evidence without re-deriving it. Empty array
@@ -210,9 +234,13 @@ export async function runVertexFactLedgerPipeline(
       },
     };
   } catch (error) {
+    const classification = error instanceof VertexProviderError ? error.classification : undefined;
+    const httpStatus = error instanceof VertexProviderError ? error.httpStatus : undefined;
     return fallbackResult(
       `Vertex fact ledger pipeline failed: ${(error as Error)?.message ?? error}`,
       startTime,
+      classification,
+      httpStatus,
     );
   }
 }

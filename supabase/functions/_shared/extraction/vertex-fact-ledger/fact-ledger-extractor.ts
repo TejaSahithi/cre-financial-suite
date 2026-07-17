@@ -17,7 +17,8 @@
  * Dedup via evidence-index.ts's existing normalizeForPageMatch().
  */
 
-import { callVertexAIJSON, callVertexAIFileJSON } from "../../vertex-ai.ts";
+import { callVertexAIJSON, callVertexAIFileJSON, VertexProviderError } from "../../vertex-ai.ts";
+import type { VertexFailureClassification } from "../../vertex-ai.ts";
 import { chunkDocument } from "../chunker.ts";
 import { normalizeForPageMatch, resolveVerifiedSourcePage } from "../evidence-index.ts";
 import { CLAUSE_DEFINITIONS } from "../lease-workflow.ts";
@@ -105,19 +106,53 @@ function dedupeFacts(facts: Fact[]): Fact[] {
   return result;
 }
 
+interface ChunkExtractionResult {
+  facts: Fact[];
+  warning: string | null;
+  /** Structured classification of what went wrong on THIS chunk/file-mode
+   *  call, if anything. Set alongside `warning`, never inferred later by
+   *  parsing the warning text. A `null` callVertexAIJSON return (either the
+   *  "empty model response" case or a malformed-JSON-after-repair-failure
+   *  case -- callVertexAIJSON does not itself distinguish the two) is
+   *  classified "malformed_response"; a non-null response that parses to
+   *  zero facts is the separate "empty_extraction" case. */
+  classification?: VertexFailureClassification;
+  httpStatus?: number;
+}
+
 async function extractFromChunk(
   chunkText: string,
   moduleType: ModuleType,
-): Promise<{ facts: Fact[]; warning: string | null }> {
+  deadlineAt?: number,
+): Promise<ChunkExtractionResult> {
   try {
     const response = await callVertexAIJSON<unknown>({
       systemPrompt: buildSystemPrompt(moduleType),
       userPrompt: chunkText,
       temperature: 0,
+      deadlineAt,
     });
-    return { facts: parseFactsResponse(response), warning: null };
+    if (response == null) {
+      return {
+        facts: [],
+        warning: "Fact ledger extraction returned no parseable JSON for one chunk",
+        classification: "malformed_response",
+      };
+    }
+    const facts = parseFactsResponse(response);
+    if (facts.length === 0) {
+      return { facts, warning: null, classification: "empty_extraction" };
+    }
+    return { facts, warning: null };
   } catch (error) {
-    return { facts: [], warning: `Fact ledger extraction failed for one chunk: ${(error as Error)?.message ?? error}` };
+    const classification = error instanceof VertexProviderError ? error.classification : "unknown";
+    const httpStatus = error instanceof VertexProviderError ? error.httpStatus : undefined;
+    return {
+      facts: [],
+      warning: `Fact ledger extraction failed for one chunk: ${(error as Error)?.message ?? error}`,
+      classification,
+      httpStatus,
+    };
   }
 }
 
@@ -125,7 +160,8 @@ async function extractFromFile(
   fileBase64: string,
   fileMimeType: string,
   moduleType: ModuleType,
-): Promise<{ facts: Fact[]; warning: string | null }> {
+  deadlineAt?: number,
+): Promise<ChunkExtractionResult> {
   try {
     const response = await callVertexAIFileJSON<unknown>({
       systemPrompt: buildSystemPrompt(moduleType),
@@ -133,11 +169,56 @@ async function extractFromFile(
       fileBase64,
       fileMimeType,
       temperature: 0,
+      deadlineAt,
     });
-    return { facts: parseFactsResponse(response), warning: null };
+    if (response == null) {
+      return {
+        facts: [],
+        warning: "Fact ledger file-mode extraction returned no parseable JSON",
+        classification: "malformed_response",
+      };
+    }
+    const facts = parseFactsResponse(response);
+    if (facts.length === 0) {
+      return { facts, warning: null, classification: "empty_extraction" };
+    }
+    return { facts, warning: null };
   } catch (error) {
-    return { facts: [], warning: `Fact ledger file-mode extraction failed: ${(error as Error)?.message ?? error}` };
+    const classification = error instanceof VertexProviderError ? error.classification : "unknown";
+    const httpStatus = error instanceof VertexProviderError ? error.httpStatus : undefined;
+    return {
+      facts: [],
+      warning: `Fact ledger file-mode extraction failed: ${(error as Error)?.message ?? error}`,
+      classification,
+      httpStatus,
+    };
   }
+}
+
+// Round-3 correction: fixed priority order for picking the DOMINANT failure
+// classification across multiple chunks -- auth_error always wins (a bad
+// credential must never be masked by an unrelated chunk's timeout), then
+// roughly most-to-least "this run is unlikely to succeed on retry".
+const CLASSIFICATION_PRIORITY: VertexFailureClassification[] = [
+  "auth_error",
+  "rate_limited",
+  "server_error",
+  "model_unavailable" as VertexFailureClassification,
+  "network_error",
+  "budget_exhausted",
+  "malformed_response",
+  "empty_extraction" as VertexFailureClassification,
+  "timeout",
+  "unknown",
+];
+
+function dominantClassification(classifications: Array<VertexFailureClassification | undefined>): VertexFailureClassification | undefined {
+  const present = classifications.filter((c): c is VertexFailureClassification => !!c);
+  if (present.length === 0) return undefined;
+  for (const candidate of CLASSIFICATION_PRIORITY) {
+    if (present.includes(candidate)) return candidate;
+  }
+  return present[0];
 }
 
 /**
@@ -154,19 +235,29 @@ export async function extractFactLedger(args: {
    *  by tests and by the orchestrator's VertexFactLedgerOptions.fileMode.
    *  Undefined defers to the env flag (default false). */
   fileModeOverride?: boolean;
+  /** Absolute epoch-ms deadline forwarded to every Vertex call this
+   *  extraction makes. See VertexAIOptions.deadlineAt. */
+  deadlineAt?: number;
 }): Promise<FactLedgerResult> {
-  const { docIndex, moduleType, fileBase64, fileMimeType, fileModeOverride } = args;
+  const { docIndex, moduleType, fileBase64, fileMimeType, fileModeOverride, deadlineAt } = args;
   const warnings: string[] = [];
 
   const fileModeEnabled = fileModeOverride ?? envFlagEnabled("VERTEX_FACT_LEDGER_FILE_MODE");
   if (fileModeEnabled && fileBase64 && fileMimeType) {
-    const { facts, warning } = await extractFromFile(fileBase64, fileMimeType, moduleType);
-    if (warning) warnings.push(warning);
-    const grounded = dedupeFacts(facts).map((fact) => ({
+    const result = await extractFromFile(fileBase64, fileMimeType, moduleType, deadlineAt);
+    if (result.warning) warnings.push(result.warning);
+    const grounded = dedupeFacts(result.facts).map((fact) => ({
       ...fact,
       sourcePage: resolveVerifiedSourcePage(docIndex.doclingRaw as Record<string, unknown>, fact.sourceText, fact.sourcePage),
     }));
-    return { facts: grounded, warnings, chunksProcessed: 1 };
+    // Single "chunk" (the whole file) — dominant-classification logic still
+    // applies: only surface a classification when nothing usable came out.
+    return {
+      facts: grounded,
+      warnings,
+      chunksProcessed: 1,
+      ...(grounded.length === 0 ? { failureClassification: result.classification, failureHttpStatus: result.httpStatus } : {}),
+    };
   }
 
   if (!docIndex.fullText || docIndex.fullText.trim().length < 10) {
@@ -176,12 +267,23 @@ export async function extractFactLedger(args: {
   const chunks = chunkDocument(docIndex.doclingRaw as any).slice(0, MAX_CHUNKS);
   const allFacts: Fact[] = [];
   let chunksProcessed = 0;
+  let successfulChunkCount = 0;
+  let failedChunkCount = 0;
+  const chunkClassifications: Array<VertexFailureClassification | undefined> = [];
+  let lastHttpStatus: number | undefined;
 
   for (const chunk of chunks) {
-    const { facts, warning } = await extractFromChunk(chunk.text, moduleType);
-    if (warning) warnings.push(warning);
+    const result = await extractFromChunk(chunk.text, moduleType, deadlineAt);
+    if (result.warning) warnings.push(result.warning);
     chunksProcessed += 1;
-    for (const fact of facts) {
+    if (result.facts.length > 0) {
+      successfulChunkCount += 1;
+    } else {
+      failedChunkCount += 1;
+      chunkClassifications.push(result.classification);
+      if (result.httpStatus != null) lastHttpStatus = result.httpStatus;
+    }
+    for (const fact of result.facts) {
       allFacts.push({
         ...fact,
         sourcePage: fact.sourcePage ?? resolveVerifiedSourcePage(
@@ -193,5 +295,26 @@ export async function extractFactLedger(args: {
     }
   }
 
-  return { facts: dedupeFacts(allFacts), warnings, chunksProcessed };
+  const dedupedFacts = dedupeFacts(allFacts);
+  // Round-3 correction (item 1): some chunks failing while meaningful facts
+  // remain overall must NOT surface a failure classification -- that would
+  // let the business-extraction acceptance layer treat a partially-degraded
+  // but genuinely usable extraction as fallback-eligible. A classification
+  // is only ever surfaced when the WHOLE document produced nothing usable.
+  const overallFailed = dedupedFacts.length === 0 && failedChunkCount > 0;
+
+  return {
+    facts: dedupedFacts,
+    warnings,
+    chunksProcessed,
+    ...(overallFailed
+      ? { failureClassification: dominantClassification(chunkClassifications), failureHttpStatus: lastHttpStatus }
+      : {}),
+  };
 }
+
+// Test hook (same pattern as other _shared/extraction modules).
+export const __test__ = {
+  dominantClassification,
+  CLASSIFICATION_PRIORITY,
+};

@@ -65,6 +65,12 @@ export interface FactLedgerResult {
   facts: Fact[];
   warnings: string[];
   chunksProcessed: number;
+  /** Structured classification of the LAST provider failure encountered
+   *  (if any) across all chunks/file-mode calls — set alongside `warnings`,
+   *  never inferred later by parsing the warning text. Undefined when no
+   *  provider call failed. See VertexFailureClassification in vertex-ai.ts. */
+  failureClassification?: import("../../vertex-ai.ts").VertexFailureClassification;
+  failureHttpStatus?: number;
 }
 
 // ── Field mapping ─────────────────────────────────────────────────────────────
@@ -109,4 +115,7 @@ export interface VertexFactLedgerOptions {
    *  against docIndex.fullText (built from the Azure-parsed docling_raw). */
   fileMode?: boolean;
   maxChunks?: number;
+  /** Absolute epoch-ms deadline forwarded to every callVertexAI(JSON) call
+   *  this pipeline run makes. See VertexAIOptions.deadlineAt. */
+  deadlineAt?: number;
 }

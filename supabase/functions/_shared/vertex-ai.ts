@@ -209,18 +209,37 @@ async function requestAccessTokenForServiceAccount(saKey: ServiceAccountKey): Pr
 
   const jwt = await signJWT(jwtPayload, saKey.private_key);
 
-  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion: jwt,
-    }),
-  });
+  let tokenRes: Response;
+  try {
+    assertExternalProviderCallsAllowed("Google OAuth token endpoint");
+    tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        assertion: jwt,
+      }),
+    });
+  } catch (fetchErr) {
+    // The OAuth token endpoint itself was unreachable -- a temporary network
+    // condition, not a credential problem. Fallback-eligible.
+    throw new VertexProviderError(
+      `Network error reaching Google OAuth token endpoint: ${(fetchErr as Error)?.message ?? fetchErr}`,
+      "network_error",
+    );
+  }
 
   if (!tokenRes.ok) {
     const err = await tokenRes.text().catch(() => "unknown");
-    throw new Error(`Failed to get Google access token: ${tokenRes.status} ${err}`);
+    const status = tokenRes.status;
+    // Azure+Vertex Phase 4E: distinguish a permanent credential/config
+    // problem (invalid_grant, malformed key, revoked SA -> 400/401/403) from
+    // a temporary token-service outage (429/5xx) -- only the latter is
+    // fallback-eligible; a bad credential must never silently fall back to
+    // legacy_hybrid and hide a real configuration defect.
+    const classification: VertexFailureClassification =
+      status === 429 ? "rate_limited" : status >= 500 ? "server_error" : "auth_error";
+    throw new VertexProviderError(`Failed to get Google access token: ${status} ${err}`, classification, status);
   }
 
   const tokenData = await tokenRes.json();
@@ -277,10 +296,12 @@ async function getAccessToken(): Promise<string> {
 
   const candidates = getServiceAccountCandidates();
   if (candidates.length === 0) {
-    throw new Error("Vertex AI service account is not configured");
+    // No credential configured at all -- permanent, not fallback-eligible.
+    throw new VertexProviderError("Vertex AI service account is not configured", "auth_error");
   }
 
   let lastError = "";
+  let lastClassification: VertexFailureClassification = "auth_error";
   for (const candidate of candidates) {
     try {
       const tokenData = await requestAccessTokenForServiceAccount(candidate.key);
@@ -292,11 +313,16 @@ async function getAccessToken(): Promise<string> {
       return _cachedToken.token;
     } catch (error) {
       lastError = error?.message ?? String(error);
+      lastClassification = error instanceof VertexProviderError ? error.classification : "auth_error";
       console.warn(`[vertex-ai] Credential source ${candidate.source} failed: ${lastError}`);
     }
   }
 
-  throw new Error(lastError || "All configured Vertex AI credentials failed");
+  // Propagate whichever classification the LAST attempted candidate failed
+  // with -- if every configured credential hit a temporary condition
+  // (network/rate-limited/server), the overall failure is temporary too and
+  // fallback-eligible; only genuinely bad/missing credentials stay auth_error.
+  throw new VertexProviderError(lastError || "All configured Vertex AI credentials failed", lastClassification);
 }
 
 export async function getGoogleCloudAccessToken(): Promise<string> {
@@ -311,6 +337,52 @@ export function getGoogleCloudProjectId(): string | null {
 // Vertex AI Gemini API call
 // ---------------------------------------------------------------------------
 
+// Azure+Vertex Phase 4E: structured failure classification so callers (the
+// business-extraction orchestrator's acceptance/fallback logic) never have
+// to infer what went wrong by parsing a free-text warning/error message.
+export type VertexFailureClassification =
+  | "timeout"
+  | "rate_limited"
+  | "server_error"
+  | "auth_error"
+  | "network_error"
+  | "budget_exhausted"
+  /** Every model/location combination in the sweep returned 404 -- distinct
+   *  from a single-attempt "unknown": this deployment has no working model
+   *  available, not a transient per-attempt failure. Fallback-eligible. */
+  | "model_unavailable"
+  /** Provider call succeeded but the response could not be parsed as JSON
+   *  even after the bounded repair attempt (or returned no content at all —
+   *  callVertexAIJSON does not itself distinguish the two). Fallback-eligible. */
+  | "malformed_response"
+  /** Provider call succeeded and parsed, but yielded zero meaningful facts —
+   *  a materially different signal from malformed_response for acceptance
+   *  evaluation. Fallback-eligible only when this is the ONLY signal (i.e.
+   *  no meaningful facts anywhere in the document), never merely because one
+   *  chunk was empty while others produced real facts. */
+  | "empty_extraction"
+  | "unknown";
+
+export class VertexProviderError extends Error {
+  classification: VertexFailureClassification;
+  httpStatus?: number;
+  constructor(message: string, classification: VertexFailureClassification, httpStatus?: number) {
+    super(message);
+    this.name = "VertexProviderError";
+    this.classification = classification;
+    this.httpStatus = httpStatus;
+  }
+}
+
+
+function assertExternalProviderCallsAllowed(providerName: string): void {
+  if (String(Deno.env.get("DISABLE_EXTERNAL_PROVIDER_CALLS") ?? "").toLowerCase() === "true") {
+    throw new VertexProviderError(
+      `External provider calls are disabled; refusing to contact ${providerName}`,
+      "network_error",
+    );
+  }
+}
 export interface VertexAIOptions {
   systemPrompt?: string;
   userPrompt: string;
@@ -319,6 +391,15 @@ export interface VertexAIOptions {
   temperature?: number;
   /** Response MIME type — "application/json" (default) or "text/plain" for raw text output */
   responseMimeType?: string;
+  /**
+   * Absolute epoch-ms deadline for the whole model/location sweep. Checked
+   * before each model/location attempt, and each request timeout is clamped to
+   * the remaining budget so an in-flight attempt is aborted when the configured
+   * budget expires. Callers that need a bounded total Vertex time (the
+   * business-extraction orchestrator) must set this; omitted, the sweep behaves
+   * exactly as before.
+   */
+  deadlineAt?: number;
 }
 
 export interface VertexAIFileOptions extends VertexAIOptions {
@@ -346,7 +427,10 @@ export interface VertexAIResponse {
 export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIResponse> {
   const projectId = Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID");
   if (!projectId) {
-    throw new Error("Neither VERTEX_PROJECT_ID nor GOOGLE_PROJECT_ID environment variable is set");
+    throw new VertexProviderError(
+      "Neither VERTEX_PROJECT_ID nor GOOGLE_PROJECT_ID environment variable is set",
+      "auth_error",
+    );
   }
 
   const primaryLocation = Deno.env.get("VERTEX_LOCATION") || Deno.env.get("GOOGLE_LOCATION") || "us-central1";
@@ -355,12 +439,42 @@ export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIRespo
   // Ordered list of (location, model) to try if primary fails with 404
   const attempts = buildVertexAttempts(primaryLocation, primaryModel);
 
-  const accessToken = await getAccessToken();
+  let accessToken: string;
+  try {
+    accessToken = await getAccessToken();
+  } catch (credErr) {
+    // getAccessToken() already throws a properly-classified VertexProviderError
+    // (auth_error for bad/missing credentials, network_error/rate_limited/
+    // server_error for a temporary token-service outage) -- propagate that
+    // classification unchanged rather than collapsing everything to auth_error.
+    if (credErr instanceof VertexProviderError) throw credErr;
+    throw new VertexProviderError(
+      `Vertex AI credentials error: ${(credErr as Error)?.message ?? credErr}`,
+      "auth_error",
+    );
+  }
   let lastError: Error | null = null;
   let consecutiveNetworkErrors = 0;
+  let notFoundCount = 0;
   const MAX_NETWORK_ERRORS = 2;
+  // Round-3 correction: a between-attempts deadline check alone can still
+  // overshoot by one full 30s request. Clamp each individual request's own
+  // timeout to whatever budget remains, so total elapsed time stays close to
+  // deadlineAt rather than deadlineAt + one more full attempt.
+  const DEFAULT_ATTEMPT_TIMEOUT_MS = 30000;
 
   for (const { loc, mod } of attempts) {
+    let attemptTimeoutMs = DEFAULT_ATTEMPT_TIMEOUT_MS;
+    if (opts.deadlineAt) {
+      const remainingMs = opts.deadlineAt - Date.now();
+      if (remainingMs <= 0) {
+        throw new VertexProviderError(
+          "Vertex AI attempt budget exhausted before all model/location combinations were tried",
+          "budget_exhausted",
+        );
+      }
+      attemptTimeoutMs = Math.min(DEFAULT_ATTEMPT_TIMEOUT_MS, remainingMs);
+    }
     try {
       console.log(`[vertex-ai] Trying ${mod} in ${loc}...`);
       const url = `https://${loc}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${loc}/publishers/google/models/${mod}:generateContent`;
@@ -378,6 +492,7 @@ export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIRespo
         requestBody.systemInstruction = { parts: [{ text: opts.systemPrompt }] };
       }
 
+      assertExternalProviderCallsAllowed("Vertex AI generateContent endpoint");
       const response = await fetch(url, {
         method: "POST",
         headers: {
@@ -385,7 +500,7 @@ export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIRespo
           "Authorization": `Bearer ${accessToken}`,
         },
         body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(attemptTimeoutMs),
       });
 
       if (response.ok) {
@@ -400,15 +515,26 @@ export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIRespo
 
       if (response.status === 404) {
         consecutiveNetworkErrors = 0;
+        notFoundCount++;
         console.warn(`[vertex-ai] 404 NOT FOUND: Project=${projectId}, Model=${mod}, Loc=${loc}, URL=${url}. Ensure Vertex AI API is enabled in this project.`);
         continue;
       }
 
       consecutiveNetworkErrors = 0;
       const errText = await response.text().catch(() => "unknown error");
-      throw new Error(`Vertex AI API error ${response.status}: ${errText}`);
+      const statusMsg = `Vertex AI API error ${response.status}: ${errText}`;
+      throw new VertexProviderError(
+        statusMsg,
+        response.status === 429 ? "rate_limited" : "server_error",
+        response.status,
+      );
     } catch (err) {
       lastError = err;
+      if (err instanceof VertexProviderError) {
+        // Already structured (429/5xx/budget_exhausted/auth from above) —
+        // propagate as-is rather than re-classifying via string matching.
+        throw err;
+      }
       const msg = String(err?.message || "");
       const isNetworkError = msg.includes("connection") || msg.includes("network") || msg.includes("ECONNRESET") || msg.includes("reset");
       if (isNetworkError) {
@@ -420,7 +546,7 @@ export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIRespo
           // fall back to GEMINI_API_KEY instead of retrying all 32 combinations.
           const networkMsg = `Vertex AI unreachable after ${MAX_NETWORK_ERRORS} consecutive network errors (IPv6 routing issue likely). Configure GEMINI_API_KEY as fallback.`;
           console.error(`[vertex-ai] ${networkMsg}`);
-          throw new Error(networkMsg);
+          throw new VertexProviderError(networkMsg, "network_error");
         }
         console.warn(`[vertex-ai] Network error ${consecutiveNetworkErrors}/${MAX_NETWORK_ERRORS} for ${mod} in ${loc}: ${msg.slice(0, 120)}; trying next`);
         continue;
@@ -436,7 +562,22 @@ export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIRespo
     }
   }
 
-  throw lastError || new Error("All Vertex AI model attempts failed with 404");
+  if (lastError instanceof VertexProviderError) throw lastError;
+  if (notFoundCount === attempts.length) {
+    // Every model/location combination in the sweep was 404 -- this
+    // deployment has no working model available at all, a distinct
+    // condition from a single attempt's transient failure.
+    throw new VertexProviderError(
+      `All ${attempts.length} Vertex AI model/location combinations returned 404 — no configured model is available in this project`,
+      "model_unavailable",
+    );
+  }
+  const lastMsg = String(lastError?.message || "");
+  const wasTimeout = lastError?.name === "TimeoutError" || lastError?.name === "AbortError" || lastMsg.includes("timed out");
+  throw new VertexProviderError(
+    lastError?.message || "All Vertex AI model attempts failed",
+    wasTimeout ? "timeout" : "unknown",
+  );
 }
 
 export type VertexAIDiagnosticStageName =
@@ -555,6 +696,7 @@ async function requestDiagnosticAccessToken(opts: VertexAISingleRequestDiagnosti
   const oauthFetchImpl = opts.oauthFetchImpl || fetch;
   const oauthTimeoutMs = opts.oauthTimeoutMs ?? 5000;
   emitDiagnosticStage(opts.onStage, "oauth_request_started", start);
+  assertExternalProviderCallsAllowed("Google OAuth token endpoint");
   const tokenRes = await fetchWithTimeout(
     oauthFetchImpl,
     "https://oauth2.googleapis.com/token",
@@ -637,6 +779,7 @@ export async function callVertexAISingleRequestDiagnostic(
   }
 
   emitDiagnosticStage(recordStage, "vertex_request_started", start);
+  assertExternalProviderCallsAllowed("Vertex AI diagnostic endpoint");
   const response = await fetchWithTimeout(
     fetchImpl,
     url,
@@ -828,6 +971,7 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
     const url = `https://${loc}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${loc}/publishers/google/models/${mod}:generateContent`;
     try {
       console.log(`[vertex-ai] Trying file model ${mod} in ${loc}...`);
+      assertExternalProviderCallsAllowed("Vertex AI file generateContent endpoint");
       const response = await fetch(url, {
         method: "POST",
         headers: {
@@ -1012,6 +1156,7 @@ export async function callGeminiWithAPIKey(opts: VertexAIOptions): Promise<Verte
     requestBody.system_instruction = { parts: [{ text: opts.systemPrompt }] };
   }
 
+  assertExternalProviderCallsAllowed("Gemini Developer API endpoint");
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1057,6 +1202,7 @@ export async function callGeminiWithAPIKeyAndFile(opts: VertexAIFileOptions): Pr
     requestBody.system_instruction = { parts: [{ text: opts.systemPrompt }] };
   }
 
+  assertExternalProviderCallsAllowed("Gemini Developer API endpoint");
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
