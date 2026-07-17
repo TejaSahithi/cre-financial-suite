@@ -1070,3 +1070,81 @@ describe("Phase 48B: no-provider CAM-heavy base lease fallbacks", () => {
     expect(result.approvalBlockers.missingFields).not.toContain('premises_address');
   });
 });
+
+describe("Phase 5F reviewer projection authority", () => {
+  function phase5fSecurityDepositLease() {
+    return {
+      id: "phase5f-security-deposit-projection",
+      security_deposit: 32500,
+      extraction_data: {
+        fields: {
+          security_deposit: {
+            value: 30000,
+            normalized_value: 30000,
+            source_page: 6,
+            source_text: "Security deposit listed as $30,000 in one paragraph.",
+            confidence: 0.53,
+            extraction_status: "conflict_detected",
+          },
+        },
+        field_evidence: {
+          security_deposit: {
+            value: 30000,
+            normalized_value: 30000,
+            source_page: 6,
+            source_text: "Security deposit listed as $30,000 in one paragraph.",
+            confidence: 0.53,
+            extraction_status: "conflict_detected",
+          },
+        },
+        field_reviews: {
+          security_deposit: {
+            status: REVIEW_STATUSES.EDITED,
+            value: 32500,
+            source_page: 6,
+            source_text: "Reviewer confirmed the signed security deposit is $32,500.",
+            reviewed_at: "2026-07-17T09:30:00.000Z",
+          },
+        },
+      },
+    };
+  }
+
+  it("uses reviewer-resolved Security Deposit before extracted fallback without duplicating the row", () => {
+    const lease = phase5fSecurityDepositLease();
+    expect(lease.extraction_data.fields.security_deposit.normalized_value).toBe(30000);
+    expect(lease.security_deposit).toBe(32500);
+    expect(lease.extraction_data.field_reviews.security_deposit.value).toBe(32500);
+
+    const result = normalizeLeaseReviewData(lease);
+    const securityDepositRows = result.standardFields.filter((row) => row.canonicalKey === "security_deposit");
+    expect(securityDepositRows).toHaveLength(1);
+
+    const row = securityDepositRows[0];
+    expect(row.value).toBe(32500);
+    expect(row.normalized_value).toBe(32500);
+    expect(row.display_value).toBe(32500);
+    expect(row.status).toBe("manually_edited");
+    expect(row.extractionMode).toBe(EXTRACTION_MODES.REVIEWER_ENTERED);
+    expect(row.source_page).toBe(6);
+    expect(row.source_text).toMatch(/32,500/);
+
+    const rentRows = result.tabs.rent_charges.filter((row) => row.canonicalKey === "security_deposit");
+    expect(rentRows).toHaveLength(1);
+    expect(rentRows[0].value).toBe(32500);
+    expect(result.dynamicFindings.some((row) => row.fieldKey === "security_deposit" || row.canonicalKey === "security_deposit")).toBe(false);
+  });
+
+  it("uses the reviewed typed lease column before the extracted fallback when no field review is present", () => {
+    const lease = phase5fSecurityDepositLease();
+    delete lease.extraction_data.field_reviews.security_deposit;
+
+    const result = normalizeLeaseReviewData(lease);
+    const row = result.standardFields.find((item) => item.canonicalKey === "security_deposit");
+
+    expect(lease.extraction_data.fields.security_deposit.normalized_value).toBe(30000);
+    expect(lease.security_deposit).toBe(32500);
+    expect(row.value).toBe(32500);
+    expect(row.normalized_value).toBe(32500);
+  });
+});

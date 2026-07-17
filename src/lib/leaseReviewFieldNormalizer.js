@@ -35,6 +35,7 @@ import {
   isManualExtractionStatus,
   normalizeEvidenceComparable,
   REVIEW_STATUSES,
+  RESOLVED_REVIEW_STATUSES,
   EXTRACTION_STATUSES,
   SOURCE_TEXT_QUALITIES,
   EXTRACTION_MODES,
@@ -218,6 +219,32 @@ function standardFieldFallback(lease, canonicalKey, { value, evidence } = {}) {
   return null;
 }
 
+function readTypedLeaseColumnValue(lease, canonicalKey) {
+  if (!lease || typeof lease !== "object") return undefined;
+  for (const key of getFieldAliases(canonicalKey)) {
+    if (!Object.prototype.hasOwnProperty.call(lease, key)) continue;
+    const value = lease[key];
+    if (isMeaningfulValue(value)) return value;
+  }
+  return undefined;
+}
+function readResolvedReviewValue(review) {
+  if (!review || !RESOLVED_REVIEW_STATUSES.has(review.status)) return undefined;
+  const value = review.value ?? review.normalized_value ?? review.normalizedValue ?? review.raw_value ?? review.rawValue;
+  return isMeaningfulValue(value) ? value : undefined;
+}
+
+function mergeReviewEvidence(evidence, review) {
+  if (!review) return evidence;
+  const sourcePage = review.source_page ?? review.sourcePage ?? evidence?.sourcePage ?? null;
+  const sourceText = review.source_text ?? review.sourceText ?? evidence?.sourceText ?? null;
+  if (sourcePage === (evidence?.sourcePage ?? null) && sourceText === (evidence?.sourceText ?? null)) return evidence;
+  return {
+    ...(evidence || {}),
+    sourcePage,
+    sourceText,
+  };
+}
 function hasRowValue(row) {
   // Phase 39: a required field whose only extracted value was rejected as a
   // layout/markup artifact (see normalizeStandardFields/isMarkupArtifactValue)
@@ -387,15 +414,27 @@ function computeFieldStatus({ hasValue, evidenceVerified, confidenceBucket, revi
  * and row-level, non-field entries like document_profile/approval_status —
  * those are surfaced separately, see normalizeApprovalBlockers).
  */
-export function normalizeStandardFields(lease, { fieldReviews = {} } = {}) {
+export function normalizeStandardFields(lease, { fieldReviews } = {}) {
+  const effectiveFieldReviews = fieldReviews ?? lease?.extraction_data?.field_reviews ?? {};
   const rows = [];
   for (const rawContract of LEASE_FIELD_CONTRACT) {
     const contract = getFieldContract(rawContract.canonicalKey) || rawContract;
     if (contract.computed || !contract.inLeaseSchema) continue;
     const canonicalKey = contract.canonicalKey;
-    let value = readFieldValue(lease, canonicalKey);
+    const review = effectiveFieldReviews?.[canonicalKey];
+    const reviewedValue = readResolvedReviewValue(review);
+    const typedColumnValue = readTypedLeaseColumnValue(lease, canonicalKey);
+    let value = reviewedValue !== undefined
+      ? reviewedValue
+      : typedColumnValue !== undefined
+        ? typedColumnValue
+        : readFieldValue(lease, canonicalKey);
     let evidence = readFieldEvidence(lease, canonicalKey);
     let confidence = readFieldConfidence(lease, canonicalKey);
+    if (reviewedValue !== undefined) {
+      evidence = mergeReviewEvidence(evidence, review);
+      confidence = typeof review?.confidence === "number" ? review.confidence : confidence;
+    }
     let fallbackReviewReason = null;
     let fallbackSourceProvider = null;
     const fallback = standardFieldFallback(lease, canonicalKey, { value, evidence });
@@ -436,8 +475,6 @@ export function normalizeStandardFields(lease, { fieldReviews = {} } = {}) {
       evidenceOverrideReason =
         "Source text describes when the original lease was entered into, not this document's signature date. Needs manual verification.";
     }
-
-    const review = fieldReviews?.[canonicalKey];
     const hasValue = isMeaningfulValue(value);
     const status = computeFieldStatus({
       hasValue,
@@ -1460,11 +1497,12 @@ export function buildDebugCounts({ standardFields, dynamicFindings, clauseRecord
  * is NOT included here; those stay in their existing async react-query hooks
  * and get layered on top by the components that already load them.
  */
-export function normalizeLeaseReviewData(lease, { fieldReviews = {} } = {}) {
-  const standardFields = normalizeStandardFields(lease, { fieldReviews });
+export function normalizeLeaseReviewData(lease, { fieldReviews } = {}) {
+  const effectiveFieldReviews = fieldReviews ?? lease?.extraction_data?.field_reviews ?? {};
+  const standardFields = normalizeStandardFields(lease, { fieldReviews: effectiveFieldReviews });
   const currentReviewPolicy = buildCurrentReviewPolicy(lease, {
     rows: standardFields,
-    fieldReviews,
+    fieldReviews: effectiveFieldReviews,
     legacyRequiredFieldKeys: REQUIRED_FIELD_KEYS,
   });
   const dynamicFindings = normalizeDynamicFindings(lease);

@@ -1,4 +1,4 @@
-﻿# Dependencies
+# Dependencies
 node_modules/
 .pnp
 .pnp.js
@@ -70,3 +70,8 @@ current_lint_errors.txt
 
 # Local Phase 52 Vertex diagnostic secrets
 /.env.phase52.local
+
+# Phase 5F browser E2E artifacts
+/test-results/phase5f/
+/test-results/phase5f-html/
+/playwright/.auth/

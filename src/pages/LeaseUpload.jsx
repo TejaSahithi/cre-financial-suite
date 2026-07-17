@@ -276,11 +276,12 @@ export default function LeaseUpload() {
   const queryPropertyId = urlParams.get("property");
   const queryBuildingId = urlParams.get("building");
   const queryUnitId = urlParams.get("unit");
+  const queryFileId = urlParams.get("file_id") || urlParams.get("file");
 
   const [scopeProperty, setScopeProperty] = useState(queryPropertyId || "all");
   const [scopeBuilding, setScopeBuilding] = useState(queryBuildingId || "all");
   const [scopeUnit, setScopeUnit] = useState(queryUnitId || "all");
-  const [fileId, setFileId] = useState(null);
+  const [fileId, setFileId] = useState(queryFileId || null);
   const [fileRecord, setFileRecord] = useState(null);
   const [loadingRecord, setLoadingRecord] = useState(false);
   const [openingReview, setOpeningReview] = useState(false);
@@ -326,6 +327,13 @@ export default function LeaseUpload() {
     setScopeBuilding(nextBuilding);
     setScopeUnit(nextUnit);
   }, [queryPropertyId, queryBuildingId, queryUnitId, buildings, units]);
+
+  useEffect(() => {
+    if (queryFileId && queryFileId !== fileId) {
+      setFileId(queryFileId);
+      setFileRecord(null);
+    }
+  }, [queryFileId, fileId]);
 
   const scopedBuildings = useMemo(
     () => (scopeProperty !== "all" ? buildings.filter((building) => building.property_id === scopeProperty) : buildings),
