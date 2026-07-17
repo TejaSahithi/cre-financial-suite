@@ -23,6 +23,7 @@ import { getAzureDocumentIntelligenceConfig } from "../_shared/azure/document-in
 import { resolveExtractionProvider, shouldUseAzureLayout } from "../_shared/extraction/extraction-provider.ts";
 import { setStatus } from "../_shared/pipeline-status.ts";
 import { createLogger } from "../_shared/logger.ts";
+import { shouldUseLocalAzureByteSource } from "./source-strategy.ts";
 import {
   buildBlockedReviewPayload,
   buildPipelineMetadata,
@@ -369,15 +370,22 @@ Deno.serve(async (req: Request) => {
         );
       }
 
+      const signedOrStoredUrl = signedUrlData?.signedUrl ?? fileRecord.file_url;
+      const sourceStrategy = shouldUseLocalAzureByteSource({
+        strictAzureMode,
+        localSupabaseRuntime: Deno.env.get("LOCAL_SUPABASE_RUNTIME")?.toLowerCase() === "true",
+        sourceUrl: signedOrStoredUrl,
+        fileSizeBytes,
+        maxLocalAzureBytes: MAX_NATIVE_BYTES,
+      });
+
       let fileBytes: Uint8Array | null = null;
-      if (strictAzureMode) {
+      if (sourceStrategy.loadBytesFromStorage || !strictAzureMode) {
+        const reason = sourceStrategy.loadBytesFromStorage
+          ? `local Azure byte source (${sourceStrategy.category})`
+          : "legacy-compatible parser mode";
         console.log(
-          `[parse-pdf-docling] strict Azure mode for file_id=${file_id} — ` +
-          `skipping byte download, sending signed URL to Azure`,
-        );
-      } else {
-        console.log(
-          `[parse-pdf-docling] downloading file_id=${file_id} ` +
+          `[parse-pdf-docling] downloading file_id=${file_id} reason=${reason} ` +
           `size=${fileSizeBytes > 0 ? (fileSizeBytes / 1024 / 1024).toFixed(2) + " MB" : "unknown"} ` +
           `hasDocling=${hasDocling} hasVision=${hasVision}`,
         );
@@ -394,12 +402,18 @@ Deno.serve(async (req: Request) => {
         }
 
         fileBytes = new Uint8Array(await fileBlob.arrayBuffer());
+      } else {
+        console.log(
+          `[parse-pdf-docling] strict Azure mode for file_id=${file_id} - ` +
+          `skipping byte download, sending signed URL to Azure ` +
+          `(source_category=${sourceStrategy.category})`,
+        );
       }
 
       // 6. Delegate to the canonical parser (Azure URL-first; Docling →
       // Gemini Vision fallback in legacy modes)
       const doclingOutput = await parseDocument(fileBytes, fileName, mimeType, {
-        fileUrl: signedUrlData?.signedUrl ?? fileRecord.file_url,
+        fileUrl: sourceStrategy.sendUrlToAzure ? signedOrStoredUrl : undefined,
         providerOverride: provider_override,
       });
       const extractionMethod = doclingOutput.extraction_method ?? "unknown";
