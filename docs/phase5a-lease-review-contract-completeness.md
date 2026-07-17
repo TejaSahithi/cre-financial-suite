@@ -2,7 +2,7 @@
 
 Date: 2026-07-17
 
-Verdict: PHASE 5A COMPLETE WITH CONDITIONS
+Verdict: PHASE 5A COMPLETE WITH CONDITIONS — MANUAL VISUAL WALKTHROUGH REQUIRED
 
 ## 1. Executive Result
 
@@ -149,25 +149,82 @@ Local HTTP backend integration note:
 
 ## 13. Visual/Manual Validation
 
-Browser-level visual validation was not completed because no authenticated seeded local Lease Review session was available within the Phase 5A constraints.
+Phase 5A visual closure preflight completed locally on 2026-07-17.
 
-Manual checklist for the next seeded local walkthrough:
+Preflight results:
 
-- Confirm all Lease Review tab labels render.
-- Confirm Field, Value, Status, Confidence, Extraction Mode, Page, Source Text, and Action columns render without overlap.
-- Confirm CAM Rules and Expenses / Recoveries rows are separated for a triple-net fixture.
-- Confirm conflicting facts appear as `needs_review`.
-- Confirm reviewer edit/save/reload preserves edited field state.
-- Confirm optional missing clauses are not shown as fabricated values.
-- Confirm readiness and blocker counts match document profile expectations.
+- Working tree before seeding: clean.
+- Branch: `feature/document-intelligence-v3`.
+- Latest commit: `6b8c900 Complete Phase 5A Lease Review contract validation`.
+- Local Supabase: started successfully from existing local images and backup; no remote Supabase access was used.
+- Frontend: `npm run dev -- --host 127.0.0.1 --port 5173` started successfully outside the Windows sandbox after the known Vite/esbuild `spawn EPERM` sandbox failure.
+- Authenticated local sign-in: verified through local Supabase Auth API for the seeded user.
+- Seeded route HTTP check: `http://127.0.0.1:5173/LeaseReview?id=050a0000-0000-4000-8000-000000000004` returned HTTP 200.
+
+Seeded fixture identifiers, sanitized:
+
+- Organization: `050a0000-0000-4000-8000-000000000001`.
+- Uploaded file: `050a0000-0000-4000-8000-000000000003`.
+- Lease Review draft / lease: `050a0000-0000-4000-8000-000000000004`.
+- Local route: `/LeaseReview?id=050a0000-0000-4000-8000-000000000004`.
+- Local credential handoff file: `C:/tmp/phase5a/visual-local-login.txt`.
+
+Seeded data coverage:
+
+- Standard fields: landlord, tenant, property address, suite/premises, commencement date, expiration date, lease term, monthly rent, and lease type.
+- Evidence metadata: confidence, source page, sanitized source text, and extraction mode.
+- CAM/recovery rules: annual reconciliation, true-up, pro-rata allocation, proportionate share, audit right, and CAM cap.
+- Expense rules: property taxes, property insurance, utilities, and repairs/maintenance.
+- Other findings: renewal option, insurance requirement, one conflict-detected fact, one absent optional clause, and one pre-seeded reviewer-edited `field_reviews` entry.
+- Draft identity: one local organization, one local user, one uploaded file, one linked lease, and one Lease Review draft were seeded.
+
+Browser automation result:
+
+- Codex in-app browser automation was unavailable in this session: the browser skill was present, but the required Node REPL browser-control tool was not exposed by tool discovery.
+- Repo-local browser automation was also unavailable: `playwright`, `@playwright/test`, `puppeteer`, and `@vitest/browser-playwright` were not installed in `node_modules`.
+- Screenshots were unavailable for the same reason.
+
+Visual result per tab:
+
+- Summary: pending manual visual observation.
+- Parties & Premises: pending manual visual observation.
+- Dates & Term: pending manual visual observation.
+- Rent & Charges: pending manual visual observation.
+- CAM Rules: pending manual visual observation.
+- Expenses / Recoveries: pending manual visual observation.
+- Insurance: pending manual visual observation.
+- Legal / Options: pending manual visual observation.
+- Conflict row: pending manual visual observation.
+- Evidence columns: pending manual visual observation.
+- Reviewer save/reload: pending manual visual observation.
+- Optional absent clause: pending manual visual observation.
+- Duplicate-record check after reload: pending manual visual observation.
+
+Manual checklist for the seeded local walkthrough:
+
+- Sign in locally using the credential handoff file; do not copy the password into this report.
+- Open `http://localhost:5173/LeaseReview?id=050a0000-0000-4000-8000-000000000004`.
+- Confirm Summary shows base-lease profile/readiness/blockers and no hollow review state.
+- Confirm Parties & Premises shows landlord, tenant, address, and suite/premises with confidence/source/page evidence and no duplicate editable rows.
+- Confirm Dates & Term shows commencement, expiration, and term; Critical Dates may reference them read-only only.
+- Confirm Rent & Charges shows monthly rent and NNN lease type.
+- Confirm CAM Rules shows annual reconciliation, true-up, allocation/pro-rata/proportionate share, audit right, and CAM cap as `needs_review` rows.
+- Confirm Expenses / Recoveries shows taxes, insurance, utilities, and repairs/maintenance, with no duplicate CAM rows.
+- Confirm Insurance shows the insurance requirement and Legal / Options shows the renewal option.
+- Confirm the conflict-detected fact remains visible as `needs_review`, not rejected or removed.
+- Confirm rendered columns: Field, Value, Status, Confidence, Extraction Mode, Page, Source Text, and Action.
+- Confirm no desktop column overlap or inaccessible controls.
+- Edit one normalized value, mark one field reviewed, save, reload, and confirm both the new edit and the pre-seeded monthly-rent reviewer edit remain authoritative.
+- Confirm absent optional clause data is not fabricated.
+- Confirm exactly one uploaded file, one linked lease, and one Lease Review draft remain after reload.
 
 ## 14. Remaining Risks
 
-- Browser validation remains conditional until a seeded authenticated local fixture is opened in the app.
+- Browser validation remains conditional until the seeded authenticated local route is manually opened or a browser automation tool is made available.
 - Live-provider output shape was intentionally not retested in Phase 5A.
 - Assignment and amendment profile behavior was validated against the current reduced-review policy, not redesigned.
-- Full local HTTP workflow remains dependent on local Supabase/runtime credentials that were not introduced during this phase.
+- Full local HTTP workflow remains dependent on local Supabase/runtime credentials; credentials were used only for the local seeded session and were not written into this report.
 
 ## 15. Next Action
 
-Use a deterministic local seeded Lease Review draft to run the visual/manual checklist, then decide whether the remaining browser-validation condition can be closed without starting provider transport work.
+Run the manual visual walkthrough against the seeded local route, or rerun this closure task in a session where Codex browser automation is exposed. Do not start Phase 5B until the visual condition is explicitly closed.
