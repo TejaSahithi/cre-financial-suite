@@ -140,7 +140,7 @@ export function sanitizeLog(log: Record<string, any>): Record<string, any> {
   };
 }
 
-export function deriveDisplayState(record: Record<string, any>, latestJob: Record<string, any> | null): {
+function deriveDisplayStateCore(record: Record<string, any>, latestJob: Record<string, any> | null): {
   display_state: string;
   message: string;
   next_action: string | null;
@@ -229,5 +229,31 @@ export function deriveDisplayState(record: Record<string, any>, latestJob: Recor
     display_state: "unknown",
     message: "Lease extraction status is not available yet.",
     next_action: null,
+  };
+}
+
+// P0.4/P0.7: additive wrapper — existing consumers (LeaseUpload.jsx,
+// FileHistory.jsx, and deriveDisplayStateCore's own three fields above) are
+// unchanged; review_readiness/enrichment_state/artifact_sync_status are new
+// fields read directly from the uploaded_files columns (real columns as of
+// P0.4, not a JSONB dig) for the first consumer of this data,
+// LeaseReview.jsx (P0.7), to use as the authoritative signal instead of its
+// own ad hoc ui_review_payload-only derivation.
+export function deriveDisplayState(record: Record<string, any>, latestJob: Record<string, any> | null): {
+  display_state: string;
+  message: string;
+  next_action: string | null;
+  review_readiness: string | null;
+  review_readiness_reasons: unknown[];
+  enrichment_state: string | null;
+  artifact_sync_status: string | null;
+} {
+  const core = deriveDisplayStateCore(record, latestJob);
+  return {
+    ...core,
+    review_readiness: record?.review_readiness ?? null,
+    review_readiness_reasons: Array.isArray(record?.review_readiness_reasons) ? record.review_readiness_reasons : [],
+    enrichment_state: record?.enrichment_status ?? record?.ui_review_payload?.enrichment_status ?? null,
+    artifact_sync_status: record?.artifact_sync_status ?? null,
   };
 }

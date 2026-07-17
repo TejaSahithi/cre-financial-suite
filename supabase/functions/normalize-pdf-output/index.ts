@@ -1842,16 +1842,17 @@ async function handleEnrichMode(args: {
   supabaseAdmin: any;
   orgId: string;
   fileId: string;
+  pipelineJobId?: string | null;
   jsonResponse: (body: unknown, status?: number) => Response;
 }): Promise<Response> {
-  const { supabaseAdmin, orgId, fileId, jsonResponse } = args;
+  const { supabaseAdmin, orgId, fileId, pipelineJobId, jsonResponse } = args;
   const logger = createLogger(supabaseAdmin, fileId, orgId);
 
   const { data: fileRecord, error: fetchError } = await supabaseAdmin
     .from("uploaded_files")
     .select(
       "id, org_id, file_name, module_type, status, review_required, document_subtype, " +
-      "extraction_method, docling_raw, normalized_output, ui_review_payload",
+      "extraction_method, docling_raw, normalized_output, ui_review_payload, active_generation_id",
     )
     .eq("id", fileId)
     .eq("org_id", orgId)
@@ -1862,6 +1863,36 @@ async function handleEnrichMode(args: {
       { error: true, message: `File not found: ${fetchError?.message ?? "Invalid file_id"}`, error_code: "FILE_NOT_FOUND" },
       404,
     );
+  }
+
+  // P0.3: generation fencing. This job may have been superseded by a newer
+  // explicit re-extraction generation while it was queued/running — a stale
+  // worker finishing this expensive pass late must not clobber a newer
+  // generation's state. jobGenerationId is resolved once here; the actual
+  // staleness check is re-done with a FRESH read right before each write
+  // below (isEnrichGenerationStale), since the LLM call in between can take
+  // minutes, during which a new generation can start. If pipelineJobId is
+  // absent (older/legacy caller), the job's generation can't be resolved —
+  // skip the check entirely rather than newly failing a call that never
+  // provided the information needed to make it.
+  let jobGenerationId: string | null = null;
+  if (pipelineJobId) {
+    const { data: jobRow } = await supabaseAdmin
+      .from("pipeline_jobs")
+      .select("generation_id")
+      .eq("id", pipelineJobId)
+      .maybeSingle();
+    jobGenerationId = jobRow?.generation_id ?? null;
+  }
+
+  async function isEnrichGenerationStale(): Promise<boolean> {
+    if (!jobGenerationId) return false;
+    const { data: freshFile } = await supabaseAdmin
+      .from("uploaded_files")
+      .select("active_generation_id")
+      .eq("id", fileId)
+      .maybeSingle();
+    return !!freshFile && freshFile.active_generation_id !== jobGenerationId;
   }
 
   if (!ENRICH_READY_STATUSES.has(fileRecord.status)) {
@@ -1894,6 +1925,11 @@ async function handleEnrichMode(args: {
       { error: true, message: "No normalized_output found to enrich — run normalize first.", error_code: "NO_NORMALIZED_OUTPUT" },
       422,
     );
+  }
+
+  if (await isEnrichGenerationStale()) {
+    console.log(`[normalize-pdf-output] enrich_stale_generation_skipped file_id=${fileId} job_id=${pipelineJobId} — superseded before starting`);
+    return jsonResponse({ error: false, file_id: fileId, stale_generation: true });
   }
 
   console.log(`[normalize-pdf-output] enrichment_started file_id=${fileId}`);
@@ -1933,6 +1969,11 @@ async function handleEnrichMode(args: {
       (f: any) => f?.evidence?.source_text || f?.evidence?.source_page != null,
     ).length;
 
+    if (await isEnrichGenerationStale()) {
+      console.log(`[normalize-pdf-output] enrich_stale_generation_skipped file_id=${fileId} job_id=${pipelineJobId} — superseded before persisting result, discarding stale output`);
+      return jsonResponse({ error: false, file_id: fileId, stale_generation: true });
+    }
+
     const { error: persistError } = await supabaseAdmin
       .from("uploaded_files")
       .update({ ui_review_payload: enrichedPayload, updated_at: new Date().toISOString() })
@@ -1945,6 +1986,21 @@ async function handleEnrichMode(args: {
       `[normalize-pdf-output] enrichment_completed file_id=${fileId} clauses=${clauseCount} source_backed=${sourceBackedCount}`,
     );
     await logger.event("enrich", "completed", { metadata: { clauses: clauseCount, source_backed: sourceBackedCount } });
+
+    // P0.5: re-evaluate and persist review_readiness now that enrichment
+    // concluded — best-effort; a failure here must not fail the enrich
+    // response itself (the enrichment result is already durably persisted
+    // above). finalize_lease_extraction_for_review is safely re-callable
+    // from any other terminal event, so this is not the only place it runs.
+    try {
+      await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
+        p_org_id: orgId,
+        p_uploaded_file_id: fileId,
+        p_generation_id: jobGenerationId,
+      });
+    } catch (finalizeError: any) {
+      console.warn(`[normalize-pdf-output] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
+    }
 
     return jsonResponse({
       error: false,
@@ -1959,6 +2015,10 @@ async function handleEnrichMode(args: {
     // Never call setFailed()/touch uploaded_files.status and never overwrite
     // the core standard_fields — only patch enrichment_status, so the
     // minimal payload's real values stay fully visible (guarantee 7).
+    if (await isEnrichGenerationStale()) {
+      console.log(`[normalize-pdf-output] enrich_stale_generation_skipped file_id=${fileId} job_id=${pipelineJobId} — superseded before persisting failure, discarding stale write`);
+      return jsonResponse({ error: false, file_id: fileId, stale_generation: true });
+    }
     await supabaseAdmin
       .from("uploaded_files")
       .update({
@@ -1967,6 +2027,20 @@ async function handleEnrichMode(args: {
       })
       .eq("id", fileId);
     await logger.event("enrich", "failed", { error_message: message });
+
+    // P0.5: failed enrichment is a terminal event too — re-evaluate
+    // readiness so review_readiness reflects ENRICHMENT_FAILED instead of
+    // silently staying at whatever it was before this attempt.
+    try {
+      await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
+        p_org_id: orgId,
+        p_uploaded_file_id: fileId,
+        p_generation_id: jobGenerationId,
+      });
+    } catch (finalizeError: any) {
+      console.warn(`[normalize-pdf-output] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
+    }
+
     return jsonResponse({ error: true, message, error_code: "ENRICHMENT_FAILED" }, 500);
   }
 }
@@ -2085,7 +2159,7 @@ Deno.serve(async (req: Request) => {
     // must never call setFailed()/touch uploaded_files.status on error
     // (guarantee 7).
     if (mode === "enrich") {
-      return await handleEnrichMode({ supabaseAdmin, orgId, fileId: file_id, jsonResponse });
+      return await handleEnrichMode({ supabaseAdmin, orgId, fileId: file_id, pipelineJobId: pipeline_job_id || job_id, jsonResponse });
     }
 
     // Fetch only the columns this function actually uses.

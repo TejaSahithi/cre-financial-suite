@@ -38,10 +38,21 @@ const MAX_CONSECUTIVE_FAILURES = 10;
  *   processingStatus: string|null,
  *   failedStep: string|null,
  *   errorMessage: string|null,
+ *   pipelineState: string|null,
+ *   reviewReadiness: string|null,
+ *   reviewReadinessReasons: Array,
+ *   enrichmentState: string|null,
+ *   artifactSyncStatus: string|null,
+ *   latestJob: object|null,
  *   refetch:    () => Promise<void>,
  * }}
+ * @param {string|null} fileId
+ * @param {{include_details?: boolean}} [options] - pass include_details:true to
+ *   receive pipelineState/reviewReadiness/enrichmentState/artifactSyncStatus/latestJob
+ *   (pipeline-status only computes these when asked).
  */
-export default function useFileStatus(fileId) {
+export default function useFileStatus(fileId, options = {}) {
+  const { include_details: includeDetailsOption = false } = options;
   const [status, setStatus] = useState(null);
   const [progress, setProgress] = useState(0);
   const [errors, setErrors] = useState([]);
@@ -52,6 +63,14 @@ export default function useFileStatus(fileId) {
   const [processingStatus, setProcessingStatus] = useState(null);
   const [failedStep, setFailedStep] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
+  // P0.7: additive fields, only populated when include_details is passed —
+  // pipeline-status only returns latest_job/display/reasons when asked.
+  const [pipelineState, setPipelineState] = useState(null);
+  const [reviewReadiness, setReviewReadiness] = useState(null);
+  const [reviewReadinessReasons, setReviewReadinessReasons] = useState([]);
+  const [enrichmentState, setEnrichmentState] = useState(null);
+  const [artifactSyncStatus, setArtifactSyncStatus] = useState(null);
+  const [latestJob, setLatestJob] = useState(null);
 
   // Keep a ref to the timer so we can clear it on unmount / fileId change.
   const timerRef = useRef(null);
@@ -93,7 +112,7 @@ export default function useFileStatus(fileId) {
       const { data, error } = await supabase.functions.invoke(
         "pipeline-status",
         {
-          body: { file_id: fileIdRef.current },
+          body: { file_id: fileIdRef.current, include_details: includeDetailsOption === true },
           headers: actingOrgId ? { "x-acting-org-id": actingOrgId } : {},
         }
       );
@@ -120,6 +139,12 @@ export default function useFileStatus(fileId) {
         setFailedStep(data.failed_step ?? null);
         setErrorMessage(data.error_message ?? null);
         setPollError(null);
+        setPipelineState(data.display_state ?? null);
+        setReviewReadiness(data.review_readiness ?? null);
+        setReviewReadinessReasons(Array.isArray(data.review_readiness_reasons) ? data.review_readiness_reasons : []);
+        setEnrichmentState(data.enrichment_state ?? null);
+        setArtifactSyncStatus(data.artifact_sync_status ?? null);
+        setLatestJob(data.latest_job ?? null);
       }
 
       return data;
@@ -129,7 +154,7 @@ export default function useFileStatus(fileId) {
     } finally {
       setIsLoading(false);
     }
-  }, [resolveActingOrgId]);
+  }, [resolveActingOrgId, includeDetailsOption]);
 
   /**
    * Public refetch — can be called manually by consumers.
@@ -161,6 +186,12 @@ export default function useFileStatus(fileId) {
       setProcessingStatus(null);
       setFailedStep(null);
       setErrorMessage(null);
+      setPipelineState(null);
+      setReviewReadiness(null);
+      setReviewReadinessReasons([]);
+      setEnrichmentState(null);
+      setArtifactSyncStatus(null);
+      setLatestJob(null);
       return;
     }
 
@@ -231,6 +262,12 @@ export default function useFileStatus(fileId) {
     processingStatus,
     failedStep,
     errorMessage,
+    pipelineState,
+    reviewReadiness,
+    reviewReadinessReasons,
+    enrichmentState,
+    artifactSyncStatus,
+    latestJob,
     refetch,
   };
 }

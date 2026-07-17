@@ -783,7 +783,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    if (["completed", "failed", "cancelled"].includes(job.status)) {
+    if (["completed", "failed", "cancelled", "superseded"].includes(job.status)) {
       return jsonResponse({ error: false, job_id: job.id, status: job.status, stage: job.stage });
     }
 
@@ -799,23 +799,40 @@ Deno.serve(async (req: Request) => {
         // payload with uploaded_files.status="failed". Only fail the job row
         // and patch enrichment_status.
         await failJob(supabaseAdmin, job, "MAX_ATTEMPTS_EXCEEDED", message);
-        await supabaseAdmin
+        // P0.3: generation fencing — this job may already have been
+        // superseded by a newer explicit re-extraction generation. Failing
+        // the job row itself is always safe (it's this job's own row), but
+        // patching uploaded_files.ui_review_payload for a stale generation
+        // would clobber the active generation's state with this exhausted
+        // job's stale "failed" status.
+        const { data: fileForGenerationCheck } = await supabaseAdmin
           .from("uploaded_files")
-          .update({ updated_at: new Date().toISOString() })
-          .eq("id", fileId);
-        const { data: currentFile } = await supabaseAdmin
-          .from("uploaded_files")
-          .select("ui_review_payload")
+          .select("active_generation_id, ui_review_payload")
           .eq("id", fileId)
           .maybeSingle();
-        const currentPayload = currentFile?.ui_review_payload || {};
-        await supabaseAdmin
-          .from("uploaded_files")
-          .update({
-            ui_review_payload: { ...currentPayload, enrichment_status: "failed", enrichment_error: message },
-          })
-          .eq("id", fileId);
-        console.log(`[${WORKER_NAME}] enrichment_failed_preserved_core_payload file_id=${fileId} reason=max_attempts_exceeded`);
+        if (fileForGenerationCheck && fileForGenerationCheck.active_generation_id === job.generation_id) {
+          const currentPayload = fileForGenerationCheck.ui_review_payload || {};
+          await supabaseAdmin
+            .from("uploaded_files")
+            .update({
+              ui_review_payload: { ...currentPayload, enrichment_status: "failed", enrichment_error: message },
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", fileId);
+          console.log(`[${WORKER_NAME}] enrichment_failed_preserved_core_payload file_id=${fileId} reason=max_attempts_exceeded`);
+          // P0.5: terminal enrichment outcome — re-evaluate readiness.
+          try {
+            await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
+              p_org_id: orgId,
+              p_uploaded_file_id: fileId,
+              p_generation_id: job.generation_id,
+            });
+          } catch (finalizeError: any) {
+            console.warn(`[${WORKER_NAME}] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
+          }
+        } else {
+          console.log(`[${WORKER_NAME}] enrich_stale_generation_skipped file_id=${fileId} job_id=${job.id} — superseded, not patching ui_review_payload`);
+        }
       } else {
         await failJobAndUpload(supabaseAdmin, job, fileId, "MAX_ATTEMPTS_EXCEEDED", message, job.stage ?? "parse", 15);
       }
@@ -843,17 +860,28 @@ Deno.serve(async (req: Request) => {
       return await stopForCancellation(supabaseAdmin, job, fileId, logger, "before_claim");
     }
 
-    const attempt = Number(job.attempt || 0) + 1;
-    await supabaseAdmin
-      .from("pipeline_jobs")
-      .update({
-        status: "running",
-        attempt,
-        worker_name: WORKER_NAME,
-        started_at: job.started_at ?? new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", job.id);
+    // Atomic conditional claim — replaces the previous unconditional
+    // `.update({status:"running",...}).eq("id", job.id)`, which had no
+    // predicate beyond id and could "claim" a job already superseded or
+    // cancelled between this invocation's initial fetch (above) and this
+    // update. claim_pipeline_job only succeeds if the job is still queued,
+    // available, not cancel-requested, and under its attempt budget — see
+    // supabase/migrations/20260824000200_pipeline_jobs_generation_rpcs.sql.
+    const { data: claimedJob, error: claimError } = await supabaseAdmin.rpc("claim_pipeline_job", {
+      p_job_id: job.id,
+      p_worker_name: WORKER_NAME,
+    });
+
+    if (claimError) {
+      return jsonResponse({ error: true, error_code: "CLAIM_FAILED", message: claimError.message }, 500);
+    }
+    if (!claimedJob) {
+      // Someone else claimed it first, it was superseded/cancelled between
+      // fetch and claim, or its attempt budget is exhausted — stop here
+      // rather than proceeding to run stale/duplicate work.
+      return jsonResponse({ error: false, job_id: job.id, status: "not_claimed" });
+    }
+    const attempt = Number(claimedJob.attempt || 0);
 
     // Run parse and normalize sequentially in a single invocation.
     // The original two-stage self-dispatch pattern (dispatchSelf) was unreliable:
@@ -1386,13 +1414,20 @@ Deno.serve(async (req: Request) => {
         // enrichment_status failed. The core minimal payload this job was
         // meant to enhance must remain exactly as it was.
         await failJob(supabaseAdmin, job, errorCode, message);
+        // P0.3: generation fencing — only patch ui_review_payload if this
+        // job's generation is still the file's active one; a stale worker
+        // whose internal call to normalize-pdf-output failed/timed out must
+        // not overwrite a newer generation's state with its own failure.
         const { data: currentFile } = await supabaseAdmin
           .from("uploaded_files")
-          .select("ui_review_payload")
+          .select("ui_review_payload, active_generation_id")
           .eq("id", fileId)
           .maybeSingle();
         const currentPayload = currentFile?.ui_review_payload || {};
-        if (currentPayload.enrichment_status !== "completed") {
+        if (
+          currentFile?.active_generation_id === job.generation_id &&
+          currentPayload.enrichment_status !== "completed"
+        ) {
           await supabaseAdmin
             .from("uploaded_files")
             .update({
@@ -1400,6 +1435,18 @@ Deno.serve(async (req: Request) => {
               updated_at: new Date().toISOString(),
             })
             .eq("id", fileId);
+          // P0.5: terminal enrichment outcome — re-evaluate readiness.
+          try {
+            await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
+              p_org_id: orgId,
+              p_uploaded_file_id: fileId,
+              p_generation_id: job.generation_id,
+            });
+          } catch (finalizeError: any) {
+            console.warn(`[${WORKER_NAME}] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
+          }
+        } else if (currentFile?.active_generation_id !== job.generation_id) {
+          console.log(`[${WORKER_NAME}] enrich_stale_generation_skipped file_id=${fileId} job_id=${job.id} — superseded, not patching ui_review_payload`);
         }
         console.log(`[${WORKER_NAME}] enrichment_failed_preserved_core_payload file_id=${fileId}: ${message}`);
         await logger.event("enrich", "failed", {

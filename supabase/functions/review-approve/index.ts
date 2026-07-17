@@ -341,6 +341,105 @@ Deno.serve(async (req: Request) => {
       throw new Error(`Failed to persist reviewed output: ${persistErr.message}`);
     }
 
+    // P0.6: lease-module approval goes through the two-finalizer gate
+    // (extraction readiness, then approval) instead of the plain FSM
+    // setStatus() sequence — this is what actually prevents approving a
+    // file whose review_readiness never reached 'ready'. Non-lease modules
+    // are out of P0's scope (no review_readiness concept applies to them)
+    // and keep the original setStatus("approved") path unchanged.
+    if (isLeaseModule(fileRecord.module_type)) {
+      const { data: finalizeResult, error: finalizeRpcError } = await supabaseAdmin.rpc(
+        "finalize_lease_review_approval",
+        {
+          p_org_id: orgId,
+          p_uploaded_file_id: file_id,
+          p_generation_id: fileRecord.active_generation_id ?? null,
+          p_lease_id: null,
+          p_actor_user_id: user.id,
+          p_actor_email: user.email ?? null,
+          p_idempotency_key: null,
+        },
+      );
+
+      if (finalizeRpcError) {
+        throw new Error(`Approval finalization RPC call failed: ${finalizeRpcError.message}`);
+      }
+      if (!finalizeResult?.success) {
+        return jsonResponse(
+          {
+            error: true,
+            message: finalizeResult?.error_code === "NOT_READY"
+              ? `File is not ready for approval (review_readiness=${finalizeResult?.readiness}).`
+              : (finalizeResult?.error_message || "Approval could not be finalized."),
+            error_code: finalizeResult?.error_code || "APPROVAL_FINALIZATION_FAILED",
+            readiness: finalizeResult?.readiness ?? null,
+            blocking_reasons: finalizeResult?.blocking_reasons ?? null,
+          },
+          422,
+        );
+      }
+
+      // Approval finalized (status now 'storing', artifact_sync_status
+      // 'pending'). Artifact fan-out (CAM/clause sync) stays a best-effort,
+      // non-transactional step (porting its ~2000-line matching/decision
+      // engine to SQL is P1+ scope, same precedent as
+      // persist_lease_extraction_merge/review_expense_classification) — but
+      // its outcome is now explicitly tracked via artifact_sync_status
+      // rather than silently conflated with the approval itself.
+      let leaseStoreResult: unknown = null;
+      let artifactSyncSucceeded = false;
+      let artifactSyncErrorMessage: string | null = null;
+      try {
+        leaseStoreResult = await ensureLeaseReviewDrafts(
+          supabaseAdmin,
+          fileRecord,
+          finalRows,
+          reviewedOutput,
+          user,
+          true,
+        );
+        artifactSyncSucceeded = true;
+      } catch (artifactError: any) {
+        artifactSyncErrorMessage = artifactError?.message ?? String(artifactError);
+        console.error(`[review-approve] artifact_sync_failed file_id=${file_id}:`, artifactSyncErrorMessage);
+      }
+
+      const { data: markResult, error: markRpcError } = await supabaseAdmin.rpc(
+        "mark_lease_artifact_sync_result",
+        {
+          p_org_id: orgId,
+          p_uploaded_file_id: file_id,
+          p_success: artifactSyncSucceeded,
+          p_error_message: artifactSyncErrorMessage,
+        },
+      );
+      if (markRpcError) {
+        console.error(`[review-approve] mark_lease_artifact_sync_result call failed file_id=${file_id}:`, markRpcError.message);
+      }
+
+      return jsonResponse({
+        error: false,
+        file_id,
+        action,
+        review_status: "approved",
+        approval_state: "approved",
+        artifact_sync_status: markResult?.artifact_sync_status ?? (artifactSyncSucceeded ? "completed" : "failed"),
+        validate_result: {
+          skipped: true,
+          reason: "Lease documents are routed to Lease Review before final approval.",
+        },
+        store_result: leaseStoreResult,
+        store_triggered: artifactSyncSucceeded,
+        artifact_sync_error: artifactSyncErrorMessage,
+        reviewed_output: {
+          accepted_count: reviewedOutput.accepted_fields.length,
+          rejected_count: reviewedOutput.rejected_fields.length,
+          custom_count: reviewedOutput.custom_fields.length,
+          row_count: finalRows.length,
+        },
+      });
+    }
+
     const { error: approveErr } = await setStatus(
       supabaseAdmin,
       file_id,
@@ -349,51 +448,6 @@ Deno.serve(async (req: Request) => {
     );
     if (approveErr) {
       throw new Error(`Approve status transition failed: ${approveErr.message}`);
-    }
-
-    if (isLeaseModule(fileRecord.module_type)) {
-      const leaseStoreResult = await ensureLeaseReviewDrafts(
-        supabaseAdmin,
-        fileRecord,
-        finalRows,
-        reviewedOutput,
-        user,
-        true,
-      );
-
-      const { error: storingStatusError } = await setStatus(supabaseAdmin, file_id, "storing");
-      if (storingStatusError) {
-        throw new Error(`Lease draft staging failed: ${storingStatusError.message}`);
-      }
-      const { error: storedStatusError } = await setStatus(supabaseAdmin, file_id, "stored", {
-        reviewed_output: {
-          ...reviewedOutput,
-          status: "approved",
-          lease_review_ids: leaseStoreResult.inserted_ids,
-        },
-      });
-      if (storedStatusError) {
-        throw new Error(`Lease draft finalization failed: ${storedStatusError.message}`);
-      }
-
-      return jsonResponse({
-        error: false,
-        file_id,
-        action,
-        review_status: "approved",
-        validate_result: {
-          skipped: true,
-          reason: "Lease documents are routed to Lease Review before final approval.",
-        },
-        store_result: leaseStoreResult,
-        store_triggered: true,
-        reviewed_output: {
-          accepted_count: reviewedOutput.accepted_fields.length,
-          rejected_count: reviewedOutput.rejected_fields.length,
-          custom_count: reviewedOutput.custom_fields.length,
-          row_count: finalRows.length,
-        },
-      });
     }
 
     const authHeader =

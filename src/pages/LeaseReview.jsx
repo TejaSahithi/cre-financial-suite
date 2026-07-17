@@ -223,13 +223,16 @@ export default function LeaseReview() {
   // data from ui_review_payload (the pipeline stores extracted fields there,
   // not on lease.extraction_data, until the abstract is approved).
   const resolvedSourceFileId = lease?.source_file_id ?? lease?.extraction_data?.source_file_id ?? null;
-  const { data: uploadedFile, isFetching: isUploadedFileFetching } = useQuery({
+  const { data: uploadedFile } = useQuery({
     queryKey: ["uploaded_file_for_lease", resolvedSourceFileId],
     queryFn: async () => {
       if (!resolvedSourceFileId) return null;
       const { data, error } = await supabase
         .from("uploaded_files")
-        .select("id, status, ui_review_payload, reviewed_output, normalized_output, parsed_data")
+        .select(
+          "id, status, ui_review_payload, reviewed_output, normalized_output, parsed_data, " +
+          "review_readiness, review_readiness_reasons, enrichment_status, artifact_sync_status, active_generation_id",
+        )
         .eq("id", resolvedSourceFileId)
         .single();
       if (error) {
@@ -249,6 +252,37 @@ export default function LeaseReview() {
       return isLeaseReviewEnrichmentInFlight(status) ? 4000 : false;
     },
   });
+
+  // P0.7: files already sitting at review_required from before the P0.4/P0.5
+  // migrations backfilled review_readiness conservatively to 'partial'
+  // (never fabricating 'ready') — without this, they'd stay blocked from
+  // approval forever since nothing re-runs the finalizer for them. This is
+  // NOT starting extraction or creating a job: finalize_lease_extraction_for_review
+  // only evaluates already-persisted state and records the result — it is
+  // the same idempotent, safe-to-recall function P0.5 wires after every
+  // terminal pipeline event server-side, called here once per file/generation
+  // to catch up a legacy row, not as an auto-extract side effect.
+  const finalizeReadinessAttemptedRef = useRef(null);
+  useEffect(() => {
+    if (!lease?.org_id || !resolvedSourceFileId || !uploadedFile) return;
+    if (uploadedFile.review_readiness !== null && uploadedFile.review_readiness !== undefined) return;
+    const attemptKey = `${resolvedSourceFileId}:${uploadedFile.active_generation_id ?? "none"}`;
+    if (finalizeReadinessAttemptedRef.current === attemptKey) return;
+    finalizeReadinessAttemptedRef.current = attemptKey;
+    supabase
+      .rpc("finalize_lease_extraction_for_review", {
+        p_org_id: lease.org_id,
+        p_uploaded_file_id: resolvedSourceFileId,
+        p_generation_id: uploadedFile.active_generation_id ?? null,
+      })
+      .then(({ error }) => {
+        if (error) {
+          console.warn("[LeaseReview] finalize_lease_extraction_for_review call failed:", error.message);
+          return;
+        }
+        queryClient.invalidateQueries({ queryKey: ["uploaded_file_for_lease", resolvedSourceFileId] });
+      });
+  }, [lease?.org_id, resolvedSourceFileId, uploadedFile, queryClient]);
 
   // Merged lease object used for display only (FieldReviewTable, summary stats).
   // Mutation logic (save, approve, edit) continues to use the raw `lease`.
@@ -910,12 +944,23 @@ export default function LeaseReview() {
     [allReviewRows],
   );
 
-  // Async evidence/CAM enrichment status written by normalize-pdf-output's
-  // fast-path persist (see uploaded_files.ui_review_payload.enrichment_status:
-  // "pending" | "running" | "completed" | "failed"). Not yet consumed
-  // anywhere else in this file before this change.
-  const enrichmentStatus = uploadedFile?.ui_review_payload?.enrichment_status ?? null;
+  // P0.7: read enrichment_status/review_readiness as real uploaded_files
+  // columns (promoted from ui_review_payload JSONB in P0.4), falling back to
+  // the JSONB location only for a row from before that migration's backfill
+  // ran. review_readiness is the authoritative "is this file safe to call
+  // ready for review" signal — computed once by
+  // evaluate_lease_extraction_readiness/finalize_lease_extraction_for_review
+  // server-side (P0.4/P0.5), not re-derived ad hoc here the way this file
+  // used to reconstruct "has extraction succeeded" from ~10 independent
+  // heuristics over lease.extraction_data/ui_review_payload shapes.
+  const enrichmentStatus = uploadedFile?.enrichment_status ?? uploadedFile?.ui_review_payload?.enrichment_status ?? null;
   const isEnrichmentInFlight = isLeaseReviewEnrichmentInFlight(enrichmentStatus);
+  const isEnrichmentFailed = enrichmentStatus === "failed";
+  const reviewReadiness = uploadedFile?.review_readiness ?? null;
+  const reviewReadinessReasons = Array.isArray(uploadedFile?.review_readiness_reasons)
+    ? uploadedFile.review_readiness_reasons
+    : [];
+  const isReviewReady = reviewReadiness === "ready";
 
   // Temporary read-only fallback: when ui_review_payload hasn't landed yet
   // (or has none of the field-map shapes buildLeaseReviewRowsByTab knows
@@ -941,95 +986,16 @@ export default function LeaseReview() {
       }));
   }, [hasDisplayableExtractedFields, uploadedFile]);
 
-  // Auto-run extraction the first time we land on a lease that hasn't been
-  // through the full re-extract pipeline yet, and that has no displayable
-  // data at all. The canonical "extraction has been finalized" marker is
-  // `evidence_refreshed_at`, which only handleReextractLease writes - but we
-  // now trust hasDisplayableExtractedFields as the primary, authoritative
-  // gate instead of re-deriving "does data exist" from scratch, so this
-  // effect's notion of "has data" can never drift out of sync with what the
-  // table actually renders.
-  const autoExtractFiredRef = useRef(null);
-  useEffect(() => {
-    if (!lease?.id) return;
-    if (autoExtractFiredRef.current === lease.id) return;
-    if (reextracting) return;
-    const sourceFileId = lease?.source_file_id ?? lease?.extraction_data?.source_file_id;
-    if (!sourceFileId) return;
-
-    // Wait until the uploadedFile query has resolved. `uploadedFile` is
-    // `undefined` while the query is in-flight; it becomes null (not found /
-    // error) or a real row once settled. Firing before that would false-negative
-    // hasDisplayableExtractedFields and auto-re-extract could fire incorrectly.
-    if (isUploadedFileFetching || uploadedFile === undefined) return;
-
-    // Helper: mark this lease as handled so the effect never fires twice.
-    const done = () => { autoExtractFiredRef.current = lease.id; };
-
-    // 1. The review table already has real, displayable data - regardless of
-    //    which backend shape produced it (lease.extraction_data,
-    //    ui_review_payload.records[].standard_fields/fields/workflow_output,
-    //    or a fast-path minimal payload). Never disturb it automatically.
-    if (hasDisplayableExtractedFields) {
-      console.log("[LeaseReview] auto-extract: skip - review table already has displayable extracted fields");
-      done(); return;
-    }
-
-    // 2. Evidence/CAM enrichment is still in flight server-side. Don't pile a
-    //    second full re-extract on top of it - the fast-path fields (if any)
-    //    are already covered by check 1; if there are truly none yet, wait
-    //    rather than racing the in-flight enrichment run.
-    if (isEnrichmentInFlight) {
-      console.log("[LeaseReview] auto-extract: skip - enrichment_status is pending/running");
-      done(); return;
-    }
-
-    // 3. Pipeline ran but core mapping failed - retrying automatically won't
-    //    help without a source-file change; require a manual Re-extract.
-    const uiPayload = uploadedFile?.ui_review_payload;
-    if (uiPayload && (uiPayload.mapping_failed || uiPayload.metadata?.extractionDebug?.core_mapping_failed)) {
-      console.log("[LeaseReview] auto-extract: skip - pipeline ran but core mapping failed");
-      done(); return;
-    }
-
-    // 4. Uploaded file already reached a terminal status with no displayable
-    //    data (all-null prior run, e.g. no LLM was configured at the time) -
-    //    allow exactly one auto-re-extract from these terminal states so
-    //    newly configured Vertex AI / Docling credentials take effect without
-    //    a manual click, but never from a state that implies the document
-    //    still needs a human decision.
-    const ufStatus = uploadedFile?.status ?? uploadedFile?.processing_status ?? null;
-    const terminalStatuses = ["validated", "approved", "completed", "stored"];
-    if (ufStatus && terminalStatuses.includes(String(ufStatus))) {
-      console.log(`[LeaseReview] auto-extract: skip - uploaded file status=${ufStatus} (pipeline already ran)`);
-      done(); return;
-    }
-
-    // 5. A recent auto-extract failure for this lease was recorded in
-    //    sessionStorage. Don't hammer the edge function; wait for the user to
-    //    manually trigger Re-extract Lease once resources are available.
-    const failureKey = `lease_auto_extract_failed_${lease.id}`;
-    const lastFailedAt = Number(sessionStorage.getItem(failureKey) || 0);
-    const RETRY_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
-    if (lastFailedAt && Date.now() - lastFailedAt < RETRY_COOLDOWN_MS) {
-      console.log("[LeaseReview] auto-extract: skip - recent failure recorded, waiting for manual retry");
-      done(); return;
-    }
-
-    done();
-    console.log("[LeaseReview] auto-running re-extract - source linked but no extracted data found yet");
-    toast.info("Running full lease extraction in the background...");
-    handleReextractLease();
-  }, [
-    lease?.id,
-    lease?.source_file_id,
-    lease?.extraction_data?.source_file_id,
-    hasDisplayableExtractedFields,
-    isEnrichmentInFlight,
-    uploadedFile,
-    isUploadedFileFetching,
-    reextracting,
-  ]);
+  // P0.7: the mount-triggered auto-extract effect that used to live here has
+  // been removed entirely, not narrowed. Page navigation must never spend
+  // LLM tokens, create jobs, cancel jobs, start a new generation, or alter
+  // extraction truth as a side effect of rendering — that was exactly the
+  // defect this plan's audit found (LeaseReview.jsx never consulted the
+  // authoritative pipeline_jobs/review_readiness signal and could silently
+  // fire a force_reextract call on simple navigation). Lease Review is now a
+  // passive consumer: it shows review_readiness/blocking_reasons (below) and
+  // a "Retry Extraction" affordance for the user to click explicitly —
+  // handleReextractLease remains available only as that explicit action.
 
   // --- Early returns -------------------------------------------------------
   if (!leaseId) {
@@ -1406,6 +1372,22 @@ export default function LeaseReview() {
   })();
 
   const approvalBlockers = [];
+  // P0.7: server-computed review_readiness is the authoritative gate —
+  // approval is fail-closed on anything other than 'ready' (no waiver
+  // bypass in this P0 release; 'manual_review' routes to a separate
+  // resolution workflow, not this button). The actual enforcement lives
+  // server-side in finalize_lease_review_approval (P0.6); this blocker only
+  // prevents submitting a request that server will reject anyway, and
+  // explains why in the UI instead of a raw 422.
+  if (uploadedFile && !isReviewReady) {
+    approvalBlockers.push({
+      kind: "review_not_ready",
+      title: reviewReadiness === "manual_review"
+        ? "This document requires manual review before it can be approved"
+        : "Extraction is not yet ready for approval",
+      detail: reviewReadinessReasons.length > 0 ? reviewReadinessReasons.join(", ") : (reviewReadiness || "pending"),
+    });
+  }
   if (bulkEvaluation.validationBlockers.length > 0) {
     approvalBlockers.push({
       kind: "validation_errors",
@@ -2876,6 +2858,25 @@ export default function LeaseReview() {
         <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 flex items-center gap-3">
           <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-500" />
           Evidence and CAM enrichment is still running.
+        </div>
+      )}
+
+      {/* P0.7: failed enrichment previously showed no banner at all
+          (isLeaseReviewEnrichmentInFlight only covers pending/running) —
+          fixed to surface it, with the server's exact blocking_reasons,
+          instead of silently letting the reviewer approve incomplete data. */}
+      {!reextracting && !isReviewReady && (isEnrichmentFailed || reviewReadinessReasons.length > 0) && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <p className="font-semibold">
+            {reviewReadiness === "manual_review"
+              ? "This document requires manual review before it can be approved."
+              : "Extraction is not fully complete — review before approving."}
+          </p>
+          {reviewReadinessReasons.length > 0 && (
+            <p className="mt-1 text-xs text-red-700">
+              Blocking reasons: {reviewReadinessReasons.join(", ")}
+            </p>
+          )}
         </div>
       )}
 

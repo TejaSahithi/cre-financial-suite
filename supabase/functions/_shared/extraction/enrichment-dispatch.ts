@@ -64,42 +64,44 @@ export async function enqueueEnrichmentJob(args: {
   const { supabaseAdmin, orgId, fileId, moduleType, logger } = args;
   const now = new Date().toISOString();
 
-  await supabaseAdmin
-    .from("pipeline_jobs")
-    .update({
-      status: "cancelled",
-      error_code: "SUPERSEDED",
-      error_message: "Superseded by a newer enrichment request.",
-      completed_at: now,
-      updated_at: now,
-    })
-    .eq("uploaded_file_id", fileId)
-    .eq("stage", "enrich")
-    .in("status", ["queued", "running"]);
+  // enqueue_pipeline_job adds the "enrich" stage to the file's EXISTING
+  // active generation (started earlier by start_lease_extraction_generation
+  // during ingest/re-extraction) — it never creates a generation itself.
+  // Same-generation duplicate calls (this function is deliberately called
+  // from two places — see header comment above — as a defensive re-dispatch)
+  // return the already-queued/running job instead of creating a second row,
+  // replacing the previous non-atomic "cancel then insert" pair.
+  // See supabase/migrations/20260824000200_pipeline_jobs_generation_rpcs.sql.
+  const { data: result, error: enqueueError } = await supabaseAdmin.rpc("enqueue_pipeline_job", {
+    p_org_id: orgId,
+    p_uploaded_file_id: fileId,
+    p_job_type: "lease_extraction",
+    p_stage: "enrich",
+    p_contract_version: "lease-review-evidence-v3",
+    p_max_attempts: 3,
+    p_input: { mode: "enrich", module_type: moduleType ?? "leases" },
+    p_metadata: { enqueued_by: "enrichment-dispatch", enqueued_at: now },
+  });
 
-  const { data: job, error: jobError } = await supabaseAdmin
-    .from("pipeline_jobs")
-    .insert({
-      org_id: orgId,
-      uploaded_file_id: fileId,
-      job_type: "lease_extraction",
-      stage: "enrich",
-      status: "queued",
-      max_attempts: 3,
-      input: { mode: "enrich", module_type: moduleType ?? "leases" },
-      metadata: { enqueued_by: "enrichment-dispatch", enqueued_at: now },
-    })
-    .select("id")
-    .single();
-
-  if (jobError || !job?.id) {
-    console.error(`[enrichment-dispatch] Could not enqueue enrich job for file_id=${fileId}: ${jobError?.message}`);
+  if (enqueueError || !result) {
+    console.error(`[enrichment-dispatch] Could not enqueue enrich job for file_id=${fileId}: ${enqueueError?.message}`);
     return null;
   }
 
-  await logger?.event?.("enrich", "queued", { provider: "lease-extraction-worker", metadata: { job_id: job.id } });
-  console.log(`[normalize-pdf-output] enrichment_job_enqueued file_id=${fileId} job_id=${job.id}`);
+  const jobId = result.created ? result.job_id : result.existing_job_id;
+  if (!jobId) {
+    console.error(`[enrichment-dispatch] enqueue_pipeline_job returned no job id for file_id=${fileId}`);
+    return null;
+  }
 
-  dispatchEnrichmentWorker(job.id, logger);
-  return job;
+  if (!result.created) {
+    console.log(`[normalize-pdf-output] enrichment_job_already_active file_id=${fileId} job_id=${jobId}`);
+    return { id: jobId };
+  }
+
+  await logger?.event?.("enrich", "queued", { provider: "lease-extraction-worker", metadata: { job_id: jobId } });
+  console.log(`[normalize-pdf-output] enrichment_job_enqueued file_id=${fileId} job_id=${jobId}`);
+
+  dispatchEnrichmentWorker(jobId, logger);
+  return { id: jobId };
 }

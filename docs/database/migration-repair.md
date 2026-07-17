@@ -211,3 +211,61 @@ Unlike `budgets` (fully RPC-covered, so `tr_budget_changed`'s audit insert could
 **Verification:** local `db reset --local` clean, both functions confirmed single-signature via `\df`; Deno regression 44/44 (1 new test covering: lease creation still trigger-audited, approval produces zero trigger-duplicated rows, a later ordinary direct UPDATE after the RPC call is still fully audited by the trigger — proving the GUC doesn't leak across transactions — and the trigger's "Lease Ready for Budget" notification still fires for that direct write); Vitest 352/352; lint clean; build clean; remote dry-run showed exactly this one migration; pushed; verified read-only via a fresh `supabase db dump --linked`: both the trigger's GUC check and the RPC's `set_config` call present in the live remote function bodies.
 
 **Not touched, still open:** `tr_expense_added` (Phase 6A-3) — no actionable work exists yet since no RPC inserts expense rows; revisit once an expense-creation RPC exists. The ~12 still-direct-write lease call sites themselves remain unmigrated (tracked in the Phase 6D plan), Azure, RLS lockdown.
+
+## 2026-07-17: P0.0 audit for "make current production truth honest" — pipeline_jobs/leases/uploaded_files drift is worse than assumed
+
+A read-only `supabase migration list --linked` plus a fresh `supabase db dump --linked --schema public`, diffed against a `supabase db dump --local --schema public` (local Docker already had every migration through `20260823000000` applied), was run as the P0.0 prerequisite for the Lease Review pipeline-honesty plan (`C:\Users\tejas\.claude\plans\think-as-senior-enterprise-elegant-harbor.md`). Same method as every prior entry in this doc; findings are more extensive than any single previous session because this is the first time the exact tables that plan depends on (`pipeline_jobs`, `leases`, `uploaded_files`) were dumped and diffed directly.
+
+### 1. `migration list --linked` "applied" is not proof the objects exist — 15 tables confirmed missing on remote despite being marked applied
+
+Set-difference of `CREATE TABLE` statements (not a raw line diff, which is dominated by pg_dump ordering noise) between the two dumps shows **15 tables that exist locally but are completely absent from remote**, even though every one of their defining migrations shows `local == remote` in `migration list --linked`:
+
+- `custom_fields`, `custom_field_values` — `20260413000000_custom_fields_system.sql`
+- `expense_classification_templates`, `expense_classification_template_items`, `scope_expense_categories` — `20260424000000_expense_classifications.sql`
+- `user_roles` — `20260321_create_organizations.sql`
+- `lease_expense_rule_workflow_runs` — `20260602183000_lease_expense_rule_review_workflow.sql`
+- `lease_expense_rule_cam_publish_runs` — `20260602190000_publish_lease_expense_rule_to_cam_workflow.sql`
+- `document_intelligence_runs`, `document_claims`, `document_claim_evidence`, `document_canonical_field_projections`, `document_validation_drops`, `document_packages`, `document_package_documents`, `document_related_document_requirements`, `document_relationships` — the `20260819000000`–`20260823000000` document_intelligence_v3 series, which `migration list --linked` separately (and correctly) shows as **not yet applied** (empty `remote` field) — consistent with the rest of this finding, just already visible without a dump.
+
+No `DROP TABLE` for any of these names exists anywhere in migration history (checked directly). This is a strictly worse variant of every drift pattern already documented above in this file (which was always "remote has something migrations don't know about," or "a hand patch diverged from the tracked body") — here the ledger actively asserts six-months-old migrations are applied when their `CREATE TABLE` demonstrably never took effect on this project. **`supabase migration list --linked` cannot be trusted as evidence of actual remote schema state for this project, full stop — not just for recent migrations.** Root cause not established (possible partial-apply-then-silent-continue on an old CLI version, possible direct ledger-row insertion without running the DDL, possible a restore from an earlier snapshot that didn't replay everything) and not investigated further here, since it's out of scope for the P0 plan this audit was run for.
+
+### 2. `pipeline_jobs` — the exact table P0.1–P0.5 build on — has multiple real mismatches from what every migration file (and the P0 plan) assumes
+
+Direct column-level diff of `CREATE TABLE "public"."pipeline_jobs"`:
+
+| | Remote (live) | Local (migration-derived) |
+|---|---|---|
+| `uploaded_file_id` | nullable | `NOT NULL` |
+| `stage` | nullable, **no check that it's non-null** | `NOT NULL` |
+| `worker_name` | **column does not exist** | present |
+| `counts` | **column does not exist** | present, `DEFAULT '{}'` |
+| `output` | present (`jsonb DEFAULT '{}'`) | **does not exist in any migration** — remote-only, untracked |
+| `pipeline_jobs_job_type_check` | **constraint does not exist** | present (`job_type = 'lease_extraction'`) |
+| `pipeline_jobs_status_check` | **constraint does not exist** | present (5-value enum) |
+| `pipeline_jobs_stage_check` | present, matches | present, matches |
+| index names | `idx_pipeline_jobs_uploaded_file_id`, `idx_pipeline_jobs_claim`, `idx_pipeline_jobs_org_created` | `idx_pipeline_jobs_file`, `idx_pipeline_jobs_queue`, `idx_pipeline_jobs_org` (from `20260610120000_pipeline_jobs.sql`) |
+
+Practical implications: (a) remote's `status` column has had **zero enforcement** of the 5-value enum this whole time — any code path that writes an unexpected string would succeed silently; (b) `worker_name`/`counts` are read/written by `lease-extraction-worker/index.ts` and `pipeline-status/status-utils.ts`'s `sanitizeJob()` today — if remote genuinely lacks these columns, every worker claim that sets `worker_name` and every status read that reports `counts` is either erroring (`isMissingSchemaError`'s `42703`/`PGRST204` pattern, which this codebase already has explicit handling for) or silently dropping the field; (c) the index name mismatch means someone recreated/renamed these three indexes directly on remote outside migration history — functionally low-risk on its own, but one more confirmation that this table has been hand-touched.
+
+**This directly affects the P0.1 plan.** P0.1 was written assuming today's plan-file baseline (`worker_name`, `counts`, both CHECK constraints present) and only needed to *add* `generation_id`/`idempotency_key` and widen the status CHECK to include `superseded`. Before that can run against this remote project, P0.1's migration must first **reconcile `pipeline_jobs` to the tracked shape** (add `worker_name`, add `counts`, add both missing CHECK constraints with `NOT VALID`-then-`VALIDATE` or a pre-check for existing violations, decide `uploaded_file_id`/`stage` NOT NULL only after confirming no existing NULL rows) *before* layering generation-awareness on top — otherwise the generation work would be built on a table whose actual remote constraints don't match what every later RPC in P0.2–P0.6 assumes.
+
+### 3. `leases.source_file_id` — the P0 plan's named "deterministic lease/source link authority" — does not exist on remote
+
+The P0 plan (P0.0 step 2, P0.6) explicitly named `leases.source_file_id → uploaded_files.id` as the one authoritative relationship, added by `20260605000000_add_source_file_id_to_leases.sql`, and instructed confirming it's actually deployed before building on it. **It is not.** A direct column diff of `leases` confirms `source_file_id` is present in the local (migration-derived) schema only — absent from the remote dump entirely — even though `20260605000000` shows `local == remote` in `migration list --linked` (same "ledger says applied, object doesn't exist" pattern as finding 1). This is the exact schema/runtime-drift symptom the original architecture document flagged ("frontend expects columns not deployed in DB") and the exact reason that migration's own header comment gives for why it was added in the first place — confirming the original bug it was meant to fix was never actually fixed on this project.
+
+Additional real mismatches on `leases` beyond `source_file_id` (found via the same diff, not yet assessed for P0 impact beyond the source-link finding): `low_confidence_fields` is `jsonb` on remote vs `text[]` in the local/migrated schema; remote has a materially different, larger set of typed lease-detail columns (`property_name`, `landlord_address`, `tenant_contact_name`, `commencement_date`, `base_rent_monthly`, etc. — roughly 30 columns) that no migration in this repo's history creates. This table has clearly been evolved directly against production independent of migration history for some time; a full reconciliation of `leases` is larger than P0's scope and is **not** attempted here — only the `source_file_id` gap is load-bearing for this plan and is called out as a required fix.
+
+### 4. Other remote-only objects (not part of pipeline_jobs/leases/uploaded_files, noted for completeness, not acted on by P0)
+
+- Tables: `security_questions`, `bulk_import_logs` — remote-only, no migration creates either.
+- Functions: `get_my_org_ids_array()`, `mark_demo_viewed(uuid)`, `rls_auto_enable()` (an event trigger function), three overloaded versions of `submit_address_request`/`submit_access_request` with progressively more parameters — all remote-only.
+- `get_my_org_ids()` return-type drift (`uuid[]` on remote vs `SETOF uuid` in every migration) was already found and deliberately worked around on 2026-07-09 (see above) — re-confirmed still present, not a new finding.
+- A duplicate old/new RLS policy-naming pattern on `access_requests`/`contact_requests` (e.g. both `"Allow anonymous insert"` and `"access_requests_anon_insert"` exist simultaneously) — same leftover-policy-drift pattern documented multiple times above for other tables, not yet inventoried for these two.
+
+### Recommended path forward (not yet executed — awaiting direction)
+
+Per this plan's own P0.0 step 5/6 ("produce one additive compatibility migration only for proven drift... stop at dry-run for confirmation"), the following is proposed as the immediate next step, folded into P0.1 (which already needs to alter `pipeline_jobs`):
+
+1. One migration that reconciles `pipeline_jobs` to its tracked shape on remote (`ADD COLUMN IF NOT EXISTS worker_name`, `ADD COLUMN IF NOT EXISTS counts`, add the two missing CHECK constraints after a pre-check for existing violations) *before* adding `generation_id`/`idempotency_key`/the `superseded` status value.
+2. One migration that adds `leases.source_file_id` (matching `20260605000000`'s original definition) if a fresh remote check at execution time still confirms it's missing.
+3. Everything else in this section (the 15 missing tables, `leases`' broader ~30-column divergence, `security_questions`/`bulk_import_logs`/the extra functions, the duplicate RLS policy names) is flagged for separate follow-up, explicitly out of scope for the P0 pipeline-honesty plan, same as this doc's established practice of scoping each entry narrowly and carrying forward what it doesn't touch.

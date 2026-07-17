@@ -272,45 +272,37 @@ async function enqueueLeaseExtractionJob(args: {
     }
   }
 
-  await supabaseAdmin
-    .from("pipeline_jobs")
-    .update({
-      status: "cancelled",
-      error_code: "SUPERSEDED",
-      error_message: "Superseded by a newer lease extraction request.",
-      completed_at: now,
-      updated_at: now,
-    })
-    .eq("uploaded_file_id", fileRecord.id)
-    .eq("job_type", "lease_extraction")
-    .in("status", ["queued", "running"]);
-
-  const { data: job, error: jobError } = await supabaseAdmin
-    .from("pipeline_jobs")
-    .insert({
-      org_id: orgId,
-      uploaded_file_id: fileRecord.id,
-      job_type: "lease_extraction",
-      stage: initialStage,
-      status: "queued",
-      max_attempts: 3,
-      input: {
+  // start_lease_extraction_generation is the only place a new extraction
+  // generation is born: it atomically supersedes the previous generation's
+  // queued jobs, requests cancellation of any running one, and inserts the
+  // first job of the new generation — replacing the previous non-atomic
+  // "cancel then insert" pair, which could race two concurrent callers past
+  // each other. See supabase/migrations/20260824000200_pipeline_jobs_generation_rpcs.sql.
+  const { data: generationResult, error: generationError } = await supabaseAdmin.rpc(
+    "start_lease_extraction_generation",
+    {
+      p_org_id: orgId,
+      p_uploaded_file_id: fileRecord.id,
+      p_job_type: "lease_extraction",
+      p_initial_stage: initialStage,
+      p_contract_version: "lease-review-evidence-v3",
+      p_input: {
         force_reextract: forceReextract,
         skip_parse: initialStage === "normalize",
         module_type: fileRecord.module_type ?? "leases",
         file_name: fileRecord.file_name ?? null,
       },
-      metadata: {
+      p_metadata: {
         enqueued_by: "ingest-file",
         enqueued_at: now,
       },
-    })
-    .select("id")
-    .single();
+    },
+  );
 
-  if (jobError || !job?.id) {
-    throw new Error(`Could not enqueue lease extraction job: ${jobError?.message || "missing job id"}`);
+  if (generationError || !generationResult?.job_id) {
+    throw new Error(`Could not enqueue lease extraction job: ${generationError?.message || "missing job id"}`);
   }
+  const job = { id: generationResult.job_id };
 
   const statusResult = await setStatus(supabaseAdmin, fileRecord.id, "parsing", {
     processing_status: "lease_extraction_queued",
