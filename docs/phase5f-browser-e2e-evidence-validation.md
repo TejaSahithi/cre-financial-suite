@@ -73,7 +73,13 @@ Phase 5F Playwright now asserts after browser reload at both viewports:
 
 ## Verification Results
 
-Pending final rerun in this closure pass.
+- Focused projection tests: `npx vitest run src/lib/__tests__/leaseReviewFieldNormalizer.test.js` - 1 file passed, 70 tests passed, 0 failed.
+- Phase 5F Playwright desktop: `npm run test:e2e:phase5f -- --project=phase5f-desktop` - 1 test passed, 0 failed.
+- Phase 5F Playwright laptop: `npm run test:e2e:phase5f -- --project=phase5f-laptop` - 1 test passed, 0 failed.
+- Lint: `npm run lint` - passed, exit code 0.
+- Typecheck: `npm run typecheck` - passed, exit code 0.
+- Build: `npm run build` - passed, exit code 0. Vite emitted pre-existing chunking/dynamic-import warnings only.
+- Diff whitespace check: `git diff --check` - passed, exit code 0.
 
 ## Deferred
 
