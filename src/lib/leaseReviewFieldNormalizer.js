@@ -375,7 +375,7 @@ function describeApprovalImpact(contract) {
 
 function computeFieldStatus({ hasValue, evidenceVerified, confidenceBucket, reviewStatus, extractionStatus }) {
   if (reviewStatus === REVIEW_STATUSES.EDITED) return "manually_edited";
-  if (extractionStatus === EXTRACTION_STATUSES.CONFLICT) return "rejected";
+  if (extractionStatus === EXTRACTION_STATUSES.CONFLICT) return "needs_review";
   if (!hasValue) return "missing";
   if (evidenceVerified && confidenceBucket === "high") return "auto_populated";
   return "needs_review";
@@ -1132,7 +1132,7 @@ function mergeDynamicFallbackRows(rows, fallbackRows) {
 
 function isCamRule(rule) {
   const category = String(rule?.expense_category ?? rule?.category ?? rule?.normalized_key ?? rule?.rule_type ?? "").toLowerCase();
-  return /\bcam\b|common_area|operating_expenses|gross_up|cap|base_year|expense_stop|admin|management/.test(category)
+  return /\bcam\b|common_area|operating_expenses|gross_up|cap|base_year|expense_stop|admin|management|reconciliation|true_up|audit|allocation|pro_rata|proportionate/.test(category)
     || rule?.gross_up_threshold != null
     || rule?.gross_up_percent != null
     || rule?.cam_cap_pct != null
