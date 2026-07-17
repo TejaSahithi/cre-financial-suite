@@ -1069,7 +1069,7 @@ async function linkLeaseToUploadedFile(leaseId, fileRecord) {
   const sourceFileId = fileRecord.id;
   const { data: lease, error: fetchError } = await supabase
     .from("leases")
-    .select("id, extraction_data")
+    .select("id, source_file_id, extraction_data")
     .eq("id", leaseId)
     .maybeSingle();
 
@@ -1078,7 +1078,7 @@ async function linkLeaseToUploadedFile(leaseId, fileRecord) {
   }
 
 
-  const extractionSourceFileId = lease?.extraction_data?.source_file_id || null;
+  const extractionSourceFileId = lease?.source_file_id || lease?.extraction_data?.source_file_id || null;
   if (extractionSourceFileId !== sourceFileId) {
     try {
       await updateLeaseExtractionField({
@@ -1105,15 +1105,31 @@ async function findLeaseByFileId(fileId) {
   if (!fileId) return null;
 
   const attempts = [
+    (query) => query.eq("source_file_id", fileId),
     (query) => query.filter("extraction_data->>source_file_id", "eq", fileId),
     (query) => query.filter("extraction_data->>uploaded_file_id", "eq", fileId),
   ];
 
   for (const applyFilter of attempts) {
-    const query = supabase.from("leases").select("id").limit(1);
+    const query = supabase
+      .from("leases")
+      .select("id, source_file_id, extraction_data")
+      .order("updated_at", { ascending: false })
+      .limit(1);
     const { data, error } = await applyFilter(query).maybeSingle();
     if (!error && data?.id) return data;
   }
+
+  const { data: link, error: linkError } = await supabase
+    .from("document_links")
+    .select("entity_id")
+    .eq("file_id", fileId)
+    .eq("entity_type", "lease")
+    .in("link_role", ["source", "source_file"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!linkError && link?.entity_id) return { id: link.entity_id };
 
   return null;
 }

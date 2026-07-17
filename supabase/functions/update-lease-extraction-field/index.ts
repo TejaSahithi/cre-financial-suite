@@ -49,10 +49,26 @@ function validatePayload(body: Record<string, unknown> = {}) {
 
 function errorStatus(message: string) {
   if (/unauthorized|missing authorization/i.test(message)) return 401;
-  if (/access denied|permission/i.test(message)) return 403;
+  if (/access denied|permission|different organization/i.test(message)) return 403;
   if (/approved and locked/i.test(message)) return 409;
   if (/required|not found|must be one of|is not permitted/i.test(message)) return 400;
   return 500;
+}
+
+async function validateSourceFileForOrg(supabaseAdmin: any, orgId: string, sourceFileId: unknown) {
+  const id = typeof sourceFileId === "string" ? sourceFileId.trim() : "";
+  if (!id) throw new Error("source_file_id is required for source_link updates");
+  if (!UUID_RE.test(id)) throw new Error("source_file_id must be a valid uploaded file id");
+
+  const { data, error } = await supabaseAdmin
+    .from("uploaded_files")
+    .select("id")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (error) throw new Error(`Could not verify source_file_id: ${error.message}`);
+  if (!data?.id) throw new Error("source_file_id belongs to a different organization or does not exist");
+  return id;
 }
 
 Deno.serve(async (req: Request) => {
@@ -73,6 +89,9 @@ Deno.serve(async (req: Request) => {
 
     const body = await req.json().catch(() => ({}));
     const payload = validatePayload(body);
+    const sourceFileId = payload.fieldArea === "source_link"
+      ? await validateSourceFileForOrg(supabaseAdmin, orgId, (payload.patch as Record<string, unknown>).source_file_id)
+      : null;
 
     const { data, error } = await supabaseAdmin.rpc("update_lease_extraction_field", {
       p_org_id: orgId,
@@ -89,7 +108,7 @@ Deno.serve(async (req: Request) => {
       throw new Error(error.message || "update_lease_extraction_field failed");
     }
 
-    return jsonResponse({ error: false, ...data });
+    return jsonResponse({ error: false, ...data, source_file_id: sourceFileId ?? data?.source_file_id ?? null });
   } catch (err) {
     const message = err?.message || "Could not update lease extraction field";
     return jsonResponse({

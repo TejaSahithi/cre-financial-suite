@@ -191,10 +191,20 @@ export function buildAbstractSnapshot({
     }
   }
 
+  const sourceFileId = lease.source_file_id ?? extraction.source_file_id ?? extraction.uploaded_file_id ?? null;
+  const sourceDocument = {
+    uploaded_file_id: sourceFileId,
+    source_file_id: sourceFileId,
+    source_file_name: extraction.source_file_name ?? null,
+    document_subtype: extraction.document_subtype ?? lease.document_subtype ?? null,
+  };
+
   return {
     version,
     approved_at: approvedAt || new Date().toISOString(),
     approved_by: approvedBy,
+    source_document: sourceDocument,
+    uploaded_file_id: sourceFileId,
     fields,
     approved,
     pending_fields,

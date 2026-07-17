@@ -67,6 +67,33 @@ Deno.test("buildAbstractSnapshot groups approved and rejected field reviews", ()
   assertEquals(snapshot.rejected_fields.monthly_rent.review_status, "rejected");
 });
 
+Deno.test("buildAbstractSnapshot preserves source document identity", () => {
+  const snapshot = buildAbstractSnapshot({
+    lease: {
+      source_file_id: "upload-a",
+      extraction_data: {
+        source_file_id: "legacy-upload-a",
+        source_file_name: "phase5d-source.pdf",
+        document_subtype: "base_lease",
+        fields: { tenant_name: { value: "Tenant LLC" } },
+      },
+    },
+    fieldReviews: {
+      tenant_name: { status: "accepted", value: "Tenant LLC" },
+    },
+    version: 1,
+    approvedBy: "Pat",
+    approvedAt: "2026-07-17T12:00:00.000Z",
+  });
+
+  assertEquals(snapshot.uploaded_file_id, "upload-a");
+  assertEquals(snapshot.source_document, {
+    uploaded_file_id: "upload-a",
+    source_file_id: "upload-a",
+    source_file_name: "phase5d-source.pdf",
+    document_subtype: "base_lease",
+  });
+});
 Deno.test("buildCriticalDateRows derives idempotent lease milestone rows", () => {
   const rows = buildCriticalDateRows({
     id: "lease-1",

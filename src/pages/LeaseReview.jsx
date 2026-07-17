@@ -467,77 +467,10 @@ export default function LeaseReview() {
         if (!cancelled) setAutoLinkDebug(dbg);
         console.log("[LeaseReview] auto-link diagnostic:", dbg, "candidates:", candidates.slice(0, 5));
 
-        // Decide whether to auto-link.
-        //   - Score must clear the minimum (>= 5)
-        //   - Decisive if ANY of:
-        //       a) Every tied-at-top candidate has the same normalized filename
-        //          (re-uploads of the same document - not ambiguous)
-        //       b) Top beats the runner-up of a DIFFERENT filename by >= 3 points
-        //       c) Top score is very high (>= 10) AND >= 2 of the tied candidates
-        //          share the top's normalized filename - pick the most recent
-        //          from that filename group regardless of unrelated ties
-        const top = ranked[0];
-        if (!top || top.score < 5 || cancelled) {
-          console.log("[LeaseReview] auto-link: skip - no candidate clears minimum score (top:", top?.score, "min: 5)");
-          return;
-        }
-        const normName = (n) => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
-        const topName = normName(top.file.file_name);
-        const tiedWithTop = ranked.filter((r) => r.score === top.score);
-        const sameFileTies = tiedWithTop.filter((r) => normName(r.file.file_name) === topName);
-        const allTiedSameFile = sameFileTies.length === tiedWithTop.length;
-        const runnerUpDifferentFile = ranked
-          .find((r) => normName(r.file.file_name) !== topName);
-        const gapClear = !runnerUpDifferentFile
-          || top.score - runnerUpDifferentFile.score >= 3;
-        const highScoreSameFileMajority = top.score >= 10 && sameFileTies.length >= 2;
-        const decisive = allTiedSameFile || gapClear || highScoreSameFileMajority;
-        console.log("[LeaseReview] auto-link decision:", {
-          top_score: top.score,
-          tied_count: tiedWithTop.length,
-          same_file_tied_count: sameFileTies.length,
-          all_tied_same_file: allTiedSameFile,
-          runner_up_different_file_score: runnerUpDifferentFile?.score ?? null,
-          gap_clear: gapClear,
-          high_score_same_file_majority: highScoreSameFileMajority,
-          decisive,
-        });
-        if (!decisive) {
-          console.log("[LeaseReview] auto-link: skip - no decisive winner. Top tied with different-named candidates; user must pick manually.");
-          return;
-        }
-
-        // When multiple uploads tie at the top score and share the filename,
-        // pick the most recent of that group (ranked sort already ordered
-        // them updated_at desc within score). This avoids accidentally
-        // linking a different-name candidate that happens to share the score.
-        const chosen = (allTiedSameFile || highScoreSameFileMajority) ? sameFileTies[0] : top;
-
-        const autoLinkPatch = {
-          source_file_id: chosen.file.id,
-          source_file_name: chosen.file.file_name ?? null,
-          auto_linked_at: new Date().toISOString(),
-          auto_link_score: chosen.score,
-          auto_link_reasons: chosen.reasons,
-        };
-        const nextExtraction = { ...(lease.extraction_data || {}), ...autoLinkPatch };
-        const { error: updateErr } = await supabase
-          .from("leases")
-          .update({ extraction_data: nextExtraction })
-          .eq("id", lease.id);
-        if (updateErr) {
-          console.warn("[LeaseReview] auto-link write failed:", updateErr.message, updateErr.details || "");
-          return;
-        }
-        console.log(`[LeaseReview] auto-linked lease ${lease.id} -> uploaded_files ${chosen.file.id} (score=${chosen.score}, file=${chosen.file.file_name}, reasons=${chosen.reasons.join("+")})`);
-
-        // Update the React-Query cache immediately so the page reflects the
-        // new source_file_id without waiting for a refetch round-trip. The
-        // invalidate still runs so server state is the source of truth.
-        try {
-          updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
-        } catch { /* setQueryData best-effort */ }
-        queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+        // Phase 5D: never write a guessed source link. Similar uploads in the
+        // same org can share tenant/property signals, so this scan only powers
+        // the explicit manual picker below.
+        console.log("[LeaseReview] source-link candidates require manual selection; no auto-link write performed.");
       } catch (err) {
         console.warn("[LeaseReview] auto-link skipped:", err?.message || err);
       }
@@ -558,13 +491,15 @@ export default function LeaseReview() {
         manually_linked_at: new Date().toISOString(),
       };
       const nextExtraction = { ...(lease.extraction_data || {}), ...manualLinkPatch };
-      const { error: updateErr } = await supabase
-        .from("leases")
-        .update({ extraction_data: nextExtraction })
-        .eq("id", lease.id);
-      if (updateErr) throw updateErr;
+      const result = await updateLeaseExtractionField({
+        leaseId: lease.id,
+        fieldArea: "source_link",
+        action: "source_file_manually_linked",
+        patch: manualLinkPatch,
+      });
+      if (result?.error) throw new Error(result.message || "Could not link source file");
       toast.success(`Linked to ${picked?.file_name || fileId}`);
-      updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
+      updateLeaseQueryCache(queryClient, leaseId, { source_file_id: fileId, extraction_data: nextExtraction });
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
     } catch (err) {
       console.error("[LeaseReview] manual link failed:", err);
@@ -2842,7 +2777,7 @@ export default function LeaseReview() {
               Extraction (Docling + Gemini) can't run and the Re-extract Lease button is disabled until you point this lease at the uploaded PDF.
               {autoLinkDebug ? (
                 <span className="block mt-1 italic">
-                  Auto-link scanned {autoLinkDebug.query_count} uploads ({autoLinkDebug.lease_like} lease-shape), top score {autoLinkDebug.top_score} for "{autoLinkDebug.top_candidate || "-"}" against tenant "{autoLinkDebug.tenant || "-"}". If you see duplicates below, they're re-uploads of the same file - picking the most recent (top of the list) is safe. The UUID is just an internal identifier; you don't need to memorize it.
+                  Scanned {autoLinkDebug.query_count} uploads ({autoLinkDebug.lease_like} lease-shape), top score {autoLinkDebug.top_score} for "{autoLinkDebug.top_candidate || "-"}" against tenant "{autoLinkDebug.tenant || "-"}". Choose the exact upload that produced this lease; no source file is linked automatically.
                 </span>
               ) : null}
             </p>

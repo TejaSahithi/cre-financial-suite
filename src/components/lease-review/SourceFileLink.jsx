@@ -34,31 +34,35 @@ export function SourceFileLink({ lease }) {
 export async function findUploadedFileForLease(lease) {
   if (!lease || !supabase) return null;
 
-  const sourceFileId = lease.source_file_id ?? lease.extraction_data?.source_file_id ?? null;
-  if (sourceFileId) {
-    const { data } = await supabase
+  const fetchFile = async (sourceFileId) => {
+    if (!sourceFileId) return null;
+    let query = supabase
       .from("uploaded_files")
       .select("id, org_id, file_url, file_name")
-      .eq("id", sourceFileId)
-      .maybeSingle();
-    if (data) return data;
-  }
+      .eq("id", sourceFileId);
+    if (lease.org_id) query = query.eq("org_id", lease.org_id);
+    const { data } = await query.maybeSingle();
+    return data || null;
+  };
+
+  const sourceFileId = lease.source_file_id ?? lease.extraction_data?.source_file_id ?? null;
+  const linkedBySourceId = await fetchFile(sourceFileId);
+  if (linkedBySourceId) return linkedBySourceId;
 
   if (!lease.id) return null;
 
-  let query = supabase
-    .from("uploaded_files")
-    .select("id, org_id, file_url, file_name")
-    .contains("reviewed_output", { lease_review_ids: [lease.id] })
-    .order("updated_at", { ascending: false })
+  let linkQuery = supabase
+    .from("document_links")
+    .select("file_id")
+    .eq("entity_type", "lease")
+    .eq("entity_id", lease.id)
+    .in("link_role", ["source", "source_file"])
+    .order("created_at", { ascending: false })
     .limit(1);
+  if (lease.org_id) linkQuery = linkQuery.eq("org_id", lease.org_id);
 
-  if (lease.org_id) {
-    query = query.eq("org_id", lease.org_id);
-  }
-
-  const { data } = await query.maybeSingle();
-  return data || null;
+  const { data: link } = await linkQuery.maybeSingle();
+  return fetchFile(link?.file_id ?? null);
 }
 
 export async function resolveUploadedFileUrl(fileRecord) {

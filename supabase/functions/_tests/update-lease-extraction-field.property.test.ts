@@ -32,10 +32,12 @@ import {
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.99.2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "http://127.0.0.1:54321";
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ??
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
-const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ??
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
+
+if (!SERVICE_ROLE_KEY || !ANON_KEY) {
+  throw new Error("update-lease-extraction-field tests require local SUPABASE_SERVICE_ROLE_KEY and SUPABASE_ANON_KEY env vars");
+}
 
 function adminClient() {
   return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
@@ -102,6 +104,21 @@ function callUpdateField(accessToken: string, body: Record<string, unknown>) {
   });
 }
 
+async function createSourceUpload(admin: ReturnType<typeof adminClient>, orgId: string, userId: string, suffix: string, fileName = "lease-doc.pdf") {
+  return insertOne(admin, "uploaded_files", {
+    org_id: orgId,
+    module_type: "leases",
+    file_name: `${suffix}-${fileName}`,
+    file_url: `local://update-lease-extraction-field/${suffix}/${fileName}`,
+    file_size: 1024,
+    mime_type: "application/pdf",
+    uploaded_by: userId,
+    status: "completed",
+    processing_status: "completed",
+    review_required: false,
+    review_status: "not_required",
+  });
+}
 async function setUpScope(admin: ReturnType<typeof adminClient>, suffix: string, leaseOverrides: Record<string, unknown> = {}) {
   const org = await insertOne(admin, "organizations", {
     name: `Update Lease Extraction Field Org ${suffix}`,
@@ -216,14 +233,15 @@ Deno.test({
   fn: async () => {
     const admin = adminClient();
     const suffix = crypto.randomUUID();
-    const { accessToken, lease } = await setUpScope(admin, suffix);
+    const { org, accessToken, userId, lease } = await setUpScope(admin, suffix);
+    const source = await createSourceUpload(admin, org.id, userId, suffix);
 
     const res = await callUpdateField(accessToken, {
       lease_id: lease.id,
       field_area: "source_link",
       action: "source_file_manually_linked",
       patch: {
-        source_file_id: crypto.randomUUID(),
+        source_file_id: source.id,
         source_file_name: "lease-doc.pdf",
         manually_linked_at: new Date().toISOString(),
       },
@@ -347,13 +365,14 @@ Deno.test({
   fn: async () => {
     const admin = adminClient();
     const suffix = crypto.randomUUID();
-    const { accessToken } = await setUpScope(admin, suffix);
+    const { org, accessToken, userId } = await setUpScope(admin, suffix);
+    const source = await createSourceUpload(admin, org.id, userId, suffix);
 
     const res = await callUpdateField(accessToken, {
       lease_id: crypto.randomUUID(),
       field_area: "source_link",
       action: "source_file_manually_linked",
-      patch: { source_file_id: crypto.randomUUID() },
+      patch: { source_file_id: source.id },
     });
     const body = await res.json();
     assertEquals(body.error, true, "expected a clear error for an unknown lease_id");
@@ -369,13 +388,14 @@ Deno.test({
   fn: async () => {
     const admin = adminClient();
     const suffix = crypto.randomUUID();
-    const { org, accessToken, lease } = await setUpScope(admin, suffix, { abstract_status: "approved" });
+    const { org, accessToken, userId, lease } = await setUpScope(admin, suffix, { abstract_status: "approved" });
+    const source = await createSourceUpload(admin, org.id, userId, suffix);
 
     const res = await callUpdateField(accessToken, {
       lease_id: lease.id,
       field_area: "source_link",
       action: "source_file_manually_linked",
-      patch: { source_file_id: crypto.randomUUID() },
+      patch: { source_file_id: source.id },
     });
     const body = await res.json();
     assertEquals(body.error, true, "expected an approved lease to reject the write");
@@ -430,13 +450,14 @@ Deno.test({
   fn: async () => {
     const admin = adminClient();
     const suffix = crypto.randomUUID();
-    const { accessToken, lease } = await setUpScope(admin, suffix);
+    const { org, accessToken, userId, lease } = await setUpScope(admin, suffix);
+    const source = await createSourceUpload(admin, org.id, userId, suffix);
 
     const res = await callUpdateField(accessToken, {
       lease_id: lease.id,
       field_area: "source_link",
       action: "source_file_manually_linked",
-      patch: { source_file_id: crypto.randomUUID(), status: "approved" },
+      patch: { source_file_id: source.id, status: "approved" },
     });
     const body = await res.json();
     assertEquals(body.error, true, "expected the disallowed key to be rejected");
@@ -478,13 +499,14 @@ Deno.test({
   fn: async () => {
     const admin = adminClient();
     const suffix = crypto.randomUUID();
-    const { org, accessToken, lease } = await setUpScope(admin, suffix);
+    const { org, accessToken, userId, lease } = await setUpScope(admin, suffix);
+    const source = await createSourceUpload(admin, org.id, userId, suffix, "doc.pdf");
 
     const res = await callUpdateField(accessToken, {
       lease_id: lease.id,
       field_area: "source_link",
       action: "source_file_manually_linked",
-      patch: { source_file_id: crypto.randomUUID(), source_file_name: "doc.pdf" },
+      patch: { source_file_id: source.id, source_file_name: "doc.pdf" },
     });
     const body = await res.json();
     assertEquals(res.status, 200, JSON.stringify(body));
@@ -545,7 +567,8 @@ Deno.test({
   fn: async () => {
     const admin = adminClient();
     const suffix = crypto.randomUUID();
-    const { accessToken, lease } = await setUpScope(admin, suffix);
+    const { org, accessToken, userId, lease } = await setUpScope(admin, suffix);
+    const source = await createSourceUpload(admin, org.id, userId, suffix, "seq.pdf");
 
     const firstRes = await callUpdateField(accessToken, {
       lease_id: lease.id,
@@ -560,7 +583,7 @@ Deno.test({
       lease_id: lease.id,
       field_area: "source_link",
       action: "source_file_manually_linked",
-      patch: { source_file_id: crypto.randomUUID(), source_file_name: "seq.pdf" },
+      patch: { source_file_id: source.id, source_file_name: "seq.pdf" },
     });
     assertEquals(secondRes.status, 200, JSON.stringify(await secondRes.json()));
 

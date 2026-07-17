@@ -785,6 +785,9 @@ async function ensureLeaseReviewDrafts(
     ? reviewedOutput.lease_review_ids.filter(Boolean)
     : [];
   if (existingIds.length > 0) {
+    for (const existingId of existingIds) {
+      await syncLeaseSourceDocument(supabaseAdmin, fileRecord.org_id, existingId, fileRecord, user);
+    }
     return {
       table: "leases",
       inserted_count: 0,
@@ -838,6 +841,7 @@ async function ensureLeaseReviewDrafts(
             : ""),
         );
       }
+      await syncLeaseSourceDocument(supabaseAdmin, fileRecord.org_id, existingLeaseId, fileRecord, user);
       await syncLeaseWorkflowArtifacts(
         supabaseAdmin,
         fileRecord.org_id,
@@ -850,6 +854,7 @@ async function ensureLeaseReviewDrafts(
 
     const leasePayload = buildLeaseReviewDraftPayload(fileRecord, row, reviewedOutput, user, now, rowIndex);
     const inserted = await insertLeaseDraft(supabaseAdmin, leasePayload);
+    await syncLeaseSourceDocument(supabaseAdmin, fileRecord.org_id, inserted.id, fileRecord, user);
     await syncLeaseWorkflowArtifacts(
       supabaseAdmin,
       fileRecord.org_id,
@@ -870,6 +875,61 @@ async function ensureLeaseReviewDrafts(
   };
 }
 
+async function syncLeaseSourceDocument(supabaseAdmin: any, orgId: string, leaseId: string, fileRecord: any, user: any) {
+  if (!orgId || !leaseId || !fileRecord?.id) return;
+
+  const { data: lease, error: leaseError } = await supabaseAdmin
+    .from("leases")
+    .select("id, org_id, source_file_id, extraction_data")
+    .eq("id", leaseId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (leaseError || !lease?.id) {
+    throw new Error(`Could not verify lease source link: ${leaseError?.message ?? "lease not found"}`);
+  }
+
+  const extractionData = lease.extraction_data && typeof lease.extraction_data === "object"
+    ? lease.extraction_data
+    : {};
+  const existingSource = lease.source_file_id ?? extractionData.source_file_id ?? null;
+  if (existingSource && existingSource !== fileRecord.id) {
+    throw new Error("Existing lease source_file_id does not match this upload");
+  }
+
+  const nextExtractionData = {
+    ...extractionData,
+    source_file_id: fileRecord.id,
+    source_file_name: fileRecord.file_name ?? extractionData.source_file_name ?? null,
+    document_subtype: fileRecord.document_subtype ?? extractionData.document_subtype ?? null,
+  };
+  const { error: updateError } = await supabaseAdmin
+    .from("leases")
+    .update({
+      source_file_id: fileRecord.id,
+      extraction_data: nextExtractionData,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", leaseId)
+    .eq("org_id", orgId);
+  if (updateError) {
+    throw new Error(`Could not persist lease source link: ${updateError.message}`);
+  }
+
+  const { error: linkError } = await supabaseAdmin
+    .from("document_links")
+    .upsert({
+      org_id: orgId,
+      file_id: fileRecord.id,
+      entity_type: "lease",
+      entity_id: leaseId,
+      link_role: "source",
+      created_by: user?.id ?? null,
+    }, { onConflict: "file_id,entity_type,entity_id,link_role" });
+  if (linkError) {
+    console.warn(`[review-approve] document_links source sync skipped: ${linkError.message}`);
+  }
+}
+
 function buildEmptyLeaseReviewRow() {
   // Empty row when extraction produced no structured fields. EVERY field
   // stays null so downstream readers can't mistake a UI placeholder for
@@ -887,44 +947,63 @@ function buildEmptyLeaseReviewRow() {
   };
 }
 
-async function findExistingLeaseDraft(supabaseAdmin: any, fileRecord: any, row: Record<string, unknown>) {
+async function findExistingLeaseDraft(supabaseAdmin: any, fileRecord: any, _row: Record<string, unknown>) {
   const reviewedIds = Array.isArray(fileRecord.reviewed_output?.lease_review_ids)
     ? fileRecord.reviewed_output.lease_review_ids.filter(Boolean)
     : [];
   if (reviewedIds.length > 0) return reviewedIds[0];
 
-  const sourceLookup = await supabaseAdmin
-    .from("leases")
-    .select("id")
+  const attempts = [
+    () => supabaseAdmin
+      .from("leases")
+      .select("id")
+      .eq("org_id", fileRecord.org_id)
+      .eq("source_file_id", fileRecord.id)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    () => supabaseAdmin
+      .from("leases")
+      .select("id")
+      .eq("org_id", fileRecord.org_id)
+      .eq("extraction_data->>source_file_id", fileRecord.id)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    () => supabaseAdmin
+      .from("leases")
+      .select("id")
+      .eq("org_id", fileRecord.org_id)
+      .eq("extraction_data->>uploaded_file_id", fileRecord.id)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ];
+
+  for (const run of attempts) {
+    const { data, error } = await run();
+    if (error) {
+      console.warn(`[review-approve] Existing lease source lookup failed: ${error.message}`);
+      continue;
+    }
+    if (data?.id) return data.id;
+  }
+
+  const linkLookup = await supabaseAdmin
+    .from("document_links")
+    .select("entity_id")
     .eq("org_id", fileRecord.org_id)
-    .eq("extraction_data->>source_file_id", fileRecord.id)
-    .order("updated_at", { ascending: false })
+    .eq("file_id", fileRecord.id)
+    .eq("entity_type", "lease")
+    .in("link_role", ["source", "source_file"])
+    .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (!sourceLookup.error && sourceLookup.data?.id) return sourceLookup.data.id;
-
-  const tenantName = String(row.tenant_name ?? "").trim();
-  if (!tenantName) return null;
-
-  let query = supabaseAdmin
-    .from("leases")
-    .select("id")
-    .eq("org_id", fileRecord.org_id)
-    .eq("tenant_name", tenantName)
-    .order("updated_at", { ascending: false })
-    .limit(1);
-
-  const propertyId = row.property_id ?? fileRecord.property_id;
-  if (propertyId) query = query.eq("property_id", propertyId);
-  if (row.start_date) query = query.eq("start_date", row.start_date);
-  if (row.end_date) query = query.eq("end_date", row.end_date);
-
-  const { data, error } = await query.maybeSingle();
-  if (error) {
-    console.warn(`[review-approve] Existing lease lookup failed: ${error.message}`);
-    return null;
+  if (!linkLookup.error && linkLookup.data?.entity_id) {
+    return linkLookup.data.entity_id;
   }
-  return data?.id ?? null;
+
+  return null;
 }
 
 function buildLeaseReviewDraftPayload(
