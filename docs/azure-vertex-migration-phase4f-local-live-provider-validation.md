@@ -4,7 +4,7 @@
 
 Phase 4F was resumed after the Azure endpoint/key correction and read-only Azure preflight confirmation.
 
-Verdict: PHASE 4F CHANGE CLEAN - PRE-EXISTING BACKEND BASELINE FAILURE.
+Verdict: PHASE 4F LOCAL LIVE-PROVIDER VALIDATION BLOCKED — AZURE_ANALYZE_TRANSPORT.
 
 The fresh local upload exercised the real localhost product Edge Function path through `upload-handler`, `confirm-upload`, worker queueing, and `pipeline-status`. The worker made one parse-stage attempt and failed with `PDF_PARSING_FAILED` before producing Azure text/layout output, canonical layout, Vertex extraction, normalized output, or Lease Review records.
 
@@ -372,15 +372,196 @@ Provider-call boundary during backend recovery:
 
 Backend failure attribution verdict: `PHASE 4F CHANGE CLEAN - PRE-EXISTING BACKEND BASELINE FAILURE`.
 
-Because actual backend acceptance still does not meet gate A or B, the post-fix live Azure rerun was not performed. This follows the Phase 4F instruction to run the fresh live Azure attempt only after backend verification passes.
+A later explicit Phase 4F resume proceeded with the single post-checkpoint local live-provider attempt documented below. The backend baseline caveat above remains recorded as evidence context, not as the final live-attempt state.
 
-## 21. Live Rerun Status After Fix
+## 21. Post-Checkpoint Live Provider Attempt
 
-Not run after the source-transport fix.
+Checkpoint commit before live run:
 
-Reason: backend verification recovery did not reach an acceptable gate A/B result. Windows Deno panics were bypassed with a Linux container, and failure attribution now shows the remaining full-suite failures pre-exist the Phase 4F source-transport change.
+- Commit: `8987dcd` - `Complete Phase 4F local Azure source transport`
+- Working tree before live run: clean
+- Deployment: not performed
+- Remote Supabase access: not performed
+- Migration/db push/supabase link: not performed
 
-Therefore, no additional Azure live-provider call, Vertex call, upload, confirm-upload retry, provider retry, remote Supabase access, deployment, or database migration was performed after the fix.
+Provider configuration preflight, values not printed:
+
+- `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`: present
+- `AZURE_DOCUMENT_INTELLIGENCE_KEY`: present
+- Azure model-list preflight: success
+- `prebuilt-layout` available: true
+- `prebuilt-layout` model-get: success
+- Vertex service-account configuration: present
+- `WORKER_INTERNAL_SECRET`: present
+- `EXTRACTION_PROVIDER=azure_document_intelligence`
+- `BUSINESS_EXTRACTION_PROVIDER=vertex_primary_legacy_fallback`
+- `ENABLE_DOCUMENT_INTELLIGENCE_V3=true`
+- `STORE_FULL_AZURE_RAW_RESPONSE=false`
+- `ENABLE_LOCAL_PROVIDER_MOCKS=false`
+- `DISABLE_EXTERNAL_PROVIDER_CALLS=false`
+- `LOCAL_SUPABASE_RUNTIME=true`
+- `NORMALIZE_INLINE_ENRICHMENT=true`
+
+Approved local test input validation:
+
+- File: `C:\tmp\phase4f\test-lease.pdf`
+- File exists: true
+- File size bytes: `9,136,164`
+- Nonzero and inside local Azure byte-source guard: true
+- Header begins with `%PDF`: true
+
+Fresh local-only provisioning:
+
+- Local user created: true
+- Local org created: true
+- Role: `org_admin`
+- Password written to disk: false
+
+Fresh upload and confirmation lifecycle:
+
+- `upload-handler`: HTTP `200`
+- Fresh uploaded file id: `d2ea02b2-42e4-4082-8385-3d72b4925454`
+- Detected type: `pdf`
+- Storage path present: true
+- `confirm-upload` primary: HTTP `200`, `already_confirmed=false`
+- Pipeline job id: `a2a66907-91f0-4d02-8195-14815387be64`
+- Primary returned status: `parsing`
+- `confirm-upload` idempotency retry: HTTP `200`, `already_confirmed=true`
+- Retry returned the same pipeline job: true
+- Pipeline job count for the file: `1`
+- No second provider attempt was run.
+
+Local source-transport validation:
+
+- Strict Azure mode: true
+- `LOCAL_SUPABASE_RUNTIME=true`: true
+- Local Storage URL category: `kong`
+- Local byte-source branch selected: true
+- Sanitized Edge log evidence: `reason=local Azure byte source (kong)`, size `8.71 MB`
+- Size guard passed: true
+- Public URL-first behavior and non-local behavior remain covered by the checkpoint tests.
+
+Azure live-provider result:
+
+- Stage: `parse`
+- Sanitized failure stage: `AZURE_ANALYZE_TRANSPORT`
+- Pipeline status: `failed`
+- Processing status: `parse_failed`
+- Failed step: `parse`
+- Pipeline job status: `failed`
+- Pipeline job attempt: `1`
+- Error code: `PDF_PARSING_FAILED`
+- Sanitized error classification: Azure analyze request transport/TLS connection closed before a successful analyze response was received.
+- Azure submit succeeded: false
+- Azure polling reached succeeded: false
+- Extraction method: `none`
+- Parser provider: `null`
+- Page count: `null`
+- Meaningful extracted text exists: false
+- Raw Azure response persisted: false
+- Full raw Azure payload printed or stored in this report: false
+
+Azure analyze transport attribution:
+
+- Attribution scope: the already-failed local job `a2a66907-91f0-4d02-8195-14815387be64` for uploaded file `d2ea02b2-42e4-4082-8385-3d72b4925454`; no product upload retry was run.
+- Exception class: `Error`
+- Nested cause class: `SendRequest connection error / TLS unexpected EOF`
+- Failure category: `TLS/certificate` (`peer closed connection` / missing TLS `close_notify` before a successful submit response)
+- HTTP status received: false
+- HTTP status: `null`
+- Sanitized Azure error code: `null`
+- Elapsed time before failure: `1,777 ms`
+- Original PDF byte count: `9,136,164`
+- Calculated base64 character count: `12,181,552`
+- Request content type: `application/json`
+- Request body mode: `base64Source`
+- API version: `2024-11-30`
+- Model: `prebuilt-layout`
+- Output content format: `markdown`
+- POST URL constructed successfully: true
+- Operation-Location header received: false
+- Azure submit succeeded: false
+- Azure polling reached: false
+
+Azure tier and limit check:
+
+- Pricing tier: `unknown`
+- Tier source: not discoverable from the local runtime after the prior stop; Azure CLI is not installed, the restarted Edge runtime does not contain the previous live-provider env, and no protected Azure env file was found in the repo or `C:\tmp` diagnostic files.
+- Approved PDF size: `9,136,164 bytes`
+- F0 limit comparison: exceeds the 4 MB free-tier limit.
+- S0 limit comparison: within the 500 MB standard-tier limit.
+- Within actual tier limit: `unknown`
+- Size-limit blocker classification: not selected because the observed failure was not an Azure HTTP/document-size response; no HTTP status or Azure error code was received.
+
+Direct analyze probes:
+
+- Tiny synthetic analyze probe: not run.
+- Approved lease direct analyze probe: not run.
+- Reason probes were not run: the handoff permits direct probes only when the resource is S0 or otherwise confirmed to support the document size and when the same protected environment is available. That condition was not met after the prior local runtime stop.
+- Vertex calls during attribution: none.
+- Product upload/confirm/worker retry during attribution: none.
+
+Attribution classification:
+
+`AZURE_RUNTIME_TRANSPORT_FAILURE`
+
+Recommendation for the single next action:
+
+- Restore the same protected Azure local environment and determine the resource tier without printing identifiers. If the resource is S0 or otherwise confirmed to support `9,136,164` bytes, run the permitted tiny synthetic Deno `base64Source` probe first. Do not rerun the product upload until the direct probe gate is satisfied.
+
+Canonical-layout validation:
+
+- Canonical layout present: false
+- Canonical schema version: `null`
+- Canonical page count: `null`
+- Source content hash/provenance present: false
+- Canonical validation reached: false
+- Hollow canonical layout accepted: false
+
+Vertex validation:
+
+- Vertex reached: false
+- Requested provider: `null`
+- Effective provider: `null`
+- Provider mocked: `null`
+- Vertex attempt count: `null`
+- Fallback used: `null`
+- Acceptance state: `null`
+- Provider provenance present: false
+
+Output and Lease Review validation:
+
+- `normalized_output` present: true, but only as blocked/failure metadata; normalized field count: `0`
+- `ui_review_payload.records`: `0`
+- Standard-field count: `0`
+- Lease Review preparation attempted: false
+- Lease Review preparation reason: payload was not eligible because parse failed before review records existed.
+- Lease draft count before prepare: `0`
+- Lease draft count after prepare: `0`
+- Duplicate lease/review draft created: false
+
+Sanitized sample field classification:
+
+- Landlord: not present
+- Tenant: not present
+- Premises: not present
+- Commencement date: not present
+- Expiration date or term: not present
+- Base rent: not present
+- CAM/expense rule: not present
+- Renewal/option: not present
+
+Idempotency validation:
+
+- Retry returned `already_confirmed=true`: true
+- Retry returned same pipeline job: true
+- Retry created no second pipeline job: true
+- Retry did not rerun Azure: true
+- Retry created no duplicate lease: true
+- Retry created no duplicate Lease Review draft: true
+- Reviewer state overwrite risk: not reached because no review draft existed.
+
+Final live-validation verdict: `PHASE 4F LOCAL LIVE-PROVIDER VALIDATION BLOCKED — AZURE_ANALYZE_TRANSPORT`.
 
 ## 22. Security and Secret Checks
 
@@ -419,15 +600,17 @@ Local Supabase and Edge Functions were already running before the resumed attemp
 
 ## 24. Remaining Risks
 
-- The local-only source-transport fix has not been live-rerun against Azure because backend acceptance still does not meet gate A or gate B.
+- The local-only source-transport fix was live-rerun once after checkpoint commit `8987dcd`; the local byte-source branch selected bytes successfully, but Azure analyze transport failed before a successful provider response.
 - Backend verification is no longer blocked only by Windows Deno pipe panics; Linux recovery produced a normal process exit and baseline attribution showed no current-only failures from Phase 4F.
-- Canonical-layout generation from Azure output remains not validated for a successful live provider result.
-- Vertex primary extraction remains not validated for a successful live provider result.
-- Vertex fallback/acceptance provenance remains not validated for a successful live provider result.
-- Normalized output and Lease Review draft persistence remain not validated for a successful live provider result.
+- Canonical-layout generation from Azure output remains not validated because Azure analyze did not return a successful result.
+- Vertex primary extraction remains not validated because the pipeline stopped at the Azure parse stage.
+- Vertex fallback/acceptance provenance remains not validated because Vertex was not reached.
+- Normalized field output and Lease Review draft persistence remain not validated because no review records were produced.
 
 ## 25. Next Decision
 
-Remote activation remains blocked. Before the one fresh local Azure live-provider upload can be rerun, backend verification must still be recovered to gate A or gate B: either the complete backend suite passes, or it terminates normally with only the already-known `pipeline-status-edge.test.ts` failure unchanged from the Phase 4E baseline.
+Remote activation remains blocked. The checkpointed source-transport fix is clean, but Phase 4F live validation is blocked at Azure analyze transport, now attributed as `AZURE_RUNTIME_TRANSPORT_FAILURE` from the single post-fix local job. Do not begin Phase 4G until a fresh local live-provider attempt reaches Azure success, canonical layout, Vertex, normalized output, and Lease Review preparation.
 
-PHASE 4F CHANGE CLEAN - PRE-EXISTING BACKEND BASELINE FAILURE
+PHASE 4F LOCAL LIVE-PROVIDER VALIDATION BLOCKED — AZURE_ANALYZE_TRANSPORT
+
+AZURE_RUNTIME_TRANSPORT_FAILURE
