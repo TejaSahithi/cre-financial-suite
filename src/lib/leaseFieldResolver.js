@@ -3,7 +3,11 @@ export function normalizeLeaseFieldKey(key) {
   return String(key).trim().toLowerCase().replace(/[\s.-]+/g, "_");
 }
 
-const FIELD_ALIASES = {
+// Exported (in addition to the normal getFieldAliases lookup) so external
+// auditors -- e.g. the P2.1 claims-concept-registry cross-check test -- can
+// enumerate every entry directly, rather than only being able to query one
+// key at a time.
+export const FIELD_ALIASES = {
   // Parties
   landlord_name: ["landlord_name", "landlord", "lessor", "owner_landlord", "parties.landlord", "landlordName", "owner_name", "owner"],
   tenant_name: ["tenant_name", "tenant", "lessee", "occupant", "parties.tenant", "tenantName"],

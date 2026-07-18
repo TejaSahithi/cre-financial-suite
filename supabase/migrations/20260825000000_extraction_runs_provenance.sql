@@ -66,7 +66,14 @@ CREATE TABLE public.extraction_runs (
   UNIQUE (org_id, generation_id), -- DB-enforced: at most one run per generation
   UNIQUE (id, org_id),            -- enables composite tenant-scoped FKs from child tables
   FOREIGN KEY (uploaded_file_id, org_id) REFERENCES public.uploaded_files (id, org_id) ON DELETE RESTRICT,
-  FOREIGN KEY (lease_id, org_id) REFERENCES public.leases (id, org_id) ON DELETE SET NULL,
+  -- Column-scoped SET NULL (Postgres 15+): a bare `ON DELETE SET NULL` on a
+  -- multi-column FK nulls EVERY referencing column, not just the intended
+  -- one -- which would null org_id too (NOT NULL, breaking the delete
+  -- outright) whenever a linked lease is deleted. Discovered via P2.1
+  -- deletion-behavior testing; fixed here since this is the exact same
+  -- provenance-survives-lease-deletion guarantee this table already commits
+  -- to.
+  FOREIGN KEY (lease_id, org_id) REFERENCES public.leases (id, org_id) ON DELETE SET NULL (lease_id),
   CHECK (
     (status = 'running' AND completed_at IS NULL)
     OR (status IN ('completed', 'failed', 'superseded') AND completed_at IS NOT NULL)
@@ -120,8 +127,15 @@ BEGIN
     END IF;
 
     -- lease_id: allow exactly one NULL -> non-null transition, verified
-    -- against the deterministic leases.source_file_id authority (P0.6).
+    -- against the deterministic leases.source_file_id authority (P0.6) --
+    -- OR the leases(id) ON DELETE SET NULL cascade nulling it back out
+    -- (non-null -> NULL), which must always be allowed regardless of
+    -- terminal status, or deleting a lease linked to a completed run would
+    -- fail outright.
     IF NEW.lease_id IS DISTINCT FROM OLD.lease_id THEN
+      IF NEW.lease_id IS NULL THEN
+        RETURN NEW;
+      END IF;
       IF OLD.lease_id IS NOT NULL THEN
         RAISE EXCEPTION 'extraction_runs.lease_id may only be set once, not replaced (run %)', OLD.id;
       END IF;
@@ -179,7 +193,10 @@ CREATE TABLE public.extraction_stage_runs (
   -- Composite FK: a stage row can never reference a run belonging to a
   -- DIFFERENT organization, enforced at the data layer, independent of RLS.
   FOREIGN KEY (run_id, org_id) REFERENCES public.extraction_runs (id, org_id) ON DELETE CASCADE,
-  FOREIGN KEY (pipeline_job_id, org_id) REFERENCES public.pipeline_jobs (id, org_id) ON DELETE SET NULL,
+  -- Column-scoped SET NULL: see the identical fix/rationale on
+  -- extraction_runs.lease_id above -- a bare SET NULL here would null
+  -- org_id too (NOT NULL) whenever a linked pipeline_job is deleted.
+  FOREIGN KEY (pipeline_job_id, org_id) REFERENCES public.pipeline_jobs (id, org_id) ON DELETE SET NULL (pipeline_job_id),
   CHECK (
     (status = 'running' AND finished_at IS NULL)
     OR (status IN ('completed', 'failed') AND finished_at IS NOT NULL)
@@ -367,7 +384,10 @@ CREATE TABLE public.extraction_artifacts (
   -- 3-part, same reasoning as provider_invocations.stage_run_id: this
   -- artifact's stage_run_id must belong to the artifact's own run_id, not
   -- just the same org. Previously had no FK at all (round-3 fix).
-  FOREIGN KEY (stage_run_id, run_id, org_id) REFERENCES public.extraction_stage_runs (id, run_id, org_id) ON DELETE SET NULL,
+  -- Column-scoped SET NULL: a bare SET NULL on this 3-column FK would null
+  -- run_id and org_id too (both NOT NULL) whenever a linked stage run is
+  -- deleted -- only stage_run_id itself should ever be nulled.
+  FOREIGN KEY (stage_run_id, run_id, org_id) REFERENCES public.extraction_stage_runs (id, run_id, org_id) ON DELETE SET NULL (stage_run_id),
   CHECK (
     (storage_mode = 'inline' AND inline_content IS NOT NULL AND storage_path IS NULL)
     OR (storage_mode = 'storage_object' AND storage_path IS NOT NULL AND inline_content IS NULL)
@@ -393,12 +413,15 @@ ALTER TABLE public.extraction_artifacts ENABLE ROW LEVEL SECURITY;
 -- FIRST, before either composite FK below can reference it.
 ALTER TABLE public.extraction_artifacts
   ADD CONSTRAINT extraction_artifacts_id_org_unique UNIQUE (id, org_id);
+-- Column-scoped SET NULL on both: a bare SET NULL would null org_id too
+-- (NOT NULL) whenever a linked artifact is deleted -- only the artifact-id
+-- column itself should ever be nulled.
 ALTER TABLE public.provider_invocations
   ADD CONSTRAINT provider_invocations_raw_request_artifact_fkey
-    FOREIGN KEY (raw_request_artifact_id, org_id) REFERENCES public.extraction_artifacts (id, org_id) ON DELETE SET NULL;
+    FOREIGN KEY (raw_request_artifact_id, org_id) REFERENCES public.extraction_artifacts (id, org_id) ON DELETE SET NULL (raw_request_artifact_id);
 ALTER TABLE public.provider_invocations
   ADD CONSTRAINT provider_invocations_raw_response_artifact_fkey
-    FOREIGN KEY (raw_response_artifact_id, org_id) REFERENCES public.extraction_artifacts (id, org_id) ON DELETE SET NULL;
+    FOREIGN KEY (raw_response_artifact_id, org_id) REFERENCES public.extraction_artifacts (id, org_id) ON DELETE SET NULL (raw_response_artifact_id);
 
 -- ---------------------------------------------------------------------------
 -- get_extraction_artifact_authorization -- the ONLY read path for raw
