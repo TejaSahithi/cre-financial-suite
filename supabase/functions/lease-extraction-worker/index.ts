@@ -6,6 +6,7 @@ import { setFailed, setStatus } from "../_shared/pipeline-status.ts";
 import { MIN_LEASE_TEXT_CHARS } from "../_shared/extraction/pipeline-contract.ts";
 import { uploadedFileRowHasMeaningfulValues } from "../_shared/extraction/payload-guard.ts";
 import { enqueueEnrichmentJob } from "../_shared/extraction/enrichment-dispatch.ts";
+import { resolveExtractionRunId } from "../_shared/extraction/provenance/recorder.ts";
 import {
   buildInternalFunctionHeaders,
   classifyDownstreamError,
@@ -904,7 +905,24 @@ Deno.serve(async (req: Request) => {
 
       let parseResult: any;
       try {
-        parseResult = await callInternalFunction("parse-pdf-docling", { file_id: fileId }, orgId, PARSE_TIMEOUT_MS);
+        // P1.3: resolve extraction_run_id from this job's generation_id
+        // (present only when the generation was started with provenance
+        // enabled) so parse-pdf-docling can attribute its stage run.
+        const parseExtractionRunId = claimedJob.generation_id
+          ? await resolveExtractionRunId(supabaseAdmin, orgId, claimedJob.generation_id)
+          : null;
+        parseResult = await callInternalFunction(
+          "parse-pdf-docling",
+          {
+            file_id: fileId,
+            pipeline_job_id: job.id,
+            generation_id: claimedJob.generation_id,
+            extraction_run_id: parseExtractionRunId,
+            worker_attempt: attempt,
+          },
+          orgId,
+          PARSE_TIMEOUT_MS,
+        );
       } catch (transportErr: any) {
         // callInternalFunction handles fetch/timeout errors internally today,
         // but keep this guard so a future refactor can never bypass the
@@ -1215,7 +1233,21 @@ Deno.serve(async (req: Request) => {
         metadata: { job_id: job.id, attempt },
       });
 
-      const normalizeResult = await callInternalFunction("normalize-pdf-output", { file_id: fileId, pipeline_job_id: job.id, worker_attempt: attempt }, orgId, NORMALIZE_TIMEOUT_MS);
+      const normalizeExtractionRunId = claimedJob.generation_id
+        ? await resolveExtractionRunId(supabaseAdmin, orgId, claimedJob.generation_id)
+        : null;
+      const normalizeResult = await callInternalFunction(
+        "normalize-pdf-output",
+        {
+          file_id: fileId,
+          pipeline_job_id: job.id,
+          worker_attempt: attempt,
+          generation_id: claimedJob.generation_id,
+          extraction_run_id: normalizeExtractionRunId,
+        },
+        orgId,
+        NORMALIZE_TIMEOUT_MS,
+      );
       let normalizeReconciledToComplete = false;
 
       if (!normalizeResult.ok) {

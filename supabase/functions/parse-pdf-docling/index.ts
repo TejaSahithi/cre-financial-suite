@@ -34,6 +34,8 @@ import {
   PARSER_STATUSES,
   REVIEW_STATUSES,
 } from "../_shared/extraction/pipeline-contract.ts";
+import { withExtractionStage } from "../_shared/extraction/provenance/recorder.ts";
+import type { StageHandle } from "../_shared/extraction/provenance/types.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -45,6 +47,13 @@ Deno.serve(async (req: Request) => {
       status,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
+
+  // P1.3: extraction-stage provenance. Declared here (outer scope) so the
+  // `finally` block at the very end can always call ensureSettled(), even
+  // if an error occurs before the stage is actually created below (e.g. an
+  // auth failure) -- in that case it stays the inert no-op handle and
+  // ensureSettled() is a true no-op.
+  let stage: StageHandle | null = null;
 
   // ── Auth ─────────────────────────────────────────────────────────────────
   // Two caller modes:
@@ -105,7 +114,17 @@ Deno.serve(async (req: Request) => {
 
     // 2. Parse request body
     const body = await req.json().catch(() => ({}));
-    const { file_id, dry_run, provider_override } = body;
+    const {
+      file_id, dry_run, provider_override,
+      // P1.3: provenance identifiers, threaded through by the worker's
+      // generation-scoped dispatch. NOT present on ingest-file's own direct
+      // synchronous call (non-lease modules, or run_synchronously=true) --
+      // that path has no P0 generation concept at all, so provenance simply
+      // doesn't apply there. Presence of generation_id (not the global flag
+      // alone) is what decides whether this request attempts to record a
+      // stage run at all -- see withExtractionStage call below.
+      pipeline_job_id, generation_id, extraction_run_id, worker_attempt,
+    } = body;
 
     // dry_run=true: validate auth and config only — no file required, no DB writes.
     // Used by pipeline-health-check to verify internal worker auth is functional.
@@ -188,6 +207,24 @@ Deno.serve(async (req: Request) => {
     const fileName: string = fileRecord.file_name ?? "document";
     const mimeType: string = fileRecord.mime_type ?? "application/octet-stream";
     const logger = createLogger(supabaseAdmin, file_id, orgId);
+
+    // P1.3: only attempt to record a stage run when this request actually
+    // carries a generation_id -- calls without one (non-lease modules, or
+    // ingest-file's own synchronous path) are out of scope for extraction
+    // provenance, exactly as they're out of scope for P0's generation/
+    // readiness machinery. When generation_id IS present, withExtractionStage
+    // itself still no-ops if the feature flag is off.
+    if (generation_id) {
+      stage = await withExtractionStage(supabaseAdmin, {
+        orgId,
+        uploadedFileId: file_id,
+        generationId: generation_id,
+        extractionRunId: extraction_run_id ?? null,
+        pipelineJobId: pipeline_job_id,
+        stage: "parse",
+        attempt: Number(worker_attempt) || 1,
+      });
+    }
 
     const persistBlockedParse = async (args: {
       parserStatus: string;
@@ -326,6 +363,7 @@ Deno.serve(async (req: Request) => {
           providerUsed: "none",
           warnings: [reason],
         });
+        await stage?.fail("PARSER_PROVIDER_UNAVAILABLE", reason, { outcome: "terminal_failure" });
         return jsonResponse({
           error: true,
           file_id,
@@ -566,6 +604,7 @@ Deno.serve(async (req: Request) => {
           warnings: cappedWarnings,
           doclingRaw: persistedLayout,
         });
+        await stage?.fail(errorCode, message, { outcome: "terminal_failure", pageCount: doclingOutput.page_count ?? undefined });
         return jsonResponse({
           error: true,
           file_id,
@@ -614,6 +653,12 @@ Deno.serve(async (req: Request) => {
         duration_ms: parserPipeline.total_duration_ms,
       });
 
+      await stage?.complete({
+        outcome: "completed",
+        pageCount: doclingOutput.page_count ?? undefined,
+        providerCalls: 1,
+      });
+
       // Deliberately small response: the full layout is already persisted in
       // uploaded_files.docling_raw. Returning it here forced a second multi-MB
       // JSON serialization after the DB write had succeeded — the final
@@ -651,15 +696,17 @@ Deno.serve(async (req: Request) => {
       const isOcrError = /vision ocr|gemini vision|vertex ai|ocr (failed|required)|No parser backend/i.test(errMsg);
       const isProviderMissing = /No parser backend|DOCLING_API_URL|VERTEX_PROJECT_ID|GOOGLE_SERVICE_ACCOUNT_KEY/i.test(errMsg);
 
+      const parseErrorCode = isProviderMissing ? "PARSER_PROVIDER_UNAVAILABLE" : (isOcrError ? "OCR_FAILED" : "PDF_PARSING_FAILED");
       await persistBlockedParse({
         parserStatus: isOcrError ? PARSER_STATUSES.OCR_FAILED : PARSER_STATUSES.FAILED,
-        errorCode: isProviderMissing ? "PARSER_PROVIDER_UNAVAILABLE" : (isOcrError ? "OCR_FAILED" : "PDF_PARSING_FAILED"),
+        errorCode: parseErrorCode,
         message: errMsg,
         fullTextChars: 0,
         pageCount: null,
         providerUsed: isOcrError ? "gemini_vision" : null,
         warnings: [errMsg],
       });
+      await stage?.fail(parseErrorCode, errMsg, { outcome: "terminal_failure" });
 
       throw extractionError;
     }
@@ -671,20 +718,28 @@ Deno.serve(async (req: Request) => {
     const isAuthError = /unauthorized|missing authorization|invalid token|auth failed/i.test(errMsg);
     const isOcrError = /vision ocr|gemini vision|vertex ai|ocr (failed|required)|No parser backend/i.test(errMsg);
     const isProviderMissing = /No parser backend|DOCLING_API_URL|VERTEX_PROJECT_ID|GOOGLE_SERVICE_ACCOUNT_KEY/i.test(errMsg);
+    const outerErrorCode = isAuthError
+      ? "UNAUTHORIZED_INTERNAL_PARSE_CALL"
+      : isProviderMissing
+        ? "PARSER_PROVIDER_UNAVAILABLE"
+        : isOcrError
+          ? "OCR_FAILED"
+          : "PDF_PARSING_FAILED";
+    // Idempotent with the inner catch's stage.fail() above when this error
+    // was re-thrown from there (same status "failed" -> safe no-op); this
+    // is the only path for errors that occur BEFORE the inner try (auth,
+    // status-transition failures) or truly unexpected exceptions.
+    await stage?.fail(outerErrorCode, errMsg, { outcome: "terminal_failure" });
     return jsonResponse(
       {
         ok: false,
         error: true,
         message: errMsg,
-        error_code: isAuthError
-          ? "UNAUTHORIZED_INTERNAL_PARSE_CALL"
-          : isProviderMissing
-            ? "PARSER_PROVIDER_UNAVAILABLE"
-            : isOcrError
-              ? "OCR_FAILED"
-              : "PDF_PARSING_FAILED",
+        error_code: outerErrorCode,
       },
       isAuthError ? 401 : 400,
     );
+  } finally {
+    await stage?.ensureSettled();
   }
 });

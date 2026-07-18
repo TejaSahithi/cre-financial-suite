@@ -38,6 +38,9 @@ import { computeCoreReady, uploadedFileRowHasMeaningfulValues } from "../_shared
 import { enqueueEnrichmentJob } from "../_shared/extraction/enrichment-dispatch.ts";
 import { runDocumentIntelligenceV3SideWrite } from "../_shared/extraction/document-intelligence-v3/side-write.ts";
 import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/types.ts";
+import { resolveExtractionRunId, withExtractionStage } from "../_shared/extraction/provenance/recorder.ts";
+import type { StageHandle } from "../_shared/extraction/provenance/types.ts";
+import { EXTRACTION_CONTRACT_VERSION } from "../_shared/extraction/contract-version.ts";
 import {
   buildBlockedReviewPayload,
   buildPipelineMetadata,
@@ -1114,7 +1117,7 @@ function buildMinimalReviewPayload(opts: {
     validation_errors: result.validationErrors,
     metadata: {
       ...(result.metadata ?? {}),
-      extraction_contract_version: "lease-review-evidence-v3",
+      extraction_contract_version: EXTRACTION_CONTRACT_VERSION,
     },
     built_at: new Date().toISOString(),
   };
@@ -1843,10 +1846,15 @@ async function handleEnrichMode(args: {
   orgId: string;
   fileId: string;
   pipelineJobId?: string | null;
+  /** P1.3: server-owned attempt number from the claimed pipeline_jobs.attempt
+   * (post-claim value, already incremented by claim_pipeline_job) -- never
+   * a locally-tracked counter. */
+  workerAttempt?: number | null;
   jsonResponse: (body: unknown, status?: number) => Response;
 }): Promise<Response> {
-  const { supabaseAdmin, orgId, fileId, pipelineJobId, jsonResponse } = args;
+  const { supabaseAdmin, orgId, fileId, pipelineJobId, workerAttempt, jsonResponse } = args;
   const logger = createLogger(supabaseAdmin, fileId, orgId);
+  let stage: StageHandle | null = null;
 
   const { data: fileRecord, error: fetchError } = await supabaseAdmin
     .from("uploaded_files")
@@ -1932,6 +1940,25 @@ async function handleEnrichMode(args: {
     return jsonResponse({ error: false, file_id: fileId, stale_generation: true });
   }
 
+  // P1.3: stage created only now that real work is actually starting (past
+  // the staleness/status/idempotency pre-flight checks above), and only
+  // when this generation is provenance-enabled (jobGenerationId resolved).
+  // extraction_run_id is resolved here (not passed in) because
+  // jobGenerationId itself is only known at this point, from the claimed
+  // job's own pipeline_jobs.generation_id.
+  if (jobGenerationId) {
+    const enrichExtractionRunId = await resolveExtractionRunId(supabaseAdmin, orgId, jobGenerationId);
+    stage = await withExtractionStage(supabaseAdmin, {
+      orgId,
+      uploadedFileId: fileId,
+      generationId: jobGenerationId,
+      extractionRunId: enrichExtractionRunId,
+      pipelineJobId,
+      stage: "enrich",
+      attempt: Number(workerAttempt) || 1,
+    });
+  }
+
   console.log(`[normalize-pdf-output] enrichment_started file_id=${fileId}`);
   await supabaseAdmin
     .from("uploaded_files")
@@ -1961,7 +1988,7 @@ async function handleEnrichMode(args: {
     enrichedPayload.core_ready =
       currentPayload.core_ready ?? computeCoreReady(enrichedPayload.records?.[0]?.standard_fields ?? []);
     if (enrichedPayload.metadata && typeof enrichedPayload.metadata === "object") {
-      enrichedPayload.metadata.extraction_contract_version = "lease-review-evidence-v3";
+      enrichedPayload.metadata.extraction_contract_version = EXTRACTION_CONTRACT_VERSION;
     }
 
     const clauseCount = enrichedPayload.records?.[0]?.workflow_output?.lease_clauses?.length ?? 0;
@@ -1971,6 +1998,12 @@ async function handleEnrichMode(args: {
 
     if (await isEnrichGenerationStale()) {
       console.log(`[normalize-pdf-output] enrich_stale_generation_skipped file_id=${fileId} job_id=${pipelineJobId} — superseded before persisting result, discarding stale output`);
+      // Not a processing failure -- a newer generation started. No real
+      // 'superseded' extraction_stage_runs status exists yet (avoiding
+      // another schema change during P1.3, per the plan); fail() with this
+      // specific error_code/outcome distinguishes it from an ordinary
+      // terminal failure for anything reading this data later.
+      await stage?.fail("STAGE_SUPERSEDED", "Superseded by a newer extraction generation before persisting the enrich result.", { outcome: "superseded" });
       return jsonResponse({ error: false, file_id: fileId, stale_generation: true });
     }
 
@@ -2002,6 +2035,12 @@ async function handleEnrichMode(args: {
       console.warn(`[normalize-pdf-output] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
     }
 
+    await stage?.complete({
+      outcome: "completed",
+      evidenceProduced: sourceBackedCount,
+      fieldsProduced: clauseCount,
+    });
+
     return jsonResponse({
       error: false,
       file_id: fileId,
@@ -2017,6 +2056,7 @@ async function handleEnrichMode(args: {
     // minimal payload's real values stay fully visible (guarantee 7).
     if (await isEnrichGenerationStale()) {
       console.log(`[normalize-pdf-output] enrich_stale_generation_skipped file_id=${fileId} job_id=${pipelineJobId} — superseded before persisting failure, discarding stale write`);
+      await stage?.fail("STAGE_SUPERSEDED", "Superseded by a newer extraction generation before persisting the enrich failure.", { outcome: "superseded" });
       return jsonResponse({ error: false, file_id: fileId, stale_generation: true });
     }
     await supabaseAdmin
@@ -2041,7 +2081,10 @@ async function handleEnrichMode(args: {
       console.warn(`[normalize-pdf-output] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
     }
 
+    await stage?.fail("ENRICHMENT_FAILED", message, { outcome: "terminal_failure" });
     return jsonResponse({ error: true, message, error_code: "ENRICHMENT_FAILED" }, 500);
+  } finally {
+    await stage?.ensureSettled();
   }
 }
 
@@ -2055,6 +2098,12 @@ Deno.serve(async (req: Request) => {
       status,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
+
+  // P1.3: extraction-stage provenance for the "normalize" branch only
+  // (handleEnrichMode manages its own stage handle separately, since it's a
+  // distinct stage). Declared here so the outer `finally` can always call
+  // ensureSettled(), even on an early auth/validation failure.
+  let stage: StageHandle | null = null;
 
   // ── Auth guard ──────────────────────────────────────────────────────────────
   // Called from both browser (user JWT via ingest-file) and internally from
@@ -2077,7 +2126,14 @@ Deno.serve(async (req: Request) => {
     const { user, supabaseAdmin } = await verifyUser(req);
 
     const body = await req.json().catch(() => ({}));
-    const { file_id, dry_run, sample_text, job_id, pipeline_job_id, worker_attempt, mode } = body;
+    const {
+      file_id, dry_run, sample_text, job_id, pipeline_job_id, worker_attempt, mode,
+      // P1.3: generation_id/extraction_run_id, threaded by the worker's
+      // generation-scoped dispatch. Named distinctly from the pre-existing
+      // `extractionRunId` local below (a debug/trace id unrelated to the
+      // extraction_runs table) to avoid confusion between the two concepts.
+      generation_id, extraction_run_id: provenanceExtractionRunId,
+    } = body;
 
     // dry_run=true: validate auth and optionally run extraction on sample_text.
     // No file_id required and no DB writes — used by pipeline-health-check.
@@ -2159,7 +2215,16 @@ Deno.serve(async (req: Request) => {
     // must never call setFailed()/touch uploaded_files.status on error
     // (guarantee 7).
     if (mode === "enrich") {
-      return await handleEnrichMode({ supabaseAdmin, orgId, fileId: file_id, pipelineJobId: pipeline_job_id || job_id, jsonResponse });
+      // extraction_run_id is NOT resolved here -- generation_id for enrich
+      // isn't known until handleEnrichMode looks up the claimed job's
+      // pipeline_jobs.generation_id internally (jobGenerationId). It
+      // resolves extraction_run_id itself from that value.
+      return await handleEnrichMode({
+        supabaseAdmin, orgId, fileId: file_id,
+        pipelineJobId: pipeline_job_id || job_id,
+        workerAttempt: worker_attempt,
+        jsonResponse,
+      });
     }
 
     // Fetch only the columns this function actually uses.
@@ -2201,8 +2266,24 @@ Deno.serve(async (req: Request) => {
     }
     const extractionRunId = finalPipelineJobId || file_id;
 
+    // P1.3: only attempt to record a stage run when this request actually
+    // carries a generation_id (worker-dispatched, lease-module calls) --
+    // out of scope otherwise, exactly like parse-pdf-docling's same check.
+    if (generation_id) {
+      stage = await withExtractionStage(supabaseAdmin, {
+        orgId,
+        uploadedFileId: file_id,
+        generationId: generation_id,
+        extractionRunId: provenanceExtractionRunId ?? null,
+        pipelineJobId: finalPipelineJobId,
+        stage: "normalize",
+        attempt: Number(worker_attempt) || 1,
+      });
+    }
+
     // Must be in pdf_parsed state
     if (fileRecord.status !== "pdf_parsed") {
+      await stage?.fail("INVALID_STATUS", `File status must be 'pdf_parsed'. Current: '${fileRecord.status}'`, { outcome: "terminal_failure" });
       return jsonResponse(
         {
           error: true,
@@ -2214,6 +2295,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (!fileRecord.docling_raw) {
+      await stage?.fail("NO_DOCLING_OUTPUT", "No Docling output found. Run parse-pdf-docling first.", { outcome: "terminal_failure" });
       return jsonResponse(
         {
           error: true,
@@ -2293,6 +2375,7 @@ Deno.serve(async (req: Request) => {
         full_text_chars: doclingTextLength,
         page_count: pipeline.page_count,
       });
+      await stage?.fail(parseTextErrorCode, message, { outcome: "terminal_failure" });
       return jsonResponse({
         error: true,
         file_id,
@@ -2810,6 +2893,14 @@ Deno.serve(async (req: Request) => {
           review_required: reviewRequired,
           metadata: { deferred_enrichment: true },
         });
+        // The normalize stage is a completed stage regardless of
+        // reviewRequired -- "needs human review" and "stage succeeded" are
+        // different questions (the contract's manual_review outcome).
+        await stage?.complete({
+          outcome: reviewRequired ? "manual_review" : "completed",
+          fieldsProduced: result.rows.length,
+          workflowOutputPresent: !!(result.metadata as any)?.workflow_output,
+        });
         return jsonResponse({
           error: false,
           file_id,
@@ -2908,7 +2999,7 @@ Deno.serve(async (req: Request) => {
         const consolidated = {
           ...pipelineDebug,
           ...fieldTraceSummary,
-          extraction_contract_version: "lease-review-evidence-v3",
+          extraction_contract_version: EXTRACTION_CONTRACT_VERSION,
           extraction_build_version: "2026-06-22.1",
           extraction_run_id: extractionRunId,
           pipeline_job_id: finalPipelineJobId,
@@ -2952,7 +3043,7 @@ Deno.serve(async (req: Request) => {
         result.metadata = {
           ...(result.metadata ?? {}),
           extractionDebug: consolidated,
-          extraction_contract_version: "lease-review-evidence-v3",
+          extraction_contract_version: EXTRACTION_CONTRACT_VERSION,
           extraction_build_version: "2026-06-22.1",
           extraction_run_id: extractionRunId,
           pipeline_job_id: finalPipelineJobId,
@@ -2966,7 +3057,7 @@ Deno.serve(async (req: Request) => {
         if (uiReviewPayload?.metadata && typeof uiReviewPayload.metadata === "object") {
           (uiReviewPayload.metadata as Record<string, unknown>).extractionDebug = consolidated;
           (uiReviewPayload.metadata as Record<string, unknown>).extraction_debug = consolidated;
-          (uiReviewPayload.metadata as Record<string, unknown>).extraction_contract_version = "lease-review-evidence-v3";
+          (uiReviewPayload.metadata as Record<string, unknown>).extraction_contract_version = EXTRACTION_CONTRACT_VERSION;
           (uiReviewPayload.metadata as Record<string, unknown>).extraction_build_version = "2026-06-22.1";
           (uiReviewPayload.metadata as Record<string, unknown>).extraction_run_id = extractionRunId;
           (uiReviewPayload.metadata as Record<string, unknown>).pipeline_job_id = finalPipelineJobId;
@@ -3126,6 +3217,14 @@ Deno.serve(async (req: Request) => {
         review_required: reviewRequired,
       });
 
+      // Local-debug-only path (NORMALIZE_INLINE_ENRICHMENT=true) -- the
+      // production default already completed the stage above and returned.
+      await stage?.complete({
+        outcome: reviewRequired ? "manual_review" : "completed",
+        fieldsProduced: result.rows.length,
+        workflowOutputPresent: !!(uiReviewPayload as any)?.metadata?.workflow_output,
+      });
+
       return jsonResponse({
         error: false,
         file_id,
@@ -3150,6 +3249,7 @@ Deno.serve(async (req: Request) => {
         "normalize",
         35,
       );
+      await stage?.fail("NORMALIZE_FAILED", String(normError?.message ?? normError), { outcome: "terminal_failure" });
       throw normError;
     }
   } catch (err) {
@@ -3157,15 +3257,22 @@ Deno.serve(async (req: Request) => {
     const isAuthError = /unauthorized|missing authorization|invalid token|auth failed/i.test(
       String(err.message ?? ""),
     );
+    const outerErrorCode = isAuthError ? "UNAUTHORIZED_NORMALIZE_CALL" : "NORMALIZATION_FAILED";
+    // Idempotent with the inner catch's stage.fail() when re-thrown from
+    // there; the only path for errors before the inner try (auth, status
+    // transitions) or truly unexpected exceptions.
+    await stage?.fail(outerErrorCode, String(err.message ?? err), { outcome: "terminal_failure" });
     return jsonResponse(
       {
         ok: false,
         error: true,
         message: err.message,
-        error_code: isAuthError ? "UNAUTHORIZED_NORMALIZE_CALL" : "NORMALIZATION_FAILED",
+        error_code: outerErrorCode,
       },
       isAuthError ? 401 : 400,
     );
+  } finally {
+    await stage?.ensureSettled();
   }
 });
 

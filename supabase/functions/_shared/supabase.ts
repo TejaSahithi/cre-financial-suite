@@ -103,7 +103,7 @@ function extractInternalOrgId(req?: Request): string | null {
   return UUID_RE.test(trimmed) ? trimmed : null;
 }
 
-function createUserScopedClient(req: Request) {
+export function createUserScopedClient(req: Request) {
   const token = extractBearerToken(req);
   if (!token) {
     throw new Error("Missing Authorization header");

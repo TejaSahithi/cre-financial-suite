@@ -33,6 +33,7 @@ import { validateRecords, flattenRecords } from "./validator.ts";
 import { computeDerivedFields } from "./calculator.ts";
 import { parseDocument } from "./parser.ts";
 import { getSchema } from "./schemas.ts";
+import { EXTRACTION_CONTRACT_VERSION } from "./contract-version.ts";
 
 // ── Step 0: Normalize Docling output ─────────────────────────────────────────
 
@@ -538,7 +539,7 @@ export async function runExtractionPipeline(
       // uploaded_files.normalized_output.metadata and ultimately into
       // lease.extraction_data.extraction_debug.
       extractionDebug: {
-        extraction_contract_version: "lease-review-evidence-v3",
+        extraction_contract_version: EXTRACTION_CONTRACT_VERSION,
         extraction_build_version: "2026-06-22.1",
         normalized_at: new Date().toISOString(),
         embedded_text_chars_total: embeddedTextChars,

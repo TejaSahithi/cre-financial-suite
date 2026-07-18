@@ -78,6 +78,7 @@ import {
   canAcceptCalculatedReviewField,
   isMeaningfulValue,
   resolveSourceTextQuality,
+  CURRENT_EXTRACTION_CONTRACT_VERSION,
 } from "@/lib/leaseReviewSchema";
 import { getFieldAliases, resolveLeaseField } from "@/lib/leaseFieldResolver";
 import { createPageUrl } from "@/utils";
@@ -141,10 +142,6 @@ import { isLeaseReviewEnrichmentInFlight } from "@/lib/leaseReviewUiState";
 // Minimum number of source-backed fields required before a new extraction is
 // considered "richer" than the previous one. Used only for debug diagnostics.
 const SOURCE_BACKED_MIN_THRESHOLD = 1;
-
-// Must match the backend's extraction_contract_version string exactly
-// (supabase/functions/_shared/extraction/pipeline.ts, normalize-pdf-output).
-const CURRENT_EXTRACTION_CONTRACT_VERSION = "lease-review-evidence-v3";
 
 export default function LeaseReview() {
   const location = useLocation();

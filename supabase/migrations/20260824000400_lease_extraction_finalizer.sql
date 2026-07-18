@@ -59,6 +59,7 @@ DECLARE
   v_readiness JSONB;
   v_lease public.leases%ROWTYPE;
   v_coverage JSONB;
+  v_extraction_run_status TEXT;
 BEGIN
   BEGIN
     IF p_org_id IS NULL THEN
@@ -140,6 +141,40 @@ BEGIN
         )
       )
     );
+
+    -- P1.6: complete this generation's extraction_runs row (P1's provenance
+    -- ledger, if it was enabled for this generation) in the same
+    -- transaction that establishes review_readiness='ready' -- the same
+    -- authority that decides readiness also decides run completion, no
+    -- separate/distributed completion logic in the worker. Uses
+    -- v_generation_id (already correctly derived above, not a raw
+    -- p_generation_id parameter) since that's the same generation identity
+    -- every other decision in this function already relies on.
+    SELECT status INTO v_extraction_run_status
+      FROM public.extraction_runs
+     WHERE org_id = p_org_id AND generation_id = v_generation_id;
+    -- NULL here means provenance was OFF for this generation -- nothing to
+    -- check, nothing to complete, proceed as before P1 existed.
+
+    IF v_extraction_run_status = 'running' THEN
+      UPDATE public.extraction_runs
+         SET status = 'completed', completed_at = v_now, updated_at = v_now
+       WHERE org_id = p_org_id AND generation_id = v_generation_id AND status = 'running';
+      v_extraction_run_status := 'completed';
+    END IF;
+
+    IF v_extraction_run_status IS NOT NULL AND v_extraction_run_status <> 'completed' THEN
+      -- Provenance was enabled for this generation but its run is 'failed'
+      -- or 'superseded', not 'running'/'completed' -- readiness must not
+      -- become 'ready' on top of a run that isn't (or can no longer be)
+      -- successful. Re-finalizing an already-'completed' run (idempotent
+      -- recall) is NOT a mismatch and falls through normally below.
+      RETURN jsonb_build_object(
+        'success', false,
+        'error_code', 'EXTRACTION_RUN_FINALIZATION_MISMATCH',
+        'extraction_run_status', v_extraction_run_status
+      );
+    END IF;
 
     -- Idempotent: calling this twice on an already-ready generation is a
     -- no-op re-assertion, not a duplicate side effect -- no audit table is

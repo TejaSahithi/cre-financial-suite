@@ -13,6 +13,8 @@
  * touching status here would hide already-correct data from the UI.
  */
 
+import { EXTRACTION_CONTRACT_VERSION } from "./contract-version.ts";
+
 export function dispatchEnrichmentWorker(jobId: string, logger?: any) {
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -77,7 +79,7 @@ export async function enqueueEnrichmentJob(args: {
     p_uploaded_file_id: fileId,
     p_job_type: "lease_extraction",
     p_stage: "enrich",
-    p_contract_version: "lease-review-evidence-v3",
+    p_contract_version: EXTRACTION_CONTRACT_VERSION,
     p_max_attempts: 3,
     p_input: { mode: "enrich", module_type: moduleType ?? "leases" },
     p_metadata: { enqueued_by: "enrichment-dispatch", enqueued_at: now },

@@ -12,6 +12,8 @@ import {
 import { ALLOWED_TRANSITIONS, setFailed, setStatus } from "../_shared/pipeline-status.ts";
 import { createLogger } from "../_shared/logger.ts";
 import { uploadedFileRowHasMeaningfulValues } from "../_shared/extraction/payload-guard.ts";
+import { isExtractionProvenanceEnabled } from "../_shared/extraction/provenance/feature-flag.ts";
+import { EXTRACTION_CONTRACT_VERSION } from "../_shared/extraction/contract-version.ts";
 import {
   buildBlockedReviewPayload,
   buildPipelineMetadata,
@@ -285,16 +287,24 @@ async function enqueueLeaseExtractionJob(args: {
       p_uploaded_file_id: fileRecord.id,
       p_job_type: "lease_extraction",
       p_initial_stage: initialStage,
-      p_contract_version: "lease-review-evidence-v3",
+      p_contract_version: EXTRACTION_CONTRACT_VERSION,
       p_input: {
         force_reextract: forceReextract,
         skip_parse: initialStage === "normalize",
         module_type: fileRecord.module_type ?? "leases",
         file_name: fileRecord.file_name ?? null,
       },
+      // P1.2: the flag is resolved here, server-side, and passed through
+      // p_metadata as an explicit boolean the RPC reads — never inferred
+      // inside the RPC, never read directly by the browser. With the flag
+      // off (the default), start_lease_extraction_generation creates no
+      // extraction_runs row at all.
       p_metadata: {
         enqueued_by: "ingest-file",
         enqueued_at: now,
+        provenance_enabled: isExtractionProvenanceEnabled(),
+        run_type: forceReextract ? "re_extraction" : "initial_extraction",
+        contract_version: EXTRACTION_CONTRACT_VERSION,
       },
     },
   );
