@@ -8,7 +8,7 @@
  */
 
 import { PACKAGE_RESOLUTION_VERSION } from "./package-resolution-version.ts";
-import { BASE_DEPENDENT_CONCEPTS, isRegisteredAuthoritativeConcept } from "./concept-domain-policy.ts";
+import { BASE_DEPENDENT_CONCEPTS, getPackageConceptDomain, isRegisteredAuthoritativeConcept } from "./concept-domain-policy.ts";
 import { getRelationshipEffectPolicy } from "./relationship-precedence-policy.ts";
 import { buildPackageConflict, conflictTypeForRelationshipTypes } from "./package-conflict-detector.ts";
 import type {
@@ -96,11 +96,24 @@ function normalizedValuesDiffer(candidates: OverrideCandidate[]): boolean {
   return new Set(candidates.map((candidate) => candidate.claim.normalizedValue ?? "")).size > 1;
 }
 
+function combinedRelationshipPriority(candidate: OverrideCandidate): number {
+  if (candidate.sourceDocument.profileKey !== "assignment_and_amendment") return 0;
+  const domain = getPackageConceptDomain(candidate.claim.conceptKey);
+  const assignmentScoped = domain === "parties" || domain === "assignment" || domain === "notices";
+  if (assignmentScoped) return candidate.relationship.relationshipType === "assigns" ? 0 : 1;
+  return candidate.relationship.relationshipType === "amends" ? 0 : 1;
+}
+
 function dedupeCandidatesBySourceClaim(candidates: OverrideCandidate[]): OverrideCandidate[] {
   const deduped = new Map<string, OverrideCandidate>();
   for (const candidate of candidates) {
     const existing = deduped.get(candidate.claim.id);
-    if (!existing || compareStrings(candidate.relationship.id, existing.relationship.id) < 0) {
+    if (!existing) {
+      deduped.set(candidate.claim.id, candidate);
+      continue;
+    }
+    const priority = combinedRelationshipPriority(candidate) - combinedRelationshipPriority(existing);
+    if (priority < 0 || (priority === 0 && compareStrings(candidate.relationship.id, existing.relationship.id) < 0)) {
       deduped.set(candidate.claim.id, candidate);
     }
   }
