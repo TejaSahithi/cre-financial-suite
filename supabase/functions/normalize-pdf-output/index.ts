@@ -39,6 +39,8 @@ import { enqueueEnrichmentJob } from "../_shared/extraction/enrichment-dispatch.
 import { runDocumentIntelligenceV3SideWrite } from "../_shared/extraction/document-intelligence-v3/side-write.ts";
 import { getLeaseClaimsLedgerMode } from "../_shared/extraction/claims/feature-mode.ts";
 import { maybeRunClaimsLedgerForStage } from "../_shared/extraction/claims/claims-pipeline-orchestrator.ts";
+import { getLeaseDocumentPackageMode } from "../_shared/extraction/document-package/feature-mode.ts";
+import { maybeRunLeaseDocumentPackagePipeline } from "../_shared/extraction/document-package/runtime/package-runtime-orchestrator.ts";
 import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/types.ts";
 import { resolveExtractionRunId, withExtractionStage } from "../_shared/extraction/provenance/recorder.ts";
 import type { StageHandle } from "../_shared/extraction/provenance/types.ts";
@@ -2029,8 +2031,10 @@ async function handleEnrichMode(args: {
     // by finalize_lease_extraction_for_review's own P2.7 checks, not by
     // failing this stage.
     const claimsLedgerMode = getLeaseClaimsLedgerMode();
+    const packageMode = getLeaseDocumentPackageMode();
+    let enrichExtractionRunId: string | null = null;
     if (claimsLedgerMode !== "off" && jobGenerationId) {
-      const enrichExtractionRunId = await resolveExtractionRunId(supabaseAdmin, orgId, jobGenerationId);
+      enrichExtractionRunId = await resolveExtractionRunId(supabaseAdmin, orgId, jobGenerationId);
       const recordFields = (enrichedPayload.records?.[0]?.fields ?? {}) as Record<string, any>;
       const deterministicFields: Record<string, any> = {};
       for (const [fieldKey, field] of Object.entries(recordFields)) {
@@ -2080,6 +2084,28 @@ async function handleEnrichMode(args: {
       );
     }
 
+    // P3.7: package runtime is a single mode-gated server boundary after P2
+    // projection and before the finalizer. Mode=off does not call the
+    // orchestrator at all, preserving the P3.6 runtime baseline exactly.
+    if (packageMode !== "off" && jobGenerationId) {
+      if (!enrichExtractionRunId) {
+        enrichExtractionRunId = await resolveExtractionRunId(supabaseAdmin, orgId, jobGenerationId);
+      }
+      const recordFields = (enrichedPayload.records?.[0]?.fields ?? {}) as Record<string, any>;
+      await maybeRunLeaseDocumentPackagePipeline(
+        supabaseAdmin,
+        {
+          orgId,
+          uploadedFileId: fileId,
+          leaseId: null,
+          extractionRunId: enrichExtractionRunId,
+          extractionStageRunId: stage?.stageRunId ?? null,
+          generationId: jobGenerationId,
+          stageAttempt: Number(workerAttempt) || 1,
+        },
+        { singleDocumentCompatibility: { fields: recordFields } },
+      );
+    }
     // P0.5: re-evaluate and persist review_readiness now that enrichment
     // concluded — best-effort; a failure here must not fail the enrich
     // response itself (the enrichment result is already durably persisted
@@ -2091,6 +2117,7 @@ async function handleEnrichMode(args: {
         p_uploaded_file_id: fileId,
         p_generation_id: jobGenerationId,
         p_ledger_mode: claimsLedgerMode,
+        p_package_mode: packageMode,
       });
     } catch (finalizeError: any) {
       console.warn(`[normalize-pdf-output] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
@@ -2137,6 +2164,7 @@ async function handleEnrichMode(args: {
         p_org_id: orgId,
         p_uploaded_file_id: fileId,
         p_generation_id: jobGenerationId,
+        p_package_mode: getLeaseDocumentPackageMode(),
       });
     } catch (finalizeError: any) {
       console.warn(`[normalize-pdf-output] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);

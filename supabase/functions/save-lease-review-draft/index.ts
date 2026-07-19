@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { assertPageAccess, getUserOrgId, verifyUser } from "../_shared/supabase.ts";
+import { getLeaseDocumentPackageMode } from "../_shared/extraction/document-package/feature-mode.ts";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -21,7 +22,7 @@ function validatePayload(body: Record<string, unknown> = {}) {
 function errorStatus(message: string) {
   if (/unauthorized|missing authorization/i.test(message)) return 401;
   if (/access denied|permission/i.test(message)) return 403;
-  if (/approved and locked/i.test(message)) return 409;
+  if (/approved and locked|package-active/i.test(message)) return 409;
   if (/required|not found|must be a|must be an/i.test(message)) return 400;
   return 500;
 }
@@ -44,6 +45,9 @@ Deno.serve(async (req: Request) => {
 
     const body = await req.json().catch(() => ({}));
     const payload = validatePayload(body);
+    if (getLeaseDocumentPackageMode() === "active") {
+      throw new Error("package-active review draft saves must use package reviewer decision routes");
+    }
 
     const { data, error } = await supabaseAdmin.rpc("save_lease_review_draft", {
       p_org_id: orgId,
