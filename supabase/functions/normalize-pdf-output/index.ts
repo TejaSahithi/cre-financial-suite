@@ -37,6 +37,8 @@ import { createLogger } from "../_shared/logger.ts";
 import { computeCoreReady, uploadedFileRowHasMeaningfulValues } from "../_shared/extraction/payload-guard.ts";
 import { enqueueEnrichmentJob } from "../_shared/extraction/enrichment-dispatch.ts";
 import { runDocumentIntelligenceV3SideWrite } from "../_shared/extraction/document-intelligence-v3/side-write.ts";
+import { getLeaseClaimsLedgerMode } from "../_shared/extraction/claims/feature-mode.ts";
+import { maybeRunClaimsLedgerForStage } from "../_shared/extraction/claims/claims-pipeline-orchestrator.ts";
 import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/types.ts";
 import { resolveExtractionRunId, withExtractionStage } from "../_shared/extraction/provenance/recorder.ts";
 import type { StageHandle } from "../_shared/extraction/provenance/types.ts";
@@ -2020,6 +2022,64 @@ async function handleEnrichMode(args: {
     );
     await logger.event("enrich", "completed", { metadata: { clauses: clauseCount, source_backed: sourceBackedCount } });
 
+    // P2.7: claims ledger side-write, mode-gated (off/shadow/active, P2.2).
+    // maybeRunClaimsLedgerForStage never throws -- a claims-ledger failure
+    // must never break the primary enrich response, which is already
+    // durably persisted above. Active-mode correctness is enforced later,
+    // by finalize_lease_extraction_for_review's own P2.7 checks, not by
+    // failing this stage.
+    const claimsLedgerMode = getLeaseClaimsLedgerMode();
+    if (claimsLedgerMode !== "off" && jobGenerationId) {
+      const enrichExtractionRunId = await resolveExtractionRunId(supabaseAdmin, orgId, jobGenerationId);
+      const recordFields = (enrichedPayload.records?.[0]?.fields ?? {}) as Record<string, any>;
+      const deterministicFields: Record<string, any> = {};
+      for (const [fieldKey, field] of Object.entries(recordFields)) {
+        if (!field || typeof field !== "object") continue;
+        deterministicFields[fieldKey] = {
+          value: field.value ?? null,
+          source: field.source === "llm" ? "llm" : field.source === "table" ? "table" : "rule",
+          confidence: typeof field.confidence === "number" ? field.confidence : 0,
+          sourceText: field.evidence?.source_clause ?? null,
+          sourcePage: field.evidence?.page_number ?? null,
+        };
+      }
+      // Discovered/unmapped LLM findings surface inside workflow_output.lease_fields
+      // as synthetic entries with field_group:"discovered" (built from
+      // unmappedLlmFields by buildLeaseWorkflowAbstraction,
+      // lease-workflow.ts:3086-3107) -- there is no separately-exposed
+      // unmapped_llm_keys array on the output, so this is the real,
+      // grounded source for the dynamic-findings adapter.
+      const workflowLeaseFields = ((enrichedPayload.records?.[0]?.workflow_output as any)?.lease_fields ?? {}) as Record<string, any>;
+      const unmappedLlmFields = Object.entries(workflowLeaseFields)
+        .filter(([, field]) => field?.field_group === "discovered")
+        .map(([key, field]) => ({
+          key,
+          value: field.value ?? null,
+          sourceText: field.source_clause ?? field.exact_source_text ?? null,
+          sourcePage: field.source_page ?? null,
+          confidence: typeof field.confidence_score === "number" ? field.confidence_score : null,
+        }));
+
+      await maybeRunClaimsLedgerForStage(
+        supabaseAdmin,
+        {
+          orgId,
+          uploadedFileId: fileId,
+          leaseId: null,
+          extractionRunId: enrichExtractionRunId,
+          extractionStageRunId: stage?.stageRunId ?? null,
+          generationId: jobGenerationId,
+          stageAttempt: Number(workerAttempt) || 1,
+        },
+        {
+          deterministicFields,
+          semanticCandidateGroups: [],
+          unmappedLlmFields,
+          legacyExtractionData: { fields: recordFields },
+        },
+      );
+    }
+
     // P0.5: re-evaluate and persist review_readiness now that enrichment
     // concluded — best-effort; a failure here must not fail the enrich
     // response itself (the enrichment result is already durably persisted
@@ -2030,6 +2090,7 @@ async function handleEnrichMode(args: {
         p_org_id: orgId,
         p_uploaded_file_id: fileId,
         p_generation_id: jobGenerationId,
+        p_ledger_mode: claimsLedgerMode,
       });
     } catch (finalizeError: any) {
       console.warn(`[normalize-pdf-output] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
