@@ -331,3 +331,21 @@ export function assertCanWritePage(user, pageName, action = "modify this page") 
 export function isPagePermissionError(error) {
   return error?.code === "PAGE_READ_ONLY" || error instanceof PagePermissionError;
 }
+
+// Postgres 42501 = insufficient_privilege, the code RLS-policy rejections
+// surface as. Unlike PagePermissionError (thrown client-side before the
+// request goes out), this means the client's own permission check passed
+// but the database rejected the write anyway — most commonly because the
+// client was still holding a stale cached role/membership snapshot. Give
+// the user something actionable instead of the raw Postgres message.
+export function isRlsPermissionError(error) {
+  return error?.code === "42501";
+}
+
+export function describePermissionError(error, pageName = "this page") {
+  if (isPagePermissionError(error)) return error.message;
+  if (isRlsPermissionError(error)) {
+    return `Your access to ${pageName} may have just changed. Please refresh the page and try again, or ask an admin to confirm your permissions.`;
+  }
+  return null;
+}

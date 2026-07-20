@@ -45,7 +45,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useModuleAccess } from "@/lib/ModuleAccessContext";
 import { getStoredActingOrgId, setStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
-import { assertCanWritePage, isPagePermissionError } from "@/lib/userPermissions";
+import { assertCanWritePage, describePermissionError } from "@/lib/userPermissions";
 
 async function ensureCreatorPortfolioAccess({ portfolioId, orgId, user }) {
   if (!portfolioId || !orgId || !user || user._raw_role === "super_admin") return;
@@ -182,7 +182,8 @@ export default function Portfolios() {
       // Stay on the Portfolios page so the user can see the newly created portfolio in the list
     },
     onError: (err) => {
-      toast.error(isPagePermissionError(err) ? err.message : `Failed to create portfolio: ${err?.message || "Unknown error"}`);
+      const permissionMessage = describePermissionError(err, "Portfolios");
+      toast.error(permissionMessage || `Failed to create portfolio: ${err?.message || "Unknown error"}`);
     },
   });
 
@@ -200,7 +201,8 @@ export default function Portfolios() {
       setSelectedPortfolioIds((prev) => prev.filter((selectedId) => selectedId !== id));
     },
     onError: (err) => {
-      toast.error(isPagePermissionError(err) ? err.message : `Failed to delete portfolio: ${err?.message || "Unknown error"}`);
+      const permissionMessage = describePermissionError(err, "Portfolios");
+      toast.error(permissionMessage || `Failed to delete portfolio: ${err?.message || "Unknown error"}`);
     },
   });
 
@@ -222,7 +224,8 @@ export default function Portfolios() {
       toast.success(`${count} portfolio${count === 1 ? "" : "s"} deleted`);
     },
     onError: (err) => {
-      toast.error(isPagePermissionError(err) ? err.message : `Failed to delete selected portfolios: ${err?.message || "Unknown error"}`);
+      const permissionMessage = describePermissionError(err, "Portfolios");
+      toast.error(permissionMessage || `Failed to delete selected portfolios: ${err?.message || "Unknown error"}`);
     },
   });
 

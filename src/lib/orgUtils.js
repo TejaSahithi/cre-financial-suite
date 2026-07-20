@@ -1,4 +1,4 @@
-import { me } from "@/services/auth";
+import { me, refreshMe } from "@/services/auth";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { getDataScope } from "@/lib/rbac";
 
@@ -26,7 +26,13 @@ export async function resolveReadableOrgScope(currentOrgId = null, options = {})
 
 export async function resolveWritableOrgScope(currentOrgId = null) {
   try {
-    const user = await me();
+    // Use refreshMe(), not me(): this scope gates writes, and me()'s
+    // session-long cache can still hold a role/membership snapshot from
+    // before a permission change (e.g. a just-granted role, or a
+    // just-created org's membership) took effect in the database. Resolving
+    // against stale data lets this check pass while the DB's RLS policy
+    // correctly rejects the write, surfacing as a confusing 42501 error.
+    const user = await refreshMe();
     return resolveWritableOrgScopeForUser(user, { currentOrgId });
   } catch (err) {
     console.warn("[orgUtils] Error resolving writable org scope:", err);

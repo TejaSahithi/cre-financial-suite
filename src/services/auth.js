@@ -466,6 +466,21 @@ export async function me() {
 }
 
 /**
+ * Force a fresh fetch of the user/memberships, bypassing the session-long
+ * cache in me(). Roles, memberships, and page permissions can change server
+ * side (invitation accepted, role granted, org just created) without the
+ * cached profile ever being invalidated, which lets a client-side permission
+ * check pass on stale data even though the database's RLS policy correctly
+ * rejects the write. Call this before permission-gated writes instead of
+ * me() so the check reflects current DB state.
+ * @returns {Promise<object|null>}
+ */
+export async function refreshMe() {
+  _cachedProfile = null;
+  return me();
+}
+
+/**
  * Get the current Supabase session.
  */
 export async function getSession() {
