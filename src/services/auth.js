@@ -245,7 +245,24 @@ async function resolveMembership(userId) {
     return { role: 'viewer', org_id: null, memberships };
   }
 
-  const primary = resolvePrimaryMembership(usableMemberships, preferredOrgId);
+  // Only a truly activated (active/owner) membership may become "primary"
+  // -- the one that determines the displayed role and org context. The
+  // database's RLS functions (membership_page_access, is_active_org_member,
+  // etc.) only ever recognize status IN ('active', 'owner'), never
+  // 'invited'. If an 'invited' membership were picked as primary (e.g. it's
+  // the user's only membership), the UI would show a fully privileged role
+  // for an org the database has not actually granted access to yet, and
+  // every write would fail with a confusing RLS error despite the client
+  // believing it had permission.
+  const activatedMemberships = usableMemberships.filter((m) =>
+    ['active', 'owner'].includes(m?.status || 'active')
+  );
+
+  if (activatedMemberships.length === 0) {
+    return { role: 'viewer', org_id: null, memberships: usableMemberships };
+  }
+
+  const primary = resolvePrimaryMembership(activatedMemberships, preferredOrgId);
 
   return {
     role: primary.role,
