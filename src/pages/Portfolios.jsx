@@ -153,6 +153,25 @@ export default function Portfolios() {
     mutationFn: async (data) => {
       assertCanWritePage(user, "Portfolios", "create portfolios");
       const writableOrgId = data.org_id || await resolveWritableOrgId(orgId);
+      // TEMP DIAGNOSTIC (remove once the RLS 42501 on portfolio create is
+      // root-caused): the client-side permission gate above passed, but the
+      // database's WITH CHECK (can_write_page(org_id, 'Portfolios')) has
+      // been rejecting the insert anyway. This dumps exactly what org_id is
+      // being sent and what the client believes the user's org memberships
+      // are, so a failing attempt tells us whether org_id is missing/wrong
+      // or whether the membership itself lacks org_admin/write access.
+      console.info("[Portfolio.create diagnostic]", {
+        formOrgId: data.org_id || null,
+        hookOrgId: orgId || null,
+        resolvedWritableOrgId: writableOrgId || null,
+        userId: user?.id || null,
+        rawRole: user?._raw_role || user?.role || null,
+        memberships: (user?.memberships || []).map((m) => ({
+          org_id: m?.org_id,
+          role: m?.role,
+          status: m?.status,
+        })),
+      });
       const created = await PortfolioService.create({
         ...data,
         ...(writableOrgId ? { org_id: writableOrgId } : {}),
