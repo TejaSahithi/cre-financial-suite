@@ -724,8 +724,13 @@ const ALLOWED_COLUMNS = {
 };
 
 async function getCurrentUserForCrud() {
-  const { me } = await import('@/services/auth');
-  return me();
+  // refreshMe(), not me(): this feeds resolveMutationOrgId(), which gates
+  // writes. me()'s session-long cache can hold a role/membership/org
+  // snapshot from before a permission change took effect in the database,
+  // letting this check disagree with what the caller already validated
+  // against fresh data.
+  const { refreshMe } = await import('@/services/auth');
+  return refreshMe();
 }
 
 async function resolveMutationOrgId(entityName, explicitOrgId = null) {
@@ -1266,7 +1271,16 @@ export function createEntityService(entityName) {
         // removed — super-admins must now pass `org_id` explicitly in the
         // create payload, or act with an active org in their app_metadata /
         // membership. Anything else is rejected.
-        if (!isOrgExempt) {
+        //
+        // Only re-derive org_id when the caller didn't already supply one.
+        // resolveMutationOrgId() does its own independent user/membership
+        // fetch (via the cached me(), not a fresh refetch) — if a caller has
+        // already resolved and validated a specific org_id (e.g. via
+        // resolveWritableOrgId against fresh data), that value must be
+        // trusted rather than silently overwritten by a second resolution
+        // that can disagree with it and send a different org_id than what
+        // the caller checked write access against.
+        if (!isOrgExempt && !enriched.org_id) {
           enriched.org_id = await resolveMutationOrgId(`${entityName}.create()`, enriched.org_id);
         }
 
