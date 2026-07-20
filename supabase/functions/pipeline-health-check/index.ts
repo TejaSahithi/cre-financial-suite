@@ -1,14 +1,13 @@
 // @ts-nocheck
 /**
- * pipeline-health-check — admin-only diagnostic for the CRE lease extraction pipeline
+ * pipeline-health-check — diagnostic for the CRE lease extraction pipeline
  *
  * Checks the full stack is operational:
  *   - Environment variable presence (never returns values)
  *   - Database schema (tables + required columns)
  *   - Supabase Storage (financial-uploads bucket)
- *   - parse-pdf-docling internal auth (dry_run)
- *   - normalize-pdf-output internal auth (dry_run)
- *   - Docling health (if DOCLING_API_URL present)
+ *   - OpenAI health and credentials
+ *   - Azure Document Intelligence health and credentials
  *
  * Access: org_admin or super_admin role only.
  * Security: secret values are NEVER returned — only "present" / "missing".
@@ -16,13 +15,9 @@
 
 import { corsHeaders } from "../_shared/cors.ts";
 import { createAdminClient, verifyUser } from "../_shared/supabase.ts";
-import { callGeminiWithAPIKey, validateVertexAIAuth } from "../_shared/vertex-ai.ts";
+import { callLLMText } from "../_shared/llm.ts";
 import { getAzureDocumentIntelligenceConfig } from "../_shared/azure/document-intelligence.ts";
-import { resolveExtractionProvider, shouldUseAzureLayout } from "../_shared/extraction/extraction-provider.ts";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+import { resolveExtractionProvider } from "../_shared/extraction/extraction-provider.ts";
 
 type CheckStatus = "pass" | "fail" | "warn" | "skip";
 
@@ -32,10 +27,6 @@ interface Check {
   message: string;
   fix?: string;
 }
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
 
 const REQUIRED_TABLES = ["uploaded_files", "pipeline_jobs", "pipeline_logs", "leases"] as const;
 
@@ -49,28 +40,13 @@ const REQUIRED_UF_COLUMNS = [
   "review_status",
 ] as const;
 
-const FUNCTION_CALL_TIMEOUT_MS = 20_000;
-
-const NORMALIZE_SAMPLE_TEXT =
-  "Tenant shall pay monthly rent of $2,100. " +
-  "Lease commencement date is March 1, 2019. " +
-  "Premises: Suite 200, 123 Main Street, Los Angeles, CA 90001. " +
-  "Landlord: ABC Properties LLC. Lease term: 36 months.";
-
-// ---------------------------------------------------------------------------
-// Secret presence map — NEVER return actual values
-// ---------------------------------------------------------------------------
-
 function buildSecretPresenceMap(): Record<string, "present" | "missing"> {
   const has = (key: string) => !!Deno.env.get(key);
   return {
     SUPABASE_URL: has("SUPABASE_URL") ? "present" : "missing",
     SUPABASE_SERVICE_ROLE_KEY: has("SUPABASE_SERVICE_ROLE_KEY") ? "present" : "missing",
     WORKER_INTERNAL_SECRET: has("WORKER_INTERNAL_SECRET") ? "present" : "missing",
-    VERTEX_PROJECT_ID: (has("VERTEX_PROJECT_ID") || has("GOOGLE_PROJECT_ID")) ? "present" : "missing",
-    GOOGLE_SERVICE_ACCOUNT_KEY: (has("GOOGLE_SERVICE_ACCOUNT_KEY") || has("GOOGLE_PRIVATE_KEY")) ? "present" : "missing",
-    GEMINI_API_KEY: (has("GEMINI_API_KEY") || has("GOOGLE_API_KEY")) ? "present" : "missing",
-    DOCLING_API_URL: has("DOCLING_API_URL") ? "present" : "missing",
+    OPENAI_API_KEY: has("OPENAI_API_KEY") ? "present" : "missing",
     EXTRACTION_PROVIDER: has("EXTRACTION_PROVIDER") ? "present" : "missing",
     AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: has("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT") ? "present" : "missing",
     AZURE_DOCUMENT_INTELLIGENCE_KEY: has("AZURE_DOCUMENT_INTELLIGENCE_KEY") ? "present" : "missing",
@@ -80,10 +56,6 @@ function buildSecretPresenceMap(): Record<string, "present" | "missing"> {
     STORE_FULL_AZURE_RAW_RESPONSE: has("STORE_FULL_AZURE_RAW_RESPONSE") ? "present" : "missing",
   };
 }
-
-// ---------------------------------------------------------------------------
-// Check helpers
-// ---------------------------------------------------------------------------
 
 function checkEnvVars(): Check[] {
   const checks: Check[] = [];
@@ -104,126 +76,33 @@ function checkEnvVars(): Check[] {
     });
   }
 
-  const hasVertexProject = !!(Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID"));
-  const hasVertexCreds = !!(Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"));
-  const vertexFull = hasVertexProject && hasVertexCreds;
-  const vertexPartial = hasVertexProject || hasVertexCreds;
+  const hasOpenAI = !!Deno.env.get("OPENAI_API_KEY");
   checks.push({
-    name: "env_vertex_ai",
-    status: vertexFull ? "pass" : vertexPartial ? "warn" : "skip",
-    message: vertexFull
-      ? "Vertex AI fully configured (VERTEX_PROJECT_ID + GOOGLE_SERVICE_ACCOUNT_KEY)"
-      : vertexPartial
-        ? "Vertex AI partially configured — both VERTEX_PROJECT_ID and GOOGLE_SERVICE_ACCOUNT_KEY are required"
-        : "Vertex AI not configured (optional — required for LLM field extraction)",
-    ...(vertexPartial && !vertexFull
-      ? { fix: "Set both VERTEX_PROJECT_ID and GOOGLE_SERVICE_ACCOUNT_KEY in Supabase secrets" }
-      : {}),
-  });
-
-  const hasGeminiKey = !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY"));
-  checks.push({
-    name: "env_gemini_api_key",
-    status: hasGeminiKey ? "pass" : "skip",
-    message: hasGeminiKey
-      ? "Gemini API key fallback is configured"
-      : "GEMINI_API_KEY/GOOGLE_API_KEY not configured (recommended fallback when Vertex service account auth fails)",
-    ...(hasGeminiKey ? {} : { fix: "supabase secrets set GEMINI_API_KEY=<google-ai-api-key>" }),
+    name: "env_openai_api_key",
+    status: hasOpenAI ? "pass" : "fail",
+    message: hasOpenAI ? "OpenAI API key configured (OPENAI_API_KEY)" : "OpenAI API key missing (OPENAI_API_KEY)",
+    ...(hasOpenAI ? {} : { fix: "supabase secrets set OPENAI_API_KEY=<your-key>" }),
   });
 
   const providerSelection = resolveExtractionProvider();
   checks.push({
     name: "env_extraction_provider",
-    status: providerSelection.mode === "legacy" ? "skip" : "pass",
+    status: "pass",
     message: `EXTRACTION_PROVIDER=${providerSelection.mode} (${providerSelection.source})`,
   });
 
   const azureConfig = getAzureDocumentIntelligenceConfig();
   const azureConfigured = !!(azureConfig.endpoint && azureConfig.keyPresent);
-  const azureModeRequested = shouldUseAzureLayout(providerSelection.mode);
-  const azureOnlyMode = providerSelection.mode === "azure_document_intelligence";
-  const rawResponseStorageEnabled = Deno.env.get("STORE_FULL_AZURE_RAW_RESPONSE")?.toLowerCase() === "true";
   checks.push({
     name: "env_azure_document_intelligence",
-    status: azureConfigured ? "pass" : azureModeRequested ? "fail" : "skip",
+    status: azureConfigured ? "pass" : "fail",
     message: azureConfigured
-      ? `Azure Document Intelligence configured (model=${azureConfig.modelId}, api=${azureConfig.apiVersion}, effective_output=${azureConfig.effectiveOutputFormat})`
-      : azureModeRequested
-        ? "Azure provider mode requested but endpoint/key are missing"
-        : "Azure Document Intelligence not configured (optional provider)",
+      ? `Azure Document Intelligence configured (model=${azureConfig.modelId}, api=${azureConfig.apiVersion})`
+      : "Azure Document Intelligence endpoint/key missing",
     ...(azureConfigured ? {} : { fix: "Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT and AZURE_DOCUMENT_INTELLIGENCE_KEY in Supabase secrets" }),
-  });
-  checks.push({
-    name: "env_azure_output_format",
-    status: azureConfig.effectiveOutputFormat === "markdown"
-      ? (azureConfig.outputFormatWasForced ? "warn" : "pass")
-      : azureModeRequested ? "fail" : "skip",
-    message: azureConfig.outputFormatWasForced
-      ? `AZURE_DOCUMENT_INTELLIGENCE_OUTPUT_FORMAT=${azureConfig.configuredOutputFormat} ignored; effective outputContentFormat=markdown`
-      : `Azure effective outputContentFormat=${azureConfig.effectiveOutputFormat}`,
-    ...(azureConfig.effectiveOutputFormat === "markdown" ? {} : { fix: "Azure outputContentFormat must be markdown" }),
-  });
-  checks.push({
-    name: "azure_raw_response_storage",
-    status: rawResponseStorageEnabled ? "warn" : azureModeRequested ? "pass" : "skip",
-    message: rawResponseStorageEnabled
-      ? "STORE_FULL_AZURE_RAW_RESPONSE=true; full Azure raw responses will be stored"
-      : "Full Azure raw_response storage disabled; only raw_response_summary is stored",
-  });
-  if (azureOnlyMode) {
-    checks.push({
-      name: "azure_only_mode",
-      status: "pass",
-      message: "Azure-only layout mode active; Docling/Gemini parser checks are legacy diagnostics",
-    });
-  }
-  const hasDocling = !!Deno.env.get("DOCLING_API_URL");
-  checks.push({
-    name: "env_docling_api_url",
-    status: hasDocling ? "pass" : "skip",
-    message: hasDocling
-      ? (providerSelection.mode === "azure_document_intelligence" ? "DOCLING_API_URL is set (legacy parser diagnostic only in Azure-only mode)" : "DOCLING_API_URL is set")
-      : (providerSelection.mode === "azure_document_intelligence" ? "DOCLING_API_URL not configured (legacy parser diagnostic only in Azure-only mode)" : "DOCLING_API_URL not configured (optional legacy parser table extraction)"),
-    ...(hasDocling ? {} : { fix: "supabase secrets set DOCLING_API_URL=http://your-docling-service:5001" }),
   });
 
   return checks;
-}
-
-async function checkGeminiApiKey(): Promise<Check> {
-  const hasGeminiKey = !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY"));
-  if (!hasGeminiKey) {
-    return {
-      name: "gemini_api_key",
-      status: "skip",
-      message: "Gemini API key fallback is not configured",
-      fix: "Set GEMINI_API_KEY to keep OCR/LLM extraction available when Vertex service-account auth fails",
-    };
-  }
-
-  try {
-    const response = await callGeminiWithAPIKey({
-      userPrompt: "Return {\"ok\":true}.",
-      maxOutputTokens: 64,
-      temperature: 0,
-    });
-    const content = String(response.content ?? "");
-    return {
-      name: "gemini_api_key",
-      status: content ? "pass" : "warn",
-      message: content
-        ? `Gemini API key validation succeeded via ${response.model}`
-        : "Gemini API key responded with empty content",
-      ...(content ? {} : { fix: "Verify GEMINI_API_KEY has access to Gemini generateContent" }),
-    };
-  } catch (err: any) {
-    return {
-      name: "gemini_api_key",
-      status: "warn",
-      message: `Gemini API key validation failed: ${String(err?.message ?? err).slice(0, 240)}`,
-      fix: "Rotate GEMINI_API_KEY or verify the Google AI API key has Gemini API access",
-    };
-  }
 }
 
 async function checkDatabaseSchema(admin: any): Promise<Check[]> {
@@ -233,13 +112,10 @@ async function checkDatabaseSchema(admin: any): Promise<Check[]> {
     try {
       const { error } = await admin.from(table).select("id").limit(0);
       if (error) {
-        const missing = /does not exist/i.test(error.message) || error.code === "42P01";
         checks.push({
           name: `db_table_${table}`,
           status: "fail",
-          message: missing
-            ? `Table '${table}' does not exist`
-            : `Table '${table}' query error: ${error.message}`,
+          message: `Table '${table}' query error: ${error.message}`,
           fix: "supabase db push — applies all pending migrations",
         });
       } else {
@@ -254,12 +130,10 @@ async function checkDatabaseSchema(admin: any): Promise<Check[]> {
         name: `db_table_${table}`,
         status: "fail",
         message: `Table '${table}' check threw: ${err?.message ?? err}`,
-        fix: "supabase db push",
       });
     }
   }
 
-  // Check all required uploaded_files columns in one query
   try {
     const { error: colErr } = await admin
       .from("uploaded_files")
@@ -267,24 +141,17 @@ async function checkDatabaseSchema(admin: any): Promise<Check[]> {
       .limit(0);
 
     if (colErr) {
-      // Extract the missing column name from the PostgREST error if possible
-      const match = colErr.message.match(
-        /column (?:uploaded_files\.)?["']?([a-z_]+)["']? does not exist/i,
-      );
-      const missing = match?.[1] ?? null;
       checks.push({
         name: "db_uploaded_files_columns",
         status: "fail",
-        message: missing
-          ? `uploaded_files column '${missing}' is missing`
-          : `uploaded_files column check failed: ${colErr.message}`,
-        fix: "supabase db push — migration 20260610123000_uploaded_files_processing_status.sql adds these columns",
+        message: `uploaded_files column check failed: ${colErr.message}`,
+        fix: "supabase db push",
       });
     } else {
       checks.push({
         name: "db_uploaded_files_columns",
         status: "pass",
-        message: `All required uploaded_files columns present (${REQUIRED_UF_COLUMNS.join(", ")})`,
+        message: `All required uploaded_files columns present`,
       });
     }
   } catch (err: any) {
@@ -292,7 +159,6 @@ async function checkDatabaseSchema(admin: any): Promise<Check[]> {
       name: "db_uploaded_files_columns",
       status: "fail",
       message: `Column check threw: ${err?.message ?? err}`,
-      fix: "supabase db push",
     });
   }
 
@@ -301,346 +167,63 @@ async function checkDatabaseSchema(admin: any): Promise<Check[]> {
 
 async function checkStorage(admin: any): Promise<Check> {
   try {
-    const { data: buckets, error } = await admin.storage.listBuckets();
-
+    const { data, error } = await admin.storage.getBucket("financial-uploads");
     if (error) {
       return {
         name: "storage_bucket",
         status: "fail",
-        message: `Storage listBuckets failed: ${error.message}`,
-        fix: "Verify SUPABASE_SERVICE_ROLE_KEY is correct and Storage API is reachable",
+        message: `Storage bucket 'financial-uploads' check failed: ${error.message}`,
+        fix: "Verify financial-uploads bucket is created in Supabase storage",
       };
     }
-
-    const list: any[] = Array.isArray(buckets) ? buckets : [];
-    const found = list.find((b: any) =>
-      b?.name === "financial-uploads" || b?.id === "financial-uploads",
-    );
-
-    if (!found) {
-      const names = list.map((b: any) => b?.name ?? "?").join(", ") || "(none)";
-      return {
-        name: "storage_bucket",
-        status: "fail",
-        message: `Bucket 'financial-uploads' not found. Existing buckets: ${names}`,
-        fix: "supabase db push — migration 20260403_create_financial_uploads_bucket.sql creates the bucket",
-      };
-    }
-
     return {
       name: "storage_bucket",
       status: "pass",
-      message: `Bucket 'financial-uploads' exists (public: ${found.public ?? "unknown"})`,
+      message: `Storage bucket 'financial-uploads' exists (public=${data.public}, allowedMimeTypes=${JSON.stringify(data.allowed_mime_types)})`,
     };
   } catch (err: any) {
     return {
       name: "storage_bucket",
       status: "fail",
-      message: `Storage check threw: ${err?.message ?? err}`,
-      fix: "Verify SUPABASE_SERVICE_ROLE_KEY and SUPABASE_URL are correct",
+      message: `Storage bucket check threw: ${err?.message ?? err}`,
     };
   }
 }
 
-async function checkParseFunctionAuth(): Promise<Check> {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  const workerSecret = Deno.env.get("WORKER_INTERNAL_SECRET");
-
-  if (!supabaseUrl || !serviceKey) {
+async function checkOpenAIAuth(): Promise<Check> {
+  const hasOpenAI = !!Deno.env.get("OPENAI_API_KEY");
+  if (!hasOpenAI) {
     return {
-      name: "parse_function_auth",
+      name: "openai_auth",
       status: "fail",
-      message: "Cannot call parse-pdf-docling: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set",
-      fix: "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Edge Function secrets",
+      message: "OpenAI API key not configured",
+      fix: "Set OPENAI_API_KEY in Supabase secrets",
     };
   }
 
-  const url = `${supabaseUrl}/functions/v1/parse-pdf-docling`;
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "Authorization": `Bearer ${serviceKey}`,
-    "apikey": serviceKey,
-  };
-  if (workerSecret) headers["x-worker-secret"] = workerSecret;
-
   try {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ dry_run: true }),
-      signal: AbortSignal.timeout(FUNCTION_CALL_TIMEOUT_MS),
+    const response = await callLLMText({
+      userPrompt: "Return 'OK'",
+      maxOutputTokens: 10,
+      temperature: 0,
     });
-
-    const text = await resp.text().catch(() => "");
-    let json: any = null;
-    try { json = JSON.parse(text); } catch { /* non-JSON */ }
-
-    if (resp.status === 401) {
-      return {
-        name: "parse_function_auth",
-        status: "fail",
-        message: `parse-pdf-docling returned 401 — worker auth rejected (${json?.error_code ?? "no code"})`,
-        fix: "Verify SUPABASE_SERVICE_ROLE_KEY and WORKER_INTERNAL_SECRET match what is set in Supabase Edge Function secrets",
-      };
-    }
-
-    // Explicit dry_run response from updated function
-    if (json?.dry_run === true && json?.authenticated === true) {
-      return {
-        name: "parse_function_auth",
-        status: "pass",
-        message: "parse-pdf-docling authenticated ok (dry_run response)",
-      };
-    }
-
-    // Auth passed and reached body-validation stage (MISSING_FILE_ID = auth passed)
-    if (
-      resp.status === 400 &&
-      (json?.error_code === "MISSING_FILE_ID" || /file_id/i.test(json?.message ?? ""))
-    ) {
-      return {
-        name: "parse_function_auth",
-        status: "pass",
-        message: "parse-pdf-docling auth passed (function reached body-validation stage)",
-      };
-    }
-
-    if (resp.ok) {
-      return {
-        name: "parse_function_auth",
-        status: "pass",
-        message: `parse-pdf-docling responded ${resp.status} ok`,
-      };
-    }
-
+    const content = String(response.content ?? "").trim();
     return {
-      name: "parse_function_auth",
-      status: "fail",
-      message: `parse-pdf-docling returned ${resp.status}: ${text.slice(0, 300)}`,
-      fix: "Check Supabase Edge Function logs for parse-pdf-docling",
+      name: "openai_auth",
+      status: content ? "pass" : "warn",
+      message: content
+        ? `OpenAI connection validation succeeded via model: ${response.model}`
+        : "OpenAI responded with empty content",
     };
   } catch (err: any) {
-    const msg = err?.message ?? String(err);
-    const isTimeout = /timeout|abort/i.test(msg);
     return {
-      name: "parse_function_auth",
+      name: "openai_auth",
       status: "fail",
-      message: isTimeout
-        ? `parse-pdf-docling timed out (>${FUNCTION_CALL_TIMEOUT_MS / 1000}s)`
-        : `parse-pdf-docling call failed: ${msg}`,
-      fix: "Verify SUPABASE_URL is correct and the function is deployed (supabase functions deploy parse-pdf-docling)",
+      message: `OpenAI validation failed: ${err.message}`,
+      fix: "Verify OPENAI_API_KEY is active and valid",
     };
   }
 }
-
-async function checkNormalizeFunctionAuth(): Promise<Check> {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-
-  if (!supabaseUrl || !serviceKey) {
-    return {
-      name: "normalize_function_auth",
-      status: "fail",
-      message: "Cannot call normalize-pdf-output: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set",
-      fix: "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Edge Function secrets",
-    };
-  }
-
-  const url = `${supabaseUrl}/functions/v1/normalize-pdf-output`;
-
-  try {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${serviceKey}`,
-        "apikey": serviceKey,
-        "x-internal-service-key": serviceKey,
-      },
-      body: JSON.stringify({ dry_run: true, sample_text: NORMALIZE_SAMPLE_TEXT }),
-      signal: AbortSignal.timeout(FUNCTION_CALL_TIMEOUT_MS),
-    });
-
-    const text = await resp.text().catch(() => "");
-    let json: any = null;
-    try { json = JSON.parse(text); } catch { /* non-JSON */ }
-
-    if (resp.status === 401) {
-      return {
-        name: "normalize_function_auth",
-        status: "fail",
-        message: `normalize-pdf-output returned 401 — auth rejected (${json?.error_code ?? "no code"})`,
-        fix: "Verify SUPABASE_SERVICE_ROLE_KEY is correctly set in Supabase Edge Function secrets",
-      };
-    }
-
-    // Explicit dry_run response
-    if (json?.dry_run === true && json?.ok === true) {
-      const rows = json?.extraction?.rows ?? 0;
-      return {
-        name: "normalize_function_auth",
-        status: "pass",
-        message: `normalize-pdf-output dry_run ok${rows > 0 ? ` (${rows} row(s) extracted from sample)` : ""}`,
-      };
-    }
-
-    // Auth passed, reached body-validation
-    if (
-      resp.status === 400 &&
-      (json?.error_code === "MISSING_FILE_ID" || /file_id/i.test(json?.message ?? ""))
-    ) {
-      return {
-        name: "normalize_function_auth",
-        status: "pass",
-        message: "normalize-pdf-output auth passed (function reached body-validation stage)",
-      };
-    }
-
-    if (resp.ok) {
-      return {
-        name: "normalize_function_auth",
-        status: "pass",
-        message: `normalize-pdf-output responded ${resp.status} ok`,
-      };
-    }
-
-    return {
-      name: "normalize_function_auth",
-      status: "fail",
-      message: `normalize-pdf-output returned ${resp.status}: ${text.slice(0, 300)}`,
-      fix: "Check Supabase Edge Function logs for normalize-pdf-output",
-    };
-  } catch (err: any) {
-    const msg = err?.message ?? String(err);
-    const isTimeout = /timeout|abort/i.test(msg);
-    return {
-      name: "normalize_function_auth",
-      status: "fail",
-      message: isTimeout
-        ? `normalize-pdf-output timed out (>${FUNCTION_CALL_TIMEOUT_MS / 1000}s)`
-        : `normalize-pdf-output call failed: ${msg}`,
-      fix: "Verify SUPABASE_URL and deploy: supabase functions deploy normalize-pdf-output",
-    };
-  }
-}
-
-async function checkDocling(): Promise<Check> {
-  const doclingUrl = Deno.env.get("DOCLING_API_URL");
-
-  if (!doclingUrl) {
-    return {
-      name: "docling",
-      status: "skip",
-      message: "DOCLING_API_URL not configured — Docling check skipped (optional)",
-      fix: "supabase secrets set DOCLING_API_URL=http://your-docling-service:5001",
-    };
-  }
-
-  const base = doclingUrl.replace(/\/$/, "");
-  const healthUrl = `${base}/health`;
-
-  try {
-    const resp = await fetch(healthUrl, {
-      method: "GET",
-      signal: AbortSignal.timeout(10_000),
-    });
-
-    if (resp.ok) {
-      return {
-        name: "docling",
-        status: "pass",
-        message: `Docling health endpoint responded ${resp.status} at ${healthUrl}`,
-      };
-    }
-
-    if (resp.status === 404) {
-      // /health not implemented — probe root
-      const rootResp = await fetch(base, {
-        method: "GET",
-        signal: AbortSignal.timeout(8_000),
-      }).catch(() => null);
-
-      if (rootResp?.ok) {
-        return {
-          name: "docling",
-          status: "pass",
-          message: `Docling root reachable at ${base} (/health returned 404 — service may not expose a health endpoint)`,
-        };
-      }
-    }
-
-    return {
-      name: "docling",
-      status: "fail",
-      message: `Docling health endpoint returned ${resp.status} at ${healthUrl}`,
-      fix: "Verify the Docling service is running and DOCLING_API_URL is reachable from Supabase Edge Functions",
-    };
-  } catch (err: any) {
-    const msg = err?.message ?? String(err);
-    const isTimeout = /timeout|abort/i.test(msg);
-    return {
-      name: "docling",
-      status: "fail",
-      message: isTimeout
-        ? `Docling health check timed out at ${healthUrl}`
-        : `Docling health check failed: ${msg}`,
-      fix: `Verify DOCLING_API_URL (${base}) is correct and accessible from Supabase Edge Functions`,
-    };
-  }
-}
-
-async function checkVertexAuth(): Promise<Check> {
-  const hasVertexProject = !!(Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID"));
-  const hasServiceJson = !!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY");
-  const hasSplitCreds = !!(Deno.env.get("GOOGLE_CLIENT_EMAIL") && Deno.env.get("GOOGLE_PRIVATE_KEY"));
-  const hasGeminiKey = !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY"));
-
-  if (!hasVertexProject || (!hasServiceJson && !hasSplitCreds)) {
-    return {
-      name: "vertex_auth",
-      status: hasGeminiKey ? "skip" : "warn",
-      message: hasGeminiKey
-        ? "Vertex AI service account not configured; Gemini API key fallback is present"
-        : "Vertex AI service account not configured",
-      fix: hasGeminiKey ? undefined : "Set VERTEX_PROJECT_ID plus GOOGLE_SERVICE_ACCOUNT_KEY, or GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY",
-    };
-  }
-
-  try {
-    const result = await validateVertexAIAuth();
-    if (result.ok) {
-      return {
-        name: "vertex_auth",
-        status: "pass",
-        message: `Vertex AI OAuth token validation succeeded via ${result.source ?? "configured credentials"}`,
-      };
-    }
-
-    return {
-      name: "vertex_auth",
-      status: hasGeminiKey ? "warn" : "fail",
-      message: `Vertex AI OAuth token validation failed: ${String(result.error ?? "unknown error").slice(0, 240)}`,
-      fix: hasGeminiKey
-        ? "Rotate Vertex service account credentials or remove stale Vertex secrets to use Gemini API key fallback"
-        : "Rotate GOOGLE_SERVICE_ACCOUNT_KEY or update GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY for an active Google service account with Vertex AI access",
-    };
-  } catch (err: any) {
-    const message = String(err?.message ?? err).slice(0, 240);
-    return {
-      name: "vertex_auth",
-      status: hasGeminiKey ? "warn" : "fail",
-      message: `Vertex AI OAuth token validation threw: ${message}`,
-      fix: hasGeminiKey
-        ? "Rotate Vertex service account credentials or remove stale Vertex secrets to use Gemini API key fallback"
-        : "Rotate GOOGLE_SERVICE_ACCOUNT_KEY or update GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY for an active Google service account with Vertex AI access",
-    };
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Main handler
-// ---------------------------------------------------------------------------
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -653,7 +236,6 @@ Deno.serve(async (req: Request) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
 
-  // ── Auth guard ────────────────────────────────────────────────────────────
   const hasAuth = Boolean(
     req.headers.get("Authorization") ||
     req.headers.get("x-user-jwt") ||
@@ -679,7 +261,6 @@ Deno.serve(async (req: Request) => {
     }, 401);
   }
 
-  // ── Admin role gate ───────────────────────────────────────────────────────
   const { data: memberships, error: membershipError } = await supabaseAdmin
     .from("memberships")
     .select("role, org_id, status")
@@ -708,95 +289,42 @@ Deno.serve(async (req: Request) => {
     }, 403);
   }
 
-  // ── Run all checks ────────────────────────────────────────────────────────
   const checks: Check[] = [];
-
-  // Env var checks are synchronous
   checks.push(...checkEnvVars());
 
-  // All IO-bound checks run in parallel
   const [
     dbChecks,
     storageCheck,
-    parseAuthCheck,
-    normalizeAuthCheck,
-    doclingCheck,
-    vertexAuthCheck,
-    geminiApiKeyCheck,
+    openaiAuthCheck,
   ] = await Promise.all([
     checkDatabaseSchema(supabaseAdmin),
     checkStorage(supabaseAdmin),
-    checkParseFunctionAuth(),
-    checkNormalizeFunctionAuth(),
-    checkDocling(),
-    checkVertexAuth(),
-    checkGeminiApiKey(),
+    checkOpenAIAuth(),
   ]);
 
   checks.push(...dbChecks);
   checks.push(storageCheck);
-  checks.push(parseAuthCheck);
-  checks.push(normalizeAuthCheck);
-  checks.push(doclingCheck);
-  checks.push(vertexAuthCheck);
-  checks.push(geminiApiKeyCheck);
+  checks.push(openaiAuthCheck);
 
-  // ── Build summary ─────────────────────────────────────────────────────────
   const hasStatus = (name: string, status: CheckStatus) =>
     checks.some((c) => c.name === name && c.status === status);
 
   const dbTablesReady = REQUIRED_TABLES.every((t) => hasStatus(`db_table_${t}`, "pass"));
   const dbColumnsReady = hasStatus("db_uploaded_files_columns", "pass");
   const storageReady = hasStatus("storage_bucket", "pass");
-  const parseReady = hasStatus("parse_function_auth", "pass");
-  const vertexReady = hasStatus("env_vertex_ai", "pass");
-  const vertexAuthReady = hasStatus("vertex_auth", "pass");
-  const geminiReady = hasStatus("gemini_api_key", "pass");
-  const doclingReady = hasStatus("docling", "pass");
-  const providerSelection = resolveExtractionProvider();
-  const azureConfig = getAzureDocumentIntelligenceConfig();
-  const azureOnlyMode = providerSelection.mode === "azure_document_intelligence";
-  const azureReady =
-    hasStatus("env_azure_document_intelligence", "pass") &&
-    azureConfig.effectiveOutputFormat === "markdown";
+  const openaiReady = hasStatus("openai_auth", "pass");
+  const azureReady = hasStatus("env_azure_document_intelligence", "pass");
 
-  const ready_for_digital_pdf = dbTablesReady && dbColumnsReady && storageReady && parseReady;
-  const ready_for_scanned_pdf = ready_for_digital_pdf && doclingReady;
-  const ready_for_llm_extraction = ready_for_digital_pdf && ((vertexReady && vertexAuthReady) || geminiReady);
-  const ready_for_docling_tables = dbTablesReady && dbColumnsReady && storageReady && doclingReady;
-  const ready_for_azure_layout = ready_for_digital_pdf && azureReady;
-  const ready_for_azure_business_extraction = ready_for_azure_layout && ((vertexReady && vertexAuthReady) || geminiReady);
-
-  const overallOk = !checks.some((c) =>
-    c.status === "fail" && !(azureOnlyMode && ["docling", "gemini_api_key"].includes(c.name))
-  );
+  const overallOk = !checks.some((c) => c.status === "fail");
 
   return jsonResponse({
     ok: overallOk,
     checked_at: new Date().toISOString(),
     summary: {
-      ready_for_digital_pdf,
-      ready_for_scanned_pdf,
-      ready_for_llm_extraction,
-      ready_for_docling_tables,
-      ready_for_azure_layout,
-      ready_for_azure_business_extraction,
-    },
-    extraction_provider: providerSelection.mode,
-    azure_document_intelligence: {
-      azure_only_mode: azureOnlyMode,
-      endpoint: azureConfig.endpoint ? "present" : "missing",
-      key: azureConfig.keyPresent ? "present" : "missing",
-      api_version: azureConfig.apiVersion,
-      model_id: azureConfig.modelId,
-      configured_output_format: azureConfig.configuredOutputFormat,
-      effective_output_format: azureConfig.effectiveOutputFormat,
-      output_format_forced_to_markdown: azureConfig.outputFormatWasForced,
-      store_full_raw_response: Deno.env.get("STORE_FULL_AZURE_RAW_RESPONSE")?.toLowerCase() === "true" ? "enabled" : "disabled",
-      legacy_parser_diagnostics: {
-        docling: azureOnlyMode ? "legacy_diagnostic_not_azure_blocker" : "active_legacy_parser_check",
-        gemini_vision: azureOnlyMode ? "legacy_diagnostic_not_azure_blocker" : "active_legacy_parser_check",
-      },
+      db_ready: dbTablesReady && dbColumnsReady,
+      storage_ready: storageReady,
+      openai_ready: openaiReady,
+      azure_ready: azureReady,
     },
     secret_presence: buildSecretPresenceMap(),
     checks,

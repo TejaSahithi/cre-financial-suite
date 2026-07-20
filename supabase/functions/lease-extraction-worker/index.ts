@@ -16,8 +16,303 @@ import {
   isAuthorizedWorkerCall,
   UNAUTHORIZED_WORKER_RESPONSE,
 } from "./auth.ts";
+import { parseDocument } from "../_shared/extraction/parser.ts";
+import {
+  buildPipelineMetadata,
+  buildBlockedReviewPayload,
+  PARSER_STATUSES,
+  REVIEW_STATUSES,
+  parserStatusForTextLength,
+  countTextChars,
+  mergePipelineIntoNormalizedOutput,
+} from "../_shared/extraction/pipeline-contract.ts";
+import { withExtractionStage } from "../_shared/extraction/provenance/recorder.ts";
 
 const WORKER_NAME = "lease-extraction-worker";
+
+async function runParseStageInline(
+  supabaseAdmin: any,
+  fileId: string,
+  orgId: string,
+  jobId: string,
+  generationId: string | null,
+  extractionRunId: string | null,
+  attempt: number,
+  fileRecord: any,
+  logger: any,
+): Promise<{ ok: boolean; error?: string; error_code?: string; data?: any; status?: number }> {
+  const functionStartedAt = new Date().toISOString();
+  let stage: any = null;
+
+  if (generationId) {
+    stage = await withExtractionStage(supabaseAdmin, {
+      orgId,
+      uploadedFileId: fileId,
+      generationId: generationId,
+      extractionRunId: extractionRunId ?? null,
+      pipelineJobId: jobId,
+      stage: "parse",
+      attempt: Number(attempt) || 1,
+    });
+  }
+
+  const persistBlockedParse = async (args: {
+    parserStatus: string;
+    errorCode: string;
+    message: string;
+    fullTextChars?: number;
+    pageCount?: number | null;
+    providerUsed?: string | null;
+    warnings?: string[];
+    doclingRaw?: Record<string, unknown> | null;
+  }) => {
+    const pipeline = buildPipelineMetadata({
+      parser_status: args.parserStatus,
+      review_status: REVIEW_STATUSES.BLOCKED,
+      error_code: args.errorCode,
+      error_message: args.message,
+      started_at: functionStartedAt,
+      finished_at: new Date().toISOString(),
+      full_text_chars: args.fullTextChars ?? 0,
+      page_count: args.pageCount ?? null,
+      provider_used: args.providerUsed ?? null,
+      docling_raw_present: !!args.doclingRaw,
+      warnings: args.warnings ?? [],
+      stage: "parse",
+    });
+    const payload = buildBlockedReviewPayload({
+      fileId,
+      fileName: fileRecord.file_name ?? "document",
+      moduleType: fileRecord.module_type ?? "leases",
+      documentSubtype: fileRecord.document_subtype ?? null,
+      extractionMethod: args.providerUsed ?? null,
+      message: "The document could not be parsed into readable lease text.",
+      pipeline,
+    });
+    const doclingRaw = {
+      ...(args.doclingRaw ?? {}),
+      full_text: (args.doclingRaw as any)?.full_text ?? "",
+      text_blocks: Array.isArray((args.doclingRaw as any)?.text_blocks) ? (args.doclingRaw as any).text_blocks : [],
+      tables: Array.isArray((args.doclingRaw as any)?.tables) ? (args.doclingRaw as any).tables : [],
+      fields: Array.isArray((args.doclingRaw as any)?.fields) ? (args.doclingRaw as any).fields : [],
+      pages: Array.isArray((args.doclingRaw as any)?.pages) ? (args.doclingRaw as any).pages : [],
+      page_count: args.pageCount ?? (args.doclingRaw as any)?.page_count ?? null,
+      warnings: args.warnings ?? (args.doclingRaw as any)?.warnings ?? [],
+      extraction_method: args.providerUsed ?? (args.doclingRaw as any)?.extraction_method ?? "none",
+      _metadata: {
+        ...(((args.doclingRaw as any)?._metadata ?? {}) as Record<string, unknown>),
+        ...pipeline,
+        pipeline,
+      },
+    };
+    await setStatus(supabaseAdmin, fileId, "failed", {
+      processing_status: args.parserStatus,
+      review_status: REVIEW_STATUSES.BLOCKED,
+      review_required: false,
+      error_message: args.message,
+      failed_step: "parse",
+      extraction_method: args.providerUsed ?? "none",
+      docling_raw: doclingRaw,
+      ui_review_payload: payload,
+      normalized_output: mergePipelineIntoNormalizedOutput(null, pipeline, {
+        method: "blocked_pipeline_failure",
+        rows: [],
+        warnings: payload.global_warnings,
+        validationErrors: [],
+      }),
+      parsed_data: [],
+      row_count: 0,
+      valid_count: 0,
+      error_count: 1,
+    });
+    return payload;
+  };
+
+  // Transition status → 'parsing'
+  const { error: parsingStatusError } = await setStatus(supabaseAdmin, fileId, "parsing");
+  if (parsingStatusError) {
+    const errMsg = `Failed to transition file to parsing: ${parsingStatusError.message}`;
+    if (stage) await stage.fail("PDF_PARSING_FAILED", errMsg, { outcome: "terminal_failure" });
+    return { ok: false, error: errMsg, error_code: "PDF_PARSING_FAILED" };
+  }
+  await logger.event("parse", "started", {
+    file_size_bytes: Number(fileRecord.file_size || 0) || null,
+    mime_type: fileRecord.mime_type || "application/octet-stream",
+  });
+
+  try {
+    const storagePath = fileRecord.file_url.replace(
+      /^.*\/storage\/v1\/object\/public\/financial-uploads\//,
+      "",
+    );
+
+    const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin
+      .storage
+      .from("financial-uploads")
+      .createSignedUrl(storagePath, 60 * 60);
+
+    if (signedUrlError) {
+      const errMsg = `Failed to sign URL: ${signedUrlError.message}`;
+      await persistBlockedParse({
+        parserStatus: PARSER_STATUSES.FAILED,
+        errorCode: "PDF_PARSING_FAILED",
+        message: errMsg,
+        warnings: [errMsg],
+      });
+      if (stage) await stage.fail("PDF_PARSING_FAILED", errMsg, { outcome: "terminal_failure" });
+      return { ok: false, error: errMsg, error_code: "PDF_PARSING_FAILED" };
+    }
+
+    // Call parser directly
+    const doclingOutput = await parseDocument(null, fileRecord.file_name ?? "document", fileRecord.mime_type ?? "application/pdf", {
+      fileUrl: signedUrlData.signedUrl,
+      providerOverride: "azure_document_intelligence", // Force Azure Document Intelligence
+    });
+
+    const fullTextChars = countTextChars(doclingOutput);
+    const parserStatus = parserStatusForTextLength(fullTextChars);
+
+    const extractionMethod = doclingOutput.extraction_method || "azure_layout";
+
+    const extractionMetadata = {
+      text_block_count: (doclingOutput.text_blocks ?? []).length,
+      table_count: (doclingOutput.tables ?? []).length,
+      field_count: (doclingOutput.fields ?? []).length,
+      has_content: fullTextChars > 0,
+    };
+
+    const parserPipeline = buildPipelineMetadata({
+      parser_status: parserStatus,
+      review_status: parserStatus === PARSER_STATUSES.COMPLETED ? REVIEW_STATUSES.UNREVIEWED : REVIEW_STATUSES.BLOCKED,
+      started_at: functionStartedAt,
+      finished_at: new Date().toISOString(),
+      full_text_chars: fullTextChars,
+      page_count: doclingOutput.page_count ?? null,
+      provider_used: extractionMethod,
+      docling_raw_present: true,
+      warnings: doclingOutput.warnings ?? [],
+      stage: "parse",
+    });
+
+    const persistedLayout: Record<string, unknown> = {
+      extraction_method: extractionMethod,
+      full_text: doclingOutput.full_text ?? "",
+      markdown: doclingOutput.markdown ?? "",
+      page_count: doclingOutput.page_count ?? null,
+      pages: doclingOutput.pages ?? [],
+      text_blocks: doclingOutput.text_blocks ?? [],
+      tables: doclingOutput.tables ?? [],
+      fields: doclingOutput.fields ?? [],
+      warnings: doclingOutput.warnings ?? [],
+      raw_response: (doclingOutput as any).raw_response ?? null,
+      raw_response_summary: (doclingOutput as any).raw_response_summary ?? null,
+      _metadata: {
+        ...extractionMetadata,
+        ...parserPipeline,
+        pipeline: parserPipeline,
+        full_text_chars: fullTextChars,
+        text_block_count: extractionMetadata.text_block_count,
+        table_count: extractionMetadata.table_count,
+        page_count: doclingOutput.page_count ?? (doclingOutput.pages ?? []).length,
+        persisted_at: new Date().toISOString(),
+      },
+    };
+
+    if (parserStatus !== PARSER_STATUSES.COMPLETED) {
+      const errorCode = parserStatus === PARSER_STATUSES.EMPTY_TEXT ? "EMPTY_PARSE_TEXT" : "INSUFFICIENT_PARSE_TEXT";
+      const message = parserStatus === PARSER_STATUSES.EMPTY_TEXT
+        ? "The document could not be parsed into readable lease text."
+        : `The document parser returned only ${fullTextChars} readable characters; at least ${MIN_LEASE_TEXT_CHARS} are required for automatic lease extraction.`;
+      const payload = await persistBlockedParse({
+        parserStatus,
+        errorCode,
+        message,
+        fullTextChars,
+        pageCount: doclingOutput.page_count ?? null,
+        providerUsed: extractionMethod,
+        warnings: doclingOutput.warnings ?? [],
+        doclingRaw: persistedLayout,
+      });
+      if (stage) await stage.fail(errorCode, message, { outcome: "terminal_failure", pageCount: doclingOutput.page_count ?? undefined });
+      return {
+        ok: false,
+        error: message,
+        error_code: errorCode,
+        data: {
+          parser_status: parserStatus,
+          processing_status: "failed",
+          ui_review_payload: payload,
+        }
+      };
+    }
+
+    const { error: updateError } = await setStatus(
+      supabaseAdmin,
+      fileId,
+      "pdf_parsed",
+      {
+        docling_raw: persistedLayout,
+        extraction_method: extractionMethod,
+        parsed_data: [],
+        row_count: (doclingOutput.tables ?? []).reduce(
+          (n: number, t: any) => n + (t.rows?.length ?? 0),
+          0,
+        ),
+        processing_completed_at: new Date().toISOString(),
+      },
+    );
+
+    if (updateError) {
+      throw new Error(`Failed to store extraction results: ${updateError.message}`);
+    }
+
+    await logger.event("parse", "completed", {
+      parser_status: parserStatus,
+      full_text_chars: fullTextChars,
+      page_count: doclingOutput.page_count ?? null,
+      provider_used: extractionMethod,
+      text_block_count: extractionMetadata.text_block_count,
+      table_count: extractionMetadata.table_count,
+      field_count: extractionMetadata.field_count,
+      duration_ms: parserPipeline.total_duration_ms,
+    });
+
+    if (stage) {
+      await stage.complete({
+        outcome: "completed",
+        pageCount: doclingOutput.page_count ?? undefined,
+        providerCalls: 1,
+      });
+    }
+
+    return {
+      ok: true,
+      error: false,
+      file_id: fileId,
+      processing_status: "pdf_parsed",
+      extraction_method: extractionMethod,
+      page_count: doclingOutput.page_count,
+      parser_status: parserStatus,
+      full_text_chars: fullTextChars,
+    };
+  } catch (extractionError: any) {
+    const errMsg = String(extractionError.message ?? extractionError);
+    await persistBlockedParse({
+      parserStatus: PARSER_STATUSES.FAILED,
+      errorCode: "PDF_PARSING_FAILED",
+      message: errMsg,
+      fullTextChars: 0,
+      pageCount: null,
+      providerUsed: "azure_document_intelligence",
+      warnings: [errMsg],
+    });
+    if (stage) await stage.fail("PDF_PARSING_FAILED", errMsg, { outcome: "terminal_failure" });
+    return { ok: false, error: errMsg, error_code: "PDF_PARSING_FAILED" };
+  } finally {
+    if (stage) await stage.ensureSettled();
+  }
+}
+
 const PARSE_TIMEOUT_MS = 140_000;
 const NORMALIZE_TIMEOUT_MS = 240_000;
 // Dedicated, separate budget for the deferred evidence/clause pass (§3) —
@@ -450,11 +745,11 @@ const VALID_DURABLE_PARSER_METHODS = new Set([
 ]);
 
 // Statuses through which a durably-parsed file legitimately progresses after
-// parse-pdf-docling persisted its output.
+// parse-document-azure persisted its output.
 const POST_PARSE_STATUSES = new Set(["pdf_parsed", "validating", "validated", "review_required"]);
 
 /**
- * A "transport-shaped" failure means the HTTP call to parse-pdf-docling or
+ * A "transport-shaped" failure means the HTTP call to parse-document-azure or
  * normalize-pdf-output died (timeout, connection loss, Edge Function
  * compute/memory kill, gateway 5xx) — it says nothing about whether the
  * stage itself succeeded before dying. 4xx contract errors are real
@@ -472,14 +767,14 @@ function isTransportShapedFailure(stageResult: any): boolean {
   );
 }
 
-// Azure staging P0: the provider value parse-pdf-docling/azure-layout-adapter
+// Azure staging P0: the provider value parse-document-azure/azure-layout-adapter
 // write into docling_raw._metadata.provider for a genuine Azure Document
 // Intelligence parse (confirmed against the observed incident row).
 const EXPECTED_AZURE_PROVIDER_METADATA = "azure_document_intelligence";
 
 /**
  * Durable-state reconciliation: the database, not the HTTP response, is the
- * authority on whether parsing succeeded. parse-pdf-docling persists
+ * authority on whether parsing succeeded. parse-document-azure persists
  * docling_raw and flips status to pdf_parsed BEFORE serializing its HTTP
  * response, so a transport failure can arrive after a fully successful parse.
  *
@@ -846,7 +1141,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: fileRecord, error: fileError } = await supabaseAdmin
       .from("uploaded_files")
-      .select("id, org_id, status, file_name, module_type, document_subtype")
+      .select("id, org_id, status, file_name, module_type, document_subtype, file_size, file_url, mime_type")
       .eq("id", fileId)
       .eq("org_id", orgId)
       .maybeSingle();
@@ -909,40 +1204,33 @@ Deno.serve(async (req: Request) => {
 
       let parseResult: any;
       try {
-        // P1.3: resolve extraction_run_id from this job's generation_id
-        // (present only when the generation was started with provenance
-        // enabled) so parse-pdf-docling can attribute its stage run.
         const parseExtractionRunId = claimedJob.generation_id
           ? await resolveExtractionRunId(supabaseAdmin, orgId, claimedJob.generation_id)
           : null;
-        parseResult = await callInternalFunction(
-          "parse-pdf-docling",
-          {
-            file_id: fileId,
-            pipeline_job_id: job.id,
-            generation_id: claimedJob.generation_id,
-            extraction_run_id: parseExtractionRunId,
-            worker_attempt: attempt,
-          },
+        parseResult = await runParseStageInline(
+          supabaseAdmin,
+          fileId,
           orgId,
-          PARSE_TIMEOUT_MS,
+          job.id,
+          claimedJob.generation_id,
+          parseExtractionRunId,
+          attempt,
+          fileRecord,
+          logger,
         );
       } catch (transportErr: any) {
-        // callInternalFunction handles fetch/timeout errors internally today,
-        // but keep this guard so a future refactor can never bypass the
-        // durable-state reconciliation below by throwing instead.
         parseResult = {
           ok: false,
           status: 500,
           data: {},
           error_code: "NETWORK_ERROR",
           retryable: true,
-          error: transportErr?.message || "parse-pdf-docling transport failure",
+          error: transportErr?.message || "Inline parsing failure",
         };
       }
 
       // Durable-state reconciliation: a transport-shaped failure (timeout,
-      // 546 compute kill, gateway 5xx) can arrive AFTER parse-pdf-docling
+      // 546 compute kill, gateway 5xx) can arrive AFTER parse-document-azure
       // already persisted a successful parse. The database is authoritative —
       // re-read it before treating the parse as failed, and never overwrite a
       // durable success with manual_review_fallback.
@@ -1057,7 +1345,7 @@ Deno.serve(async (req: Request) => {
         const isLeaseModule = ["leases", "lease"].includes(fileRecord.module_type ?? "");
 
         if (isLeaseModule && parserFailureAlreadyPersisted(parseResult)) {
-          // parse-pdf-docling already persisted a blocked parser state with
+          // parse-document-azure already persisted a blocked parser state with
           // docling_raw/_metadata and ui_review_payload. Do not overwrite that
           // failed state with review_required/manual_review_fallback; doing so
           // makes backend configuration failures look like successful extraction.
@@ -1217,7 +1505,7 @@ Deno.serve(async (req: Request) => {
       // Fast re-extraction path: when the job is enqueued directly at the
       // "normalize" stage (docling_raw already had usable text, so OCR was
       // skipped), the file status is still "parsing" from enqueueLeaseExtractionJob
-      // — it never passed through parse-pdf-docling, which is what normally
+      // — it never passed through parse-document-azure, which is what normally
       // transitions status to "pdf_parsed". Without this, normalize-pdf-output's
       // status guard rejects the call with "File status must be 'pdf_parsed'.
       // Current: 'parsing'". setStatus is a no-op when already "pdf_parsed"

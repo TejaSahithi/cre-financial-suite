@@ -5,7 +5,7 @@ import { corsHeaders } from "../_shared/cors.ts";
  * Deprecated public extraction endpoint.
  *
  * The canonical pipeline is:
- * upload-handler -> ingest-file -> parse-file / parse-pdf-docling
+ * upload-handler -> ingest-file -> parse-file / parse-document-azure
  * -> normalize-pdf-output -> validate-data -> store-data -> compute.
  *
  * Keeping this HTTP surface active caused scanned documents to bypass the
@@ -25,7 +25,7 @@ Deno.serve(async (req: Request) => {
       canonical_flow: [
         "upload-handler",
         "ingest-file",
-        "parse-file or parse-pdf-docling",
+        "parse-file or parse-document-azure",
         "normalize-pdf-output",
         "validate-data",
         "store-data",

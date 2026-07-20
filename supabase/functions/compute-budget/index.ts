@@ -280,7 +280,7 @@ async function handleGenerate(
     noi: noi,
     cam_total: round2(camRecovery),
     // Only set ai_insights when the caller actually provided a fresh value
-    // (e.g. CreateBudget.jsx's Vertex AI preview text) — omitting the key
+    // (e.g. CreateBudget.jsx's OpenAI preview text) — omitting the key
     // entirely on a bare re-generate call preserves whatever was stored
     // previously instead of clobbering it with null.
     ...(aiInsights ? { ai_insights: aiInsights } : {}),

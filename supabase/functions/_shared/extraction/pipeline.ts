@@ -3,13 +3,13 @@
  * Extraction Pipeline — Main Orchestrator (v3)
  *
  * Responsibility split (enforced):
- *   Docling   → parsing only (text + table structure)
+ *   Azure     → parsing only (text + table structure)
  *   Rule/Table → PRIMARY extraction (deterministic, highest confidence)
  *   LLM        → FALLBACK only for missing fields (never primary)
  *   Code       → validation, normalization, all calculations
  *
  * Pipeline steps:
- *   Step 0: Normalize  — clean Docling output (OCR noise, whitespace, dedup)
+ *   Step 0: Normalize  — clean Azure document output (OCR noise, whitespace, dedup)
  *   Step 1: Rule-Based — regex + label patterns against normalized text
  *   Step 2: Table      — structured table extraction (highest priority for tabular docs)
  *   Step 3: LLM        — ONLY for fields still missing after Steps 1+2
@@ -35,10 +35,10 @@ import { parseDocument } from "./parser.ts";
 import { getSchema } from "./schemas.ts";
 import { EXTRACTION_CONTRACT_VERSION } from "./contract-version.ts";
 
-// ── Step 0: Normalize Docling output ─────────────────────────────────────────
+// ── Step 0: Normalize Azure document output ─────────────────────────────────────────
 
 /**
- * Normalize Docling output before extraction.
+ * Normalize Azure document output before extraction.
  *
  * Problems solved:
  *   - OCR noise (control chars, repeated whitespace, hyphenation artifacts)
@@ -157,8 +157,8 @@ function createLogger(moduleType: string, fileName: string) {
 
 function sanitizeUserWarning(warning: string): string {
   const text = String(warning || "");
-  if (/GOOGLE_SERVICE_ACCOUNT_KEY|service account|Vertex AI|JWT|private_key/i.test(text)) {
-    return "AI fallback extraction is unavailable because Google Vertex AI is not fully configured. Deterministic document parsing still ran.";
+  if (/OPENAI_API_KEY|OpenAI|No LLM configured|AI fallback/i.test(text)) {
+    return "AI fallback extraction is unavailable because OpenAI is not configured. Deterministic document parsing still ran.";
   }
   return text;
 }
@@ -223,12 +223,12 @@ export async function runExtractionPipeline(
   const log = createLogger(input.moduleType, fileName);
 
   // ── Normalize/Parse input ──────────────────────────────────────────────────────
-  log.info(`Starting pipeline: moduleType=${input.moduleType}, rawText=${(input.rawText ?? "").length} chars, docling=${!!input.docling}, fileBase64=${!!input.fileBase64}`);
+  log.info(`Starting pipeline: moduleType=${input.moduleType}, rawText=${(input.rawText ?? "").length} chars, document=${!!(input.document ?? input.docling)}, fileBase64=${!!input.fileBase64}`);
 
   let rawDocling: DoclingOutput;
 
-  if (input.docling) {
-    rawDocling = input.docling;
+  if (input.document ?? input.docling) {
+    rawDocling = (input.document ?? input.docling)!;
   } else if ((input.rawText ?? "").trim().length > 0) {
     rawDocling = rawTextToDocling(input.rawText ?? "");
   } else if (input.fileBase64) {
@@ -283,7 +283,7 @@ export async function runExtractionPipeline(
   }
 
   if (fullText.trim().length < 10 && input.fileBase64 && !hasStructuredFields) {
-    log.info("Document text too short but fileBase64 present — skipping rule/table, delegating to LLM Vision");
+    log.info("Document text too short but fileBase64 present - skipping rule/table, delegating to OpenAI LLM extraction");
   }
 
   // ── STEP 1: Rule-Based Extraction ────────────────────────────────────────
@@ -339,20 +339,20 @@ export async function runExtractionPipeline(
       );
       addWarnings(allWarnings, llmResult.warnings);
 
-      // Check if LLM was skipped (Vertex AI not configured)
+      // Check if LLM was skipped (OpenAI not configured)
       const llmSkipped = llmResult.warnings.some((w) =>
-        w.toLowerCase().includes("vertex ai not configured") ||
+        w.toLowerCase().includes("openai api key is not configured") ||
+        w.toLowerCase().includes("openai is not configured") ||
         w.toLowerCase().includes("skipping llm")
       );
       if (llmSkipped) {
-        log.warn("LLM skipped — Vertex AI not configured. Only rule/table extraction results available.");
+        log.warn("LLM skipped - OpenAI not configured. Only rule/table extraction results available.");
         addWarnings(allWarnings, [
-          "⚠️ LLM extraction was skipped because Vertex AI (VERTEX_PROJECT_ID / GOOGLE_SERVICE_ACCOUNT_KEY) is not configured. " +
+          "LLM extraction was skipped because OpenAI (OPENAI_API_KEY) is not configured. " +
           "Fields not found by rule-based or table extraction will be empty. " +
-          "Configure Vertex AI to enable full AI extraction."
+          "Configure OpenAI to enable full AI extraction."
         ]);
       }
-
       llmFieldCount = llmResult.records.reduce(
         (sum, r) => sum + Object.keys(r.fields).length, 0,
       );
@@ -475,7 +475,7 @@ export async function runExtractionPipeline(
 
   const weakTextDetected = embeddedTextChars < WEAK_TEXT_THRESHOLD;
   // Vision fallback "triggered" means the LLM step ran in file mode. The
-  // llm-extractor only switches to callVertexAIFileJSON when input.fileBase64
+  // llm-extractor works from Azure-extracted text; input.fileBase64 is retained
   // is truthy; if any LLM fields were produced under that condition we
   // count it as fired. (No flag bubbles back from llm-extractor today, so
   // this is the closest non-invasive observation.)
@@ -489,7 +489,7 @@ export async function runExtractionPipeline(
   // ── Stage 1: Vision-as-parser diagnostics ─────────────────────────────
   // The parser's extraction_method (set by parser.ts tag()) records which
   // backend produced the docling_raw payload. "gemini_vision" or "hybrid"
-  // mean the PDF was read by Gemini Vision (Stage 1). This is distinct
+  // mean the PDF required OCR-style parsing in Stage 1. This is distinct
   // from the Stage 2 fileBase64 LLM fallback above. Either may be true
   // independently — for example, a strong-text scan can be Vision-parsed
   // but never need the Stage 2 file-mode LLM fallback.
@@ -555,7 +555,7 @@ export async function runExtractionPipeline(
         vision_fallback_skipped_reason: visionFallbackSkippedReason,
         llm_file_mode_used: visionFallbackTriggered,
         // ── Split Vision diagnostics ─────────────────────────────────
-        // Stage 1 (parser): did Gemini Vision read the document?
+        // Stage 1 (parser): did Azure Document Intelligence read the document?
         vision_parser_used: visionParserUsed,
         vision_parser_source: parserSource || null,
         vision_parser_pages_count: parserPageCount,

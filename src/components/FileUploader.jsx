@@ -94,7 +94,7 @@ export { getFriendlyExtractionLabel, payloadHasMeaningfulFields };
 /**
  * Reusable file upload component that sends files to the upload-handler
  * Edge Function, then pauses for explicit user confirmation (Proceed/Cancel)
- * before extraction (ingest-file / parse-pdf-docling / Azure / normalize /
+ * before extraction (ingest-file / parse-document-azure / Azure / normalize /
  * Vertex / lease-extraction-worker) is ever triggered.
  *
  * @param {Object}   props
@@ -375,7 +375,7 @@ export default function FileUploader({
       // and runs cheap preflight checks; the file now sits at
       // confirmation_required=true until the user clicks Proceed (which
       // calls confirm-upload -> ingest-file) or Cancel (which deletes the
-      // temp row/object via cancel-upload). No parse-pdf-docling, Azure,
+      // temp row/object via cancel-upload). No parse-document-azure, Azure,
       // normalize-pdf-output, Vertex, or lease-extraction-worker call
       // happens as a side effect of this function.
       if (data?.file_id) {

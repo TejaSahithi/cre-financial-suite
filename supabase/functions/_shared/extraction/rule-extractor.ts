@@ -2,7 +2,7 @@
 /**
  * Extraction Pipeline — Step 1: Rule-Based Extraction
  *
- * Pure regex / pattern matching against Docling output.
+ * Pure regex / pattern matching against Azure document output.
  * This runs FIRST and is the most reliable (no AI hallucination).
  *
  * Extracts from:
@@ -485,7 +485,7 @@ function cleanPartyName(raw: unknown): string {
     .trim();
   if (!text || /^_+$/.test(text)) return "";
 
-  // Gemini/OCR can combine adjacent contact/address text into the tenant name.
+  // Azure OCR can combine adjacent contact/address text into the tenant name.
   // Keep the legal entity portion and leave contact person/phone/address as
   // custom fields.
   text = text
@@ -883,7 +883,7 @@ export function extractRuleBased(
   const fromPatterns = extractViaPatterns(fullText, schema);
   const fromLabels = extractViaLabels(fullText, schema);
 
-  // Merge: Docling fields / key-value tables > patterns > labels (by confidence)
+  // Merge: Azure document fields / key-value tables > patterns > labels (by confidence)
   const merged: Record<string, ExtractedField> = {};
 
   for (const source of [fromLabels, fromPatterns, fromKeyValueTables, fromFields]) {

@@ -2,7 +2,7 @@
 /**
  * Extraction Pipeline — Document Chunking
  *
- * Splits large Docling text into chunks of 1000–2000 tokens (~4000–8000 chars)
+ * Splits large Azure document text into chunks of 1000–2000 tokens (~4000–8000 chars)
  * for targeted LLM extraction. Each chunk is processed independently.
  *
  * Rules:
@@ -20,9 +20,9 @@ function estimateTokens(text: string): number {
 }
 
 /**
- * Chunk a Docling document into text segments suitable for LLM extraction.
+ * Chunk an Azure document into text segments suitable for LLM extraction.
  *
- * @param docling  The full Docling output
+ * @param docling  The full Azure document output
  * @param targetTokens  Target tokens per chunk (default: 1500)
  * @param overlapChars  Characters of overlap between chunks (default: 200)
  * @returns Array of TextChunks with metadata
@@ -137,7 +137,7 @@ function chunkPlainText(
 }
 
 /**
- * Build a focused text snippet from Docling output for a specific field group.
+ * Build a focused text snippet from Azure document output for a specific field group.
  * Selects only the most relevant text blocks based on field labels.
  */
 export function buildRelevantSnippet(

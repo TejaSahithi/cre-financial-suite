@@ -66,8 +66,8 @@ function Section({ title, count, children, badge }) {
  * Extraction Debug Panel
  *
  * Shows everything a reviewer needs to diagnose a wrong extraction:
- *   1. Docling page text (from uploaded_files.docling_raw)
- *   2. Raw Gemini / pipeline JSON (workflow_output)
+ *   1. Azure Document Intelligence page text (from uploaded_files.docling_raw)
+ *   2. Raw OpenAI / pipeline JSON (workflow_output)
  *   3. Normalized mapped fields (extraction_data.fields)
  *   4. Review table rows (per LEASE_REVIEW_FIELDS â€” what the operator sees)
  *   5. Field mapping warnings (extraction_data.workflow_output.validations)
@@ -377,7 +377,7 @@ export default function ExtractionDebugPanel({ lease }) {
 
   // â”€â”€ Vision Parser (Stage 1: PDF/image â†’ text) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // The parser tags its output via `extraction_method` on docling_raw â€”
-  // "gemini_vision" or "hybrid" means Gemini Vision read the document.
+  // "azure_layout" or "azure_document_intelligence" means Azure Document Intelligence read the document.
   // We probe several sources because the field is set by parser.ts and
   // surfaces in different places depending on which write path ran.
   const parserSource = (
@@ -389,10 +389,10 @@ export default function ExtractionDebugPanel({ lease }) {
     || ""
   ).toString().toLowerCase();
   const visionParserUsed = debugRead("vision_parser_used") === true
-    || parserSource === "gemini_vision"
+    || parserSource === "azure_layout" || parserSource === "azure_document_intelligence"
     || parserSource === "hybrid"
     // Last-resort signal: any text block tagged with gemini_vision source.
-    || textBlocks.some((b) => String(b?.source || "").toLowerCase().includes("gemini_vision"));
+    || textBlocks.some((b) => String(b?.source || "").toLowerCase().includes("azure"));
   const visionParserPages = debugRead("vision_parser_pages_count")
     ?? pdfPageCountTotal
     ?? doclingPagesParsed
@@ -495,12 +495,12 @@ export default function ExtractionDebugPanel({ lease }) {
     amendment_signal_count: workflowOutput?.amendment_signal_count ?? workflowOutput?.summary?.amendment_signal_count ?? 0,
     profile_detection_signals: JSON.stringify(workflowOutput?.profile_detection_signals || workflowOutput?.summary?.profile_detection_signals || {}),
     // Show both metrics so reviewers don't mistake Docling's per-page text
-    // count for the actual PDF page count. Vision reads multi-page PDFs
+    // count for the actual PDF page count. Azure reads multi-page PDFs
     // natively when file bytes are sent (see vision_processed flag).
     pdf_page_count_total: pdfPageCountTotal != null ? pdfPageCountTotal : "â€”",
     docling_pages_parsed: doclingPagesParsed,
     // Two distinct Vision stages â€” keeping them separate so reviewers can
-    // tell whether Gemini read the document at all (parser) from whether
+    // tell whether Azure read the document at all (parser) from whether
     // it pulled structured fields from the bytes (field extraction).
     vision_parser: visionParserLabel,
     vision_field_extraction: visionFieldLabel,
@@ -1786,9 +1786,9 @@ export default function ExtractionDebugPanel({ lease }) {
       </Section>
 
       <Section
-        title="1. Docling page text"
+        title="1. Azure Document Intelligence text/layout"
         count={`${textBlocks.length} blocks`}
-        badge={uploadedFile?.extraction_method || "docling"}
+        badge={uploadedFile?.extraction_method || "azure_document_intelligence"}
       >
         {fileLoading ? (
           <div className="flex items-center gap-2 text-slate-500">
@@ -1807,7 +1807,7 @@ export default function ExtractionDebugPanel({ lease }) {
               <pre className="mt-2 max-h-72 overflow-auto rounded bg-slate-50 p-2 font-mono text-[11px] text-slate-700">{prettyJson(textBlocks.slice(0, 50))}</pre>
             </details>
             <details>
-              <summary className="cursor-pointer text-slate-700 hover:text-slate-900">Docling key/value fields ({doclingFields.length})</summary>
+              <summary className="cursor-pointer text-slate-700 hover:text-slate-900">Azure key/value fields ({doclingFields.length})</summary>
               <pre className="mt-2 max-h-72 overflow-auto rounded bg-slate-50 p-2 font-mono text-[11px] text-slate-700">{prettyJson(doclingFields)}</pre>
             </details>
           </>
@@ -1815,7 +1815,7 @@ export default function ExtractionDebugPanel({ lease }) {
       </Section>
 
       <Section
-        title="2. Raw extraction / Gemini JSON"
+        title="2. Raw extraction / OpenAI JSON"
         count={`${Object.keys(workflowOutput?.lease_fields || {}).length} lease_fields`}
       >
         {!workflowOutput ? (

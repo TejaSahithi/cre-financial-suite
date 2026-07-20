@@ -246,9 +246,9 @@ function buildPipelineFailure(record, reviewPayload) {
   } else if (/INSUFFICIENT_PARSE_TEXT|parse_completed_insufficient_text/i.test(`${parserStatus} ${errorCode}`)) {
     reason = `The parser produced only ${Number.isFinite(fullTextChars) ? fullTextChars : 0} readable characters, which is not enough for lease extraction.`;
     recovery = "Upload a cleaner/text-searchable lease PDF, then re-run extraction.";
-  } else if (/PARSER_PROVIDER_UNAVAILABLE|No parser backend|Docling|Vertex|provider/i.test(`${errorCode} ${rawMessage}`)) {
+  } else if (/PARSER_PROVIDER_UNAVAILABLE|No parser backend|Azure Document Intelligence|OpenAI|provider/i.test(`${errorCode} ${rawMessage}`)) {
     reason = rawMessage || "No configured parser/OCR provider is available for this document.";
-    recovery = "Check Supabase secrets for Docling or Vertex/Gemini, redeploy the Edge Functions, then retry.";
+    recovery = "Check Supabase secrets for Azure Document Intelligence and OpenAI, redeploy the Edge Functions, then retry.";
   } else if (/EMPTY_PARSE_TEXT|INSUFFICIENT_PARSE_TEXT/i.test(rawMessage)) {
     reason = "The document could not be parsed into readable lease text.";
     recovery = "Upload a text-searchable or OCR-optimized PDF, then re-run extraction.";
@@ -645,8 +645,8 @@ export default function LeaseUpload() {
     [reviewedRows],
   );
   const fallbackWarnings = reviewPayload?.global_warnings || reviewPayload?.warnings || [];
-  const isVertexNotConfigured = fallbackWarnings.some((w) =>
-    /vertex ai is not fully configured|no llm configured|VERTEX_PROJECT_ID|GOOGLE_SERVICE_ACCOUNT/i.test(String(w)),
+  const isOpenAINotConfigured = fallbackWarnings.some((w) =>
+    /openai is not configured|openai api key|no llm configured|OPENAI_API_KEY/i.test(String(w)),
   );
   const isManualReviewFallback =
     reviewPayload?.pipeline_method === "manual_review_fallback" ||
@@ -1001,8 +1001,8 @@ export default function LeaseUpload() {
         <Card className="border-amber-200 bg-amber-50">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-amber-800">
             <span>
-              {isVertexNotConfigured
-                ? "AI extraction is unavailable — Vertex AI is not configured. Set VERTEX_PROJECT_ID and GOOGLE_SERVICE_ACCOUNT_KEY in your Supabase project secrets, then retry. You can also open Lease Review to fill fields manually."
+              {isOpenAINotConfigured
+                ? "AI extraction is unavailable - OpenAI is not configured. Set OPENAI_API_KEY in your Supabase project secrets, then retry. You can also open Lease Review to fill fields manually."
                 : isManualReviewFallback
                   ? (() => {
                       const reason = fallbackWarnings.find((w) =>

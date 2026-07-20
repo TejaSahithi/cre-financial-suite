@@ -1,7 +1,7 @@
 // @ts-nocheck
 /**
  * Canonical Document Layout — provider-neutral layout contract (Phase 1 of
- * the Azure + Vertex canonical pipeline migration).
+ * the Azure + OpenAI canonical pipeline migration).
  *
  * This is the single authoritative canonical layout contract, used both by
  * the legacy Docling-derived path (legacyDoclingToCanonicalLayout, aliased
@@ -15,9 +15,9 @@
  *   - This module owns provider-neutral structure only -- no provider-
  *     specific shape may leak through it (enforced by the leakage rule in
  *     the Azure adapter module).
- *   - Vertex owns semantic understanding. Canonical Layout never infers
+ *   - OpenAI owns semantic understanding. Canonical Layout never infers
  *     business meaning -- it only preserves physical anchors. Evidence
- *     ownership belongs to Vertex, never to this module or its validator.
+ *     ownership belongs to OpenAI, never to this module or its validator.
  *
  * Compatibility policy: a CanonicalDocumentLayout generated under schema
  * version X must remain readable by any consumer supporting
@@ -541,7 +541,7 @@ export function summarizeCanonicalLayout(layout: CanonicalDocumentLayout | null 
  * from, and a superset of, the page+source_text pair claims currently
  * carry per Phase 1's simpler Evidence shape). Note: this only preserves
  * *where* evidence lives structurally -- deciding what counts as evidence,
- * and what it means, belongs to Vertex, never to this module.
+ * and what it means, belongs to OpenAI, never to this module.
  */
 export function buildEvidenceAnchor(opts: {
   page: number | null;
@@ -616,7 +616,7 @@ export interface CanonicalLayoutValidationResult {
 /**
  * Structural validation only -- ids, spans, pages, polygons, reading order,
  * table dimensions. Never validates lease semantics, business rules,
- * approval rules, or extraction quality: those belong to Vertex's output
+ * approval rules, or extraction quality: those belong to OpenAI output
  * and to Lease Review's policy layer, never to this validator. This module
  * must remain provider-neutral forever; no lease-specific rule should ever
  * be added here.

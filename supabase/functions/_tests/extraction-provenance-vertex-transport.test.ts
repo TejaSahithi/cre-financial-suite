@@ -20,9 +20,10 @@ import { assert, assertEquals, assertRejects, assertStrictEquals } from "https:/
 // recorder module's own settlement tests (identical RPC shape) plus the
 // classification-mapping unit test below (pure function, no I/O).
 
+import { callOpenAIWithProvenance, mapOpenAIFailureToGeneric } from "../_shared/extraction/provenance/transport/vertex.ts";
 import { ProvenancePersistenceError } from "../_shared/extraction/provenance/recorder.ts";
-import { callVertexAIWithProvenance, mapVertexFailureToGeneric } from "../_shared/extraction/provenance/transport/vertex.ts";
-import { VertexProviderError } from "../_shared/vertex-ai.ts";
+import { LLMProviderError } from "../_shared/llm.ts";
+
 
 const BASE_CONTEXT = {
   orgId: "org-1",
@@ -66,7 +67,7 @@ function makeMockSupabase(rpcResponses: Record<string, Array<{ data: any; error:
   };
 }
 
-Deno.test("callVertexAIWithProvenance: flag disabled makes zero RPC calls", async () => {
+Deno.test("callOpenAIWithProvenance: flag disabled makes zero RPC calls", async () => {
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
   // Belt-and-suspenders: this is the one path in this file where the
   // wrapper calls through to the REAL callVertexAI. Setting this (the same
@@ -76,28 +77,28 @@ Deno.test("callVertexAIWithProvenance: flag disabled makes zero RPC calls", asyn
   // the "no live Vertex calls" policy for local tests.
   Deno.env.set("DISABLE_EXTERNAL_PROVIDER_CALLS", "true");
   const supabaseAdmin = makeMockSupabase({});
-  await assertRejects(() => callVertexAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }));
+  await assertRejects(() => callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }));
   assertEquals(supabaseAdmin.calls.length, 0);
   Deno.env.delete("DISABLE_EXTERNAL_PROVIDER_CALLS");
 });
 
-Deno.test("callVertexAIWithProvenance: missing stageRunId makes zero RPC calls even with flag on", async () => {
+Deno.test("callOpenAIWithProvenance: missing stageRunId makes zero RPC calls even with flag on", async () => {
   Deno.env.set("ENABLE_EXTRACTION_PROVENANCE", "true");
   const supabaseAdmin = makeMockSupabase({});
   await assertRejects(() =>
-    callVertexAIWithProvenance(supabaseAdmin, { ...BASE_CONTEXT, stageRunId: null }, { userPrompt: "test" })
+    callOpenAIWithProvenance(supabaseAdmin, { ...BASE_CONTEXT, stageRunId: null }, { userPrompt: "test" })
   );
   assertEquals(supabaseAdmin.calls.length, 0);
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
 });
 
-Deno.test("callVertexAIWithProvenance: start_provider_invocation failure fails closed (PROVENANCE_PERSISTENCE_FAILED), never calls the provider", async () => {
+Deno.test("callOpenAIWithProvenance: start_provider_invocation failure fails closed (PROVENANCE_PERSISTENCE_FAILED), never calls the provider", async () => {
   Deno.env.set("ENABLE_EXTRACTION_PROVENANCE", "true");
   const supabaseAdmin = makeMockSupabase({
     start_provider_invocation: [{ data: null, error: { message: "insert failed" } }],
   });
   const err = await assertRejects(
-    () => callVertexAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }),
+    () => callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }),
     ProvenancePersistenceError,
   );
   assertEquals((err as any).code, "PROVENANCE_PERSISTENCE_FAILED");
@@ -108,13 +109,13 @@ Deno.test("callVertexAIWithProvenance: start_provider_invocation failure fails c
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
 });
 
-Deno.test("callVertexAIWithProvenance: reused invocation_key already terminal throws PROVENANCE_INVOCATION_KEY_REUSED, never calls the provider", async () => {
+Deno.test("callOpenAIWithProvenance: reused invocation_key already terminal throws PROVENANCE_INVOCATION_KEY_REUSED, never calls the provider", async () => {
   Deno.env.set("ENABLE_EXTRACTION_PROVENANCE", "true");
   const supabaseAdmin = makeMockSupabase({
     start_provider_invocation: [{ data: { invocation_id: "inv-1", created: false, status: "completed" }, error: null }],
   });
   const err = await assertRejects(
-    () => callVertexAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }),
+    () => callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }),
     ProvenancePersistenceError,
   );
   assertEquals((err as any).code, "PROVENANCE_INVOCATION_KEY_REUSED");
@@ -122,7 +123,7 @@ Deno.test("callVertexAIWithProvenance: reused invocation_key already terminal th
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
 });
 
-Deno.test("callVertexAIWithProvenance: invocation_key includes providerAttempt so a caller-driven retry gets a distinct key", async () => {
+Deno.test("callOpenAIWithProvenance: invocation_key includes providerAttempt so a caller-driven retry gets a distinct key", async () => {
   Deno.env.set("ENABLE_EXTRACTION_PROVENANCE", "true");
   const supabaseAdmin = makeMockSupabase({
     start_provider_invocation: [
@@ -130,14 +131,14 @@ Deno.test("callVertexAIWithProvenance: invocation_key includes providerAttempt s
       { data: null, error: { message: "boom" } },
     ],
   });
-  await assertRejects(() => callVertexAIWithProvenance(supabaseAdmin, { ...BASE_CONTEXT, providerAttempt: 1 }, { userPrompt: "test" }));
-  await assertRejects(() => callVertexAIWithProvenance(supabaseAdmin, { ...BASE_CONTEXT, providerAttempt: 2 }, { userPrompt: "test" }));
+  await assertRejects(() => callOpenAIWithProvenance(supabaseAdmin, { ...BASE_CONTEXT, providerAttempt: 1 }, { userPrompt: "test" }));
+  await assertRejects(() => callOpenAIWithProvenance(supabaseAdmin, { ...BASE_CONTEXT, providerAttempt: 2 }, { userPrompt: "test" }));
   const keys = supabaseAdmin.calls.map((c) => c.args.p_invocation_key);
   assertEquals(new Set(keys).size, 2, "different providerAttempt values must produce different invocation_key values");
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
 });
 
-Deno.test("callVertexAIWithProvenance: a running invocation exists BEFORE the mocked call resolves", async () => {
+Deno.test("callOpenAIWithProvenance: a running invocation exists BEFORE the mocked call resolves", async () => {
   Deno.env.set("ENABLE_EXTRACTION_PROVENANCE", "true");
   const supabaseAdmin = makeMockSupabase({
     start_provider_invocation: [{ data: { invocation_id: "inv-1", created: true, status: "running" }, error: null }],
@@ -151,20 +152,20 @@ Deno.test("callVertexAIWithProvenance: a running invocation exists BEFORE the mo
     invocationStatusMidFlight = supabaseAdmin.calls.find((c) => c.fn === "start_provider_invocation") ? "running" : "missing";
     return { content: "ok", model: "gemini-test", inputTokens: 100, outputTokens: 50 };
   };
-  const result = await callVertexAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }, mockCallFn);
+  const result = await callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }, mockCallFn);
   assertEquals(invocationStatusMidFlight, "running");
   assertEquals(result.content, "ok");
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
 });
 
-Deno.test("callVertexAIWithProvenance: success terminalizes with tokens and latency", async () => {
+Deno.test("callOpenAIWithProvenance: success terminalizes with tokens and latency", async () => {
   Deno.env.set("ENABLE_EXTRACTION_PROVENANCE", "true");
   const supabaseAdmin = makeMockSupabase({
     start_provider_invocation: [{ data: { invocation_id: "inv-1", created: true, status: "running" }, error: null }],
     settle_provider_invocation: [{ data: { settled_by_this_call: true, status: "completed" }, error: null }],
   });
   const mockCallFn = async () => ({ content: "ok", model: "gemini-test", inputTokens: 123, outputTokens: 45 });
-  await callVertexAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }, mockCallFn);
+  await callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }, mockCallFn);
 
   const settleCall = supabaseAdmin.calls.find((c) => c.fn === "settle_provider_invocation");
   assert(settleCall, "settle_provider_invocation must have been called");
@@ -176,22 +177,22 @@ Deno.test("callVertexAIWithProvenance: success terminalizes with tokens and late
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
 });
 
-Deno.test("callVertexAIWithProvenance: failure terminalizes with generic AND provider-specific classification, then re-throws the original error unchanged", async () => {
+Deno.test("callOpenAIWithProvenance: failure terminalizes with generic AND provider-specific classification, then re-throws the original error unchanged", async () => {
   Deno.env.set("ENABLE_EXTRACTION_PROVENANCE", "true");
   const supabaseAdmin = makeMockSupabase({
     start_provider_invocation: [{ data: { invocation_id: "inv-1", created: true, status: "running" }, error: null }],
     settle_provider_invocation: [{ data: { settled_by_this_call: true, status: "failed" }, error: null }],
   });
-  const originalError = new VertexProviderError("rate limited by Vertex", "rate_limited", 429);
+  const originalError = new LLMProviderError("rate limited by Vertex", "rate_limited", 429);
   const mockCallFn = async () => { throw originalError; };
 
   const thrown = await assertRejects(
-    () => callVertexAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }, mockCallFn),
+    () => callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }, mockCallFn),
   );
   // Re-thrown completely unchanged: same instance, same classification,
   // same message -- proving this wrapper never alters caller-visible error behavior.
   assertStrictEquals(thrown, originalError);
-  assertEquals((thrown as VertexProviderError).classification, "rate_limited");
+  assertEquals((thrown as LLMProviderError).classification, "rate_limited");
 
   const settleCall = supabaseAdmin.calls.find((c) => c.fn === "settle_provider_invocation");
   assertEquals(settleCall.args.p_status, "failed");
@@ -202,24 +203,24 @@ Deno.test("callVertexAIWithProvenance: failure terminalizes with generic AND pro
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
 });
 
-Deno.test("callVertexAIWithProvenance: flag-on success result is deep-equal to the flag-off passthrough result (compatibility)", async () => {
+Deno.test("callOpenAIWithProvenance: flag-on success result is deep-equal to the flag-off passthrough result (compatibility)", async () => {
   const mockCallFn = async () => ({ content: "same content", model: "gemini-test", inputTokens: 10, outputTokens: 5 });
 
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
-  const flagOffResult = await callVertexAIWithProvenance(makeMockSupabase({}), BASE_CONTEXT, { userPrompt: "test" }, mockCallFn);
+  const flagOffResult = await callOpenAIWithProvenance(makeMockSupabase({}), BASE_CONTEXT, { userPrompt: "test" }, mockCallFn);
 
   Deno.env.set("ENABLE_EXTRACTION_PROVENANCE", "true");
   const supabaseAdmin = makeMockSupabase({
     start_provider_invocation: [{ data: { invocation_id: "inv-1", created: true, status: "running" }, error: null }],
     settle_provider_invocation: [{ data: { settled_by_this_call: true, status: "completed" }, error: null }],
   });
-  const flagOnResult = await callVertexAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }, mockCallFn);
+  const flagOnResult = await callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }, mockCallFn);
 
   assertEquals(flagOnResult, flagOffResult, "provenance must never alter the caller-visible provider result");
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
 });
 
-Deno.test("mapVertexFailureToGeneric: maps every Vertex classification to a value in the schema's generic taxonomy", () => {
+Deno.test("mapOpenAIFailureToGeneric: maps every OpenAI classification to a value in the schema's generic taxonomy", () => {
   const ALLOWED = new Set([
     "authentication", "authorization", "quota", "rate_limit", "resource_exhausted", "timeout",
     "transport", "provider_client_error", "provider_server_error", "invalid_response",
@@ -239,7 +240,7 @@ Deno.test("mapVertexFailureToGeneric: maps every Vertex classification to a valu
     [undefined, "unknown"],
   ];
   for (const [input, expected] of cases) {
-    const mapped = mapVertexFailureToGeneric(input);
+    const mapped = mapOpenAIFailureToGeneric(input);
     assertStrictEquals(mapped, expected);
     assert(ALLOWED.has(mapped), `${mapped} must be one of the schema's allowed failure_classification values`);
   }

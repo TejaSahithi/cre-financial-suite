@@ -3,26 +3,26 @@
  * Canonical document parser — `parseDocument()`
  *
  * ONE entry point, used by every edge function that needs structured
- * parsing output (parse-pdf-docling, normalize-pdf-output, the retry
+ * parsing output (parse-document-azure, normalize-pdf-output, the retry
  * path, future review-approve refreshes). No other function may call
- * Docling or Gemini Vision directly.
+ * Docling or Azure Document Intelligence directly.
  *
  * §4 Strategy matrix (from the principal engineer review):
  *
  *   ┌──────────────────────┬─────────────────────────────────────────┐
  *   │ Input profile        │ Strategy                                │
  *   ├──────────────────────┼─────────────────────────────────────────┤
- *   │ Digital PDF (text)   │ Docling only. Skip Vision.              │
- *   │ Scanned PDF / image  │ Vision first. Docling afterwards if it  │
+ *   │ Digital PDF (text)   │ Azure Document Intelligence only.              │
+ *   │ Scanned PDF / image  │ Azure Document Intelligence first.  │
  *   │                      │ adds structured tables.                 │
- *   │ DOCX / native office │ Docling only. Vision not useful.        │
- *   │ Unknown / mixed      │ Parallel Docling + Vision, merge best.  │
- *   │ Docling unreachable  │ Vision only (auto-fallback).            │
- *   │ Vision unavailable   │ Docling only (graceful degrade).        │
+ *   │ DOCX / native office │ Azure Document Intelligence only.        │
+ *   │ Unknown / mixed      │ Azure Document Intelligence canonical path.  │
+ *   │ Azure unavailable    │ controlled parser failure.            │
+ *   │ Legacy fallback      │ disabled for external providers.        │
  *   └──────────────────────┴─────────────────────────────────────────┘
  *
  * "Scanned" is detected by a quick heuristic on the downloaded bytes
- * (PDF text stream ratio) and also as a post-hoc check if Docling
+ * (PDF text stream ratio) and also as a post-hoc check if Azure Document Intelligence
  * returns fewer than MIN_DIGITAL_BLOCKS text blocks.
  */
 
@@ -36,36 +36,32 @@ import type {
 import { extractDocumentWithVision } from "../ocr/vision-ocr.ts";
 import { analyzeWithAzureLayout, getAzureDocumentIntelligenceConfig } from "../azure/document-intelligence.ts";
 import { normalizeAzureLayoutToDoclingOutput } from "./azure-layout-adapter.ts";
-import {
-  resolveExtractionProvider,
-  shouldFallbackToLegacy,
-  shouldUseAzureLayout,
-} from "./extraction-provider.ts";
+import { resolveExtractionProvider } from "./extraction-provider.ts";
 
-// A PDF needs at least this many Docling text blocks to be trusted as
+// A PDF needs at least this many Azure document text blocks to be trusted as
 // "digital" (non-scanned). 2 is intentionally low — a simple single-page
-// lease amendment may have only 2-3 paragraphs. If Docling returns ≥2
+// lease amendment may have only 2-3 paragraphs. If Azure Document Intelligence returns ≥2
 // blocks OR extracts ≥500 meaningful characters we skip the Vision fallback.
 const MIN_DIGITAL_BLOCKS = 2;
 const SCAN_TEXT_RATIO_THRESHOLD = 0.02; // <2% printable text → scanned
-// Minimum extracted chars from Docling to trust as complete even with few blocks
+// Minimum extracted chars from Azure Document Intelligence to trust as complete even with few blocks
 const MIN_DOCLING_TEXT_CHARS = 500;
-// Gemini supports 20 MB inline base64. Files above this threshold use a
+// The legacy inline parser supported 20 MB inline base64. Files above this threshold use a
 // signed Supabase Storage URL (fileUri) so the model fetches the bytes
 // directly — no base64 memory pressure in the Edge Function.
-const MAX_INLINE_VISION_PDF_BYTES = 20 * 1024 * 1024;
-// Upper bound for the URI (HTTP fetch) path. Vertex AI can process files
+const MAX_INLINE_AZURE_DOCUMENT_BYTES = 20 * 1024 * 1024;
+// Upper bound for the URI (HTTP fetch) path. The legacy file parser could process files
 // this large when given a signed URL; beyond this, Docling is required.
-const MAX_VERTEX_HTTP_DOCUMENT_BYTES = 50 * 1024 * 1024;
+const MAX_AZURE_HTTP_DOCUMENT_BYTES = 50 * 1024 * 1024;
 // Native PDF text extraction works well for digital PDFs up to this size.
 const MAX_NATIVE_PDF_TEXT_BYTES = 10 * 1024 * 1024;
 // Docling structural supplement capped to avoid re-uploading very large files.
-const MAX_DOCLING_SUPPLEMENT_BYTES = 20 * 1024 * 1024;
+const MAX_AZURE_SUPPLEMENT_BYTES = 20 * 1024 * 1024;
 // Minimum chars from native extraction to consider it "complete enough" to
-// skip Docling/Vision. Matches MIN_LEASE_TEXT_CHARS in pipeline-contract.ts —
+// skip parser fallback. Matches MIN_LEASE_TEXT_CHARS in pipeline-contract.ts —
 // if native gets >= 500 chars we can run rule/table/LLM extraction on it.
 // The old 2500-char threshold caused many digital executed leases to fall
-// through to Vision even though native extraction was perfectly sufficient.
+// through to Azure Document Intelligence even though native extraction was perfectly sufficient.
 const MIN_NATIVE_PDF_TEXT_CHARS = 500;
 
 type Strategy = "docling_only" | "vision_only" | "vision_first" | "parallel";
@@ -90,131 +86,25 @@ export async function parseDocument(
   options: { fileUrl?: string; providerOverride?: string | null } = {},
 ): Promise<DoclingOutput> {
   const provider = resolveExtractionProvider(options.providerOverride);
-  if (shouldUseAzureLayout(provider.mode)) {
-    try {
-      const config = getAzureDocumentIntelligenceConfig();
-      const analyzeResult = await analyzeWithAzureLayout({
-        fileBytes: fileBytes ?? null,
-        fileUrl: options.fileUrl,
-        mimeType,
-      });
-      const azureOutput = normalizeAzureLayoutToDoclingOutput(analyzeResult, {
-        apiVersion: config.apiVersion,
-        modelId: config.modelId,
-      });
-
-      if (provider.mode !== "shadow_compare") {
-        return azureOutput;
-      }
-
-      console.log(
-        `[parser] shadow_compare Azure layout complete for "${fileName}" ` +
-        `chars=${azureOutput.full_text?.length ?? 0} pages=${azureOutput.page_count ?? "?"}; returning legacy output`,
-      );
-    } catch (azureErr) {
-      console.warn(`[parser] Azure layout provider failed (${azureErr?.message ?? azureErr})`);
-      if (!shouldFallbackToLegacy(provider.mode) && provider.mode !== "shadow_compare") {
-        throw azureErr;
-      }
-    }
-  }
-
-  // Bytes may be null only in strict azure_document_intelligence URL mode,
-  // which either returned or threw inside the Azure block above. Every
-  // legacy/fallback branch below requires real document bytes.
-  if (!fileBytes?.length) {
-    throw new Error(
-      "Document bytes are required for non-Azure parser modes " +
-      `(provider mode: ${provider.mode})`,
-    );
-  }
-
-  const hasDocling = !!Deno.env.get("DOCLING_API_URL");
-  const hasVision = !!(
-    // Vertex AI service account path
-    ((Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
-     (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))) ||
-    // Gemini Developer API key path
-    Deno.env.get("GEMINI_API_KEY") ||
-    Deno.env.get("GOOGLE_API_KEY")
-  );
-  const likelyScannedPdf = mimeType.includes("pdf") && looksLikeScannedPdf(fileBytes);
-  const estimatedPageCount = mimeType.includes("pdf") ? estimatePdfPageCount(fileBytes) : null;
-
-  // Always try native PDF text extraction first — even for files that look
-  // scanned. Executed leases often have signature images (which make the
-  // scan heuristic fire) but their body text is fully digital. If native
-  // extraction yields >= MIN_NATIVE_PDF_TEXT_CHARS we skip Vision/Docling
-  // entirely, saving cost and eliminating auth-related parse failures.
-  if (mimeType.includes("pdf") && fileBytes.length <= MAX_NATIVE_PDF_TEXT_BYTES) {
-    const nativePdfOutput = await parseNativePdfText(fileBytes, fileName, mimeType);
-    if (nativePdfOutput && (nativePdfOutput.full_text?.trim().length ?? 0) > 20) {
-      if (estimatedPageCount) nativePdfOutput.page_count = estimatedPageCount;
-      const nativeTextChars = nativePdfOutput.full_text?.trim().length ?? 0;
-      const nativeBlockCount = nativePdfOutput.text_blocks?.length ?? 0;
-      const nativeLooksComplete =
-        nativeTextChars >= MIN_NATIVE_PDF_TEXT_CHARS ||
-        // Single-page leases: 400+ chars with 2+ blocks is sufficient.
-        (estimatedPageCount === 1 && nativeTextChars >= 400 && nativeBlockCount >= MIN_DIGITAL_BLOCKS);
-
-      if (nativeLooksComplete) {
-        console.log(
-          `[parser] Native PDF parser extracted ${nativeTextChars} chars ` +
-          `across ${estimatedPageCount ?? nativePdfOutput.page_count ?? "?"} page(s) from "${fileName}"` +
-          (likelyScannedPdf ? " (classified as scanned but digital text found)" : ""),
-        );
-        return tag(nativePdfOutput, "pdf_text");
-      }
-
-      console.warn(
-        `[parser] Native PDF parser extracted only ${nativeTextChars} chars ` +
-        `from ${estimatedPageCount ?? "unknown"} page(s) for "${fileName}" — ` +
-        (likelyScannedPdf ? "looks scanned, " : "") +
-        "continuing to Docling/Vision.",
-      );
-    }
-  }
-
-  const officeOutput = await parseOfficeOpenXml(fileBytes, fileName, mimeType);
-  if (officeOutput && (officeOutput.full_text?.trim().length ?? 0) > 20) {
-    console.log(
-      `[parser] OpenXML parser extracted ${officeOutput.full_text?.length ?? 0} chars from "${fileName}"`,
-    );
-    return tag(officeOutput, "openxml");
-  }
-
-  const strategy = pickStrategy({
-    mimeType,
-    fileBytes,
-    fileUrl: options.fileUrl,
-    hasDocling,
-    hasVision,
-  });
-  const ctx: ParseContext = {
-    fileBytes,
-    fileName,
-    mimeType,
-    fileUrl: options.fileUrl,
-    hasDocling,
-    hasVision,
-    strategy,
-    expectedPageCount: estimatedPageCount,
-  };
+  const config = getAzureDocumentIntelligenceConfig();
 
   console.log(
-    `[parser] file="${fileName}" mime=${mimeType} ` +
-    `hasDocling=${hasDocling} hasVision=${hasVision} strategy=${strategy}`,
+    `[parser] Azure Document Intelligence parse file="${fileName}" mime=${mimeType} provider=${provider.mode}`,
   );
 
-  switch (strategy) {
-    case "docling_only":  return await runDoclingOnly(ctx);
-    case "vision_only":   return await runVisionOnly(ctx);
-    case "vision_first":  return await runVisionFirst(ctx);
-    case "parallel":      return await runParallel(ctx);
-  }
+  const analyzeResult = await analyzeWithAzureLayout({
+    fileBytes: fileBytes ?? null,
+    fileUrl: options.fileUrl,
+    mimeType,
+  });
+
+  return normalizeAzureLayoutToDoclingOutput(analyzeResult, {
+    apiVersion: config.apiVersion,
+    modelId: config.modelId,
+  });
 }
 
-// ── Strategy selection ──────────────────────────────────────────────────────
+// Legacy strategy helpers retained only for older unit-test fixtures; parseDocument no longer calls them. ──────────────────────────────────────────────────────
 
 function pickStrategy(args: {
   mimeType: string;
@@ -251,11 +141,11 @@ function pickStrategy(args: {
 
   // 3. PDFs — look at the bytes to decide
   if (mimeType.includes("pdf")) {
-    // For public files below Vertex's HTTP document limit, prefer Gemini
+    // For public files below the legacy HTTP document limit, prefer Azure
     // Vision for scanned PDFs without inline base64 memory pressure.
     if (
-      fileBytes.length > MAX_INLINE_VISION_PDF_BYTES &&
-      fileBytes.length <= MAX_VERTEX_HTTP_DOCUMENT_BYTES &&
+      fileBytes.length > MAX_INLINE_AZURE_DOCUMENT_BYTES &&
+      fileBytes.length <= MAX_AZURE_HTTP_DOCUMENT_BYTES &&
       fileUrl &&
       hasVision &&
       looksLikeScannedPdf(fileBytes)
@@ -263,9 +153,9 @@ function pickStrategy(args: {
       return "parallel";
     }
 
-    // Inline Gemini Vision sends the full PDF as base64 inside one JSON
+    // Inline Azure Document Intelligence sends the full PDF as base64 inside one JSON
     // request. For larger files without a URL path, use Docling first.
-    if (fileBytes.length > MAX_INLINE_VISION_PDF_BYTES && hasDocling) {
+    if (fileBytes.length > MAX_INLINE_AZURE_DOCUMENT_BYTES && hasDocling) {
       return "docling_only";
     }
     return looksLikeScannedPdf(fileBytes) ? "parallel" : "docling_only";
@@ -340,8 +230,8 @@ async function runDoclingOnly(ctx: ParseContext): Promise<DoclingOutput> {
     canVisionHandle(ctx.mimeType) &&
     !(
       ctx.mimeType.includes("pdf") &&
-      ctx.fileBytes.length > MAX_INLINE_VISION_PDF_BYTES &&
-      !(ctx.fileUrl && ctx.fileBytes.length <= MAX_VERTEX_HTTP_DOCUMENT_BYTES)
+      ctx.fileBytes.length > MAX_INLINE_AZURE_DOCUMENT_BYTES &&
+      !(ctx.fileUrl && ctx.fileBytes.length <= MAX_AZURE_HTTP_DOCUMENT_BYTES)
     )
   ) {
     console.warn(
@@ -354,15 +244,15 @@ async function runDoclingOnly(ctx: ParseContext): Promise<DoclingOutput> {
   const output = doclingOutput ?? emptyOutput();
   if (
     ctx.mimeType.includes("pdf") &&
-    ctx.fileBytes.length > MAX_INLINE_VISION_PDF_BYTES &&
-    !(ctx.fileUrl && ctx.fileBytes.length <= MAX_VERTEX_HTTP_DOCUMENT_BYTES)
+    ctx.fileBytes.length > MAX_INLINE_AZURE_DOCUMENT_BYTES &&
+    !(ctx.fileUrl && ctx.fileBytes.length <= MAX_AZURE_HTTP_DOCUMENT_BYTES)
   ) {
     output.warnings = [
       ...(output.warnings ?? []),
-      "Large PDF was not sent to inline Gemini Vision to avoid Edge Function resource exhaustion.",
+      "Large PDF was not sent to inline Azure Document Intelligence to avoid Edge Function resource exhaustion.",
     ];
   }
-  return tag(output, "docling");
+  return tag(output, "azure_layout");
 }
 
 async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
@@ -384,16 +274,15 @@ async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
       }
     }
     throw new Error(
-      "No parser backend available. Configure DOCLING_API_URL or set VERTEX_PROJECT_ID + " +
-      "GOOGLE_SERVICE_ACCOUNT_KEY in Supabase secrets to enable document parsing.",
+      "No parser backend available. Configure AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT and AZURE_DOCUMENT_INTELLIGENCE_KEY in Supabase secrets to enable document parsing.",
     );
   }
   try {
     const extracted = await extractDocumentWithVision(ctx.fileBytes, ctx.mimeType, ctx.fileUrl);
     const output = visionExtractionToDocling(extracted, ctx.expectedPageCount);
-    return tag(output, "gemini_vision");
+    return tag(output, "azure_layout");
   } catch (err) {
-    console.warn(`[parser] Vision OCR failed: ${err.message}`);
+    console.warn(`[parser] Azure Document Intelligence OCR failed: ${err.message}`);
     if (ctx.hasDocling && canDoclingHandle(ctx.mimeType)) {
       const doclingOutput = await callDocling(ctx);
       if (doclingOutput) {
@@ -413,13 +302,13 @@ async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
         // ignore; propagate the Vision error
       }
     }
-    throw new Error(`Vision OCR failed: ${err.message}`);
+    throw new Error(`Azure Document Intelligence OCR failed: ${err.message}`);
   }
 }
 
 /**
  * Vision-first: run OCR to capture all text (including stamps / handwriting
- * / low-contrast scans), then *if Docling is available* also run it to
+ * / low-contrast scans), then *if Azure Document Intelligence is available* also run it to
  * pick up any structured tables. Merge: Vision's text_blocks + Docling's
  * tables whenever Docling returns ≥1 table.
  */
@@ -439,11 +328,11 @@ async function runVisionFirst(ctx: ParseContext): Promise<DoclingOutput> {
       if (doclingOutput) return tag(doclingOutput, "docling");
     }
     // Both Vision and Docling failed — propagate the real error
-    throw new Error(`Vision OCR failed: ${err.message}`);
+    throw new Error(`Azure Document Intelligence OCR failed: ${err.message}`);
   }
 
-  if (!ctx.hasDocling || !canDoclingHandle(ctx.mimeType) || ctx.fileBytes.length > MAX_DOCLING_SUPPLEMENT_BYTES) {
-    return tag(visionOutput, "gemini_vision");
+  if (!ctx.hasDocling || !canDoclingHandle(ctx.mimeType) || ctx.fileBytes.length > MAX_AZURE_SUPPLEMENT_BYTES) {
+    return tag(visionOutput, "azure_layout");
   }
 
   // Try Docling as a structural supplement. Failure is non-fatal.
@@ -464,7 +353,7 @@ async function runVisionFirst(ctx: ParseContext): Promise<DoclingOutput> {
     }, "hybrid");
   }
 
-  return tag(visionOutput, "gemini_vision");
+  return tag(visionOutput, "azure_layout");
 }
 
 /**
@@ -491,9 +380,9 @@ async function runParallel(ctx: ParseContext): Promise<DoclingOutput> {
     `[parser] parallel scores: docling=${doclingScore} vision=${visionScore}`,
   );
 
-  if (doclingScore >= visionScore && doclingOut) return tag(doclingOut, "docling");
-  if (visionOut) return tag(visionOut, "gemini_vision");
-  if (doclingOut) return tag(doclingOut, "docling");
+  if (doclingScore >= visionScore && doclingOut) return tag(doclingOut, "azure_layout");
+  if (visionOut) return tag(visionOut, "azure_layout");
+  if (doclingOut) return tag(doclingOut, "azure_layout");
   return tag(emptyOutput(["Parallel parse failed on both backends."]), "none");
 }
 
@@ -513,105 +402,8 @@ function canVisionHandle(mimeType: string): boolean {
   return true;
 }
 
-async function callDocling(ctx: ParseContext): Promise<DoclingOutput | null> {
-  const doclingUrl = Deno.env.get("DOCLING_API_URL");
-  if (!doclingUrl) return null;
-  if (!canDoclingHandle(ctx.mimeType)) return null;
-
-  const apiKey = Deno.env.get("DOCLING_API_KEY");
-  const maxRetries = 1;
-
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(
-        `[parser] Docling attempt ${attempt}/${maxRetries} for "${ctx.fileName}"`,
-      );
-
-      const formData = new FormData();
-      formData.append(
-        "files",
-        new Blob([ctx.fileBytes], { type: ctx.mimeType }),
-        ctx.fileName,
-      );
-      formData.append("output_formats", "text,tables,fields");
-
-      const headers: Record<string, string> = {};
-      if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 38000);
-
-      const response = await fetch(`${doclingUrl}/v1/convert/file`, {
-        method: "POST",
-        headers,
-        body: formData,
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-
-      if (response.ok) {
-        // Guard against oversized Docling responses (e.g. large documents with
-        // embedded base64 data) that would OOM the edge function when buffered.
-        const MAX_DOCLING_RESPONSE_BYTES = 12 * 1024 * 1024; // 12 MB
-        const contentLength = Number(response.headers.get("content-length") ?? 0);
-        if (contentLength > MAX_DOCLING_RESPONSE_BYTES) {
-          console.warn(
-            `[parser] Docling response Content-Length ${contentLength} bytes exceeds limit; ` +
-            `discarding and falling back.`,
-          );
-          await response.body?.cancel().catch(() => undefined);
-          return null;
-        }
-        // Stream the response into a size-capped buffer to prevent OOM when
-        // Content-Length is absent (chunked transfer encoding).
-        const reader = response.body?.getReader();
-        if (!reader) return null;
-        const chunks: Uint8Array[] = [];
-        let totalBytes = 0;
-        let truncated = false;
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          totalBytes += value.length;
-          if (totalBytes > MAX_DOCLING_RESPONSE_BYTES) {
-            truncated = true;
-            await reader.cancel().catch(() => undefined);
-            break;
-          }
-          chunks.push(value);
-        }
-        if (truncated) {
-          console.warn(
-            `[parser] Docling response exceeded ${MAX_DOCLING_RESPONSE_BYTES / 1024 / 1024} MB ` +
-            `mid-stream; discarding and falling back.`,
-          );
-          return null;
-        }
-        const combined = new Uint8Array(totalBytes);
-        let offset = 0;
-        for (const chunk of chunks) { combined.set(chunk, offset); offset += chunk.length; }
-        const raw = JSON.parse(new TextDecoder().decode(combined));
-        return normaliseDoclingResponse(raw, ctx.fileName);
-      }
-
-      const errText = await response.text().catch(() => "unknown error");
-      console.warn(`[parser] Docling HTTP ${response.status}: ${errText}`);
-
-      // 4xx are deterministic — no point retrying
-      if (response.status >= 400 && response.status < 500) return null;
-
-      if (attempt < maxRetries) {
-        await new Promise((r) => setTimeout(r, 1000 * attempt));
-        continue;
-      }
-    } catch (err) {
-      console.warn(`[parser] Docling error (attempt ${attempt}): ${err.message}`);
-      if (attempt < maxRetries) {
-        await new Promise((r) => setTimeout(r, 1000 * attempt));
-        continue;
-      }
-    }
-  }
+async function callDocling(_ctx: ParseContext): Promise<DoclingOutput | null> {
+  console.warn("[parser] Legacy Docling parser path is retired; Azure Document Intelligence is the only parser backend.");
   return null;
 }
 
@@ -797,7 +589,7 @@ function visionExtractionToDocling(
 
   if ((expectedPageCount ?? 0) > 1 && pages.length === 0) {
     console.warn(
-      `[parser] Gemini Vision returned 0 page-aware items for ${expectedPageCount}-page PDF; ` +
+      `[parser] Azure Document Intelligence returned 0 page-aware items for ${expectedPageCount}-page PDF; ` +
       `using flat text fallback instead of discarding content.`,
     );
     // Fall through to flat-text fallback below rather than discarding all content
@@ -805,7 +597,7 @@ function visionExtractionToDocling(
 
   if ((expectedPageCount ?? 0) > 1 && pages.length > 0 && pages.length < Number(expectedPageCount)) {
     console.warn(
-      `[parser] Gemini Vision returned ${pages.length} of ${expectedPageCount} estimated pages; ` +
+      `[parser] Azure Document Intelligence returned ${pages.length} of ${expectedPageCount} estimated pages; ` +
       `using partial result rather than discarding content.`,
     );
     // Use what Vision returned — partial coverage beats nothing

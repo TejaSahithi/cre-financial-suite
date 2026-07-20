@@ -1,7 +1,8 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
-import { callVertexAIJSON } from "../_shared/vertex-ai.ts";
+import { callLLMJSON } from "../_shared/llm.ts";
+
 
 const FULL_SCAN_SYSTEM_PROMPT = `You are an expert commercial real estate (CRE) lease abstraction AI performing a COMPREHENSIVE PARAGRAPH-BY-PARAGRAPH SCAN.
 
@@ -171,48 +172,95 @@ Map each rule to the most appropriate standard expense category. If none fit per
 
 Return a JSON array of objects representing these rules. The output MUST be valid JSON.`;
 
-const MAX_EXPENSE_SOURCE_CHARS = 70000;
-const EXPENSE_SOURCE_KEYWORDS =
-  /(cam|common\s+area|operating\s+expenses?|additional\s+rent|reimburs|recover|pro\s*rata|tax(?:es)?|assessment|insurance|premium|utilit|electric|water|sewer|gas|hvac|janitorial|trash|security|landscap|snow|parking|maintenance|repair|capital|management|administrative|gross[-\s]?up|base\s+year|expense\s+stop|cap(?:ped)?|tenant'?s\s+share|landlord'?s\s+cost|directly\s+metered|separately\s+metered|fee|charge|cost|pay|reimburse|obligat)/i;
+// Chunk threshold: ~100k tokens at ~3.5 chars/token. Above this we split the
+// document into overlapping chunks, extract from each, then deduplicate rules.
+const CHUNK_THRESHOLD_CHARS = 350_000;
+const CHUNK_OVERLAP_CHARS = 5_000;
 
 function normalizePromptText(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
-function buildExpenseFocusedText(sourceText: unknown, fullScan = false) {
-  const text = normalizePromptText(sourceText);
-  // fullScan sends the entire document — CAM/expense clauses can appear
-  // anywhere, including well past any fixed character offset. This branch
-  // used to hard-slice to MAX_EXPENSE_SOURCE_CHARS even when fullScan=true,
-  // silently dropping end-of-document expense/CAM clauses on long leases.
-  if (fullScan) return text;
+/**
+ * Returns the full normalized document text.
+ * gpt-4o supports a 128k context window — no keyword filtering, no size
+ * gating, no sentences dropped. Every clause reaches the model.
+ */
+function buildExpenseFocusedText(sourceText: unknown): string {
+  return normalizePromptText(sourceText);
+}
 
-  // Non-full-scan: keyword-filtered sentence selection already scans the
-  // WHOLE document (not just a prefix) for CAM/expense-relevant sentences —
-  // a sentence's position in the document never excludes it from
-  // consideration, so this path was never position-truncating; only the
-  // MAX_EXPENSE_SOURCE_CHARS length check below is used as a "is this even
-  // worth filtering" threshold, not a truncation.
-  if (text.length <= MAX_EXPENSE_SOURCE_CHARS) return text;
+function splitIntoChunks(text: string, chunkSize: number, overlap: number): string[] {
+  if (text.length <= chunkSize) return [text];
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    chunks.push(text.slice(start, start + chunkSize));
+    start += chunkSize - overlap;
+  }
+  return chunks;
+}
 
-  const sentences = text.match(/[^.!?]+[.!?]?/g) || [text];
-  const selected: string[] = [];
-  const seen = new Set<number>();
-  for (let index = 0; index < sentences.length; index += 1) {
-    if (!EXPENSE_SOURCE_KEYWORDS.test(sentences[index])) continue;
-    for (const nearby of [index - 1, index, index + 1]) {
-      if (nearby < 0 || nearby >= sentences.length || seen.has(nearby)) continue;
-      seen.add(nearby);
-      selected.push(normalizePromptText(sentences[nearby]));
+function deduplicateRules(rules: unknown[]): unknown[] {
+  const seen = new Set<string>();
+  const deduped: unknown[] = [];
+  for (const rule of rules) {
+    const key = String((rule as any)?.exact_source_text ?? JSON.stringify(rule)).slice(0, 200).toLowerCase().trim();
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(rule);
     }
   }
-
-  const focused = selected.filter(Boolean).join(" ");
-  // The relevance-filtered selection is normally far smaller than the raw
-  // document. Only fall back to the (untruncated) raw text if keyword
-  // filtering found essentially nothing — never truncate either result.
-  return focused.length > 2000 ? focused : text;
+  return deduped;
 }
+
+async function extractRulesFromText(text: string, systemPrompt: string, userPromptBuilder: (t: string) => string): Promise<unknown[]> {
+  const chunks = splitIntoChunks(text, CHUNK_THRESHOLD_CHARS, CHUNK_OVERLAP_CHARS);
+  if (chunks.length === 1) {
+    // Common case: lease fits in a single request
+    const result = await callLLMJSON({
+      systemPrompt,
+      userPrompt: userPromptBuilder(chunks[0]),
+      temperature: 0.1,
+      promptVersion: "expense-rules-v3",
+    });
+    const rules = Array.isArray(result.data) ? result.data : ((result.data as any)?.rules ?? []);
+    // Log truncation — finish_reason="length" means the JSON was cut off
+    if (result.finishReason === "length") {
+      console.warn(
+        `[extract-lease-expense-rules] finish_reason=length — response truncated. ` +
+        `model=${result.model}, tokens=${result.completionTokens}. Consider raising OPENAI_MAX_OUTPUT_TOKENS.`,
+      );
+    }
+    return rules;
+  }
+
+  // Large lease: parallel chunk extraction → merge → deduplicate
+  console.log(`[extract-lease-expense-rules] Document is ${text.length} chars — splitting into ${chunks.length} chunks for extraction.`);
+  const chunkResults = await Promise.all(
+    chunks.map((chunk, i) =>
+      callLLMJSON({
+        systemPrompt,
+        userPrompt: userPromptBuilder(chunk),
+        temperature: 0.1,
+        promptVersion: "expense-rules-v3-chunk",
+      }).then(r => {
+        const rules = Array.isArray(r.data) ? r.data : ((r.data as any)?.rules ?? []);
+        console.log(`[extract-lease-expense-rules] Chunk ${i + 1}/${chunks.length}: ${rules.length} rules extracted, finish_reason=${r.finishReason}`);
+        return rules;
+      }).catch(err => {
+        console.error(`[extract-lease-expense-rules] Chunk ${i + 1} failed: ${err?.message}`);
+        return [];
+      })
+    )
+  );
+
+  const allRules = chunkResults.flat();
+  const deduped = deduplicateRules(allRules);
+  console.log(`[extract-lease-expense-rules] Merged ${allRules.length} rules across ${chunks.length} chunks → ${deduped.length} after deduplication.`);
+  return deduped;
+}
+
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -232,36 +280,24 @@ serve(async (req: Request) => {
       throw new Error("source_text is required.");
     }
 
-    const expenseFocusedText = buildExpenseFocusedText(sourceText, fullScan);
-    const activeSystemPrompt = fullScan ? FULL_SCAN_SYSTEM_PROMPT : SYSTEM_PROMPT;
+    const expenseFocusedText = buildExpenseFocusedText(sourceText);
+    // Always use the comprehensive full-scan prompt — 128k context window
+    // makes the non-full-scan path unnecessary.
+    const activeSystemPrompt = FULL_SCAN_SYSTEM_PROMPT;
 
-    const userPrompt = fullScan
-      ? `Read EVERY paragraph of the following lease document. For each sentence or clause that mentions any cost, fee, charge, expense, payment, or financial obligation — output a separate rule with the EXACT verbatim sentence as exact_source_text.
+    const userPromptBuilder = (text: string) =>
+      `Read EVERY paragraph of the following lease document. For each sentence or clause that mentions any cost, fee, charge, expense, payment, or financial obligation — output a separate rule with the EXACT verbatim sentence as exact_source_text.
 
 Lease document:
 ===================================
-${expenseFocusedText}
+${text}
 ===================================
 
-Return a JSON array of expense rules found. Each rule must have exact_source_text copied verbatim from the document above.`
-      : `Here is the list of expense categories to map:
-${JSON.stringify(categories, null, 2)}
+Return a JSON object with a "rules" array of expense rules found. Each rule must have exact_source_text copied verbatim from the document above.`;
 
-Here is the lease text to analyze:
-===================================
-${expenseFocusedText}
-===================================
-
-Extract the expense classification rules${categories.length > 0 ? " for the categories listed above" : ""}.`;
-
-    let result: unknown = null;
+    let rules: unknown[] = [];
     try {
-      result = await callVertexAIJSON({
-        systemPrompt: activeSystemPrompt,
-        userPrompt: userPrompt,
-        temperature: 0.1,
-        maxOutputTokens: 8192,
-      });
+      rules = await extractRulesFromText(expenseFocusedText, activeSystemPrompt, userPromptBuilder);
     } catch (aiError) {
       const message = aiError instanceof Error ? aiError.message : String(aiError);
       console.error("[extract-lease-expense-rules] AI extraction failed:", message);
@@ -274,7 +310,7 @@ Extract the expense classification rules${categories.length > 0 ? " for the cate
       });
     }
 
-    if (!result) {
+    if (!rules || rules.length === 0) {
       return new Response(JSON.stringify({
         rules: [],
         warning: "AI expense rule extraction returned no rules.",
@@ -284,8 +320,8 @@ Extract the expense classification rules${categories.length > 0 ? " for the cate
       });
     }
 
-    const resultAny = result as any;
-    const rules = (Array.isArray(result) ? result : resultAny?.rules || []).map((rule: Record<string, unknown>) => {
+    const mappedRules = rules.map((rule: Record<string, unknown>) => {
+
       const normalizedRecoverable = normalizeDecision(rule.recoverable_from_tenant, rule.is_recoverable === true ? "yes" : "no");
       const paymentTreatmentText = normalizeText(rule.payment_treatment);
       // cam_eligible may only default to "no" when there is an EXPLICIT exclusion
@@ -327,10 +363,11 @@ Extract the expense classification rules${categories.length > 0 ? " for the cate
       });
     });
 
-    return new Response(JSON.stringify({ rules }), {
+    return new Response(JSON.stringify({ rules: mappedRules }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
       status: 200,
     });
+
   } catch (err) {
     const error = err as Error;
     console.error("[extract-lease-expense-rules] Error:", error.message);

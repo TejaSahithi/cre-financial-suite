@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * Canonical Document Layout resolver (Phase 3 of the Azure + Vertex
+ * Canonical Document Layout resolver (Phase 3 of the Azure + OpenAI
  * canonical pipeline migration).
  *
  * A single, provider-neutral entry point for obtaining a

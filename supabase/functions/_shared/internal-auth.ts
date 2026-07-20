@@ -1,7 +1,7 @@
 // @ts-nocheck
 /**
  * Internal call detection for edge functions that accept both user-JWT and
- * service-to-service calls (e.g. parse-pdf-docling called from lease-extraction-worker).
+ * service-to-service calls (e.g. parse-document-azure called from lease-extraction-worker).
  *
  * Three accepted forms:
  *   1. x-worker-secret header == WORKER_INTERNAL_SECRET

@@ -1283,7 +1283,7 @@ export const leaseExpenseRuleService = {
 
     // Docling writes the OCR'd document body to `docling_raw.full_text`.
     // Earlier this function only checked `text` and `markdown` keys, which
-    // are written by some pipelines but NOT by the Docling pipeline this
+    // are written by some pipelines but NOT by the Azure parser pipeline this
     // project uses — so getLeaseSourceText returned empty for every lease
     // and the fallback extractor silently failed. We now check every known
     // key so the extractor always finds the text when it exists.

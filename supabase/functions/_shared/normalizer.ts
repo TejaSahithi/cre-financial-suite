@@ -18,7 +18,7 @@
 import type { ModuleType } from "./file-detector.ts";
 
 // ---------------------------------------------------------------------------
-// Docling output types (mirrors parse-pdf-docling)
+// Azure document output compatibility types (mirrors parse-document-azure)
 // ---------------------------------------------------------------------------
 
 interface DoclingField {
@@ -188,7 +188,7 @@ function resolveAlias(key: string, aliases: Record<string, string>): string {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Normalize Docling fields array → canonical rows
+// 1. Normalize Azure document fields array → canonical rows
 // ---------------------------------------------------------------------------
 
 /**
@@ -217,7 +217,7 @@ function normalizeDoclingFields(
 }
 
 // ---------------------------------------------------------------------------
-// 2. Normalize Docling tables → canonical rows
+// 2. Normalize Azure document tables → canonical rows
 // ---------------------------------------------------------------------------
 
 /**
@@ -315,7 +315,7 @@ export interface NormalizationResult {
  */
 export function normalizeExtractedData(
   input: {
-    /** Docling output (for PDF files) */
+    /** Azure document output (for PDF files) */
     doclingOutput?: DoclingOutput;
     /** Pre-parsed CSV rows (for CSV/Excel — already in row format) */
     csvRows?: Array<Record<string, string | null>>;
@@ -369,7 +369,7 @@ export function normalizeExtractedData(
       }
     }
 
-    warnings.push("Docling output contained no extractable data");
+    warnings.push("Azure document output contained no extractable data");
     return { rows: [], source: "docling_fields", rowCount: 0, warnings };
   }
 

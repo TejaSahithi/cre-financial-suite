@@ -6,7 +6,7 @@
  * NORMALIZE_INLINE_ENRICHMENT and EXTRACTION_PROVIDER. Nothing in the
  * runtime pipeline reads ENABLE_DOCUMENT_INTELLIGENCE_V3 yet — Phase 1 is
  * scaffold-only (contract types + a read-only compatibility adapter + a
- * durable-storage migration, none of them wired into parse-pdf-docling,
+ * durable-storage migration, none of them wired into parse-document-azure,
  * normalize-pdf-output, or LeaseReview.jsx). This flag exists so a later
  * phase has one canonical, already-tested place to gate v3 behavior instead
  * of inventing the check ad hoc when that phase starts.

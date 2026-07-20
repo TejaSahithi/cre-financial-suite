@@ -1,13 +1,13 @@
 // @ts-nocheck
 /**
- * Azure + Vertex Phase 4E (local implementation) — deterministic acceptance
+ * Azure Document Intelligence + OpenAI (local implementation) — deterministic acceptance
  * evaluation for a business-extraction ExtractionPipelineResult.
  *
  * Replaces the pre-Phase-4E "is at least one field non-empty" gate
  * (normalize-pdf-output's countMeaningfulRowValues) with a profile-aware
  * evaluator that can distinguish "accepted", "needs review", "eligible for
  * legacy fallback", and "rejected outright" — and that reads STRUCTURED
- * provider failure classification (VertexFailureClassification) rather than
+ * provider failure classification rather than
  * inferring what went wrong by parsing a warning string.
  *
  * Reuses payload-guard.ts's isMeaningfulFieldValue/parsedDataHasMeaningfulValues
@@ -19,7 +19,7 @@
 
 import { isMeaningfulFieldValue } from "./payload-guard.ts";
 import type { ExtractionPipelineResult } from "./types.ts";
-import type { VertexFailureClassification } from "../vertex-ai.ts";
+
 
 export type ExtractionAcceptanceState = "accepted" | "accepted_needs_review" | "fallback_eligible" | "rejected";
 
@@ -35,7 +35,7 @@ export interface ExtractionAcceptance {
 export interface AcceptanceContext {
   /** Which provider produced this result — legacy is held to the same
    *  evaluator (Correction round 2, item 8: no automatic legacy trust). */
-  provider: "vertex_fact_ledger" | "legacy_hybrid";
+  provider: "openai_fact_ledger" | "vertex_fact_ledger" | "legacy_hybrid";
   /** Document profile, when known — assignment/amendment/consent/notice/
    *  guaranty are not required to hit base-lease field coverage. */
   documentProfile?: string | null;
@@ -51,9 +51,9 @@ const REDUCED_COVERAGE_PROFILES = new Set(["assignment", "amendment", "consent",
 
 // Structured classifications that make a result eligible for legacy
 // fallback (mirrors the fallback-eligibility matrix in the Phase 4E design,
-// re-verified against current vertex-ai.ts this session). auth_error is
+// re-verified against current OpenAI provider wrapper this session). auth_error is
 // deliberately absent — a bad/missing credential is never fallback-eligible.
-const FALLBACK_ELIGIBLE_CLASSIFICATIONS = new Set<VertexFailureClassification>([
+const FALLBACK_ELIGIBLE_CLASSIFICATIONS = new Set<string>([
   "timeout",
   "rate_limited",
   "server_error",
@@ -94,7 +94,7 @@ function countMeaningfulFields(rows: Record<string, unknown>[]): number {
 
 function countEvidenceBacked(result: ExtractionPipelineResult): number {
   const debug = (result.metadata as any)?.extractionDebug;
-  const anchors = debug?.vertex_fact_ledger?.evidence_anchors;
+  const anchors = debug?.openai_fact_ledger?.evidence_anchors ?? debug?.vertex_fact_ledger?.evidence_anchors;
   if (Array.isArray(anchors)) return anchors.length;
   // Legacy path: merged_field_sources entries with a real source_text count
   // as evidence-backed, mirroring how fact-mapper.ts already treats them.
@@ -109,8 +109,8 @@ function countEvidenceBacked(result: ExtractionPipelineResult): number {
  * Structured failure classification the result's producer attached (per
  * Phase 4E's structured-error plumbing) — never inferred from warning text.
  */
-function readFailureClassification(result: ExtractionPipelineResult): VertexFailureClassification | undefined {
-  return (result.metadata as any)?.extractionDebug?.vertex_fact_ledger?.failure_classification;
+function readFailureClassification(result: ExtractionPipelineResult): string | undefined {
+  return (result.metadata as any)?.extractionDebug?.openai_fact_ledger?.failure_classification ?? (result.metadata as any)?.extractionDebug?.vertex_fact_ledger?.failure_classification;
 }
 
 export function evaluateExtractionAcceptance(
@@ -156,11 +156,11 @@ export function evaluateExtractionAcceptance(
     }
     // No structured classification available at all (e.g. a legacy result
     // with a genuinely empty extraction, or an unclassified failure) --
-    // still empty, so still fallback-eligible for a Vertex result and
+    // still empty, so still fallback-eligible for a OpenAI result and
     // rejected for a legacy result (legacy has nothing further to fall
     // back to within this orchestrator).
     return {
-      state: context.provider === "vertex_fact_ledger" ? "fallback_eligible" : "rejected",
+      state: context.provider === "openai_fact_ledger" || context.provider === "vertex_fact_ledger" ? "fallback_eligible" : "rejected",
       reason: classification ?? "empty_extraction",
       meaningfulFieldCount,
       validFieldKeyCount,

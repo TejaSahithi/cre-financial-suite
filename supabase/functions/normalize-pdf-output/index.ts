@@ -25,8 +25,8 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { isInternalCall } from "../_shared/internal-auth.ts";
 import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
-import { runVertexFactLedgerPipeline } from "../_shared/extraction/vertex-fact-ledger/orchestrator.ts";
 import { runBusinessExtraction } from "../_shared/extraction/business-extraction-orchestrator.ts";
+import { normalizeBusinessExtractionMode, type CanonicalBusinessExtractionMode } from "../_shared/extraction/business-extraction-provenance.ts";
 import { isAzureLayoutOutput } from "../_shared/extraction/extraction-provider.ts";
 import { getFieldGroups, getSchema } from "../_shared/extraction/schemas.ts";
 import { buildLeaseWorkflowAbstraction } from "../_shared/extraction/lease-workflow.ts";
@@ -59,11 +59,11 @@ import {
 } from "../_shared/extraction/pipeline-contract.ts";
 
 // Base64 expands PDFs by about 33%, and the intermediate binary string can
-// double memory again. Keep inline Vision fallback below Edge compute limits.
-// 20 MB matches the parser.ts MAX_INLINE_VISION_PDF_BYTES — Gemini's documented
-// inline data limit — so any file small enough for parse to have processed inline
-// can also be processed inline here if Vision is needed as a fallback.
-const MAX_INLINE_VISION_BYTES = 20 * 1024 * 1024;
+// double memory again. Keep inline file fallback below Edge compute limits.
+// 20 MB matches the parser inline byte limit used before Azure parsing became canonical;
+// any file small enough for parse to have processed inline
+// can also be processed inline here if a fallback needs file bytes.
+const MAX_INLINE_FILE_BYTES = 20 * 1024 * 1024;
 
 const AZURE_PAGE_MARKER_RE = /\[\[\s*PAGE\s+\d+\s*\]\]/i;
 
@@ -122,35 +122,20 @@ function buildPipelineLayoutInput(
 
 /**
  * Resolve which extraction/reasoning provider runs the pipeline.
- * Default is "legacy_hybrid" (runExtractionPipeline, unchanged) whenever
- * BUSINESS_EXTRACTION_PROVIDER is unset or any value other than the exact
- * string "vertex_fact_ledger" — vertex_fact_ledger is strictly opt-in.
- *
- * `internalDebugOverride` lets a scoped, single request pick the provider
- * without touching the BUSINESS_EXTRACTION_PROVIDER project secret — the
- * caller must only pass a value here when the request has already passed
- * isInternalCall(req) (service-role/worker auth), so a normal browser/user
- * request can never set it. Used for one-off live provider comparisons
- * without making vertex_fact_ledger the project's live default.
+ * New configuration should use openai_fact_ledger or
+ * openai_primary_legacy_fallback. The old vertex_* values are accepted as
+ * aliases so existing Supabase secrets and internal debug calls do not break.
  */
-// Azure+Vertex Phase 4E (local implementation): adds vertex_primary_legacy_fallback
-// as a new, opt-in-only mode. The project default is unchanged -- an unset
-// or unrecognized BUSINESS_EXTRACTION_PROVIDER still resolves to legacy_hybrid.
 function resolveBusinessExtractionProvider(
   internalDebugOverride?: string | null,
-): "legacy_hybrid" | "vertex_fact_ledger" | "vertex_primary_legacy_fallback" {
-  const RECOGNIZED = new Set(["legacy_hybrid", "vertex_fact_ledger", "vertex_primary_legacy_fallback"]);
+): CanonicalBusinessExtractionMode {
   const override = String(internalDebugOverride ?? "").trim().toLowerCase();
-  if (RECOGNIZED.has(override)) {
-    return override as "legacy_hybrid" | "vertex_fact_ledger" | "vertex_primary_legacy_fallback";
-  }
-  const raw = String(Deno.env.get("BUSINESS_EXTRACTION_PROVIDER") ?? "").trim().toLowerCase();
-  return RECOGNIZED.has(raw) ? (raw as "legacy_hybrid" | "vertex_fact_ledger" | "vertex_primary_legacy_fallback") : "legacy_hybrid";
+  if (override) return normalizeBusinessExtractionMode(override);
+  return normalizeBusinessExtractionMode(Deno.env.get("BUSINESS_EXTRACTION_PROVIDER"));
 }
-
 /**
- * Azure+Vertex Phase 4E (local implementation): local-only, test-only mock
- * injection for the business-extraction orchestrator's Vertex call. Never a
+ * Azure+OpenAI Phase 4E (local implementation): local-only, test-only mock
+ * injection for the business-extraction orchestrator's OpenAI call. Never a
  * production capability. Requires all gates simultaneously:
  *   (a) isInternalCall(req) -- existing internal-auth check
  *   (b) ENABLE_LOCAL_PROVIDER_MOCKS=true -- explicit opt-in env var
@@ -187,15 +172,15 @@ function isLocalSupabaseUrl(): boolean {
     return false;
   }
 }
-function resolveMockVertexScenario(req: Request, body: Record<string, unknown>, requestedProvider?: string): string | undefined {
+function resolveMockOpenAIScenario(req: Request, body: Record<string, unknown>, requestedProvider?: string): string | undefined {
   const mocksEnabled = localProviderMocksEnabled();
-  const requestedScenario = isInternalCall(req) ? String((body as any)?.debug_vertex_mock_scenario ?? "").trim() : "";
+  const requestedScenario = isInternalCall(req) ? String((body as any)?.debug_openai_mock_scenario ?? "").trim() : "";
 
   if (!mocksEnabled) {
     if (requestedScenario) {
       // A caller asked for a mock but mocks are not enabled -- fail loudly
       // rather than silently making a real call with an ignored parameter.
-      throw new Error("debug_vertex_mock_scenario was provided but ENABLE_LOCAL_PROVIDER_MOCKS is not set to true");
+      throw new Error("debug_openai_mock_scenario was provided but ENABLE_LOCAL_PROVIDER_MOCKS is not set to true");
     }
     return undefined;
   }
@@ -213,7 +198,7 @@ function resolveMockVertexScenario(req: Request, body: Record<string, unknown>, 
   const disableExternalCalls = true;
   if (!requestedScenario) {
     if (disableExternalCalls && requestedProvider !== "legacy_hybrid") {
-      throw new Error("DISABLE_EXTERNAL_PROVIDER_CALLS=true requires a valid debug_vertex_mock_scenario on every internal call");
+      throw new Error("DISABLE_EXTERNAL_PROVIDER_CALLS=true requires a valid debug_openai_mock_scenario on every internal call");
     }
     return undefined;
   }
@@ -223,7 +208,7 @@ function resolveMockVertexScenario(req: Request, body: Record<string, unknown>, 
     "empty_extraction", "auth_error", "low_evidence", "conflicting_facts",
   ]);
   if (!VALID_SCENARIOS.has(requestedScenario)) {
-    throw new Error(`Unrecognized debug_vertex_mock_scenario: ${requestedScenario}`);
+    throw new Error(`Unrecognized debug_openai_mock_scenario: ${requestedScenario}`);
   }
   return requestedScenario;
 }
@@ -1182,9 +1167,9 @@ function buildReviewPayload(opts: {
       };
     })
     .filter((f) => f.value != null && f.value !== "");
-  // vertex_fact_ledger diagnostics (undefined for legacy_hybrid — both
+  // openai_fact_ledger diagnostics (undefined for legacy_hybrid — both
   // spreads below become no-ops, preserving existing behavior exactly).
-  const vertexFactLedgerDebug = (reviewExtractionDebug as any)?.vertex_fact_ledger ?? null;
+  const openaiFactLedgerDebug = (reviewExtractionDebug as any)?.openai_fact_ledger ?? (reviewExtractionDebug as any)?.vertex_fact_ledger ?? null;
   const workflowOutputs = extractionModuleType === "lease"
     ? result.rows.map((row, rowIndex) =>
       buildLeaseWorkflowAbstraction({
@@ -1192,9 +1177,9 @@ function buildReviewPayload(opts: {
         doclingRaw: doclingRaw ?? null,
         documentSubtype,
         ...(rowIndex === 0 ? { unmappedLlmFields } : {}),
-        ...(vertexFactLedgerDebug?.document_profile ? { documentProfileOverride: vertexFactLedgerDebug.document_profile } : {}),
-        ...(rowIndex === 0 && Array.isArray(vertexFactLedgerDebug?.dynamic_items)
-          ? { factLedgerDynamicItems: vertexFactLedgerDebug.dynamic_items }
+        ...(openaiFactLedgerDebug?.document_profile ? { documentProfileOverride: openaiFactLedgerDebug.document_profile } : {}),
+        ...(rowIndex === 0 && Array.isArray(openaiFactLedgerDebug?.dynamic_items)
+          ? { factLedgerDynamicItems: openaiFactLedgerDebug.dynamic_items }
           : {}),
       })
     )
@@ -1475,11 +1460,11 @@ function filterUserWarnings(warnings: string[] = [], rowCount = 0): string[] {
   for (const warning of warnings) {
     const text = String(warning || "");
     if (rowCount > 0 && /no tables found/i.test(text)) continue;
-    if (rowCount > 0 && /GOOGLE_SERVICE_ACCOUNT_KEY|VERTEX_PROJECT_ID|service account|private_key|JWT|Vertex AI|AI fallback|ANTHROPIC_API_KEY|GEMINI_API_KEY|Claude|No LLM configured/i.test(text)) {
+    if (rowCount > 0 && /OPENAI_API_KEY|OpenAI|AI fallback|No LLM configured/i.test(text)) {
       continue;
     }
-    if (/GOOGLE_SERVICE_ACCOUNT_KEY|VERTEX_PROJECT_ID|service account|private_key|JWT|ANTHROPIC_API_KEY|GEMINI_API_KEY|No LLM configured/i.test(text)) {
-      const sanitized = "AI fallback extraction is unavailable because Google Vertex AI is not fully configured. Deterministic document parsing still ran.";
+    if (/OPENAI_API_KEY|OpenAI|No LLM configured/i.test(text)) {
+      const sanitized = "AI fallback extraction is unavailable because OpenAI is not configured. Deterministic document parsing still ran.";
       if (!out.includes(sanitized)) out.push(sanitized);
       continue;
     }
@@ -1760,7 +1745,7 @@ function normalizeConfidence(value: unknown): number | null {
 function sourceFromMethod(method: string | null): string {
   const lower = String(method ?? "").toLowerCase();
   if (lower.includes("vision") || lower.includes("ocr")) return "vision";
-  if (lower.includes("llm") || lower.includes("gemini") || lower.includes("vertex")) return "llm";
+  if (lower.includes("llm") || lower.includes("openai")) return "llm";
   if (lower.includes("table")) return "table";
   return "rule";
 }
@@ -2253,15 +2238,12 @@ Deno.serve(async (req: Request) => {
     // dry_run=true: validate auth and optionally run extraction on sample_text.
     // No file_id required and no DB writes — used by pipeline-health-check.
     if (dry_run === true) {
-      const hasVertex = !!(
-        (Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
-        (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))
-      );
+      const hasOpenAI = !!Deno.env.get("OPENAI_API_KEY");
 
       let extraction: Record<string, unknown> | null = null;
       if (typeof sample_text === "string" && sample_text.length > 0) {
         // Tier 1 (dry_run) live comparison support: an internal/service-role
-        // caller may request vertex_fact_ledger for this one sample_text call
+        // caller may request openai_fact_ledger for this one sample_text call
         // without touching the BUSINESS_EXTRACTION_PROVIDER project secret.
         // No uploaded_files row exists in this branch, so there is nothing to
         // write — this is the zero-DB-write comparison path.
@@ -2277,8 +2259,8 @@ Deno.serve(async (req: Request) => {
             page_count: 1,
             extraction_method: "dry_run",
           };
-          // Azure+Vertex Phase 4E: routed through the same orchestrator as the
-          // real path so a dryRunProvider of vertex_primary_legacy_fallback
+          // Azure+OpenAI route: routed through the same orchestrator as the
+          // real path so the selected provider
           // is handled correctly instead of silently falling to legacy (the
           // old two-branch ternary here had no third case).
           const result = await runBusinessExtraction({
@@ -2306,7 +2288,7 @@ Deno.serve(async (req: Request) => {
         dry_run: true,
         authenticated: true,
         llm: {
-          vertex_configured: hasVertex,
+          openai_configured: hasOpenAI,
         },
         ...(extraction !== null ? { extraction } : {}),
         message: "Auth verified. dry_run=true — no file processed, no DB writes.",
@@ -2383,7 +2365,7 @@ Deno.serve(async (req: Request) => {
 
     // P1.3: only attempt to record a stage run when this request actually
     // carries a generation_id (worker-dispatched, lease-module calls) --
-    // out of scope otherwise, exactly like parse-pdf-docling's same check.
+    // out of scope otherwise, exactly like parse-document-azure's same check.
     if (generation_id) {
       stage = await withExtractionStage(supabaseAdmin, {
         orgId,
@@ -2410,11 +2392,11 @@ Deno.serve(async (req: Request) => {
     }
 
     if (!fileRecord.docling_raw) {
-      await stage?.fail("NO_DOCLING_OUTPUT", "No Docling output found. Run parse-pdf-docling first.", { outcome: "terminal_failure" });
+      await stage?.fail("NO_DOCLING_OUTPUT", "No parser output found. Run parse-document-azure first.", { outcome: "terminal_failure" });
       return jsonResponse(
         {
           error: true,
-          message: "No Docling output found. Run parse-pdf-docling first.",
+          message: "No parser output found. Run parse-document-azure first.",
           error_code: "NO_DOCLING_OUTPUT",
         },
         422,
@@ -2502,20 +2484,16 @@ Deno.serve(async (req: Request) => {
       }, 422);
     }
 
-    // When parse-pdf-docling stored an empty docling_raw because no backend was
+    // When parse-document-azure stored an empty docling_raw because no backend was
     // configured AND the file was too large for native extraction, skip the
     // Vision-fallback download that would re-OOM this function for the same reason.
     const extractionSkipped =
       (fileRecord.docling_raw as any)?._metadata?.extraction_skipped_reason ||
       (fileRecord.docling_raw as any)?.extraction_method === "none";
-    const hasLLM = !!(
-      Deno.env.get("ANTHROPIC_API_KEY") ||
-      ((Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
-        (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY")))
-    );
+    const hasLLM = !!Deno.env.get("OPENAI_API_KEY");
     if (extractionSkipped && !hasLLM) {
       console.warn(
-        `[normalize-pdf-output] file_id=${file_id} — parse-pdf-docling stored empty output ` +
+        `[normalize-pdf-output] file_id=${file_id} — parse-document-azure stored empty output ` +
         `and no LLM is configured. Transitioning to review_required with empty payload so the ` +
         `reviewer can fill fields manually.`,
       );
@@ -2524,7 +2502,7 @@ Deno.serve(async (req: Request) => {
     const fileSizeBytes = Number(fileRecord.file_size || 0);
     const fileSizeIsKnown = Number.isFinite(fileSizeBytes) && fileSizeBytes > 0;
 
-    // Load file bytes from Supabase Storage ONLY when Docling text is too
+    // Load file bytes from Supabase Storage ONLY when parser text is too
     // weak for the LLM extractor to work from — i.e. for scanned / image-only
     // PDFs. For digital PDFs with sufficient extracted text the file bytes are
     // never used and downloading them wastes 3–8 MB of Edge Function RAM,
@@ -2545,7 +2523,7 @@ Deno.serve(async (req: Request) => {
       Deno.env.get("EXTRACTION_PROVIDER") === "azure_document_intelligence" ||
       isAzureLayoutOutput(fileRecord.docling_raw as Record<string, unknown>);
     const fileTooLargeForInlineVision =
-      fileSizeIsKnown && fileSizeBytes > MAX_INLINE_VISION_BYTES;
+      fileSizeIsKnown && fileSizeBytes > MAX_INLINE_FILE_BYTES;
 
     console.log(
       `[normalize-pdf-output] STAGE docling_check file_id=${file_id} ` +
@@ -2577,7 +2555,7 @@ Deno.serve(async (req: Request) => {
     // Detect what was actually downloaded by inspecting the first bytes.
     // If the download silently returned an HTML error page (expired signed
     // URL, RLS deny rendered as HTML, etc.) we must NOT send that to
-    // Gemini Vision and pretend it's the lease PDF.
+    // a previous OCR path and pretend it's the lease PDF.
     const detectMagic = detectFileMagic;
 
     if (azureLayoutMode) {
@@ -2598,7 +2576,7 @@ Deno.serve(async (req: Request) => {
         `skipping inline Vision fallback to avoid Edge compute limits.`;
       console.warn(
         `[normalize-pdf-output] ${fileLoadError} ` +
-        `file_id=${file_id} max_inline_vision_mb=${(MAX_INLINE_VISION_BYTES / (1024 * 1024)).toFixed(1)}`,
+        `file_id=${file_id} max_inline_file_mb=${(MAX_INLINE_FILE_BYTES / (1024 * 1024)).toFixed(1)}`,
       );
     } else if (!doclingTextIsGood && fileRecord.file_url) {
       try {
@@ -2624,7 +2602,7 @@ Deno.serve(async (req: Request) => {
           const bytes = new Uint8Array(await fileBlob.arrayBuffer());
           fileBytesLength = bytes.length;
 
-          if (bytes.length > MAX_INLINE_VISION_BYTES) {
+          if (bytes.length > MAX_INLINE_FILE_BYTES) {
             fileLoadStatus = "skipped_large_file_after_download";
             fileLoadError =
               `Downloaded file is ${(bytes.length / (1024 * 1024)).toFixed(1)} MB; ` +
@@ -2637,7 +2615,7 @@ Deno.serve(async (req: Request) => {
 
             if (!detectedMagic || detectedMagic === "html_or_xml") {
               // Don't send a non-document to Vision. Mark load as failed and
-              // let extraction proceed with whatever Docling produced.
+              // let extraction proceed with whatever the parser produced.
               fileLoadStatus = "unexpected_content_type";
               fileLoadError = `Downloaded bytes do not look like a PDF/image (magic=${detectedMagic ?? "unknown"}, first 16 bytes hex=${Array.from(bytes.subarray(0, 16)).map((b) => b.toString(16).padStart(2, "0")).join("")
                 })`;
@@ -2709,22 +2687,23 @@ Deno.serve(async (req: Request) => {
       // Run the canonical extraction pipeline.
       // Rule → Table → LLM(missing only) → Merge → Validate → Calculate.
       const pipelineDocling = buildPipelineLayoutInput(fileRecord.docling_raw as Record<string, unknown> | null);
-      // Azure+Vertex Phase 4E (local implementation): single call through the
+      // Azure+OpenAI Phase 4E (local implementation): single call through the
       // business-extraction orchestrator replaces the direct provider
       // ternary. Returns the exact same ExtractionPipelineResult shape both
       // providers already produced -- buildReviewPayload/buildLeaseWorkflowAbstraction/
       // persistence below are unmodified and unaware this replaced a ternary.
-      const mockVertexScenario = resolveMockVertexScenario(req, body as Record<string, unknown>, businessExtractionProvider);
+      const mockOpenAIScenario = resolveMockOpenAIScenario(req, body as Record<string, unknown>, businessExtractionProvider);
       const result = await runBusinessExtraction({
         requestedProvider: businessExtractionProvider,
         moduleType: extractionModuleType,
         fileName,
+        document: pipelineDocling,
         docling: pipelineDocling,
         documentSubtype: fileRecord.document_subtype ?? null,
         ...(fileBase64 && !azureLayoutMode ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
         correlationId: file_id,
         canonicalLayoutSchemaVersion: (fileRecord.docling_raw as any)?.layout_contract_version ?? null,
-        ...(mockVertexScenario ? { mockVertexScenario } : {}),
+        ...(mockOpenAIScenario ? { mockOpenAIScenario } : {}),
       });
       stampBusinessExtractionPersistedAt(result, new Date().toISOString());
       console.log(`[normalize-pdf-output] STAGE pipeline_done file_id=${file_id} rows=${result.rows?.length ?? 0} method=${result.method} provider=${businessExtractionProvider}`);
@@ -2750,7 +2729,7 @@ Deno.serve(async (req: Request) => {
           file_load_error: fileLoadError,
           file_url_present: !!fileRecord.file_url,
           file_size_bytes: fileSizeIsKnown ? fileSizeBytes : null,
-          max_inline_vision_bytes: MAX_INLINE_VISION_BYTES,
+          max_inline_file_bytes: MAX_INLINE_FILE_BYTES,
           file_bytes_length: fileBytesLength,
           file_magic_detected: detectedMagic,
           file_name: fileRecord.file_name ?? null,
@@ -2918,7 +2897,7 @@ Deno.serve(async (req: Request) => {
         .filter((f: any) => f.status === "auto_populated" || f.status === "pending_enrichment").length;
       const minimalValueCount = (minimalPayload.records[0]?.standard_fields ?? [])
         .filter((f: any) => f.value != null && f.value !== "").length;
-      // Azure+Vertex Phase 4E (local implementation): CAS token-chaining.
+      // Azure+OpenAI Phase 4E (local implementation): CAS token-chaining.
       // The minimal persist above and the final persist below are BOTH in
       // this same invocation and both go through setStatus(), which
       // unconditionally sets updated_at -- so a CAS token captured once at
@@ -3212,7 +3191,7 @@ Deno.serve(async (req: Request) => {
       // the UI can stop showing the "enriching evidence" affordance.
       (uiReviewPayload as Record<string, unknown>).enrichment_status = "completed";
 
-      // Azure+Vertex Phase 4E (local implementation): conditional-write CAS
+      // Azure+OpenAI Phase 4E (local implementation): conditional-write CAS
       // guard, chained from the minimal persist's own updated_at (not a
       // request-start value - see the capture site above). Zero affected rows
       // is always treated as a real race. A durable result is reused only when
@@ -3399,7 +3378,7 @@ export const __test__ = {
   rejectMarkupValue,
   buildReviewField,
   resolveBusinessExtractionProvider,
-  resolveMockVertexScenario,
+  resolveMockOpenAIScenario,
   isLocalSupabaseUrl,
   localProviderMocksEnabled,
   externalProviderCallsDisabled,

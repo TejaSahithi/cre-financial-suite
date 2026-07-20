@@ -44,9 +44,9 @@ export interface StepResult {
   diagnostics?: Record<string, unknown>;
 }
 
-// ── Docling input types ──────────────────────────────────────────────────────
+// ── Provider-normalized Azure Document Intelligence input types ──────────────────────────────────────────────────────
 
-export interface DoclingTextBlock {
+export interface AzureDocumentTextBlock {
   block_index: number;
   type: string;    // "paragraph" | "heading" | "list_item" | etc.
   text: string;
@@ -55,14 +55,14 @@ export interface DoclingTextBlock {
   span?: { offset: number; length: number };
 }
 
-export interface DoclingTable {
+export interface AzureDocumentTable {
   table_index: number;
   headers: string[];
   rows: string[][];
   markdown?: string;
 }
 
-export interface DoclingField {
+export interface AzureDocumentField {
   key: string;
   value: string;
   confidence?: number;
@@ -70,25 +70,34 @@ export interface DoclingField {
   source_text?: string;
 }
 
-export interface DoclingPage {
+export interface AzureDocumentPage {
   page: number;
   text: string;
-  fields?: DoclingField[];
+  fields?: AzureDocumentField[];
 }
 
-export interface DoclingOutput {
+export interface AzureDocumentOutput {
   model_version?: string;
   page_count?: number;
-  pages?: DoclingPage[];
-  text_blocks: DoclingTextBlock[];
-  tables: DoclingTable[];
-  fields: DoclingField[];
+  pages?: AzureDocumentPage[];
+  text_blocks: AzureDocumentTextBlock[];
+  tables: AzureDocumentTable[];
+  fields: AzureDocumentField[];
   full_text?: string;
   extraction_method?: string;
   warnings?: string[];
   raw_response?: Record<string, unknown>;
 }
-
+/** @deprecated Compatibility alias for the former parser output shape. */
+export type DoclingTextBlock = AzureDocumentTextBlock;
+/** @deprecated Compatibility alias for the former parser output shape. */
+export type DoclingTable = AzureDocumentTable;
+/** @deprecated Compatibility alias for the former parser output shape. */
+export type DoclingField = AzureDocumentField;
+/** @deprecated Compatibility alias for the former parser output shape. */
+export type DoclingPage = AzureDocumentPage;
+/** @deprecated Compatibility alias for uploaded_files.docling_raw payloads. */
+export type DoclingOutput = AzureDocumentOutput;
 // ── Chunking types ───────────────────────────────────────────────────────────
 
 export interface TextChunk {
@@ -112,9 +121,11 @@ export type ModuleType =
   | "gl_account";
 
 export interface ExtractionInput {
+  document?: AzureDocumentOutput;
+  /** @deprecated Use document. Kept for uploaded_files.docling_raw compatibility. */
   docling?: DoclingOutput;
   rawText?: string;        // backward compat — converted to minimal DoclingOutput
-  fileBase64?: string;     // Base64 file contents for Gemini Vision fallback
+  fileBase64?: string;     // Base64 file contents for legacy compatibility paths
   fileMimeType?: string;   // MimeType for the Base64 file contents
   fileName: string;
   moduleType: ModuleType;

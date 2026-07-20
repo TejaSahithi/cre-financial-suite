@@ -12,7 +12,7 @@
  * place, and is called by the recorder module's own functions
  * (startExtractionRun/withExtractionStage/recordProviderInvocation/
  * storeArtifact), each of which no-ops when this returns false. Call sites
- * in parse-pdf-docling/normalize-pdf-output/lease-extraction-worker/the
+ * in parse-document-azure/normalize-pdf-output/lease-extraction-worker/the
  * provider transport wrappers call the recorder unconditionally; the gate
  * logic itself exists in exactly this one tested place.
  *

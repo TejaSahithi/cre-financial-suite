@@ -5,7 +5,7 @@
  * The sole call point for the extraction_stage_runs lifecycle RPCs
  * (start_extraction_stage_run / settle_extraction_stage_run, added in
  * 20260825000200_extraction_runs_recorder_rpcs.sql). Stage bodies
- * (parse-pdf-docling, normalize-pdf-output, handleEnrichMode) call
+ * (parse-document-azure, normalize-pdf-output, handleEnrichMode) call
  * withExtractionStage() once at the top of their existing try/catch
  * structure and call stage.complete()/stage.fail() at their EXISTING exit
  * points -- no restructuring into a callback shape.

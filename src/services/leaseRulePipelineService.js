@@ -445,7 +445,7 @@ export const leaseRulePipelineService = {
         // Canonical parser fallback for scanned PDFs/images. Reaching this
         // branch means existing parser payloads produced no usable text, so
         // re-enter ingest-file and let parser.ts choose native PDF text,
-        // Docling, or Gemini/Vertex Vision.
+        // Docling, or Azure Document Intelligence/OpenAI.
         if (!sourceText && isScannableUploadedFile(file)) {
           try {
             devLog("[PIPELINE TEXT FALLBACK] Reprocessing source file through ingest-file", { fileId });

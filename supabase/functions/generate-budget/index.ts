@@ -1,16 +1,17 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
-import { callVertexAIJSON } from "../_shared/vertex-ai.ts";
+import { callLLMText } from "../_shared/llm.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+
 
 /**
  * generate-budget Edge Function
  *
- * Uses Vertex AI (Gemini) to generate realistic CRE budget projections
+ * Uses OpenAI to generate realistic CRE budget projections
  * based on property details, active leases, uploaded historical budgets,
  * and budget parameters.
  *
- * Falls back to formula-based estimation when Vertex AI is unavailable.
+ * Falls back to formula-based estimation when OpenAI is unavailable.
  *
  * Request body: {
  *   scope_label: string,
@@ -306,12 +307,13 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const hasVertexAI = !!Deno.env.get("VERTEX_PROJECT_ID") && !!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY");
+    const deterministicBudget = estimateBudget(leases, budget_year, historical);
 
-    if (!hasVertexAI) {
-      console.warn("[generate-budget] Vertex AI not configured — using formula-based estimation");
+    const hasOpenAI = !!Deno.env.get("OPENAI_API_KEY");
+    if (!hasOpenAI) {
+      console.warn("[generate-budget] OPENAI_API_KEY not configured — using formula-based estimation with fallback insights");
       return new Response(
-        JSON.stringify(estimateBudget(leases, budget_year, historical)),
+        JSON.stringify(deterministicBudget),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
@@ -321,38 +323,33 @@ Deno.serve(async (req: Request) => {
       : "No active leases on file.";
     const historicalContext = historical ? buildHistoricalContext(historical) : "No historical files provided.";
 
-    const result = await callVertexAIJSON<BudgetResult>({
-      systemPrompt: `You are a commercial real estate financial analyst. Generate realistic budget projections based on provided property, lease, and historical budget data. When historical totals are available, anchor the projection to them and apply modest growth (2-4%) unless the data suggests otherwise. Use industry-standard CRE expense ratios and market benchmarks when historical data is insufficient. Return only valid JSON.`,
-      userPrompt: `Generate a commercial real estate budget for "${scope_label}", fiscal year ${budget_year}.
+    try {
+      const response = await callLLMText({
+        systemPrompt: "You are a commercial real estate financial analyst. Your task is to write a concise, professional 2-3 sentence narrative summarizing and explaining the generated budget numbers. Focus on prior-year growth drivers, CAM ratios, and active lease coverage.",
+        userPrompt: `Explain this generated commercial real estate budget for "${scope_label}", fiscal year ${budget_year}.
 Scope: ${scope}, Period: ${period}, Method: ${method}.
-${leaseContext}
 
+Deterministic Budget Numbers:
+- Total Revenue: $${deterministicBudget.total_revenue.toLocaleString()}
+- Total Expenses: $${deterministicBudget.total_expenses.toLocaleString()}
+- CAM Total: $${deterministicBudget.cam_total.toLocaleString()}
+- Net Operating Income (NOI): $${deterministicBudget.noi.toLocaleString()}
+
+Context:
+${leaseContext}
 ${historicalContext}
 
-Return a JSON object with these exact fields:
-{
-  "total_revenue": number (annual USD),
-  "total_expenses": number (annual USD),
-  "cam_total": number (annual CAM charges USD),
-  "noi": number (net operating income USD),
-  "ai_insights": "string with 2-3 sentences of insights. If historical data was used, explicitly reference it (e.g., growth vs prior year, category drivers)."
-}
+Write a professional narrative explanation (2-3 sentences max) to be returned in the "ai_insights" field.`,
+        temperature: 0.2,
+      });
 
-Use realistic CRE ratios: operating expenses typically 30-45% of revenue, CAM typically 8-15% of base rent. When historical totals are present, deviate only with a clear reason stated in ai_insights.`,
-      maxOutputTokens: 1024,
-      temperature: 0.2,
-    });
-
-    if (!result) {
-      console.warn("[generate-budget] Vertex AI returned null — using fallback");
-      return new Response(
-        JSON.stringify(estimateBudget(leases, budget_year, historical)),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
+      deterministicBudget.ai_insights = response.content.trim();
+    } catch (aiError) {
+      console.error("[generate-budget] AI narrative generation failed:", aiError?.message ?? aiError);
     }
 
     return new Response(
-      JSON.stringify(result),
+      JSON.stringify(deterministicBudget),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
 

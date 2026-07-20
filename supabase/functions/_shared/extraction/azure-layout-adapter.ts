@@ -96,7 +96,7 @@ export function normalizeAzureLayoutToDoclingOutput(
   const rawResponseStored = Deno.env.get("STORE_FULL_AZURE_RAW_RESPONSE")?.toLowerCase() === "true";
   const pageCount = normalizedPages.length || positiveNumber((analyzeResult as any)?.pageCount) || null;
 
-  // Every legacy parser (native PDF text, Gemini Vision, Docling) emits
+  // Every legacy parser (native PDF text, Azure Document Intelligence, Docling) emits
   // full_text as `[[PAGE n]]\n<page text>` joined blocks. Azure's raw content
   // has no such markers, so the LLM extraction prompt's page-anchoring rule
   // (source_page is only required when [[PAGE n]] markers are present) never

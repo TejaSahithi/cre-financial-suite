@@ -8,7 +8,7 @@
  *   - it does not call any extraction provider and does not re-run parsing
  *   - it does not mutate its inputs
  *   - it does not write ui_review_payload or normalized_output
- *   - it is not imported by parse-pdf-docling, normalize-pdf-output, or
+ *   - it is not imported by parse-document-azure, normalize-pdf-output, or
  *     LeaseReview.jsx — nothing in the live pipeline calls this yet
  *
  * Every v3-only section (claims, canonical_fields, clauses, ...) is left at

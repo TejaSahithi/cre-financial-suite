@@ -1971,7 +1971,7 @@ export default function LeaseReview() {
       console.log("[Re-extract] ingest-file response:", ingestData);
       if (ingestData?.error) throw new Error(ingestData?.message || "Re-extraction failed");
 
-      // When parse-pdf-docling or normalize-pdf-output fails, ingest-file calls
+      // When parse-document-azure or normalize-pdf-output fails, ingest-file calls
       // parkForManualReview and returns { error: false, manual_review: true,
       // stage: "extraction"|"normalization", error_details: "..." }.
       // Surface the failure reason immediately instead of silently applying an
@@ -2008,7 +2008,7 @@ export default function LeaseReview() {
       }
 
       // 2. Poll uploaded_files.status. With the expanded LEASE_GROUPS the
-      // pipeline now makes ~9 Gemini calls so allow up to 3 minutes total.
+      // pipeline now makes multiple OpenAI calls so allow up to 3 minutes total.
       setReextractStage("polling");
       const ACTIVE_STATUSES = new Set([
         "uploaded", "parsing", "parsed", "pdf_parsed", "validating", "validated", "storing", "stored", "computing",
@@ -2753,7 +2753,7 @@ export default function LeaseReview() {
           <div>
             <p className="font-semibold">No source file linked to this lease.</p>
             <p className="text-xs text-red-700">
-              Extraction (Docling + Gemini) can't run and the Re-extract Lease button is disabled until you point this lease at the uploaded PDF.
+              Extraction (Azure Document Intelligence + OpenAI) can't run and the Re-extract Lease button is disabled until you point this lease at the uploaded PDF.
               {autoLinkDebug ? (
                 <span className="block mt-1 italic">
                   Scanned {autoLinkDebug.query_count} uploads ({autoLinkDebug.lease_like} lease-shape), top score {autoLinkDebug.top_score} for "{autoLinkDebug.top_candidate || "-"}" against tenant "{autoLinkDebug.tenant || "-"}". Choose the exact upload that produced this lease; no source file is linked automatically.
@@ -2975,9 +2975,7 @@ export default function LeaseReview() {
                 The AI extraction backend is not configured or could not read this document, so no
                 fields were populated automatically. You can still <strong>fill in all fields manually</strong> below
                 and approve the abstract. To enable AI extraction, set{" "}
-                <code>VERTEX_PROJECT_ID</code> and <code>GOOGLE_SERVICE_ACCOUNT_KEY</code> in your
-                Supabase Edge Function secrets (for Vertex AI / Gemini Vision). Optionally set{" "}
-                <code>DOCLING_API_URL</code> for structured document parsing. After updating secrets,
+                <code>AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT</code>, <code>AZURE_DOCUMENT_INTELLIGENCE_KEY</code>, and <code>OPENAI_API_KEY</code> in your Supabase Edge Function secrets. After updating secrets,
                 redeploy the edge functions and click <strong>Re-extract Lease</strong> to retry.
               </p>
             </div>

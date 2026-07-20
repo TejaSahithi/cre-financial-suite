@@ -1,23 +1,16 @@
 // @ts-nocheck
 /**
- * Gemini Developer API-key transport wrapper — P1.4.
+ * OpenAI transport wrapper with legacy filename/function compatibility.
  *
- * Same shape/guarantees as transport/vertex.ts (still an active path, used
- * by llm-extractor.ts and pipeline-health-check). Reuses
- * mapVertexFailureToGeneric since callGeminiWithAPIKey shares vertex-ai.ts's
- * VertexAIOptions/VertexAIResponse/VertexProviderError/
- * VertexFailureClassification shapes exactly -- no separate taxonomy needed
- * for what is, from this wrapper's perspective, the same error contract
- * under a different transport/credential path.
+ * Older imports can still call this compatibility function, but the
+ * implementation delegates to _shared/llm.ts and records provider=openai.
  */
 
-import { callGeminiWithAPIKey } from "../../../vertex-ai.ts";
-import type { VertexAIOptions, VertexAIResponse } from "../../../vertex-ai.ts";
-import { VertexProviderError } from "../../../vertex-ai.ts";
+import { callLLMText, LLMProviderError } from "../../../llm.ts";
 import { isExtractionProvenanceEnabled } from "../feature-flag.ts";
 import { persistArtifact, ProvenancePersistenceError, sanitizeErrorMessage } from "../recorder.ts";
 import type { ProvenanceContext } from "../types.ts";
-import { mapVertexFailureToGeneric } from "./vertex.ts";
+import { mapOpenAIFailureToGeneric } from "./vertex.ts";
 
 async function settleInvocation(
   supabaseAdmin: any,
@@ -51,7 +44,7 @@ async function settleInvocation(
   });
   if (error) {
     console.error(
-      `[gemini-provenance] settle_provider_invocation failed for invocation ${invocationId}:`,
+      `[openai-provenance] settle_provider_invocation failed for invocation ${invocationId}:`,
       error.message,
     );
   }
@@ -60,9 +53,22 @@ async function settleInvocation(
 export async function callGeminiWithAPIKeyAndProvenance(
   supabaseAdmin: any,
   context: ProvenanceContext,
-  opts: VertexAIOptions,
-  callFn: (opts: VertexAIOptions) => Promise<VertexAIResponse> = callGeminiWithAPIKey,
-): Promise<VertexAIResponse> {
+  opts: any,
+  callFn: (opts: any) => Promise<any> = async (o: any) => {
+    const res = await callLLMText({
+      systemPrompt: o.systemPrompt ?? "",
+      userPrompt: o.userPrompt,
+      temperature: o.temperature,
+      maxOutputTokens: o.maxOutputTokens,
+    });
+    return {
+      content: res.content,
+      model: res.model,
+      inputTokens: res.promptTokens,
+      outputTokens: res.completionTokens,
+    };
+  },
+): Promise<any> {
   if (!isExtractionProvenanceEnabled() || !context.extractionRunId || !context.stageRunId) {
     return callFn(opts);
   }
@@ -71,7 +77,7 @@ export async function callGeminiWithAPIKeyAndProvenance(
   const invocationKey = [
     context.generationId,
     context.stageRunId,
-    "gemini_api_key",
+    "openai",
     context.operation,
     context.chunkIndex ?? "",
     providerAttempt,
@@ -83,7 +89,7 @@ export async function callGeminiWithAPIKeyAndProvenance(
       p_org_id: context.orgId,
       p_run_id: context.extractionRunId,
       p_stage_run_id: context.stageRunId,
-      p_provider: "gemini_api_key",
+      p_provider: "openai",
       p_operation: context.operation,
       p_invocation_key: invocationKey,
       p_provider_attempt: providerAttempt,
@@ -139,13 +145,13 @@ export async function callGeminiWithAPIKeyAndProvenance(
     });
     return result;
   } catch (err) {
-    const isProviderError = err instanceof VertexProviderError;
+    const isProviderError = err instanceof LLMProviderError;
     await settleInvocation(supabaseAdmin, invocationId, context.orgId, {
       status: "failed",
       success: false,
       latencyMs: Date.now() - startedAt,
       httpStatus: isProviderError ? err.httpStatus ?? null : null,
-      failureClassification: mapVertexFailureToGeneric(isProviderError ? err.classification : undefined),
+      failureClassification: mapOpenAIFailureToGeneric(isProviderError ? err.classification : undefined),
       providerErrorCode: isProviderError ? err.classification : null,
       errorMessage: err?.message ?? String(err),
     });

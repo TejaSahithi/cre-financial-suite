@@ -5,17 +5,14 @@ export type ExtractionProviderMode =
   | "shadow_compare";
 
 const SUPPORTED_PROVIDERS = new Set<ExtractionProviderMode>([
-  "legacy",
   "azure_document_intelligence",
-  "azure_with_legacy_fallback",
-  "shadow_compare",
 ]);
 
 export function normalizeExtractionProvider(value: unknown): ExtractionProviderMode {
   const normalized = String(value ?? "").trim().toLowerCase();
   return SUPPORTED_PROVIDERS.has(normalized as ExtractionProviderMode)
     ? normalized as ExtractionProviderMode
-    : "legacy";
+    : "azure_document_intelligence";
 }
 
 export function resolveExtractionProvider(providerOverride?: unknown): {
@@ -31,7 +28,7 @@ export function resolveExtractionProvider(providerOverride?: unknown): {
     return { mode: normalizeExtractionProvider(envProvider), source: "env" };
   }
 
-  return { mode: "legacy", source: "default" };
+  return { mode: "azure_document_intelligence", source: "default" };
 }
 
 export function shouldUseAzureLayout(mode: ExtractionProviderMode): boolean {
@@ -41,7 +38,7 @@ export function shouldUseAzureLayout(mode: ExtractionProviderMode): boolean {
 }
 
 export function shouldFallbackToLegacy(mode: ExtractionProviderMode): boolean {
-  return mode === "azure_with_legacy_fallback";
+  return false;
 }
 
 export function isAzureLayoutOutput(doclingRaw: Record<string, unknown> | null | undefined): boolean {

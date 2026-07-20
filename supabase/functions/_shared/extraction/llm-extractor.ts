@@ -1,16 +1,16 @@
 // @ts-nocheck
 /**
- * Extraction Pipeline — Step 3: LLM Fallback Extraction
+ * Extraction Pipeline - Step 3: LLM Fallback Extraction
  *
  * ONLY called for fields that Step 1 (rule) and Step 2 (table) could not extract.
- * Sends focused, field-wise prompts to Gemini with ONLY relevant text chunks.
+ * Sends focused, field-wise prompts to OpenAI with ONLY relevant text chunks.
  *
  * Key design rules:
- *   - NEVER pass entire document — only relevant chunks
+ *   - NEVER pass entire document - only relevant chunks
  *   - Extract fields in small groups (3-7 fields per call)
- *   - Strict JSON output schema — no freeform text
- *   - NO calculations — LLM only reads raw values
- *   - If not found → null (never guess)
+ *   - Strict JSON output schema - no freeform text
+ *   - NO calculations - LLM only reads raw values
+ *   - If not found -> null (never guess)
  *   - Temperature = 0 for deterministic extraction
  */
 
@@ -25,29 +25,29 @@ import type {
 } from "./types.ts";
 import { getSchema, getFieldGroups, type FieldDef, type FieldGroup } from "./schemas.ts";
 import { buildRelevantSnippet, chunkDocument } from "./chunker.ts";
-import { callVertexAI, callVertexAIWithFile, callVertexAIJSON, callVertexAIFileJSON, callGeminiWithAPIKey, callGeminiWithAPIKeyAndFile } from "../vertex-ai.ts";
+import { callLLMJSON } from "../llm.ts";
 
-// ── System prompt — short, strict, no room for hallucination ─────────────────
+// -- System prompt - short, strict, no room for hallucination -----------------
 
 const LLM_SYSTEM_PROMPT = `You are a CRE data extraction tool.
 You extract ONLY the specific fields requested from the provided text snippet, with SOURCE EVIDENCE.
 
 RULES:
-1. Output ONLY valid JSON — no explanation, no markdown, no preamble.
+1. Output ONLY valid JSON - no explanation, no markdown, no preamble.
 2. For EVERY field requested, return an object of this shape:
      { "value": <extracted value or null>,
        "source_text": "<the exact phrase from the document you used, verbatim, or null>",
        "source_page": <page number if known, else null>,
-       "confidence": <number 0.0–1.0> }
+       "confidence": <number 0.0-1.0> }
    The top-level JSON is { "<field_key>": { value, source_text, source_page, confidence }, ... }.
 3. If a field is NOT found, return { "value": null, "source_text": null, "source_page": null, "confidence": 0 }.
 4. NEVER guess, infer, or calculate values. Only extract what is explicitly stated.
-5. NEVER calculate totals, annual amounts, or derived values — EXCEPTION: notice periods.
+5. NEVER calculate totals, annual amounts, or derived values - EXCEPTION: notice periods.
    If a field expects MONTHS but the document states the period in DAYS, convert: months = Math.round(days / 30).
-   Examples: '180 days' notice → 6 months. '90 days' notice → 3 months. '30 days' notice → 1 month.
+   Examples: '180 days' notice -> 6 months. '90 days' notice -> 3 months. '30 days' notice -> 1 month.
    This conversion applies ONLY to notice-period fields (renewal_notice_months, termination_notice_months).
 
-6. ENTITY vs PERSON disambiguation — critical:
+6. ENTITY vs PERSON disambiguation - critical:
    tenant_name and landlord_name are LEGAL ENTITY names (LLC, Inc., Corp, Trust, individual property owner).
    Signatory / signer / "By:" lines belong to tenant_signatory_name or landlord_signatory_name, NEVER to *_name.
 
@@ -75,10 +75,10 @@ RULES:
    following the label, STOPPING at "By:" / "Signed:" / "Its:" / "Title:".
 
 7. Date conventions:
-   YYYY-MM-DD format. "January 1, 2024" → "2024-01-01".
+   YYYY-MM-DD format. "January 1, 2024" -> "2024-01-01".
    When the lease shows "commences on February 1, 2024 and ends January 31" with year elided,
    the end year is one year AFTER the commencement year unless the lease explicitly says otherwise.
-   So "commences February 1, 2024 and ends January 31" → end_date.value = "2025-01-31".
+   So "commences February 1, 2024 and ends January 31" -> end_date.value = "2025-01-31".
    If unsure of the year, leave value null with confidence 0.
 
 8. Monthly vs Annual rent:
@@ -91,19 +91,19 @@ RULES:
    NEVER use building total, complex total, gross leasable area for the whole project.
    Look for "Premises containing approximately X rentable square feet" or "Leased Premises: X SF".
 
-10. Monetary values: plain numbers only. "$12,500" → 12500.
-11. Percentages: plain number. "3%" → 3.
+10. Monetary values: plain numbers only. "$12,500" -> 12500.
+11. Percentages: plain number. "3%" -> 3.
 12. source_text MUST BE THE EXACT VERBATIM text from the document snippet. NEVER paraphrase your reasoning. NEVER explain how you derived the value.
     If you derived the value from a specific phrase (e.g. extracting Tenant from "Assignee: John"), the source_text MUST BE the exact phrase "Assignee: John".
     If the text is OCR-garbled, return the garbled text exactly as it appears.
     For lease review fields, source_text must be a COMPLETE, EXACT FULL SENTENCE from the lease document that contains the value and enough surrounding context for a reviewer to understand why the value was extracted.
     Do NOT return fragments like only "THIS LEASE AGREEMENT", only a party name, only a date, or text ending mid-sentence.
-    Prefer the SHORTEST verbatim clause that supports the value — a single numbered line item or sentence is ideal.
+    Prefer the SHORTEST verbatim clause that supports the value - a single numbered line item or sentence is ideal.
     Do NOT quote an entire paragraph, section header, or document preamble (e.g., "SUMMARY OF BASIC LEASE INFORMATION...").
     If the snippet contains [[PAGE n]] markers, source_page is mandatory and must match the page containing source_text.
     If you cannot provide an exact source_text for a found value, return value null.
 
-13. Numbered-summary documents are common — leases often start with a section like:
+13. Numbered-summary documents are common - leases often start with a section like:
         "1. Date: January 1, 2025
          2. Landlord: Acme Partners, LLC
          3. Address of Landlord: 123 Main St, Suite 100, Cityville, ST 12345
@@ -114,28 +114,28 @@ RULES:
          10. Permitted Use: General Office"
     The label after the number IS the field label. Extract from these lines even though they don't say
     "Landlord Name:" or "Property Address:" verbatim.
-    CRITICAL — numbered-list boundary rule: when extracting a value from a numbered line,
+    CRITICAL - numbered-list boundary rule: when extracting a value from a numbered line,
     STOP at the end of that line. The NUMBER that begins the NEXT line is NOT part of the
     current field's value. Examples:
-      "2. Landlord: Acme Partners, LLC\n3. Address..." → landlord_name = "Acme Partners, LLC"  NOT "Acme Partners, LLC 3"
-      "3. Address of Landlord: 123 Main St\n4. Tenant..." → landlord_address = "123 Main St"  NOT "4"
-    If the address appears only as a trailing number (e.g. you see only "4"), it is WRONG — return null.
+      "2. Landlord: Acme Partners, LLC\n3. Address..." -> landlord_name = "Acme Partners, LLC"  NOT "Acme Partners, LLC 3"
+      "3. Address of Landlord: 123 Main St\n4. Tenant..." -> landlord_address = "123 Main St"  NOT "4"
+    If the address appears only as a trailing number (e.g. you see only "4"), it is WRONG - return null.
     For tenant_contact_name / landlord_contact_name: the value MUST be a human first+last name.
     NEVER return a calendar month name (January, February, March, April, May, June, July,
-    August, September, October, November, December) — those are dates, not person names.
-      BAD:  tenant_contact_name = "January"  ← extracted from "January 9, 2024"
-      GOOD: tenant_contact_name = "Narendra Pydi"  ← actual name from the tenant line
+    August, September, October, November, December) - those are dates, not person names.
+      BAD:  tenant_contact_name = "January"  (extracted from "January 9, 2024")
+      GOOD: tenant_contact_name = "Narendra Pydi"  (actual name from the tenant line)
     For property_name: return ONLY the official trade/marketing name of the building (e.g.
     "Markets at Choto", "The Commons"). If no such name is stated, return null. NEVER return
     clause text, parking clauses, or any phrase that contains the word "Tenant".
 
 14. Multi-line labeled values: when an address spans several lines, join with commas.
-    "Address: 123 Main St / Suite #100 / Cityville, ST 12345" → "123 Main St, Suite #100, Cityville, ST 12345".
+    "Address: 123 Main St / Suite #100 / Cityville, ST 12345" -> "123 Main St, Suite #100, Cityville, ST 12345".
 
 15. Premises Address vs Landlord Address vs Tenant Mailing Address:
     property_address / premises_address = the address of the LEASED PREMISES (where the tenant operates).
     In single-tenant office leases this often equals "Address of Tenant" (suite #).
-    "Address of Landlord" is the landlord's mailing address — DO NOT use it as property_address.
+    "Address of Landlord" is the landlord's mailing address - DO NOT use it as property_address.
     The "Building:" or "Premises:" line is the most authoritative source for property_address.
 
 16. Universal document handling:
@@ -150,11 +150,11 @@ RULES:
     ONLY when explicitly stated. Do NOT infer CAM, taxes, insurance, utilities, or other expense recovery
     rules from "assumes all obligations" or "all other terms remain unchanged."
 
-18. Short-value fields — do NOT return full clause text:
+18. Short-value fields - do NOT return full clause text:
     permitted_use: Return ONLY the core activity (1-8 words). "restaurant", "IT work", "retail clothing sales".
        NOT the entire use clause paragraph. If the text describes restrictions ("shall not", "without prior written consent"),
-       that is a USE RESTRICTION clause, NOT the permitted use — return null.
-    renewal_options: Return a brief format like "2 × 5-year options" or "1 option for 3 years". NOT the full clause.
+       that is a USE RESTRICTION clause, NOT the permitted use - return null.
+    renewal_options: Return a brief format like "2 - 5-year options" or "1 option for 3 years". NOT the full clause.
     assignment_provisions: Return 1-2 sentence summary. "Requires prior written landlord consent." NOT the full clause.
     property_name: Return the marketing name of the shopping center/building (e.g. "Markets at Choto"). NOT clause text, addresses, or party names.
 
@@ -163,30 +163,30 @@ RULES:
     If the document states "$24.00 per SF" AND also states the total (e.g. "$68,352"), return the TOTAL (68352).
     If ONLY the per-SF rate is given with no total calculated, return null for ti_allowance.
 
-20. Person name fields — CRITICAL:
+20. Person name fields - CRITICAL:
     tenant_contact_name and tenant_signatory_name must be a human name ONLY (e.g. "John Smith").
     NEVER return: clause text, verb phrases ("leases and accepts..."), party descriptions, or partial sentences.
     If you cannot find a clear human name in a signature block, return null.
-    landlord_contact_name and landlord_signatory_name — same rule.
+    landlord_contact_name and landlord_signatory_name - same rule.
 
-21. Numeric fields — return plain numbers, never sentence fragments:
+21. Numeric fields - return plain numbers, never sentence fragments:
     admin_fee_pct: Return only the number (e.g. 5 for "five percent (5%)"). NOT the full sentence.
     cam_cap_pct: Return only the cap percentage number. NOT the full sentence.
     late_fee_percent: Return only the percentage number.
     escalation_rate: Return only the percentage number.
     gross_up_threshold: Return only the percentage number (e.g. 95 for "grossed up to 95%").
 
-22. security_deposit — CRITICAL:
+22. security_deposit - CRITICAL:
     Return the TOTAL final dollar amount as a plain number.
     If a Security Deposit Addendum adds component amounts (e.g. "3rd month rent $6,004 + 86th month rent $6,904.60 = $12,908.60"), return the TOTAL (12908.60).
     NEVER return an intermediate component. If no deposit is mentioned, return null.
 
-23. Dates — return YYYY-MM-DD only:
+23. Dates - return YYYY-MM-DD only:
     commencement_date: The lease TERM start date. ONLY return a specific calendar date. If formulaic ("upon delivery", "upon C of O", "one day after X"), return null.
     expiration_date: The lease TERM end date. Only return a specific calendar date. If formulaic, return null.
-    For date source_text: quote the exact labeled line (e.g. "Commencement Date: March 1, 2024") — 1 sentence max.`;
+    For date source_text: quote the exact labeled line (e.g. "Commencement Date: March 1, 2024") - 1 sentence max.`;
 
-// ── Prompt builder for a field group ─────────────────────────────────────────
+// -- Prompt builder for a field group -----------------------------------------
 
 function buildFieldGroupPrompt(
   group: FieldGroup,
@@ -210,18 +210,17 @@ function buildFieldGroupPrompt(
     .filter(Boolean)
     .join("\n");
 
-  // When file bytes are attached (isFileMode), the text snippet is often only
-  // page 1 of a multi-page PDF. Explicitly direct the model to use the full
-  // attached document so values on pages 2+ are not missed.
+  // OpenAI extraction in this pipeline consumes Azure-extracted text snippets,
+  // not attached binary files. Keep prompts grounded in the text provided.
   const snippetLabel = isFileMode
-    ? "TEXT EXCERPT — page 1 only (values may be on later pages; use the ATTACHED PDF)"
+    ? "TEXT EXCERPT FROM AZURE DOCUMENT INTELLIGENCE"
     : "TEXT SNIPPET (May contain OCR fragments/errors)";
   const importantNote = isFileMode
-    ? "IMPORTANT: The COMPLETE lease document is attached as a PDF. Extract values from the ATTACHED FILE — do not limit yourself to the text excerpt above. Values such as rent schedules, security deposits, CAM caps, gross-up provisions, and escalation rates are often on pages 2 or later and are only in the attached file. Use the text excerpt as a supplement, not the sole source."
+    ? "IMPORTANT: Use the Azure-extracted text provided below. Values such as rent schedules, security deposits, CAM caps, gross-up provisions, and escalation rates may appear later in the snippet; do not invent values that are not supported by the text."
     : "IMPORTANT: The text snippet may come from OCR and contain fragments or misread characters. Use context to infer the correct values where possible.";
   const noTextFallback = isFileMode
-    ? "(No extracted text — use the ATTACHED PDF document exclusively)"
-    : "[No text provided, refer to the attached visual document]";
+    ? "[No Azure-extracted text provided]"
+    : "[No text provided]";
 
   return `Extract these ${moduleType} fields from the text below.
 Context: ${group.hint}
@@ -232,9 +231,9 @@ ${fieldDescriptions}
 }
 
 ${snippetLabel}:
-───────────────────────────
+---------------------------
 ${textSnippet || noTextFallback}
-───────────────────────────
+---------------------------
 
 ${importantNote}
 For each field, return a JSON object with this EXACT shape:
@@ -249,7 +248,7 @@ Return ONLY a JSON object with the field keys above mapped to these evidence obj
 }
 
 
-// ── Prompt builder for multi-row extraction from table text ───────────────────
+// -- Prompt builder for multi-row extraction from table text -------------------
 
 function buildMultiRowPrompt(
   fields: string[],
@@ -281,9 +280,9 @@ Return a JSON ARRAY of objects. Each distinct record = one object.
 If there is only one record, still return an array with one object.
 
 TEXT (May contain OCR fragments/errors):
-───────────────────────────
+---------------------------
 ${textSnippet}
-───────────────────────────
+---------------------------
 
 IMPORTANT: The text snippet may come from OCR and contain fragments or misread characters. Carefully reconstruct the records from the fragments.
 
@@ -299,7 +298,7 @@ Return ONLY the JSON array of objects. Nothing else.`;
 }
 
 
-// ── Parse LLM response safely ────────────────────────────────────────────────
+// -- Parse LLM response safely ------------------------------------------------
 
 /**
  * Per-field evidence shape returned by the LLM under the new prompt:
@@ -358,27 +357,20 @@ function parseLLMArrayResponse(raw: unknown, expectedFields: string[]): Array<Re
     });
 }
 
-// ── Diagnostic accumulator ────────────────────────────────────────────────────
+// -- Diagnostic accumulator ----------------------------------------------------
 // Carried through the entire LLM extraction step and returned in
 // StepResult.diagnostics so the pipeline can forward them into
 // extractionDebug without reading edge-function logs.
 
-function makeDiag(input: ExtractionInput, missingVars: string[]) {
+function makeDiag(input: ExtractionInput, _missingVars: string[]) {
   return {
-    vertex_config_present:
-      (!!Deno.env.get("VERTEX_PROJECT_ID") || !!Deno.env.get("GOOGLE_PROJECT_ID")) &&
-      (!!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || (!!Deno.env.get("GOOGLE_CLIENT_EMAIL") && !!Deno.env.get("GOOGLE_PRIVATE_KEY"))),
-    vertex_config_missing_vars: missingVars,
-    gemini_api_key_present: !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY")),
+    openai_config_present: !!Deno.env.get("OPENAI_API_KEY"),
+    openai_config_missing_vars: Deno.env.get("OPENAI_API_KEY") ? [] : ["OPENAI_API_KEY"],
     // Presence of each relevant env var (values never logged).
-    vertex_env_keys_present: {
-      VERTEX_PROJECT_ID: !!Deno.env.get("VERTEX_PROJECT_ID"),
-      GOOGLE_PROJECT_ID: !!Deno.env.get("GOOGLE_PROJECT_ID"),
-      VERTEX_LOCATION: !!Deno.env.get("VERTEX_LOCATION"),
-      GOOGLE_SERVICE_ACCOUNT_KEY: !!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY"),
-      GOOGLE_CLIENT_EMAIL: !!Deno.env.get("GOOGLE_CLIENT_EMAIL"),
-      GOOGLE_PRIVATE_KEY: !!Deno.env.get("GOOGLE_PRIVATE_KEY"),
-      GEMINI_API_KEY: !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY")),
+    openai_env_keys_present: {
+      OPENAI_API_KEY: !!Deno.env.get("OPENAI_API_KEY"),
+      OPENAI_MODEL: !!Deno.env.get("OPENAI_MODEL"),
+      OPENAI_MAX_OUTPUT_TOKENS: !!Deno.env.get("OPENAI_MAX_OUTPUT_TOKENS"),
     },
     model_name: null as string | null,
     llm_call_attempted: false,
@@ -432,354 +424,68 @@ function recordLlmFieldTrace(
   }
 }
 
-// ── Diagnostic-aware Vertex call + JSON parse ─────────────────────────────────
-// Replaces direct callVertexAIJSON / callVertexAIFileJSON inside the extraction
-// loops so we can capture: raw response chars, parse success/fail, repair
-// applied, raw preview on failure — all without touching vertex-ai.ts API.
-
-function repairTruncatedJson(text: string): string | null {
-  const lastClose = Math.max(text.lastIndexOf("}"), text.lastIndexOf("]"));
-  if (lastClose < 0) return null;
-  return text.slice(0, lastClose + 1);
-}
-
-async function callVertexAndParse<T = unknown>(
-  input: ExtractionInput,
+// OpenAI call + JSON parse.
+async function callOpenAIAndParse<T = unknown>(
+  _input: ExtractionInput,
   opts: { systemPrompt: string; userPrompt: string; maxOutputTokens?: number; temperature?: number },
   diag: ReturnType<typeof makeDiag>,
 ): Promise<T | null> {
-  const isFileMode = Boolean(input.fileBase64);
   diag.llm_call_attempted = true;
-  if (isFileMode) {
-    diag.llm_file_mode_attempted = true;
-  } else {
-    diag.llm_text_mode_attempted = true;
-    diag.text_chars_sent_to_llm += opts.userPrompt.length;
-  }
-
-  let rawContent: string;
-  let modelUsed: string;
+  diag.llm_text_mode_attempted = true;
+  diag.text_chars_sent_to_llm += opts.userPrompt.length;
 
   try {
-    if (isFileMode) {
-      const resp = await callVertexAIWithFile({
-        ...opts,
-        fileBase64: input.fileBase64,
-        fileMimeType: input.fileMimeType || "application/pdf",
-      });
-      rawContent = resp.content;
-      modelUsed = resp.model;
-    } else {
-      const resp = await callVertexAI(opts);
-      rawContent = resp.content;
-      modelUsed = resp.model;
+    const response = await callLLMJSON({
+      systemPrompt: opts.systemPrompt,
+      userPrompt: opts.userPrompt,
+      temperature: opts.temperature,
+      maxOutputTokens: opts.maxOutputTokens,
+    });
+
+    if (!diag.model_name) diag.model_name = response.model;
+    diag.llm_raw_response_chars += JSON.stringify(response.data ?? "").length;
+
+    if (response.finishReason === "length") {
+      console.warn(
+        `[llm-extractor] OpenAI finish_reason=length; output may be truncated. ` +
+        `model=${response.model}, completion_tokens=${response.completionTokens}`,
+      );
     }
+
+    if (response.data == null) {
+      diag.llm_json_parse_success = false;
+      diag.llm_empty_response_reason = "empty_content_from_openai";
+      return null;
+    }
+
+    diag.llm_json_parse_success = true;
+    return response.data as T;
   } catch (callErr) {
     const msg = String(callErr?.message ?? callErr);
     diag.call_errors.push(msg);
-    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? `vertex_call_error: ${msg.slice(0, 120)}`;
+    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? `openai_call_error: ${msg.slice(0, 120)}`;
     throw callErr;
-  }
-
-  if (!diag.model_name) diag.model_name = modelUsed;
-
-  // Strip code fences the model sometimes adds despite responseMimeType=json
-  let text = rawContent.trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```\s*$/, "")
-    .trim();
-
-  diag.llm_raw_response_chars += text.length;
-
-  if (!text) {
-    diag.llm_json_parse_success = false;
-    diag.llm_empty_response_reason = diag.llm_empty_response_reason
-      ?? `empty_content_from_model_${modelUsed}`;
-    console.warn(`[llm-extractor] ${isFileMode ? "file" : "text"} mode: empty response from ${modelUsed}`);
-    return null;
-  }
-
-  // Attempt JSON parse
-  try {
-    const parsed = JSON.parse(text) as T;
-    diag.llm_json_parse_success = true;
-    return parsed;
-  } catch (parseErr) {
-    // Attempt truncation repair
-    const repaired = repairTruncatedJson(text);
-    if (repaired) {
-      try {
-        const parsed = JSON.parse(repaired) as T;
-        diag.llm_json_parse_success = true;
-        diag.llm_json_repair_applied = true;
-        console.warn(
-          `[llm-extractor] Repaired truncated JSON (orig ${text.length} chars, model=${modelUsed})`,
-        );
-        return parsed;
-      } catch {
-        // fall through to full failure
-      }
-    }
-    const preview = text.slice(0, 300);
-    diag.llm_json_parse_success = false;
-    diag.llm_json_parse_error = String(parseErr?.message ?? parseErr);
-    diag.llm_raw_response_preview = preview;
-    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? "json_parse_failed";
-    console.error(
-      `[llm-extractor] JSON parse failed (model=${modelUsed}, ${text.length} chars). ` +
-      `Error: ${parseErr?.message}. Preview: ${preview}`,
-    );
-    return null;
   }
 }
 
-// ── Claude (Anthropic) API call + JSON parse ──────────────────────────────────
-
-async function callClaudeAndParse<T = unknown>(
-  input: ExtractionInput,
-  opts: { systemPrompt: string; userPrompt: string; maxOutputTokens?: number; temperature?: number },
-  diag: ReturnType<typeof makeDiag>,
-): Promise<T | null> {
-  const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
-
-  const isFileMode = Boolean(input.fileBase64);
-  diag.llm_call_attempted = true;
-  if (isFileMode) {
-    diag.llm_file_mode_attempted = true;
-  } else {
-    diag.llm_text_mode_attempted = true;
-    diag.text_chars_sent_to_llm += opts.userPrompt.length;
-  }
-
-  const model = "claude-sonnet-4-6";
-
-  // Build message content — text mode or PDF file mode
-  let messageContent: unknown;
-  if (isFileMode && input.fileBase64) {
-    const mimeType = (input.fileMimeType || "application/pdf") as string;
-    if (mimeType.startsWith("application/pdf") || mimeType.startsWith("image/")) {
-      messageContent = [
-        {
-          type: mimeType.startsWith("image/") ? "image" : "document",
-          source: { type: "base64", media_type: mimeType, data: input.fileBase64 },
-        },
-        { type: "text", text: opts.userPrompt },
-      ];
-    } else {
-      // Unsupported file type in file mode — fall back to text-only
-      messageContent = opts.userPrompt;
-    }
-  } else {
-    messageContent = opts.userPrompt;
-  }
-
-  let rawContent: string;
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: opts.maxOutputTokens ?? 2048,
-        temperature: opts.temperature ?? 0,
-        system: opts.systemPrompt,
-        messages: [{ role: "user", content: messageContent }],
-      }),
-      signal: AbortSignal.timeout(45000),
-    });
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "unknown");
-      throw new Error(`Claude API ${res.status}: ${errText.slice(0, 200)}`);
-    }
-
-    const data = await res.json();
-    rawContent = data?.content?.[0]?.text ?? "";
-  } catch (callErr) {
-    const msg = String(callErr?.message ?? callErr);
-    diag.call_errors.push(`claude: ${msg}`);
-    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? `claude_call_error: ${msg.slice(0, 120)}`;
-    throw callErr;
-  }
-
-  if (!diag.model_name) diag.model_name = model;
-
-  let text = rawContent.trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```\s*$/, "")
-    .trim();
-
-  diag.llm_raw_response_chars += text.length;
-
-  if (!text) {
-    diag.llm_json_parse_success = false;
-    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? `empty_content_from_claude_${model}`;
-    console.warn(`[llm-extractor] Claude ${isFileMode ? "file" : "text"} mode: empty response`);
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(text) as T;
-    diag.llm_json_parse_success = true;
-    return parsed;
-  } catch (parseErr) {
-    const repaired = repairTruncatedJson(text);
-    if (repaired) {
-      try {
-        const parsed = JSON.parse(repaired) as T;
-        diag.llm_json_parse_success = true;
-        diag.llm_json_repair_applied = true;
-        console.warn(`[llm-extractor] Claude: repaired truncated JSON (orig ${text.length} chars)`);
-        return parsed;
-      } catch { /* fall through */ }
-    }
-    const preview = text.slice(0, 300);
-    diag.llm_json_parse_success = false;
-    diag.llm_json_parse_error = String(parseErr?.message ?? parseErr);
-    diag.llm_raw_response_preview = preview;
-    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? "json_parse_failed";
-    console.error(`[llm-extractor] Claude JSON parse failed (${text.length} chars). Error: ${parseErr?.message}. Preview: ${preview}`);
-    return null;
-  }
-}
-
-// ── Gemini Developer API (GEMINI_API_KEY) call + JSON parse ──────────────────
-
-async function callGeminiAndParse<T = unknown>(
-  input: ExtractionInput,
-  opts: { systemPrompt: string; userPrompt: string; maxOutputTokens?: number; temperature?: number },
-  diag: ReturnType<typeof makeDiag>,
-): Promise<T | null> {
-  const isFileMode = Boolean(input.fileBase64);
-  diag.llm_call_attempted = true;
-  if (isFileMode) {
-    diag.llm_file_mode_attempted = true;
-  } else {
-    diag.llm_text_mode_attempted = true;
-    diag.text_chars_sent_to_llm += opts.userPrompt.length;
-  }
-
-  let rawContent: string;
-  let modelUsed: string;
-
-  try {
-    if (isFileMode && input.fileBase64) {
-      const resp = await callGeminiWithAPIKeyAndFile({
-        ...opts,
-        fileBase64: input.fileBase64,
-        fileMimeType: input.fileMimeType || "application/pdf",
-      });
-      rawContent = resp.content;
-      modelUsed = resp.model;
-    } else {
-      const resp = await callGeminiWithAPIKey(opts);
-      rawContent = resp.content;
-      modelUsed = resp.model;
-    }
-  } catch (callErr) {
-    const msg = String(callErr?.message ?? callErr);
-    diag.call_errors.push(`gemini: ${msg}`);
-    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? `gemini_call_error: ${msg.slice(0, 120)}`;
-    throw callErr;
-  }
-
-  if (!diag.model_name) diag.model_name = modelUsed;
-
-  let text = rawContent.trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```\s*$/, "")
-    .trim();
-
-  diag.llm_raw_response_chars += text.length;
-
-  if (!text) {
-    diag.llm_json_parse_success = false;
-    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? `empty_content_from_gemini_${modelUsed}`;
-    console.warn(`[llm-extractor] Gemini ${isFileMode ? "file" : "text"} mode: empty response`);
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(text) as T;
-    diag.llm_json_parse_success = true;
-    return parsed;
-  } catch (parseErr) {
-    const repaired = repairTruncatedJson(text);
-    if (repaired) {
-      try {
-        const parsed = JSON.parse(repaired) as T;
-        diag.llm_json_parse_success = true;
-        diag.llm_json_repair_applied = true;
-        console.warn(`[llm-extractor] Gemini: repaired truncated JSON (orig ${text.length} chars)`);
-        return parsed;
-      } catch { /* fall through */ }
-    }
-    const preview = text.slice(0, 300);
-    diag.llm_json_parse_success = false;
-    diag.llm_json_parse_error = String(parseErr?.message ?? parseErr);
-    diag.llm_raw_response_preview = preview;
-    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? "json_parse_failed";
-    console.error(`[llm-extractor] Gemini JSON parse failed (${text.length} chars). Error: ${parseErr?.message}. Preview: ${preview}`);
-    return null;
-  }
-}
-
-// ── Unified LLM call: Vertex AI → Gemini → Claude ────────────────────────────
+// Unified LLM call - OpenAI only.
 
 async function callLLMAndParse<T = unknown>(
   input: ExtractionInput,
   opts: { systemPrompt: string; userPrompt: string; maxOutputTokens?: number; temperature?: number },
   diag: ReturnType<typeof makeDiag>,
-  useVertex: boolean,
-  useClaude: boolean,
-  useGemini = false,
 ): Promise<T | null> {
-  if (useVertex) {
-    try {
-      return await callVertexAndParse<T>(input, opts, diag);
-    } catch (vertexErr) {
-      const warnMsg = String(vertexErr?.message ?? vertexErr).slice(0, 80);
-      if (useGemini) {
-        console.warn(`[llm-extractor] Vertex call failed (${warnMsg}), falling back to Gemini API key`);
-        try {
-          return await callGeminiAndParse<T>(input, opts, diag);
-        } catch (geminiErr) {
-          if (useClaude) {
-            console.warn(`[llm-extractor] Gemini call also failed (${String(geminiErr?.message ?? geminiErr).slice(0, 80)}), falling back to Claude`);
-            return await callClaudeAndParse<T>(input, opts, diag);
-          }
-          throw geminiErr;
-        }
-      }
-      if (useClaude) {
-        console.warn(`[llm-extractor] Vertex call failed (${warnMsg}), falling back to Claude`);
-        return await callClaudeAndParse<T>(input, opts, diag);
-      }
-      throw vertexErr;
-    }
-  }
-  if (useGemini) {
-    return await callGeminiAndParse<T>(input, opts, diag);
-  }
-  if (useClaude) {
-    return await callClaudeAndParse<T>(input, opts, diag);
-  }
-  return null;
+  return callOpenAIAndParse<T>(input, opts, diag);
 }
 
-// ── Main: LLM field-wise extraction ──────────────────────────────────────────
+// -- Main: LLM field-wise extraction ------------------------------------------
 
 /**
  * Step 3 of the extraction pipeline.
  *
  * Only extracts fields that are MISSING from previous steps.
  * Uses targeted prompts with relevant text snippets.
- * Supports Vertex AI (Gemini) and Claude (Anthropic) — whichever is configured.
+ * Uses OpenAI for targeted field extraction.
  * Returns StepResult.diagnostics with full LLM call diagnostics so the
  * pipeline can surface them in extractionDebug.
  */
@@ -796,40 +502,21 @@ export async function extractWithLLM(
   const warnings: string[] = [];
   const { maxChunks = 6, temperature = 0 } = options;
 
-  // Collect which Vertex config vars are missing.
-  const missingVars: string[] = [];
-  if (!Deno.env.get("VERTEX_PROJECT_ID") && !Deno.env.get("GOOGLE_PROJECT_ID")) {
-    missingVars.push("VERTEX_PROJECT_ID (or GOOGLE_PROJECT_ID)");
-  }
-  if (!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") && !(Deno.env.get("GOOGLE_CLIENT_EMAIL") && Deno.env.get("GOOGLE_PRIVATE_KEY"))) {
-    missingVars.push("GOOGLE_SERVICE_ACCOUNT_KEY (or GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY)");
-  }
+  const hasOpenAI = !!Deno.env.get("OPENAI_API_KEY");
+  const diag = makeDiag(input, []);
 
-  const hasVertexAI = missingVars.length === 0;
-  const hasClaudeAI = !!Deno.env.get("ANTHROPIC_API_KEY");
-  const hasGeminiAI = !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY"));
-  const diag = makeDiag(input, missingVars);
-
-  if (!hasVertexAI && !hasClaudeAI && !hasGeminiAI) {
-    const msg =
-      `No LLM configured — Vertex AI missing vars: [${missingVars.join(", ")}]` +
-      (hasGeminiAI ? "" : ", and GEMINI_API_KEY not set") +
-      `. LLM extraction skipped. Fields requiring AI: [${missingFields.join(", ")}].`;
+  if (!hasOpenAI) {
+    const msg = "OPENAI_API_KEY is not set. LLM extraction skipped. " +
+      `Fields requiring AI: [${missingFields.join(", ")}].`;
     console.warn(`[llm-extractor] ${msg}`);
     warnings.push(msg);
     diag.llm_empty_response_reason = "no_llm_configured";
     return { records: [], warnings, diagnostics: diag };
   }
 
-  if (!hasVertexAI && hasGeminiAI && !hasClaudeAI) {
-    console.log(`[llm-extractor] Vertex AI not configured — using Gemini API key for extraction`);
-  } else if (!hasVertexAI && hasClaudeAI) {
-    console.log(`[llm-extractor] Vertex AI not configured — using Claude (Anthropic) for extraction`);
-  }
-
   if (missingFields.length === 0) {
     diag.llm_empty_response_reason = "no_missing_fields";
-    return { records: [], warnings: ["No missing fields — LLM extraction skipped"], diagnostics: diag };
+    return { records: [], warnings: ["No missing fields - LLM extraction skipped"], diagnostics: diag };
   }
 
   // Filter groups to only include groups with missing fields
@@ -847,24 +534,22 @@ export async function extractWithLLM(
   diag.llm_requested_fields = [...new Set(relevantGroups.flatMap((group) => group.fields))];
 
   // Determine extraction strategy:
-  // - If we have existing multi-row records from tables → fill in missing fields per-group
-  // - If no existing records → try multi-row extraction from chunks
+  // - If we have existing multi-row records from tables, fill in missing fields per-group
+  // - If no existing records, try multi-row extraction from chunks
   const isMultiRow = existingRecords.length > 1;
 
   if (isMultiRow) {
     return await fillMissingFieldsForRecords(
       input, docling, relevantGroups, schema, moduleType, existingRecords, temperature, warnings, diag,
-      hasVertexAI, hasClaudeAI, hasGeminiAI,
     );
   }
 
   return await extractFieldGroups(
     input, docling, relevantGroups, schema, moduleType, missingFields, maxChunks, temperature, warnings, diag,
-    hasVertexAI, hasClaudeAI, hasGeminiAI,
   );
 }
 
-// ── Strategy A: Fill missing fields for existing multi-row records ────────────
+// -- Strategy A: Fill missing fields for existing multi-row records ------------
 
 async function fillMissingFieldsForRecords(
   input: ExtractionInput,
@@ -876,9 +561,6 @@ async function fillMissingFieldsForRecords(
   temperature: number,
   warnings: string[],
   diag: ReturnType<typeof makeDiag>,
-  useVertex = true,
-  useClaude = false,
-  useGemini = false,
 ): Promise<StepResult> {
   const records: ExtractedRecord[] = [];
 
@@ -903,9 +585,6 @@ async function fillMissingFieldsForRecords(
         input,
         { systemPrompt: LLM_SYSTEM_PROMPT, userPrompt: prompt, maxOutputTokens: 4096, temperature },
         diag,
-        useVertex,
-        useClaude,
-        useGemini,
       );
 
       if (result == null) {
@@ -963,7 +642,7 @@ async function fillMissingFieldsForRecords(
   return { records, warnings, diagnostics: diag };
 }
 
-// ── Bounded concurrency helper ────────────────────────────────────────────────
+// -- Bounded concurrency helper ------------------------------------------------
 // Runs `worker` for every item in `items`, keeping at most `limit` workers
 // active simultaneously.  Output slots are pre-allocated so results come back
 // in the original item order regardless of completion order.
@@ -999,7 +678,7 @@ async function runWithConcurrency<T, R>(
   return results;
 }
 
-// ── Concurrency ceiling ───────────────────────────────────────────────────────
+// -- Concurrency ceiling -------------------------------------------------------
 // Hard cap prevents runaway parallelism even if the env var is set higher.
 // Raise the cap here (in code) if you ever have reason to exceed 3.
 const MAX_ALLOWED_CONCURRENCY = 3;
@@ -1014,7 +693,7 @@ function resolveConcurrencyLimit(): number {
   return Math.min(parsed, MAX_ALLOWED_CONCURRENCY);
 }
 
-// ── Strategy B: Extract field groups for single-record documents ──────────────
+// -- Strategy B: Extract field groups for single-record documents --------------
 
 async function extractFieldGroups(
   input: ExtractionInput,
@@ -1027,9 +706,6 @@ async function extractFieldGroups(
   temperature: number,
   warnings: string[],
   diag: ReturnType<typeof makeDiag>,
-  useVertex = true,
-  useClaude = false,
-  useGemini = false,
 ): Promise<StepResult> {
   const concurrencyLimit = resolveConcurrencyLimit();
   const llmStartMs = Date.now();
@@ -1072,10 +748,7 @@ async function extractFieldGroups(
           input,
           { systemPrompt: LLM_SYSTEM_PROMPT, userPrompt: prompt, maxOutputTokens: 4096, temperature },
           diag,
-          useVertex,
-          useClaude,
-          useGemini,
-        );
+      );
 
         const groupMs = Date.now() - groupStartMs;
         console.log(`[llm-extractor] group "${group.name}" done in ${groupMs}ms`);
@@ -1126,11 +799,11 @@ async function extractFieldGroups(
       } catch (err) {
         const groupMs = Date.now() - groupStartMs;
         const errMsg = String(err?.message ?? err);
-        // Detect Vertex AI quota exhaustion — do not retry, just tag and continue.
+        // Detect OpenAI quota/rate limiting; do not retry, just tag and continue.
         const isQuota =
           errMsg.includes("429") ||
           /quota|rate.?limit|resource.?exhausted/i.test(errMsg);
-        const failTag = isQuota ? "failed_vertex_quota" : undefined;
+        const failTag = isQuota ? "failed_openai_rate_limit" : undefined;
         console.warn(
           `[llm-extractor] group "${group.name}" ${isQuota ? "quota-exceeded" : "failed"} ` +
           `after ${groupMs}ms: ${errMsg.slice(0, 120)}`,
@@ -1151,7 +824,7 @@ async function extractFieldGroups(
   for (const result of settled) {
     if (result.status === "rejected") {
       // runWithConcurrency catches all errors inside the worker itself, so
-      // this branch is defensive — the worker never throws past its try/catch.
+      // this branch is defensive - the worker never throws past its try/catch.
       const errMsg = String((result.reason as any)?.message ?? result.reason);
       warnings.push(`LLM group worker threw unexpectedly: ${errMsg}`);
       continue;

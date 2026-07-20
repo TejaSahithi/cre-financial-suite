@@ -212,8 +212,8 @@ function methodLabel(method) {
   const labels = {
     canonical_pipeline: 'Canonical Pipeline',
     review_required: 'Review Required',
-    docling: 'Docling',
-    gemini_vision: 'Gemini Vision OCR',
+    docling: 'Azure Document Intelligence',
+    gemini_vision: 'Azure OCR',
     hybrid: 'Hybrid OCR',
     csv: 'CSV Parser',
     excel: 'Excel Parser',
@@ -1445,7 +1445,7 @@ export default function BulkImportModal({
                 </Button>
               </label>
               <p className="text-[10px] text-slate-400 mt-4 flex items-center justify-center gap-1">
-                <Sparkles className="w-3 h-3 text-violet-400"/>PDF & Word → Google Gemini 1.5 Pro extraction
+                <Sparkles className="w-3 h-3 text-violet-400"/>PDF & Word to Azure Document Intelligence + OpenAI extraction
               </p>
             </div>
           )}
@@ -1458,7 +1458,7 @@ export default function BulkImportModal({
                 : <Loader2 className="w-8 h-8 animate-spin text-blue-600"/>}
               <p className="text-sm font-medium text-slate-600">
                 {file?.name?.match(/\.(pdf|docx|doc)$/i)
-                  ? 'Gemini 1.5 Pro analyzing document…'
+                  ? 'Azure Document Intelligence analyzing document...'
                   : 'Parsing file…'}
               </p>
               <p className="text-xs text-slate-400">{file?.name}</p>

@@ -29,7 +29,7 @@ import {
  * ingest-file — Unified File Ingestion Router
  *
  * This is the single entry point for ALL file formats (CSV, Excel, PDF, text).
- * It replaces the need to call parse-file or parse-pdf-docling directly.
+ * It replaces the need to call parse-file or parse-document-azure directly.
  *
  * Flow:
  *   1. Accept { file_id, module_type? }
@@ -37,11 +37,11 @@ import {
  *   3. Detect file format + module type (using file-detector)
  *   4. Route to the correct extraction function:
  *        csv / xls / xlsx / text  →  parse-file  (existing CSV pipeline)
- *        pdf                      →  parse-pdf-docling  (Docling OCR)
+ *        pdf                      →  parse-document-azure  (Azure Document Intelligence)
  *        unknown                  →  attempt text fallback, else fail
  *   5. Return detection result + routing decision to caller
  *
- * The downstream functions (parse-file, parse-pdf-docling) handle their own
+ * The downstream functions (parse-file, parse-document-azure) handle their own
  * status updates. This function only does detection + routing.
  *
  * RULES:
@@ -58,7 +58,7 @@ import {
 /** Edge Function caller with selective retry and strict timeout budget.
  *
  * Timeout budget: Supabase Edge Functions have a 150 s hard wall. With two
- * downstream calls (parse-pdf-docling + normalize-pdf-output) plus overhead,
+ * downstream calls (parse-document-azure + normalize-pdf-output) plus overhead,
  * each call must complete within 45 s, leaving ≥60 s for parkForManualReview
  * and the HTTP response before the hard limit.
  *
@@ -108,7 +108,7 @@ async function callEdgeFunction(
         // When the caller doesn't need the response body (e.g. the downstream
         // function writes its output directly to the DB), discard the body
         // rather than buffering it in ingest-file's heap. Large payloads from
-        // parse-pdf-docling / normalize-pdf-output (field traces, docling_raw)
+        // parse-document-azure / normalize-pdf-output (field traces, docling_raw)
         // are the primary cause of ingest-file hitting the 546 memory limit.
         if (discardSuccessBody) {
           await res.body?.cancel().catch(() => undefined);
@@ -838,7 +838,7 @@ function inferFieldType(fieldName: string): string {
 
 type RoutingDecision =
   | { route: "parse-file"; reason: string }
-  | { route: "parse-pdf-docling"; reason: string }
+  | { route: "parse-document-azure"; reason: string }
   | { route: "unsupported"; reason: string };
 
 /** Enhanced routing decision with better format support */
@@ -857,23 +857,23 @@ function decideRoute(detection: DetectionResult): RoutingDecision {
       if (isTabularModule) {
         return { route: "parse-file", reason: `${fileFormat} file → CSV/Excel parser for tabular data` };
       }
-      // Excel — route through Docling which handles binary Excel natively
-      return { route: "parse-pdf-docling", reason: `${fileFormat} file → Docling (handles Excel binary format)` };
+      // Excel — route through Azure Document Intelligence parser
+      return { route: "parse-document-azure", reason: `${fileFormat} file → Azure Document Intelligence` };
 
     case "pdf":
-      return { route: "parse-pdf-docling", reason: "PDF → Docling OCR extraction" };
+      return { route: "parse-document-azure", reason: "PDF → Azure Document Intelligence extraction" };
 
     case "docx":
     case "doc":
-      return { route: "parse-pdf-docling", reason: `${fileFormat} Word document → Docling extraction` };
+      return { route: "parse-document-azure", reason: `${fileFormat} Word document → Azure Document Intelligence extraction` };
 
     case "image":
-      return { route: "parse-pdf-docling", reason: "Image → Docling OCR extraction" };
+      return { route: "parse-document-azure", reason: "Image → Azure Document Intelligence extraction" };
 
     case "unknown":
     default:
-      // Enhanced unknown format handling - try Docling first with better error handling
-      return { route: "parse-pdf-docling", reason: "Unknown format → Docling (multi-format extraction with fallback)" };
+      // Enhanced unknown format handling - try Azure Document Intelligence first with better error handling
+      return { route: "parse-document-azure", reason: "Unknown format → Azure Document Intelligence extraction" };
   }
 }
 
@@ -1024,7 +1024,7 @@ Deno.serve(async (req: Request) => {
     const isLeaseModule = effectiveModule === "leases" || effectiveModule === "lease";
     const reviewRequired = isLeaseModule
       ? true
-      : routing.route === "parse-pdf-docling" && subtypeResult.reviewRequired;
+      : routing.route === "parse-document-azure" && subtypeResult.reviewRequired;
 
     await supabaseAdmin
       .from("uploaded_files")
@@ -1052,7 +1052,7 @@ Deno.serve(async (req: Request) => {
     };
 
     // NOTE: status is left at 'uploaded' here. The next function in the
-    // chain (parse-file / parse-pdf-docling) transitions to 'parsing' via
+    // chain (parse-file / parse-document-azure) transitions to 'parsing' via
     // the FSM in _shared/pipeline-status.ts. Writing an ad-hoc status
     // here breaks the CHECK constraint.
 
@@ -1078,7 +1078,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    if (routing.route === "parse-pdf-docling" && isLeaseModule && run_synchronously !== true) {
+    if (routing.route === "parse-document-azure" && isLeaseModule && run_synchronously !== true) {
       const job = await enqueueLeaseExtractionJob({
         supabaseAdmin,
         logger,
@@ -1125,7 +1125,7 @@ Deno.serve(async (req: Request) => {
         : (fileRecord.module_type ?? explicitModuleType ?? "documents");
 
     // PDF and document processing: enhanced two-step with better error handling
-    if (routing.route === "parse-pdf-docling") {
+    if (routing.route === "parse-document-azure") {
       console.log(`[ingest-file] Starting PDF/document processing for ${detection.fileFormat} file`);
 
       // Shared deadline: ingest-file has a finite wall-clock budget. Give the
@@ -1137,13 +1137,13 @@ Deno.serve(async (req: Request) => {
       const RESPONSE_SAFETY_MS = 10_000;
       const PARSE_TIMEOUT_MS = 90_000;
 
-      // Step 1: Docling extraction with enhanced error handling
-      // discardSuccessBody=true: parse-pdf-docling writes docling_raw directly
-      // to the DB. Buffering its response in ingest-file's heap (docling_raw
+      // Step 1: Azure Document Intelligence extraction with enhanced error handling
+      // discardSuccessBody=true: parse-document-azure writes parser output directly
+      // to the DB. Buffering its response in ingest-file's heap (parser output
       // can be several MB) is the primary cause of the 546 memory-limit error.
-      const doclingResult = await callEdgeFunction(
+      const azureParseResult = await callEdgeFunction(
         supabaseUrl,
-        "parse-pdf-docling",
+        "parse-document-azure",
         { file_id },
         downstreamAuthToken,
         actingOrgId,
@@ -1152,12 +1152,12 @@ Deno.serve(async (req: Request) => {
         !defer_store,
       );
 
-      if (!doclingResult.ok) {
-        console.error(`[ingest-file] Docling extraction failed:`, doclingResult.error);
+      if (!azureParseResult.ok) {
+        console.error(`[ingest-file] Azure Document Intelligence extraction failed:`, azureParseResult.error);
 
-        const reason = (doclingResult as any).timedOut
+        const reason = (azureParseResult as any).timedOut
           ? `The document parser timed out after ${Math.round(PARSE_TIMEOUT_MS / 1000)}s before it could produce readable lease text. Upload a smaller/text-searchable PDF, or move parsing to a longer-running background worker before retrying.`
-          : `Document extraction failed: ${doclingResult.error || "Unknown error"}`;
+          : `Document extraction failed: ${azureParseResult.error || "Unknown error"}`;
         const payload = await parkForBlockedPipeline({
           supabaseAdmin,
           logger,
@@ -1165,10 +1165,10 @@ Deno.serve(async (req: Request) => {
           fileName: fileRecord.file_name ?? "document",
           moduleType: effectiveModuleType,
           documentSubtype: subtypeResult.subtype,
-          extractionMethod: (doclingResult as any).timedOut ? "timeout_review_pending" : "parse_failed",
+          extractionMethod: (azureParseResult as any).timedOut ? "timeout_review_pending" : "parse_failed",
           stage: "parse",
-          parserStatus: (doclingResult as any).timedOut ? PARSER_STATUSES.TIMEOUT : PARSER_STATUSES.FAILED,
-          errorCode: (doclingResult as any).timedOut ? "PARSE_TIMEOUT" : "PDF_PARSING_FAILED",
+          parserStatus: (azureParseResult as any).timedOut ? PARSER_STATUSES.TIMEOUT : PARSER_STATUSES.FAILED,
+          errorCode: (azureParseResult as any).timedOut ? "PARSE_TIMEOUT" : "PDF_PARSING_FAILED",
           reason,
         });
         
@@ -1178,8 +1178,8 @@ Deno.serve(async (req: Request) => {
             file_id, 
             detection: detectionSummary, 
             routing: { routed_to: routing.route, reason: routing.reason }, 
-            result: doclingResult.data,
-            error_details: doclingResult.error,
+            result: azureParseResult.data,
+            error_details: azureParseResult.error,
             stage: "extraction",
             manual_review: false,
             blocked_pipeline: true,
@@ -1226,7 +1226,7 @@ Deno.serve(async (req: Request) => {
         );
       }
       
-      console.log(`[ingest-file] Docling extraction succeeded, starting normalization`);
+      console.log(`[ingest-file] Azure Document Intelligence extraction succeeded, starting normalization`);
       
       // Step 2: Normalization with enhanced error handling
       // discardSuccessBody=true: normalize-pdf-output writes normalized_output
@@ -1335,7 +1335,7 @@ Deno.serve(async (req: Request) => {
             detection: detectionSummary,
             routing: { routed_to: routing.route, reason: routing.reason },
             steps: {
-              extraction: { success: doclingResult.ok, error: doclingResult.error },
+              extraction: { success: azureParseResult.ok, error: azureParseResult.error },
               normalization: { success: normalizeResult.ok, error: normalizeResult.error },
               validation: { success: false, skipped: true, reason: "defer_store=true" },
               storage: { success: false, skipped: true, reason: "defer_store=true" },
@@ -1383,7 +1383,7 @@ Deno.serve(async (req: Request) => {
             detection: detectionSummary,
             routing: { routed_to: routing.route, reason: routing.reason },
             steps: {
-              extraction: { success: doclingResult.ok, error: doclingResult.error },
+              extraction: { success: azureParseResult.ok, error: azureParseResult.error },
               normalization: { success: normalizeResult.ok, error: normalizeResult.error },
               validation: { success: validateResult.ok, error: validateResult.error },
               storage: { success: storeResult.ok, error: storeResult.error },
@@ -1400,7 +1400,7 @@ Deno.serve(async (req: Request) => {
           detection: detectionSummary,
           routing: { routed_to: routing.route, reason: routing.reason },
           steps: {
-            extraction: { success: doclingResult.ok, error: doclingResult.error },
+            extraction: { success: azureParseResult.ok, error: azureParseResult.error },
             normalization: { success: normalizeResult.ok, error: normalizeResult.error },
           },
         }),

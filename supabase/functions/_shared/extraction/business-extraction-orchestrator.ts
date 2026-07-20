@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * Azure + Vertex Phase 4E (local implementation) — business-extraction
+ * Azure Document Intelligence + OpenAI (local implementation) — business-extraction
  * orchestrator. Drop-in replacement for the direct provider-selection
  * ternary in normalize-pdf-output/index.ts — returns the SAME
  * ExtractionPipelineResult shape both providers already produce, with
@@ -9,10 +9,10 @@
  * they are, consuming whichever result this module produces.
  *
  * legacy_hybrid            -> legacy pipeline only (unchanged behavior)
- * vertex_fact_ledger       -> Vertex pipeline only (unchanged behavior;
+ * openai_fact_ledger       -> OpenAI pipeline only (legacy vertex_fact_ledger aliases accepted;
  *                             acceptance evaluated for provenance/reporting
  *                             ONLY -- never triggers legacy fallback here)
- * vertex_primary_legacy_fallback -> Vertex once (bounded by an absolute
+ * openai_primary_legacy_fallback -> OpenAI once (bounded by an absolute
  *                             deadline, no outer retry loop) -> acceptance
  *                             evaluation -> controlled, one-time legacy
  *                             fallback when eligible -> whole-result
@@ -20,20 +20,22 @@
  */
 
 import { runExtractionPipeline } from "./pipeline.ts";
-import { runVertexFactLedgerPipeline } from "./vertex-fact-ledger/orchestrator.ts";
+import { runOpenAIFactLedgerPipeline } from "./openai-fact-ledger/orchestrator.ts";
 import type { ExtractionPipelineResult, DoclingOutput } from "./types.ts";
 import { evaluateExtractionAcceptance } from "./business-extraction-acceptance.ts";
-import { buildProvenance, attachProvenance, type BusinessExtractionMode } from "./business-extraction-provenance.ts";
+import { buildProvenance, attachProvenance, normalizeBusinessExtractionMode, type BusinessExtractionMode } from "./business-extraction-provenance.ts";
 
 export type { BusinessExtractionMode } from "./business-extraction-provenance.ts";
 
-// Round-2/3 corrections: one orchestrator-level Vertex invocation only (no
+// Round-2/3 corrections: one orchestrator-level OpenAI invocation only (no
 // outer retry loop around the existing, effectively-uncancellable 32-combo
 // sweep) -- bounded instead by an absolute deadline threaded into
-// callVertexAI's own combo loop and per-request timeout clamp.
-const VERTEX_TOTAL_BUDGET_MS = 100_000; // ~90-120s target, mid-point default
+// the OpenAI fact-ledger provider loop and per-request timeout clamp.
+const OPENAI_TOTAL_BUDGET_MS = 100_000; // ~90-120s target, mid-point default
+/** @deprecated Compatibility alias for old tests/imports. */
+const VERTEX_TOTAL_BUDGET_MS = OPENAI_TOTAL_BUDGET_MS;
 
-export interface MockVertexScenario {
+export interface MockOpenAIScenario {
   scenario:
     | "success"
     | "timeout"
@@ -46,10 +48,14 @@ export interface MockVertexScenario {
     | "conflicting_facts";
 }
 
+export type MockVertexScenario = MockOpenAIScenario;
+
 export interface RunBusinessExtractionOptions {
   requestedProvider: BusinessExtractionMode;
   moduleType: string;
   fileName: string;
+  document?: DoclingOutput;
+  /** @deprecated Use document. */
   docling: DoclingOutput;
   documentSubtype: string | null;
   fileBase64?: string;
@@ -58,16 +64,27 @@ export interface RunBusinessExtractionOptions {
   canonicalLayoutSchemaVersion?: number | null;
   // Test-only injection seam. Both default to the real pipelines; never
   // used outside tests / the triple-gated local mock path.
-  vertexRunner?: typeof runVertexFactLedgerPipeline;
+  openaiRunner?: typeof runOpenAIFactLedgerPipeline;
+  vertexRunner?: typeof runOpenAIFactLedgerPipeline;
   legacyRunner?: typeof runExtractionPipeline;
   // Local-integration-test-only: when set (and already validated by the
   // caller's triple gate -- internal auth + ENABLE_LOCAL_PROVIDER_MOCKS=true
   // + localhost Supabase URL -- this module does not re-check those gates,
   // the HTTP layer does), a canned fixture is used instead of vertexRunner.
-  mockVertexScenario?: MockVertexScenario["scenario"];
+  mockOpenAIScenario?: MockOpenAIScenario["scenario"];
+  /** @deprecated Use mockOpenAIScenario. */
+  mockVertexScenario?: MockOpenAIScenario["scenario"];
 }
 
-function buildMockVertexResult(scenario: MockVertexScenario["scenario"], startTime: number): ExtractionPipelineResult {
+function factLedgerDebug(debug: Record<string, unknown>): Record<string, unknown> {
+  return {
+    openai_fact_ledger: debug,
+    /** @deprecated Compatibility mirror for existing consumers. */
+    vertex_fact_ledger: debug,
+  };
+}
+
+function buildMockOpenAIResult(scenario: MockOpenAIScenario["scenario"], startTime: number): ExtractionPipelineResult {
   const base = {
     validationErrors: [] as unknown[],
     metadata: {
@@ -93,7 +110,7 @@ function buildMockVertexResult(scenario: MockVertexScenario["scenario"], startTi
           llmFieldsExtracted: 2,
           totalRecords: 1,
           avgConfidence: 90,
-          extractionDebug: { vertex_fact_ledger: { evidence_anchors: [{ category: "tenant_name", source_text: "Mock Tenant LLC", source_page: 1 }] } },
+          extractionDebug: factLedgerDebug({ evidence_anchors: [{ category: "tenant_name", source_text: "Mock Tenant LLC", source_page: 1 }] }),
         },
       };
     case "low_evidence":
@@ -102,7 +119,7 @@ function buildMockVertexResult(scenario: MockVertexScenario["scenario"], startTi
         rows: [{ tenant_name: "Mock Tenant LLC" }],
         method: "llm_only",
         warnings: [],
-        metadata: { ...base.metadata, llmFieldsExtracted: 1, totalRecords: 1, avgConfidence: 60, extractionDebug: { vertex_fact_ledger: { evidence_anchors: [] } } },
+        metadata: { ...base.metadata, llmFieldsExtracted: 1, totalRecords: 1, avgConfidence: 60, extractionDebug: factLedgerDebug({ evidence_anchors: [] }) },
       };
     case "conflicting_facts":
       return {
@@ -111,7 +128,7 @@ function buildMockVertexResult(scenario: MockVertexScenario["scenario"], startTi
         method: "llm_only",
         warnings: [],
         validationErrors: [{ field: "monthly_rent", message: "Conflicting values found: $5000 vs $5500" }],
-        metadata: { ...base.metadata, llmFieldsExtracted: 1, totalRecords: 1, avgConfidence: 70, extractionDebug: { vertex_fact_ledger: { evidence_anchors: [{ category: "tenant_name", source_text: "x", source_page: 1 }] } } },
+        metadata: { ...base.metadata, llmFieldsExtracted: 1, totalRecords: 1, avgConfidence: 70, extractionDebug: factLedgerDebug({ evidence_anchors: [{ category: "tenant_name", source_text: "x", source_page: 1 }] }) },
       };
     case "timeout":
     case "rate_limited":
@@ -129,12 +146,15 @@ function buildMockVertexResult(scenario: MockVertexScenario["scenario"], startTi
         ...base,
         rows: [],
         method: "fallback",
-        warnings: [`Mock Vertex scenario: ${scenario}`],
-        metadata: { ...base.metadata, extractionDebug: { vertex_fact_ledger: { failure_classification: classification, failure_http_status: failureHttpStatus } } },
+        warnings: [`Mock OpenAI scenario: ${scenario}`],
+        metadata: { ...base.metadata, extractionDebug: factLedgerDebug({ failure_classification: classification, failure_http_status: failureHttpStatus }) },
       };
     }
   }
 }
+
+/** @deprecated Compatibility alias for old tests. */
+const buildMockVertexResult = buildMockOpenAIResult;
 
 async function runLegacySafely(
   legacyRunner: typeof runExtractionPipeline,
@@ -148,7 +168,7 @@ async function runLegacySafely(
       {
         moduleType: opts.moduleType,
         fileName: opts.fileName,
-        docling: opts.docling,
+        docling: opts.document ?? opts.docling,
         ...(opts.fileBase64 ? { fileBase64: opts.fileBase64, fileMimeType: opts.fileMimeType || "application/pdf" } : {}),
       },
       { maxLLMChunks: 50, chunkSize: 3000, llmTemperature: 0 },
@@ -194,28 +214,31 @@ async function sha256Hex(value: string): Promise<string> {
 export async function runBusinessExtraction(opts: RunBusinessExtractionOptions): Promise<ExtractionPipelineResult> {
   const startTime = Date.now();
   const attemptId = `${opts.correlationId}:${startTime}`;
-  const sourceContentHash = await sha256Hex(contentForHash(opts.docling));
-  const vertexRunner = opts.vertexRunner ?? runVertexFactLedgerPipeline;
+  const requestedProvider = normalizeBusinessExtractionMode(opts.requestedProvider);
+  const document = opts.document ?? opts.docling;
+  const sourceContentHash = await sha256Hex(contentForHash(document));
+  const openaiRunner = opts.openaiRunner ?? opts.vertexRunner ?? runOpenAIFactLedgerPipeline;
   const legacyRunner = opts.legacyRunner ?? runExtractionPipeline;
-  const providerMocked = opts.mockVertexScenario != null;
+  const mockOpenAIScenario = opts.mockOpenAIScenario ?? opts.mockVertexScenario ?? null;
+  const providerMocked = mockOpenAIScenario != null;
 
-  async function runVertexOnce(): Promise<ExtractionPipelineResult> {
-    if (opts.mockVertexScenario) {
-      return buildMockVertexResult(opts.mockVertexScenario, startTime);
+  async function runOpenAIOnce(): Promise<ExtractionPipelineResult> {
+    if (mockOpenAIScenario) {
+      return buildMockOpenAIResult(mockOpenAIScenario, startTime);
     }
-    return await vertexRunner(
+    return await openaiRunner(
       {
         moduleType: opts.moduleType,
         fileName: opts.fileName,
-        docling: opts.docling,
+        docling: opts.document ?? opts.docling,
         documentSubtype: opts.documentSubtype,
         ...(opts.fileBase64 ? { fileBase64: opts.fileBase64, fileMimeType: opts.fileMimeType || "application/pdf" } : {}),
       },
-      { deadlineAt: startTime + VERTEX_TOTAL_BUDGET_MS },
+      { deadlineAt: startTime + OPENAI_TOTAL_BUDGET_MS },
     );
   }
 
-  if (opts.requestedProvider === "legacy_hybrid") {
+  if (requestedProvider === "legacy_hybrid") {
     const result = await runLegacySafely(legacyRunner, opts);
     const acceptance = evaluateExtractionAcceptance(result, { provider: "legacy_hybrid", documentProfile: opts.documentSubtype });
     return attachProvenance(
@@ -226,7 +249,7 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
         effectiveProvider: "legacy_hybrid",
         acceptanceState: acceptance.state,
         fallbackUsed: false,
-        vertexAttemptCount: 0,
+        openaiAttemptCount: 0,
         canonicalLayoutSchemaVersion: opts.canonicalLayoutSchemaVersion,
         sourceContentHash,
         correlationId: opts.correlationId,
@@ -235,77 +258,77 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
     );
   }
 
-  if (opts.requestedProvider === "vertex_fact_ledger") {
-    // Direct Vertex mode: preserve existing behavior exactly -- acceptance
+  if (requestedProvider === "openai_fact_ledger") {
+    // Direct OpenAI mode: preserve existing behavior exactly -- acceptance
     // is evaluated and recorded in provenance ONLY, it never triggers
     // legacy fallback and never changes this mode's output semantics.
-    const result = await runVertexOnce();
-    const acceptance = evaluateExtractionAcceptance(result, { provider: "vertex_fact_ledger", documentProfile: opts.documentSubtype });
+    const result = await runOpenAIOnce();
+    const acceptance = evaluateExtractionAcceptance(result, { provider: "openai_fact_ledger", documentProfile: opts.documentSubtype });
     return attachProvenance(
       result,
       buildProvenance({
         attemptId,
-        requestedProvider: "vertex_fact_ledger",
-        effectiveProvider: "vertex_fact_ledger",
+        requestedProvider: "openai_fact_ledger",
+        effectiveProvider: "openai_fact_ledger",
         acceptanceState: acceptance.state,
         fallbackUsed: false,
-        vertexAttemptCount: 1,
+        openaiAttemptCount: 1,
         canonicalLayoutSchemaVersion: opts.canonicalLayoutSchemaVersion,
         sourceContentHash,
         correlationId: opts.correlationId,
         providerMocked,
-        mockScenario: opts.mockVertexScenario ?? null,
+        mockScenario: mockOpenAIScenario,
       }),
     );
   }
 
-  // vertex_primary_legacy_fallback
-  const vertexResult = await runVertexOnce();
-  const vertexAcceptance = evaluateExtractionAcceptance(vertexResult, { provider: "vertex_fact_ledger", documentProfile: opts.documentSubtype });
+  // openai_primary_legacy_fallback
+  const openaiResult = await runOpenAIOnce();
+  const openaiAcceptance = evaluateExtractionAcceptance(openaiResult, { provider: "openai_fact_ledger", documentProfile: opts.documentSubtype });
 
-  if (vertexAcceptance.state === "accepted" || vertexAcceptance.state === "accepted_needs_review") {
+  if (openaiAcceptance.state === "accepted" || openaiAcceptance.state === "accepted_needs_review") {
     return attachProvenance(
-      vertexResult,
+      openaiResult,
       buildProvenance({
         attemptId,
-        requestedProvider: "vertex_primary_legacy_fallback",
-        effectiveProvider: "vertex_fact_ledger",
-        acceptanceState: vertexAcceptance.state,
+        requestedProvider: "openai_primary_legacy_fallback",
+        effectiveProvider: "openai_fact_ledger",
+        acceptanceState: openaiAcceptance.state,
         fallbackUsed: false,
-        vertexAttemptCount: 1,
+        openaiAttemptCount: 1,
         canonicalLayoutSchemaVersion: opts.canonicalLayoutSchemaVersion,
         sourceContentHash,
         correlationId: opts.correlationId,
         providerMocked,
-        mockScenario: opts.mockVertexScenario ?? null,
+        mockScenario: mockOpenAIScenario,
       }),
     );
   }
 
-  if (vertexAcceptance.state === "rejected") {
+  if (openaiAcceptance.state === "rejected") {
     // Non-fallback-eligible failure (e.g. auth_error) -- explicit failure,
     // never silently degrade to legacy for a configuration defect.
     return attachProvenance(
-      vertexResult,
+      openaiResult,
       buildProvenance({
         attemptId,
-        requestedProvider: "vertex_primary_legacy_fallback",
-        effectiveProvider: "vertex_fact_ledger",
+        requestedProvider: "openai_primary_legacy_fallback",
+        effectiveProvider: "openai_fact_ledger",
         acceptanceState: "extraction_failed_manual_review",
         fallbackUsed: false,
-        fallbackReason: vertexAcceptance.reason,
-        vertexAttemptCount: 1,
+        fallbackReason: openaiAcceptance.reason,
+        openaiAttemptCount: 1,
         canonicalLayoutSchemaVersion: opts.canonicalLayoutSchemaVersion,
         sourceContentHash,
         correlationId: opts.correlationId,
         providerMocked,
-        mockScenario: opts.mockVertexScenario ?? null,
+        mockScenario: mockOpenAIScenario,
       }),
     );
   }
 
   // fallback_eligible -- run legacy exactly once. No recursion: if legacy
-  // also fails, that is terminal, never re-attempts Vertex.
+  // also fails, that is terminal, never re-attempts OpenAI.
   const legacyResult = await runLegacySafely(legacyRunner, opts);
   const legacyAcceptance = evaluateExtractionAcceptance(legacyResult, { provider: "legacy_hybrid", documentProfile: opts.documentSubtype });
 
@@ -314,17 +337,17 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
       legacyResult,
       buildProvenance({
         attemptId,
-        requestedProvider: "vertex_primary_legacy_fallback",
+        requestedProvider: "openai_primary_legacy_fallback",
         effectiveProvider: "legacy_hybrid",
         acceptanceState: legacyAcceptance.state,
         fallbackUsed: true,
-        fallbackReason: vertexAcceptance.reason,
-        vertexAttemptCount: 1,
+        fallbackReason: openaiAcceptance.reason,
+        openaiAttemptCount: 1,
         canonicalLayoutSchemaVersion: opts.canonicalLayoutSchemaVersion,
         sourceContentHash,
         correlationId: opts.correlationId,
         providerMocked,
-        mockScenario: opts.mockVertexScenario ?? null,
+        mockScenario: mockOpenAIScenario,
       }),
     );
   }
@@ -335,25 +358,27 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
     legacyResult,
     buildProvenance({
       attemptId,
-      requestedProvider: "vertex_primary_legacy_fallback",
+      requestedProvider: "openai_primary_legacy_fallback",
       effectiveProvider: "legacy_hybrid",
       acceptanceState: "extraction_failed_manual_review",
       fallbackUsed: true,
-      fallbackReason: `vertex:${vertexAcceptance.reason};legacy:${legacyAcceptance.reason}`,
-      vertexAttemptCount: 1,
+      fallbackReason: `openai:${openaiAcceptance.reason};legacy:${legacyAcceptance.reason}`,
+      openaiAttemptCount: 1,
       canonicalLayoutSchemaVersion: opts.canonicalLayoutSchemaVersion,
       sourceContentHash,
       correlationId: opts.correlationId,
       providerMocked,
-      mockScenario: opts.mockVertexScenario ?? null,
+      mockScenario: mockOpenAIScenario,
     }),
   );
 }
 
 // Test hook.
 export const __test__ = {
+  buildMockOpenAIResult,
   buildMockVertexResult,
   runLegacySafely,
+  OPENAI_TOTAL_BUDGET_MS,
   VERTEX_TOTAL_BUDGET_MS,
   contentForHash,
 };

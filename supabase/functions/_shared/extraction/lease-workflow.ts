@@ -213,7 +213,7 @@ const FIELD_SPECS = [
   { key: "assignment_consideration", group: "assignment_amendment", aliases: ["assignment_consideration"], patterns: [/\b(?:assignment\s+consideration|consideration)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
   { key: "all_other_terms_remain_same", group: "assignment_amendment", aliases: ["all_other_terms_remain_same"], patterns: [/\b(all\s+other\s+terms[^.\n]{0,160}(?:remain|shall\s+remain|continue)[^.\n]{0,120}(?:unchanged|same|full\s+force\s+and\s+effect))/i] },
   // tenant_contact_name aliases must include tenant_signatory_name (set by
-  // the Gemini extractor) so the signer goes here, NOT into tenant_name.
+  // the OpenAI extractor) so the signer goes here, NOT into tenant_name.
   // The fallback regex for `By: <name>` is left in place for documents
   // where the signer wasn't tagged explicitly.
   { key: "tenant_contact_name", group: "lease_header", aliases: ["tenant_contact_name", "tenant_signatory_name", "signed_by"], patterns: [/\bBy:\s*([A-Z][A-Za-z.' -]{3,80})/, /\btenant(?:\s+contact|\s+representative|\s+signatory)?\b[:\s-]+([A-Z][A-Za-z.' -]{3,80})/i] },
@@ -602,9 +602,9 @@ function getRowConfidence(row: Record<string, unknown>, key: string) {
 /**
  * Pull per-field evidence from the row's `_field_evidence` map. This is
  * stamped by the LLM extractor (validator.ts:flattenRecords) with the
- * source_text / source_page that Gemini quoted verbatim. Honoring this
+ * source_text / source_page that OpenAI quoted verbatim. Honoring this
  * here means workflow_output.lease_fields[key].source_clause / source_page
- * reflect what Gemini actually saw - not whatever the local text-matcher
+ * reflect what OpenAI actually saw - not whatever the local text-matcher
  * happens to find.
  */
 function getLlmEvidenceForAliases(row: Record<string, unknown>, aliases: string[] = []) {
@@ -2513,9 +2513,9 @@ function buildLeaseFieldMap(
       : null;
     // Evidence resolution order:
     //   1. Related clause snippet (highest fidelity for clause-bound fields)
-    //   2. LLM-quoted evidence (Gemini's verbatim source_text + source_page)
+    //   2. LLM-quoted evidence (OpenAI verbatim source_text + source_page)
     //   3. Local text-matcher fallback (docling text search)
-    // This makes sure Gemini's evidence doesn't get overwritten by a
+    // This makes sure OpenAI evidence doesn't get overwritten by a
     // text-match against a generic value like "unknown" or "1110".
     const llmEvidence = getLlmEvidenceForAliases(row, spec.aliases || [spec.key]);
     const summaryEvidence = summaryPairs[spec.key];
@@ -4306,8 +4306,8 @@ export function buildLeaseWorkflowAbstraction(args: {
   // blocks for. For scanned / handwritten PDFs this is often << the real
   // page count because Docling can't structure-parse image-only pages.
   // pdfPageCountTotal = the source PDF's actual page count, surfaced by
-  // parse-pdf-docling on doclingRaw.page_count. When file bytes are sent
-  // to Vision (callVertexAIFileJSON) Gemini reads ALL pages natively,
+  // parse-document-azure on doclingRaw.page_count. When file bytes are sent
+  // to Azure Document Intelligence Azure Document Intelligence reads all pages,
   // even when Docling only produced text blocks for one.
   const doclingPagesParsed = new Set(
     asArray(doclingRaw?.text_blocks)
@@ -4663,8 +4663,8 @@ export function buildLeaseWorkflowAbstraction(args: {
       pages_detected: pagesDetected,
       docling_pages_parsed: doclingPagesParsed,
       pdf_page_count_total: pdfPageCountTotal,
-      // Vision (Gemini multimodal) processes every page of the PDF when the
-      // file bytes are sent via callVertexAIFileJSON. There's no per-page
+      // Vision (Azure Document Intelligence) processes every page of the PDF when the
+      // file bytes are sent through Azure Document Intelligence. There's no per-page
       // toggle â€” it's all-or-nothing from the LLM step. This flag reflects
       // what's POSSIBLE; the actual vision_fallback_triggered diagnostic
       // (in normalize-pdf-output's extractionDebug) reflects what RAN.
