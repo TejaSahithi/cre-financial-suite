@@ -31,7 +31,7 @@
 import { isDocumentIntelligenceV3Enabled } from "./feature-flag.ts";
 import { buildDocumentIntelligenceV3Skeleton } from "./adapter.ts";
 import {
-  extractVertexFactLedgerClaims,
+  extractOpenAIFactLedgerClaims,
   extractValidationDrops,
   extractCanonicalFieldProjections,
   type DocumentIntelligenceV3ClaimRow,
@@ -120,12 +120,13 @@ function buildIdempotencyKey(parts: {
   return [...base, ...enrichment].join("|");
 }
 
-function readVertexFactLedgerProfile(result: any): {
+function readOpenAIFactLedgerProfile(result: any): {
   profileKey: string | null;
   profileConfidence: number | null;
   profileStatus: "unclassified" | "auto_detected";
 } {
-  const vfl = result?.metadata?.extractionDebug?.vertex_fact_ledger;
+  const debug = result?.metadata?.extractionDebug;
+  const vfl = debug?.openai_fact_ledger ?? debug?.vertex_fact_ledger;
   if (!vfl || typeof vfl !== "object") {
     return { profileKey: null, profileConfidence: null, profileStatus: "unclassified" };
   }
@@ -139,11 +140,12 @@ function readVertexFactLedgerProfile(result: any): {
 /**
  * Phase 7 Task E: which document index (Phase 6) produced whatever evidence
  * anchors ended up attached to this run's evidence rows -- "unavailable"
- * covers both legacy_hybrid (no vertex_fact_ledger debug object at all) and
- * a pre-Phase-6 vertex_fact_ledger run that never computed this field.
+ * covers both legacy_hybrid (no openai_fact_ledger debug object at all) and
+ * a pre-Phase-6 ledger run that never computed this field.
  */
 function readEvidenceAnchorSource(result: any): "canonical_layout" | "legacy_evidence_index" | "unavailable" {
-  const vfl = result?.metadata?.extractionDebug?.vertex_fact_ledger;
+  const debug = result?.metadata?.extractionDebug;
+  const vfl = debug?.openai_fact_ledger ?? debug?.vertex_fact_ledger;
   if (!vfl || typeof vfl !== "object") return "unavailable";
   return vfl.document_index_source === "canonical_layout" ? "canonical_layout" : "legacy_evidence_index";
 }
@@ -255,7 +257,7 @@ export async function runDocumentIntelligenceV3SideWrite(
       lease: leaseId ? { id: leaseId, org_id: orgId } : null,
     });
 
-    const legacyProfile = readVertexFactLedgerProfile(result);
+    const existingProfile = readOpenAIFactLedgerProfile(result);
     const { summary: layoutSummary, contentHash } = await computeCanonicalLayoutAndSummary(uploadedFile, {
       uploadedFileId,
       orgId,
@@ -266,8 +268,8 @@ export async function runDocumentIntelligenceV3SideWrite(
       layoutSummary,
     });
     const profile = {
-      profileKey: profileEnsemble.selected_profile_key ?? legacyProfile.profileKey,
-      profileConfidence: profileEnsemble.confidence ?? legacyProfile.profileConfidence,
+      profileKey: profileEnsemble.selected_profile_key ?? existingProfile.profileKey,
+      profileConfidence: profileEnsemble.confidence ?? existingProfile.profileConfidence,
       profileStatus: profileEnsemble.profile_source === "manual_override"
         ? "manual_override"
         : profileEnsemble.selected_policy_key === "unknown_cre_document"
@@ -341,7 +343,7 @@ export async function runDocumentIntelligenceV3SideWrite(
       throw new Error(`Failed to clear prior canonical field projections for retry: ${deleteProjectionsError.message}`);
     }
 
-    const { claims, evidence } = extractVertexFactLedgerClaims({
+    const { claims, evidence } = extractOpenAIFactLedgerClaims({
       result,
       orgId,
       uploadedFileId,

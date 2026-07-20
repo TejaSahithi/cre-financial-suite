@@ -5,24 +5,24 @@
  * document index ran -- see buildEvidenceAnchorIndex()/resolveEvidenceAnchor()
  * below).
  *
- * Maps the vertex_fact_ledger provider's already-computed output (per
+ * Maps the openai_fact_ledger provider's already-computed output (per
  * docs/document-intelligence-v3-baseline.md Section 5) into v3
  * document_claims / document_claim_evidence / document_validation_drops /
  * document_canonical_field_projections row shapes.
  *
- * This module does NOT call vertex_fact_ledger, does not reimplement its
+ * This module does NOT call openai_fact_ledger, does not reimplement its
  * fact extraction or field mapping, and does not invent a second claim
  * shape -- it is a pure, read-only transform over
  * result.metadata.extractionDebug (the exact contract every extraction
  * provider, legacy_hybrid included, already returns per pipeline.ts's
- * snapshotFieldMap()). Per Phase 2 Task B: if vertex_fact_ledger did not
+ * snapshotFieldMap()). Per Phase 2 Task B: if openai_fact_ledger did not
  * run for this row, every function here returns zero claims -- it never
  * fabricates a claim from legacy_hybrid output.
  *
- * Two claim sources, both genuinely vertex_fact_ledger-derived data:
+ * Two claim sources, both genuinely openai_fact_ledger-derived data:
  *   1. Mapped canonical fields (validated_field_values / merged_field_sources)
  *      -- one claim per field the fact-field-mapper successfully mapped.
- *   2. Dynamic items (vertex_fact_ledger.dynamic_items) -- one claim per
+ *   2. Dynamic items (openai_fact_ledger.dynamic_items) -- one claim per
  *      fact the fact-field-mapper could NOT map, already reshaped by
  *      dynamic-fact-surfacer.ts's createDocumentItem() call, which is the
  *      real per-fact detail (category/value/sourceText/sourcePage/confidence)
@@ -99,10 +99,10 @@ function inferExtractionMode(source: unknown): string {
   return source === "calculated" ? "calculated" : "explicit";
 }
 
-function readVertexFactLedgerDebug(result: any): Record<string, unknown> | null {
+function readOpenAIFactLedgerDebug(result: any): Record<string, unknown> | null {
   const debug = result?.metadata?.extractionDebug;
-  const vfl = debug?.vertex_fact_ledger;
-  return vfl && typeof vfl === "object" ? vfl : null;
+  const ledger = debug?.openai_fact_ledger ?? debug?.vertex_fact_ledger;
+  return ledger && typeof ledger === "object" ? ledger : null;
 }
 
 function readFieldSnapshot(result: any): Record<string, any> {
@@ -123,11 +123,11 @@ const DEFAULT_EVIDENCE_ANCHOR: { blockIds: string[]; polygon: number[]; supportT
 };
 
 /**
- * Phase 7 Task B: indexes vertex_fact_ledger's evidence_anchors (Phase 6,
+ * Phase 7 Task B: indexes openai_fact_ledger's evidence_anchors (Phase 6,
  * orchestrator.ts) by source_text so real block_ids/polygon/support_type
  * can be attached to a claim's evidence row when available. Never invents
  * an anchor -- an empty/missing evidence_anchors array (legacy_evidence_index
- * ran, or vertex_fact_ledger predates Phase 6) simply yields an empty index,
+ * ran, or the ledger predates Phase 6) simply yields an empty index,
  * and every lookup then falls through to DEFAULT_EVIDENCE_ANCHOR, which is
  * byte-identical to Phase 2's original hardcoded evidence shape.
  */
@@ -159,14 +159,17 @@ function resolveEvidenceAnchor(
 }
 
 /**
- * True whenever vertex_fact_ledger ran for this row, regardless of whether
+ * True whenever openai_fact_ledger ran for this row, regardless of whether
  * it found any facts -- callers use this to decide whether to still create
  * a v3 run record (Task B: "still create a v3 run record if useful, mark
  * claim count = 0").
  */
-export function vertexFactLedgerRan(result: any): boolean {
-  return readVertexFactLedgerDebug(result) !== null;
+export function openAIFactLedgerRan(result: any): boolean {
+  return readOpenAIFactLedgerDebug(result) !== null;
 }
+
+/** @deprecated Use openAIFactLedgerRan. */
+export const vertexFactLedgerRan = openAIFactLedgerRan;
 
 export interface ExtractClaimsInput {
   result: any;
@@ -182,13 +185,13 @@ export interface ExtractClaimsOutput {
 }
 
 /**
- * Builds claim + evidence rows strictly from vertex_fact_ledger's own
+ * Builds claim + evidence rows strictly from openai_fact_ledger's own
  * already-computed output. Returns empty arrays (never throws, never
- * fabricates) when vertex_fact_ledger did not run or found nothing.
+ * fabricates) when openai_fact_ledger did not run or found nothing.
  */
-export function extractVertexFactLedgerClaims(input: ExtractClaimsInput): ExtractClaimsOutput {
+export function extractOpenAIFactLedgerClaims(input: ExtractClaimsInput): ExtractClaimsOutput {
   const { result, orgId, uploadedFileId, leaseId } = input;
-  const vfl = readVertexFactLedgerDebug(result);
+  const vfl = readOpenAIFactLedgerDebug(result);
   if (!vfl) {
     return { factsPresent: false, claims: [], evidence: [] };
   }
@@ -295,7 +298,7 @@ export function extractVertexFactLedgerClaims(input: ExtractClaimsInput): Extrac
 /**
  * Maps result.validationErrors (the same ValidationError[] every provider
  * returns, per types.ts) into document_validation_drops rows. Not gated on
- * vertex_fact_ledger having run -- validation errors are a property of the
+ * openai_fact_ledger having run -- validation errors are a property of the
  * extraction result itself, whichever provider produced it.
  */
 export function extractValidationDrops(input: {
@@ -318,12 +321,12 @@ export function extractValidationDrops(input: {
 }
 
 /**
- * Maps vertex_fact_ledger's field-level snapshot into
+ * Maps openai_fact_ledger's field-level snapshot into
  * document_canonical_field_projections rows -- one row per field key the
  * mapper attempted (present with a value, or present-but-rejected to null).
- * Only produced when vertex_fact_ledger ran, matching the claims source.
+ * Only produced when openai_fact_ledger ran, matching the claims source.
  *
- * `claims` (optional): the same claim rows extractVertexFactLedgerClaims()
+ * `claims` (optional): the same claim rows extractOpenAIFactLedgerClaims()
  * just built for this run. When supplied, each projection's
  * source_claim_ids is populated by matching the canonical_field claim whose
  * object.field_key equals this projection's field_key -- this is what lets
@@ -340,7 +343,7 @@ export function extractCanonicalFieldProjections(input: {
   claims?: DocumentIntelligenceV3ClaimRow[];
 }): DocumentIntelligenceV3CanonicalFieldProjectionRow[] {
   const { result, orgId, uploadedFileId, leaseId, claims } = input;
-  if (!vertexFactLedgerRan(result)) return [];
+  if (!openAIFactLedgerRan(result)) return [];
 
   const snapshot = readFieldSnapshot(result);
   const rows: DocumentIntelligenceV3CanonicalFieldProjectionRow[] = [];
@@ -381,3 +384,6 @@ export function extractCanonicalFieldProjections(input: {
 
   return rows;
 }
+
+/** @deprecated Use extractOpenAIFactLedgerClaims. */
+export const extractVertexFactLedgerClaims = extractOpenAIFactLedgerClaims;

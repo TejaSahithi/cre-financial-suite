@@ -9,7 +9,7 @@ function fieldLabel(key) {
 
 /**
  * Advisory workflow blockers — NEVER final approval enforcement. Server
- * blockers (vertex_fact_ledger only, today) are preferred when present;
+ * blockers (openai_fact_ledger, with legacy fallback) are preferred when present;
  * otherwise a clearly-labeled client-side estimate (pure re-use of the
  * field contract's requiredByDocumentProfile flags) fills in so this
  * section shows real, profile-aware content for legacy_hybrid leases too.

@@ -81,21 +81,40 @@ verify_jwt = false
 enabled = true
 verify_jwt = true
 
-# verify_jwt=false: parse-pdf-docling is called from both the browser (via
-# ingest-file, user JWT) and from lease-extraction-worker (service-role key).
-# Supabase's platform JWT check rejects the service-role Bearer in verify_jwt=true
-# mode, so auth is handled entirely inside the function via verifyUser() which
-# already short-circuits on x-internal-service-key == SUPABASE_SERVICE_ROLE_KEY.
-[functions.parse-pdf-docling]
-enabled = true
-verify_jwt = false
-
 # verify_jwt=false: normalize-pdf-output is called both by browsers (via
 # ingest-file with user JWT) and from lease-extraction-worker (service-role
 # key). Supabase's platform JWT check rejects service-role Bearer when
 # verify_jwt=true; auth is handled inside via verifyUser() which
 # short-circuits on x-internal-service-key == SUPABASE_SERVICE_ROLE_KEY.
+
+# verify_jwt=false: parse-document-azure is called from both the browser (via
+# ingest-file, user JWT) and from lease-extraction-worker (service-role key).
+# Supabase's platform JWT check rejects the service-role Bearer in verify_jwt=true
+# mode, so auth is handled entirely inside the function via verifyUser() which
+# already short-circuits on x-internal-service-key == SUPABASE_SERVICE_ROLE_KEY.
+[functions.parse-document-azure]
+enabled = true
+verify_jwt = false
+
+# Compatibility alias retained for older deployed clients. The implementation
+# delegates to parse-document-azure; do not remove until all external callers
+# have moved to the Azure route.
+[functions.parse-pdf-docling]
+enabled = true
+verify_jwt = false
+
 [functions.normalize-pdf-output]
+enabled = true
+verify_jwt = false
+
+
+[functions.ocr-document-extract]
+enabled = true
+verify_jwt = false
+
+# Compatibility alias retained for older callers; implementation delegates to
+# ocr-document-extract.
+[functions.ocr-vision-extract]
 enabled = true
 verify_jwt = false
 
@@ -143,6 +162,16 @@ verify_jwt = true
 # Admin & Diagnostics
 # verify_jwt=true: only valid authenticated users can call this function.
 # Admin role (org_admin / super_admin) is enforced inside the handler.
+
+[functions.phase52-openai-diagnostic]
+enabled = true
+verify_jwt = true
+
+# Compatibility alias retained for older diagnostic callers; implementation
+# delegates to phase52-openai-diagnostic.
+[functions.phase52-vertex-diagnostic]
+enabled = true
+verify_jwt = true
 [functions.pipeline-health-check]
 enabled = true
 verify_jwt = true

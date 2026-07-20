@@ -3,7 +3,7 @@
  * Document Intelligence v3 - Profile Ensemble and Extraction Planner.
  *
  * Diagnostic-only. This module consolidates existing profile signals from
- * vertex_fact_ledger, deterministic lease-workflow rules, layout signals,
+ * openai_fact_ledger, deterministic lease-workflow rules, layout signals,
  * and legacy payload hints. It does not decide which extraction calls run.
  */
 
@@ -11,7 +11,7 @@ import { detectDocumentProfileSignals } from "../lease-workflow.ts";
 import { getProfilePolicy, normalizeProfileKey, resolvePolicyKey } from "./profile-policy.ts";
 
 export const PROFILE_SOURCE_VALUES = [
-  "vertex_fact_ledger",
+  "openai_fact_ledger",
   "deterministic_rules",
   "canonical_layout_signals",
   "existing_payload",
@@ -62,8 +62,9 @@ function textFromUploadedFile(uploadedFile: Record<string, unknown> | null | und
   return String(raw?.full_text ?? raw?.text ?? uploadedFile?.full_text ?? "");
 }
 
-function readVertexDebug(result: any) {
-  return result?.metadata?.extractionDebug?.vertex_fact_ledger ?? null;
+function readOpenAIDebug(result: any) {
+  const debug = result?.metadata?.extractionDebug;
+  return debug?.openai_fact_ledger ?? debug?.vertex_fact_ledger ?? null;
 }
 
 function readExistingProfileHints(result: any, uploadedFile: any): string[] {
@@ -114,9 +115,9 @@ export function buildProfileEnsemble(args: {
     candidates.push(candidate(args.profileOverride, 1, "manual_override", { reason: "profile_override" }));
   }
 
-  const vfl = readVertexDebug(result);
+  const vfl = readOpenAIDebug(result);
   if (vfl?.document_profile) {
-    candidates.push(candidate(vfl.document_profile, vfl.document_profile_confidence ?? 0.6, "vertex_fact_ledger", {
+    candidates.push(candidate(vfl.document_profile, vfl.document_profile_confidence ?? 0.6, "openai_fact_ledger", {
       method: vfl.document_profile_method ?? null,
       reasoning: vfl.document_profile_reasoning ?? null,
     }));
@@ -144,7 +145,7 @@ export function buildProfileEnsemble(args: {
     }));
   }
 
-  const priority = ["manual_override", "vertex_fact_ledger", "deterministic_rules", "existing_payload", "canonical_layout_signals"];
+  const priority = ["manual_override", "openai_fact_ledger", "deterministic_rules", "existing_payload", "canonical_layout_signals"];
   const recognized = candidates.filter((c) => c.profile_key !== "unknown_cre_document");
   const pool = recognized.length ? recognized : candidates;
   const selected = [...pool].sort((a, b) => {

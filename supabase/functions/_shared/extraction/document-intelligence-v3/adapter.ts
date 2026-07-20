@@ -66,15 +66,15 @@ function readPipelineMetadata(uploadedFile: UploadedFileLike | null): Record<str
 /**
  * Detects the business-extraction provider used for this row *without*
  * altering how normalize-pdf-output itself resolves it — this just reads
- * the already-persisted debug marker vertex_fact_ledger's orchestrator
- * stamps onto metadata.extractionDebug.vertex_fact_ledger when that
- * provider ran (see supabase/functions/_shared/extraction/vertex-fact-ledger/
+ * the already-persisted debug marker openai_fact_ledger's orchestrator
+ * stamps onto metadata.extractionDebug.openai_fact_ledger when that
+ * provider ran (see supabase/functions/_shared/extraction/openai-fact-ledger/
  * orchestrator.ts). Absence means legacy_hybrid ran, which is the default.
  */
 function readExtractionProvider(uploadedFile: UploadedFileLike | null): string | null {
   const normalizedMetadata = readNormalizedMetadata(uploadedFile);
   const extractionDebug = normalizedMetadata.extractionDebug as Record<string, unknown> | undefined;
-  return extractionDebug?.vertex_fact_ledger ? "vertex_fact_ledger" : "legacy_hybrid";
+  return (extractionDebug?.openai_fact_ledger ?? extractionDebug?.vertex_fact_ledger) ? "openai_fact_ledger" : "legacy_hybrid";
 }
 
 function readLayoutProvider(uploadedFile: UploadedFileLike | null): string | null {

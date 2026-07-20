@@ -171,7 +171,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
   // lease-workflow.ts FIELD_SPECS entries (real patterns/aliases) but no
   // LEASE_SCHEMA entry, so they were captured for legacy_hybrid's workflow
   // display but never validated, never part of getSchema()'s standard-field
-  // set, and unreachable by vertex_fact_ledger's fact-field-mapper.ts (which
+  // set, and unreachable by openai_fact_ledger's fact-field-mapper.ts (which
   // only scores against LEASE_SCHEMA labels). Patterns/labels below mirror
   // the existing FIELD_SPECS entries (lease-workflow.ts) so both vocabularies
   // agree on what these fields mean.

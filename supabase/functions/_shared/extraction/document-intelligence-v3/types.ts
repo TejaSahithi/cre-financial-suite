@@ -5,12 +5,12 @@
  * Structural types for the `document_intelligence_v3` contract described in
  * docs/document-intelligence-v3-baseline.md. This module defines shape only.
  * It does not run, parse, or replace any part of the current legacy_hybrid /
- * vertex_fact_ledger extraction pipeline, and nothing else in the runtime
+ * openai_fact_ledger extraction pipeline, and nothing else in the runtime
  * pipeline imports it yet — see feature-flag.ts (gate) and adapter.ts
  * (read-only skeleton builder) for the only two Phase 1 consumers.
  *
  * @ts-nocheck matches the convention already used by every file in the
- * sibling vertex-fact-ledger/ module, since this scaffold's job is to model
+ * sibling openai-fact-ledger/ module, since this scaffold's job is to model
  * the same kind of loosely-shaped, JSONB-sourced data those modules do.
  */
 
@@ -60,6 +60,7 @@ export interface DocumentIntelligenceV3LayoutSection {
 }
 
 export type DocumentIntelligenceV3ProfileSource =
+  | "openai_fact_ledger"
   | "vertex_fact_ledger"
   | "deterministic_rules"
   | "canonical_layout_signals"

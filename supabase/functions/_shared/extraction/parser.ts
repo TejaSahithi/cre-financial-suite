@@ -33,7 +33,7 @@ import type {
   DoclingField,
   DoclingPage,
 } from "./types.ts";
-import { extractDocumentWithVision } from "../ocr/vision-ocr.ts";
+import { extractDocumentWithAzureAndOpenAI } from "../ocr/document-ocr.ts";
 import { analyzeWithAzureLayout, getAzureDocumentIntelligenceConfig } from "../azure/document-intelligence.ts";
 import { normalizeAzureLayoutToDoclingOutput } from "./azure-layout-adapter.ts";
 import { resolveExtractionProvider } from "./extraction-provider.ts";
@@ -55,7 +55,7 @@ const MAX_INLINE_AZURE_DOCUMENT_BYTES = 20 * 1024 * 1024;
 const MAX_AZURE_HTTP_DOCUMENT_BYTES = 50 * 1024 * 1024;
 // Native PDF text extraction works well for digital PDFs up to this size.
 const MAX_NATIVE_PDF_TEXT_BYTES = 10 * 1024 * 1024;
-// Docling structural supplement capped to avoid re-uploading very large files.
+// Azure structural supplement capped to avoid re-uploading very large files.
 const MAX_AZURE_SUPPLEMENT_BYTES = 20 * 1024 * 1024;
 // Minimum chars from native extraction to consider it "complete enough" to
 // skip parser fallback. Matches MIN_LEASE_TEXT_CHARS in pipeline-contract.ts —
@@ -257,7 +257,7 @@ async function runDoclingOnly(ctx: ParseContext): Promise<DoclingOutput> {
 
 async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
   if (!ctx.hasVision) {
-    // No Vision or Docling configured. Try native text extraction as last resort
+    // No Azure Document Intelligence backend configured. Try native text extraction as last resort
     // before throwing — this handles executed lease PDFs where we get here because
     // the scan heuristic fired but the native parse was not tried (e.g. the file
     // is larger than MAX_NATIVE_PDF_TEXT_BYTES but still has some digital text).
@@ -266,7 +266,7 @@ async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
         const nativeFallback = await parseNativePdfText(ctx.fileBytes, ctx.fileName, ctx.mimeType);
         const nativeChars = nativeFallback?.full_text?.trim().length ?? 0;
         if (nativeFallback && nativeChars >= MIN_NATIVE_PDF_TEXT_CHARS) {
-          console.warn(`[parser] No Vision/Docling backend — using native PDF text (${nativeChars} chars) as fallback`);
+          console.warn(`[parser] No Azure Document Intelligence backend — using native PDF text (${nativeChars} chars) as fallback`);
           return tag(nativeFallback, "pdf_text");
         }
       } catch {
@@ -278,7 +278,7 @@ async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
     );
   }
   try {
-    const extracted = await extractDocumentWithVision(ctx.fileBytes, ctx.mimeType, ctx.fileUrl);
+    const extracted = await extractDocumentWithAzureAndOpenAI(ctx.fileBytes, ctx.mimeType, ctx.fileUrl);
     const output = visionExtractionToDocling(extracted, ctx.expectedPageCount);
     return tag(output, "azure_layout");
   } catch (err) {
@@ -289,13 +289,13 @@ async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
         return tag(doclingOutput, "docling");
       }
     }
-    // Vision and Docling both failed. Try native text as last resort.
+    // Azure document extraction failed. Try native text as last resort.
     if (ctx.mimeType.includes("pdf")) {
       try {
         const nativeFallback = await parseNativePdfText(ctx.fileBytes, ctx.fileName, ctx.mimeType);
         const nativeChars = nativeFallback?.full_text?.trim().length ?? 0;
         if (nativeFallback && nativeChars >= MIN_NATIVE_PDF_TEXT_CHARS) {
-          console.warn(`[parser] Vision failed — using native PDF text (${nativeChars} chars) as fallback`);
+          console.warn(`[parser] Azure extraction failed — using native PDF text (${nativeChars} chars) as fallback`);
           return tag(nativeFallback, "pdf_text");
         }
       } catch {
@@ -307,9 +307,9 @@ async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
 }
 
 /**
- * Vision-first: run OCR to capture all text (including stamps / handwriting
+ * Azure-first: run OCR to capture all text (including stamps / handwriting
  * / low-contrast scans), then *if Azure Document Intelligence is available* also run it to
- * pick up any structured tables. Merge: Vision's text_blocks + Docling's
+ * pick up any structured tables. Merge: Azure text_blocks + Azure
  * tables whenever Docling returns ≥1 table.
  */
 async function runVisionFirst(ctx: ParseContext): Promise<DoclingOutput> {
@@ -319,15 +319,15 @@ async function runVisionFirst(ctx: ParseContext): Promise<DoclingOutput> {
 
   let visionOutput: DoclingOutput | null = null;
   try {
-    const extracted = await extractDocumentWithVision(ctx.fileBytes, ctx.mimeType, ctx.fileUrl);
+    const extracted = await extractDocumentWithAzureAndOpenAI(ctx.fileBytes, ctx.mimeType, ctx.fileUrl);
     visionOutput = visionExtractionToDocling(extracted, ctx.expectedPageCount);
   } catch (err) {
-    console.warn(`[parser] Vision-first OCR failed, falling back to Docling: ${err.message}`);
+    console.warn(`[parser] Azure-first OCR failed: ${err.message}`);
     if (ctx.hasDocling && canDoclingHandle(ctx.mimeType)) {
       const doclingOutput = await callDocling(ctx);
       if (doclingOutput) return tag(doclingOutput, "docling");
     }
-    // Both Vision and Docling failed — propagate the real error
+    // Azure document extraction failed — propagate the real error
     throw new Error(`Azure Document Intelligence OCR failed: ${err.message}`);
   }
 
@@ -340,7 +340,7 @@ async function runVisionFirst(ctx: ParseContext): Promise<DoclingOutput> {
   try {
     doclingOutput = await callDocling(ctx);
   } catch (err) {
-    console.warn(`[parser] Docling supplement failed: ${err.message}`);
+    console.warn(`[parser] Azure supplement failed: ${err.message}`);
   }
 
   if (doclingOutput && (doclingOutput.tables?.length ?? 0) > 0) {
@@ -364,7 +364,7 @@ async function runParallel(ctx: ParseContext): Promise<DoclingOutput> {
   const [doclingRes, visionRes] = await Promise.allSettled([
     canDoclingHandle(ctx.mimeType) ? callDocling(ctx) : Promise.resolve(null),
     canVisionHandle(ctx.mimeType)
-      ? extractDocumentWithVision(ctx.fileBytes, ctx.mimeType, ctx.fileUrl).then((extracted) => {
+      ? extractDocumentWithAzureAndOpenAI(ctx.fileBytes, ctx.mimeType, ctx.fileUrl).then((extracted) => {
         return visionExtractionToDocling(extracted, ctx.expectedPageCount);
       })
       : Promise.resolve(null),
@@ -377,7 +377,7 @@ async function runParallel(ctx: ParseContext): Promise<DoclingOutput> {
   const visionScore = scoreOutput(visionOut);
 
   console.log(
-    `[parser] parallel scores: docling=${doclingScore} vision=${visionScore}`,
+    `[parser] parallel scores: docling=${doclingScore} azure=${visionScore}`,
   );
 
   if (doclingScore >= visionScore && doclingOut) return tag(doclingOut, "azure_layout");

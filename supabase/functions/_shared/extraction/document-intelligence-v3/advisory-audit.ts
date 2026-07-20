@@ -155,6 +155,7 @@ function collectBlockersFromPayload(uploadedFile: any, lease: any) {
   return [
     ...asArray(payload?.approval_blockers),
     ...asArray(payload?.metadata?.approval_blockers),
+    ...asArray(payload?.metadata?.extractionDebug?.openai_fact_ledger?.approval_blockers),
     ...asArray(payload?.metadata?.extractionDebug?.vertex_fact_ledger?.approval_blockers),
     ...asArray(workflowOutput?.approval_blockers),
     ...asArray(lease?.extraction_data?.approval_blockers),

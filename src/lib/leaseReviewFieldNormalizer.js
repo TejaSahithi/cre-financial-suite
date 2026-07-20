@@ -553,16 +553,18 @@ export function getStandardFieldsByGroup(standardFields, group) {
 /**
  * Facts extracted but not mapped to a standard field. Reuses
  * collectExtractedDocumentItems() (dynamicFields.js) — not reimplemented —
- * plus the vertex_fact_ledger-only diagnostic path your spec named
+ * plus the openai_fact_ledger diagnostic path
  * explicitly (additive; empty for legacy_hybrid leases, the live default).
  */
 export function normalizeDynamicFindings(lease) {
   const collected = collectExtractedDocumentItems(lease) || [];
-  const vertexItems =
-    lease?.uploaded_files?.ui_review_payload?.metadata?.extractionDebug?.vertex_fact_ledger?.dynamic_items
+  const openAIItems =
+    lease?.uploaded_files?.ui_review_payload?.metadata?.extractionDebug?.openai_fact_ledger?.dynamic_items
+    ?? lease?.uploaded_file?.ui_review_payload?.metadata?.extractionDebug?.openai_fact_ledger?.dynamic_items
+    ?? lease?.uploaded_files?.ui_review_payload?.metadata?.extractionDebug?.vertex_fact_ledger?.dynamic_items
     ?? lease?.uploaded_file?.ui_review_payload?.metadata?.extractionDebug?.vertex_fact_ledger?.dynamic_items
     ?? [];
-  const merged = [...collected, ...(Array.isArray(vertexItems) ? vertexItems : [])];
+  const merged = [...collected, ...(Array.isArray(openAIItems) ? openAIItems : [])];
 
   const seen = new Set();
   const rows = [];
@@ -1276,17 +1278,18 @@ function readDocumentProfile(lease) {
 function readServerApprovalBlockers(lease) {
   const ufPayload = lease?.uploaded_files?.ui_review_payload || lease?.uploaded_file?.ui_review_payload || null;
   const fromTopLevel = ufPayload?.approval_blockers;
-  const fromVertex = ufPayload?.metadata?.extractionDebug?.vertex_fact_ledger?.approval_blockers;
+  const fromOpenAI = ufPayload?.metadata?.extractionDebug?.openai_fact_ledger?.approval_blockers
+    ?? ufPayload?.metadata?.extractionDebug?.vertex_fact_ledger?.approval_blockers;
   const rawWorkflowOutput = lease?.extraction_data?.workflow_output || {};
   const workflowOutput = rawWorkflowOutput.workflow_output || rawWorkflowOutput;
   const fromWorkflow = workflowOutput?.approval_blockers;
-  const list = fromTopLevel ?? fromVertex ?? fromWorkflow ?? null;
+  const list = fromTopLevel ?? fromOpenAI ?? fromWorkflow ?? null;
   return Array.isArray(list) ? list : null;
 }
 
 /**
  * Advisory-only, never enforced. Prefers real backend-computed blockers
- * (currently only populated under vertex_fact_ledger, not the live default)
+ * (populated under openai_fact_ledger, with legacy vertex_fact_ledger fallback)
  * and falls back to a client-side, clearly-labeled estimate built purely
  * from field-contract requiredByDocumentProfile flags against the
  * already-normalized standardFields — so this section shows real,

@@ -375,25 +375,25 @@ export default function ExtractionDebugPanel({ lease }) {
     ?? lease?.extraction_data?.docling_raw?.page_count
     ?? null;
 
-  // â”€â”€ Vision Parser (Stage 1: PDF/image â†’ text) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â”€â”€ Azure Parser (Stage 1: PDF/image â†’ text) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // The parser tags its output via `extraction_method` on docling_raw â€”
   // "azure_layout" or "azure_document_intelligence" means Azure Document Intelligence read the document.
   // We probe several sources because the field is set by parser.ts and
   // surfaces in different places depending on which write path ran.
   const parserSource = (
-    debugRead("vision_parser_source")
+    (debugRead("azure_parser_source") ?? debugRead("vision_parser_source"))
     || uploadedFile?.docling_raw?.extraction_method
     || lease?.extraction_data?.docling_raw?.extraction_method
     || doclingRaw?.extraction_method
     || uploadedFile?.extraction_method
     || ""
   ).toString().toLowerCase();
-  const visionParserUsed = debugRead("vision_parser_used") === true
+  const visionParserUsed = (debugRead("azure_parser_used") ?? debugRead("vision_parser_used")) === true
     || parserSource === "azure_layout" || parserSource === "azure_document_intelligence"
     || parserSource === "hybrid"
-    // Last-resort signal: any text block tagged with gemini_vision source.
+    // Last-resort signal: any text block tagged with an Azure source.
     || textBlocks.some((b) => String(b?.source || "").toLowerCase().includes("azure"));
-  const visionParserPages = debugRead("vision_parser_pages_count")
+  const visionParserPages = debugRead("azure_parser_pages_count") ?? debugRead("vision_parser_pages_count")
     ?? pdfPageCountTotal
     ?? doclingPagesParsed
     ?? null;
@@ -403,17 +403,17 @@ export default function ExtractionDebugPanel({ lease }) {
       : `used${visionParserPages ? ` (${visionParserPages} pages)` : ""}`)
     : (parserSource ? `not used (parser: ${parserSource})` : "not used");
 
-  // â”€â”€ Vision Field Extraction (Stage 2: file bytes â†’ LLM JSON) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â”€â”€ OpenAI Field Extraction (Stage 2: Azure text â†’ LLM JSON) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const visionTriggered = Boolean(
-    debugRead("vision_field_extraction_used")
+    debugRead("openai_field_extraction_used") ?? debugRead("vision_field_extraction_used")
     ?? debugRead("vision_fallback_triggered")
     ?? debugRead("llm_file_mode_used"),
   );
   const fileBase64Available = debugRead("fileBase64_available");
   const weakTextDetected = debugRead("weak_text_detected");
-  const llmFieldsCount = debugRead("vision_field_extraction_fields_count")
+  const llmFieldsCount = debugRead("openai_field_extraction_fields_count") ?? debugRead("vision_field_extraction_fields_count")
     ?? debugRead("llm_fields_extracted");
-  const visionFieldSkipReason = debugRead("vision_field_extraction_skipped_reason")
+  const visionFieldSkipReason = debugRead("openai_field_extraction_skipped_reason") ?? debugRead("vision_field_extraction_skipped_reason")
     ?? debugRead("vision_fallback_skipped_reason")
     ?? (fileBase64Available === false
       ? "file_bytes_unavailable"
@@ -494,16 +494,16 @@ export default function ExtractionDebugPanel({ lease }) {
     assignment_signal_count: workflowOutput?.assignment_signal_count ?? workflowOutput?.summary?.assignment_signal_count ?? 0,
     amendment_signal_count: workflowOutput?.amendment_signal_count ?? workflowOutput?.summary?.amendment_signal_count ?? 0,
     profile_detection_signals: JSON.stringify(workflowOutput?.profile_detection_signals || workflowOutput?.summary?.profile_detection_signals || {}),
-    // Show both metrics so reviewers don't mistake Docling's per-page text
+    // Show both metrics so reviewers do not mistake Azure text-block pages
     // count for the actual PDF page count. Azure reads multi-page PDFs
-    // natively when file bytes are sent (see vision_processed flag).
+    // natively when file bytes are sent.
     pdf_page_count_total: pdfPageCountTotal != null ? pdfPageCountTotal : "â€”",
     docling_pages_parsed: doclingPagesParsed,
-    // Two distinct Vision stages â€” keeping them separate so reviewers can
+    // Two distinct Azure/OpenAI stages â€” keeping them separate so reviewers can
     // tell whether Azure read the document at all (parser) from whether
     // it pulled structured fields from the bytes (field extraction).
-    vision_parser: visionParserLabel,
-    vision_field_extraction: visionFieldLabel,
+    azure_parser: visionParserLabel,
+    openai_field_extraction: visionFieldLabel,
     fixed_fields_extracted: workflowOutput?.summary?.fixed_fields_extracted ?? Object.values(workflowOutput?.lease_fields || {}).filter((field) => field?.extraction_status === "extracted").length,
     // Previously `uniqueItems.length` â€” a narrower, independently-maintained
     // union that omitted lease_clauses entirely (see the `normalized` note

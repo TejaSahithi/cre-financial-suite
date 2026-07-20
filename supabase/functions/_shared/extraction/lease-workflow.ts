@@ -2222,7 +2222,7 @@ function buildUniversalDocumentItems(args: {
   documentProfile: string;
   leaseFields: Record<string, LeaseWorkflowField>;
   clauses: LeaseWorkflowClause[];
-  /** Already-built document items (e.g. from vertex-fact-ledger's
+  /** Already-built document items (e.g. from openai-fact-ledger's
    *  dynamic-fact-surfacer.ts) to merge in via this function's existing
    *  addItem()/seen dedup — optional, backward compatible. */
   externalItems?: any[];
@@ -4290,10 +4290,10 @@ export function buildLeaseWorkflowAbstraction(args: {
   documentSubtype?: string | null;
   unmappedLlmFields?: Array<{ key: string; value: unknown; sourceText?: string | null; sourcePage?: number | null; confidence?: number | null }>;
   /** Optional — when present, short-circuits the regex-based profile
-   *  classifier (e.g. vertex_fact_ledger's Vertex-classified profile).
+   *  classifier (e.g. openai_fact_ledger's OpenAI-classified profile).
    *  Undefined/null preserves existing regex-detection behavior exactly. */
   documentProfileOverride?: string | null;
-  /** Optional — pre-built document items (e.g. from vertex_fact_ledger's
+  /** Optional — pre-built document items (e.g. from openai_fact_ledger's
    *  dynamic-fact-surfacer.ts) merged into extractedDocumentItems via the
    *  existing dedup logic in buildUniversalDocumentItems. Undefined/empty
    *  preserves existing behavior exactly. */
