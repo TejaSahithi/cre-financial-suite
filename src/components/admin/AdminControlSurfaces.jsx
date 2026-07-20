@@ -258,12 +258,6 @@ function ApprovalWorkflowsSurface() {
                 <ArrowRight className="ml-1 h-3.5 w-3.5" />
               </Link>
             </Button>
-            <Button asChild variant="outline" size="sm">
-              <Link to={createPageUrl("LeaseReview")}>
-                Review Lease Approvals
-                <ArrowRight className="ml-1 h-3.5 w-3.5" />
-              </Link>
-            </Button>
           </div>
         </CardContent>
       </Card>
