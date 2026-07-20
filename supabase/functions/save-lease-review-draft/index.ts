@@ -2,6 +2,7 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { assertPageAccess, getUserOrgId, verifyUser } from "../_shared/supabase.ts";
 import { getLeaseDocumentPackageMode } from "../_shared/extraction/document-package/feature-mode.ts";
+import { getLeaseFinancialScheduleMode } from "../_shared/extraction/lease-financial-schedule/feature-mode.ts";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -22,7 +23,7 @@ function validatePayload(body: Record<string, unknown> = {}) {
 function errorStatus(message: string) {
   if (/unauthorized|missing authorization/i.test(message)) return 401;
   if (/access denied|permission/i.test(message)) return 403;
-  if (/approved and locked|package-active/i.test(message)) return 409;
+  if (/approved and locked|package-active|financial-active/i.test(message)) return 409;
   if (/required|not found|must be a|must be an/i.test(message)) return 400;
   return 500;
 }
@@ -47,6 +48,9 @@ Deno.serve(async (req: Request) => {
     const payload = validatePayload(body);
     if (getLeaseDocumentPackageMode() === "active") {
       throw new Error("package-active review draft saves must use package reviewer decision routes");
+    }
+    if (getLeaseFinancialScheduleMode() === "active") {
+      throw new Error("financial-active review draft saves must use P4 reviewer decision routes");
     }
 
     const { data, error } = await supabaseAdmin.rpc("save_lease_review_draft", {

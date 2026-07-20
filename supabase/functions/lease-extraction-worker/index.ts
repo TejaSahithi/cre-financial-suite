@@ -8,6 +8,7 @@ import { uploadedFileRowHasMeaningfulValues } from "../_shared/extraction/payloa
 import { enqueueEnrichmentJob } from "../_shared/extraction/enrichment-dispatch.ts";
 import { resolveExtractionRunId } from "../_shared/extraction/provenance/recorder.ts";
 import { getLeaseDocumentPackageMode } from "../_shared/extraction/document-package/feature-mode.ts";
+import { getLeaseFinancialScheduleMode } from "../_shared/extraction/lease-financial-schedule/feature-mode.ts";
 import {
   buildInternalFunctionHeaders,
   classifyDownstreamError,
@@ -829,6 +830,7 @@ Deno.serve(async (req: Request) => {
               p_uploaded_file_id: fileId,
               p_generation_id: job.generation_id,
               p_package_mode: getLeaseDocumentPackageMode(),
+              p_financial_mode: getLeaseFinancialScheduleMode(),
             });
           } catch (finalizeError: any) {
             console.warn(`[${WORKER_NAME}] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
@@ -1476,6 +1478,7 @@ Deno.serve(async (req: Request) => {
               p_uploaded_file_id: fileId,
               p_generation_id: job.generation_id,
               p_package_mode: getLeaseDocumentPackageMode(),
+              p_financial_mode: getLeaseFinancialScheduleMode(),
             });
           } catch (finalizeError: any) {
             console.warn(`[${WORKER_NAME}] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);

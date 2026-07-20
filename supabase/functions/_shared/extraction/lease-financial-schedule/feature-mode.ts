@@ -26,9 +26,12 @@ export interface FinancialScheduleModeCombination {
 }
 
 export const FINANCIAL_SCHEDULE_MODE_ERROR_CODES = {
+  FINANCIAL_MODE_REQUIRES_CLAIMS_LEDGER: "FINANCIAL_MODE_REQUIRES_CLAIMS_LEDGER",
   FINANCIAL_SHADOW_REQUIRES_CLAIMS_LEDGER: "FINANCIAL_SHADOW_REQUIRES_CLAIMS_LEDGER",
   FINANCIAL_ACTIVE_REQUIRES_CLAIMS_ACTIVE: "FINANCIAL_ACTIVE_REQUIRES_CLAIMS_ACTIVE",
+  FINANCIAL_ACTIVE_REQUIRES_PACKAGE_ACTIVE: "FINANCIAL_ACTIVE_REQUIRES_PACKAGE_ACTIVE",
   FINANCIAL_ACTIVE_PACKAGE_REQUIRES_PACKAGE_MODE: "FINANCIAL_ACTIVE_PACKAGE_REQUIRES_PACKAGE_MODE",
+  FINANCIAL_MODE_CONFIGURATION_INVALID: "FINANCIAL_MODE_CONFIGURATION_INVALID",
 } as const;
 
 export class FinancialScheduleModeError extends Error {
@@ -67,14 +70,17 @@ export function validateFinancialScheduleModeCombination(
   modes: FinancialScheduleModeCombination,
   options: { packageAwareInput?: boolean } = {},
 ) {
+  if (!VALID_MODES.has(modes.financialMode) || !["off", "shadow", "active"].includes(modes.claimsMode) || !["off", "shadow", "active"].includes(modes.packageMode)) {
+    throw new FinancialScheduleModeError(FINANCIAL_SCHEDULE_MODE_ERROR_CODES.FINANCIAL_MODE_CONFIGURATION_INVALID);
+  }
   if (modes.financialMode === "shadow" && modes.claimsMode === "off") {
-    throw new FinancialScheduleModeError(FINANCIAL_SCHEDULE_MODE_ERROR_CODES.FINANCIAL_SHADOW_REQUIRES_CLAIMS_LEDGER);
+    throw new FinancialScheduleModeError(FINANCIAL_SCHEDULE_MODE_ERROR_CODES.FINANCIAL_MODE_REQUIRES_CLAIMS_LEDGER);
   }
   if (modes.financialMode === "active" && modes.claimsMode !== "active") {
     throw new FinancialScheduleModeError(FINANCIAL_SCHEDULE_MODE_ERROR_CODES.FINANCIAL_ACTIVE_REQUIRES_CLAIMS_ACTIVE);
   }
-  if (modes.financialMode === "active" && options.packageAwareInput === true && modes.packageMode === "off") {
-    throw new FinancialScheduleModeError(FINANCIAL_SCHEDULE_MODE_ERROR_CODES.FINANCIAL_ACTIVE_PACKAGE_REQUIRES_PACKAGE_MODE);
+  if (modes.financialMode === "active" && options.packageAwareInput === true && modes.packageMode !== "active") {
+    throw new FinancialScheduleModeError(FINANCIAL_SCHEDULE_MODE_ERROR_CODES.FINANCIAL_ACTIVE_REQUIRES_PACKAGE_ACTIVE);
   }
 }
 

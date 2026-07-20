@@ -41,6 +41,8 @@ import { getLeaseClaimsLedgerMode } from "../_shared/extraction/claims/feature-m
 import { maybeRunClaimsLedgerForStage } from "../_shared/extraction/claims/claims-pipeline-orchestrator.ts";
 import { getLeaseDocumentPackageMode } from "../_shared/extraction/document-package/feature-mode.ts";
 import { maybeRunLeaseDocumentPackagePipeline } from "../_shared/extraction/document-package/runtime/package-runtime-orchestrator.ts";
+import { getLeaseFinancialScheduleMode } from "../_shared/extraction/lease-financial-schedule/feature-mode.ts";
+import { maybeRunLeaseFinancialScheduleRuntime } from "../_shared/extraction/lease-financial-schedule/runtime/financial-runtime-orchestrator.ts";
 import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/types.ts";
 import { resolveExtractionRunId, withExtractionStage } from "../_shared/extraction/provenance/recorder.ts";
 import type { StageHandle } from "../_shared/extraction/provenance/types.ts";
@@ -2032,6 +2034,7 @@ async function handleEnrichMode(args: {
     // failing this stage.
     const claimsLedgerMode = getLeaseClaimsLedgerMode();
     const packageMode = getLeaseDocumentPackageMode();
+    const financialMode = getLeaseFinancialScheduleMode();
     let enrichExtractionRunId: string | null = null;
     if (claimsLedgerMode !== "off" && jobGenerationId) {
       enrichExtractionRunId = await resolveExtractionRunId(supabaseAdmin, orgId, jobGenerationId);
@@ -2106,6 +2109,27 @@ async function handleEnrichMode(args: {
         { singleDocumentCompatibility: { fields: recordFields } },
       );
     }
+    // P4.7: financial runtime is a single mode-gated server boundary after
+    // P2/P3 authority and before the finalizer. Mode=off does not invoke it.
+    if (financialMode !== "off" && jobGenerationId) {
+      if (!enrichExtractionRunId) {
+        enrichExtractionRunId = await resolveExtractionRunId(supabaseAdmin, orgId, jobGenerationId);
+      }
+      const recordFields = (enrichedPayload.records?.[0]?.fields ?? {}) as Record<string, any>;
+      await maybeRunLeaseFinancialScheduleRuntime(
+        supabaseAdmin,
+        {
+          orgId,
+          uploadedFileId: fileId,
+          leaseId: null,
+          extractionRunId: enrichExtractionRunId,
+          generationId: jobGenerationId,
+          stageAttempt: Number(workerAttempt) || 1,
+        },
+        { currentCompatibility: { fields: recordFields }, packageAwareInput: packageMode !== "off" },
+      );
+    }
+
     // P0.5: re-evaluate and persist review_readiness now that enrichment
     // concluded — best-effort; a failure here must not fail the enrich
     // response itself (the enrichment result is already durably persisted
@@ -2118,6 +2142,7 @@ async function handleEnrichMode(args: {
         p_generation_id: jobGenerationId,
         p_ledger_mode: claimsLedgerMode,
         p_package_mode: packageMode,
+        p_financial_mode: financialMode,
       });
     } catch (finalizeError: any) {
       console.warn(`[normalize-pdf-output] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
@@ -2165,6 +2190,7 @@ async function handleEnrichMode(args: {
         p_uploaded_file_id: fileId,
         p_generation_id: jobGenerationId,
         p_package_mode: getLeaseDocumentPackageMode(),
+        p_financial_mode: getLeaseFinancialScheduleMode(),
       });
     } catch (finalizeError: any) {
       console.warn(`[normalize-pdf-output] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);

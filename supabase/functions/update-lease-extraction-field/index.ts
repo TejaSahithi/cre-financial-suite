@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { assertPageAccess, getUserOrgId, verifyUser } from "../_shared/supabase.ts";
+import { getLeaseFinancialScheduleMode } from "../_shared/extraction/lease-financial-schedule/feature-mode.ts";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FIELD_VALUE_ACTIONS = new Set(["field_evidence_edit", "custom_field_added"]);
@@ -11,6 +12,22 @@ const SOURCE_LINK_ACTIONS = new Set([
   "source_file_relinked_debug",
 ]);
 const LEASE_FLAG_ACTIONS = new Set(["document_type_override_set"]);
+const P4_OWNED_FIELD_KEYS = new Set([
+  "lease_date",
+  "start_date",
+  "end_date",
+  "commencement_date",
+  "expiration_date",
+  "rent_commencement_date",
+  "monthly_rent",
+  "annual_rent",
+  "rent_per_sf",
+  "security_deposit",
+  "ti_allowance",
+  "lease_term_months",
+  "late_fee_amount",
+  "assignment_consideration",
+]);
 const ACTIONS_BY_AREA: Record<string, Set<string>> = {
   field_value: FIELD_VALUE_ACTIONS,
   source_link: SOURCE_LINK_ACTIONS,
@@ -50,7 +67,7 @@ function validatePayload(body: Record<string, unknown> = {}) {
 function errorStatus(message: string) {
   if (/unauthorized|missing authorization/i.test(message)) return 401;
   if (/access denied|permission|different organization/i.test(message)) return 403;
-  if (/approved and locked/i.test(message)) return 409;
+  if (/approved and locked|financial-active/i.test(message)) return 409;
   if (/required|not found|must be one of|is not permitted/i.test(message)) return 400;
   return 500;
 }
@@ -89,6 +106,9 @@ Deno.serve(async (req: Request) => {
 
     const body = await req.json().catch(() => ({}));
     const payload = validatePayload(body);
+    if (getLeaseFinancialScheduleMode() === "active" && payload.fieldArea === "field_value" && payload.fieldKey && P4_OWNED_FIELD_KEYS.has(payload.fieldKey)) {
+      throw new Error("financial-active field edits must use P4 reviewer decision routes");
+    }
     const sourceFileId = payload.fieldArea === "source_link"
       ? await validateSourceFileForOrg(supabaseAdmin, orgId, (payload.patch as Record<string, unknown>).source_file_id)
       : null;

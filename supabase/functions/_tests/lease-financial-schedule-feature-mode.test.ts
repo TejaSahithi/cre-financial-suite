@@ -60,7 +60,7 @@ Deno.test("P4.1 feature mode: combinations require P2 and package foundations be
     () => validateFinancialScheduleModeCombination({ financialMode: "shadow", claimsMode: "off", packageMode: "off" }),
     FinancialScheduleModeError,
   );
-  assertEquals(shadowWithoutClaims.errorCode, FINANCIAL_SCHEDULE_MODE_ERROR_CODES.FINANCIAL_SHADOW_REQUIRES_CLAIMS_LEDGER);
+  assertEquals(shadowWithoutClaims.errorCode, FINANCIAL_SCHEDULE_MODE_ERROR_CODES.FINANCIAL_MODE_REQUIRES_CLAIMS_LEDGER);
 
   const activeWithoutClaimsActive = assertThrows(
     () => validateFinancialScheduleModeCombination({ financialMode: "active", claimsMode: "shadow", packageMode: "shadow" }),
@@ -72,11 +72,11 @@ Deno.test("P4.1 feature mode: combinations require P2 and package foundations be
     () => validateFinancialScheduleModeCombination({ financialMode: "active", claimsMode: "active", packageMode: "off" }, { packageAwareInput: true }),
     FinancialScheduleModeError,
   );
-  assertEquals(activePackageAwareWithoutPackage.errorCode, FINANCIAL_SCHEDULE_MODE_ERROR_CODES.FINANCIAL_ACTIVE_PACKAGE_REQUIRES_PACKAGE_MODE);
+  assertEquals(activePackageAwareWithoutPackage.errorCode, FINANCIAL_SCHEDULE_MODE_ERROR_CODES.FINANCIAL_ACTIVE_REQUIRES_PACKAGE_ACTIVE);
 
   validateFinancialScheduleModeCombination({ financialMode: "off", claimsMode: "off", packageMode: "off" });
   validateFinancialScheduleModeCombination({ financialMode: "shadow", claimsMode: "shadow", packageMode: "off" });
-  validateFinancialScheduleModeCombination({ financialMode: "active", claimsMode: "active", packageMode: "shadow" }, { packageAwareInput: true });
+  validateFinancialScheduleModeCombination({ financialMode: "active", claimsMode: "active", packageMode: "active" }, { packageAwareInput: true });
 });
 
 Deno.test("P4.1 feature mode: resolved combination reads only server env keys", () => {
