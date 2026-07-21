@@ -13,7 +13,7 @@ $ErrorActionPreference = "Continue"
 $ProjectRef = "cjwdwuqqdokblakheyjb"
 
 $Functions = @(
-    "parse-pdf-docling",
+    "parse-document-azure",
     "parse-file",
     "extract-document-fields",
     "extract-with-custom-fields",

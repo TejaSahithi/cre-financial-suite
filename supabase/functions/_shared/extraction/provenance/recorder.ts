@@ -48,10 +48,9 @@ export class ProvenancePersistenceError extends Error {
   }
 }
 
-/** Mirrors vertex-ai.ts's sanitizeDiagnosticProviderText redaction intent
- * (that helper is module-private there) -- strips bearer tokens/private
- * keys/service-account fields before anything reaches error_message, and
- * bounds length. Provenance rows must never carry secrets or document text. */
+/** Strips bearer tokens/private keys/service-account fields before anything
+ * reaches error_message, and bounds length. Provenance rows must never
+ * carry secrets or document text. */
 export function sanitizeErrorMessage(value: unknown): string {
   let text = String(
     value instanceof Error ? value.message : (value ?? "Unknown error"),

@@ -9,7 +9,7 @@
 // pipeline run (see docs/azure-vertex-migration-phase4c-evidence-enrichment-review.md).
 // These supplement, not replace, the existing behavioral coverage already
 // in document-intelligence-v3-document-index.test.ts, document-intelligence-v3-fact-mapper.test.ts,
-// and vertex-fact-ledger.test.ts, which already prove the canonical-layout
+// and openai-fact-ledger.test.ts, which already prove the canonical-layout
 // path and the legacy-fallback path end to end (cited, not duplicated, in
 // the Phase 4C report).
 //
@@ -27,7 +27,7 @@ import { assert, assertEquals, assertFalse } from "https://deno.land/std@0.208.0
 import { extractVertexFactLedgerClaims } from "../_shared/extraction/document-intelligence-v3/fact-mapper.ts";
 
 const FACT_MAPPER_PATH = new URL("../_shared/extraction/document-intelligence-v3/fact-mapper.ts", import.meta.url);
-const DOCUMENT_INDEX_V3_PATH = new URL("../_shared/extraction/vertex-fact-ledger/document-index-v3.ts", import.meta.url);
+const DOCUMENT_INDEX_V3_PATH = new URL("../_shared/extraction/openai-fact-ledger/document-index-v3.ts", import.meta.url);
 
 const LAYOUT_CONSTRUCTION_SYMBOLS = [
   "resolveCanonicalDocumentLayout",

@@ -46,7 +46,7 @@ Deno.test("61/62/63/64/65/66: migration never mutates runtime output, finalizer/
   assert(!/review_readiness|finalizer|lease_extraction_finalizer/i.test(uncommentedSql));
 
   const runtimeFiles = [
-    "supabase/functions/parse-pdf-docling/index.ts",
+    "supabase/functions/parse-document-azure/index.ts",
     "supabase/functions/normalize-pdf-output/index.ts",
     "supabase/functions/lease-extraction-worker/index.ts",
     "supabase/functions/approve-lease-workflow/index.ts",

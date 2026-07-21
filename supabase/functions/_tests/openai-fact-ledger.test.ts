@@ -1,9 +1,9 @@
 // @ts-nocheck
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { mapFactsToStandardFields } from "../_shared/extraction/vertex-fact-ledger/fact-field-mapper.ts";
-import { computeProfileApprovalBlockers } from "../_shared/extraction/vertex-fact-ledger/approval-blockers.ts";
-import { runOpenAIFactLedgerPipeline } from "../_shared/extraction/vertex-fact-ledger/orchestrator.ts";
-import type { Fact } from "../_shared/extraction/vertex-fact-ledger/types.ts";
+import { mapFactsToStandardFields } from "../_shared/extraction/openai-fact-ledger/fact-field-mapper.ts";
+import { computeProfileApprovalBlockers } from "../_shared/extraction/openai-fact-ledger/approval-blockers.ts";
+import { runOpenAIFactLedgerPipeline } from "../_shared/extraction/openai-fact-ledger/orchestrator.ts";
+import type { Fact } from "../_shared/extraction/openai-fact-ledger/types.ts";
 
 function makeFact(overrides: Partial<Fact>): Fact {
   return {
@@ -66,6 +66,9 @@ Deno.test("runOpenAIFactLedgerPipeline: ENABLE_DOCUMENT_INTELLIGENCE_V3 unset us
       documentSubtype: null,
     });
 
+    // vertex_fact_ledger is the intentional legacy-named debug-key mirror of
+    // openai_fact_ledger, retained for back-compat with stored/consumed
+    // debug payloads (see business-extraction-orchestrator.ts). Not stale.
     const vfl = (result.metadata as any)?.extractionDebug?.vertex_fact_ledger;
     assert(vfl);
     assertEquals(vfl.document_index_source, "legacy_evidence_index");

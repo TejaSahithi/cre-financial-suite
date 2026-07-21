@@ -340,6 +340,7 @@ async function performEnhancedExtraction(
   if (fileError || !fileRecord) {
     throw new Error(`File not found: ${fileError?.message || 'Invalid file_id'}`);
   }
+  fileRecord.docling_raw = fileRecord.azure_raw_response ?? fileRecord.docling_raw ?? null;
 
   // Check if we have docling_raw data
   let extractedData: Record<string, any>[] = [];

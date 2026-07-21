@@ -41,7 +41,7 @@ Deno.test("pipeline-status maps parser blocked and failed states clearly", () =>
     deriveDisplayState({ status: "failed" }, {
       status: "failed",
       stage: "parse",
-      error_message: "parse-pdf-docling returned 401",
+      error_message: "parse-document-azure returned 401",
     }).display_state,
     "failed",
   );

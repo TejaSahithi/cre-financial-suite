@@ -1,12 +1,12 @@
 // @ts-nocheck
-// Azure + Vertex Phase 4E (local implementation): unit tests for
+// Azure + OpenAI Phase 4E (local implementation): unit tests for
 // fact-ledger-extractor.ts's dominant-classification priority logic
 // (Correction round 3, item 1 — chunk-failure aggregation, not
 // last-chunk-wins). Pure-function tests only — no DB, no network.
 // Run: deno test --allow-env --allow-read --no-lock fact-ledger-chunk-aggregation.test.ts
 
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { __test__ } from "../_shared/extraction/vertex-fact-ledger/fact-ledger-extractor.ts";
+import { __test__ } from "../_shared/extraction/openai-fact-ledger/fact-ledger-extractor.ts";
 
 const { dominantClassification } = __test__;
 

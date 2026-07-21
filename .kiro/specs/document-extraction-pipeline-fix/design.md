@@ -1,5 +1,7 @@
 # Document Extraction Pipeline Fix - Technical Design
 
+> **Superseded**: This spec's provider references (Docling, Vertex AI, Gemini) describe an earlier architecture. The live pipeline now runs on Azure Document Intelligence (parsing) + OpenAI (LLM extraction) exclusively — see `docs/extraction-pipeline-architecture.md` for current behavior. Retained here for historical planning context.
+
 ## Overview
 
 The document extraction pipeline is currently broken with a disconnection between the upload and extraction processes. This design addresses the core pipeline architecture issues while adding comprehensive multi-format support, custom field capabilities, and robust AI integration. The fix ensures seamless processing of PDF, DOC, DOCX, TXT, images, and other formats through a unified pipeline that maintains backward compatibility with existing CSV/Excel workflows.

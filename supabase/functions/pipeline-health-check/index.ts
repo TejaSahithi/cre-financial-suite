@@ -37,6 +37,7 @@ const REQUIRED_UF_COLUMNS = [
   "ui_review_payload",
   "normalized_output",
   "docling_raw",
+  "azure_raw_response",
   "review_status",
 ] as const;
 
@@ -330,3 +331,8 @@ Deno.serve(async (req: Request) => {
     checks,
   });
 });
+
+export const __test__ = {
+  buildSecretPresenceMap,
+  checkEnvVars,
+};

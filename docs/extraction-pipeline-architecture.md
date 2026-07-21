@@ -1,10 +1,12 @@
 # Extraction Pipeline Architecture (as currently running)
 
 This documents what the code actually executes today, not what filenames imply.
-Two naming carryovers to keep in mind while reading the diagrams:
+Azure Document Intelligence is the only document parser and OpenAI is the
+only LLM provider — the Vertex AI / Gemini / Google Vision / Docling
+compatibility wrappers and the `parse-pdf-docling` alias route have been
+removed. One naming carryover remains:
 
-- **"Vertex" / "Gemini" names still exist in the codebase** (`vertex-ai.ts`, `vertex-fact-ledger/*`), but nothing in the live pipeline calls Vertex AI anymore. `phase52-vertex-diagnostic` returns HTTP 410: *"Vertex AI is no longer used. OpenAI is used instead."* The live LLM provider is **OpenAI (`gpt-4o-mini`)** via `supabase/functions/_shared/llm.ts`.
-- **"Docling" is now just a legacy type name** (`DoclingOutput`). Actual parsing is done by **Azure Document Intelligence**, adapted back into the old Docling shape for compatibility (`_shared/extraction/azure-layout-adapter.ts`).
+- **"Docling" is still used as a type/field name** (`DoclingOutput`, the `uploaded_files.docling_raw` column). Actual parsing is done by **Azure Document Intelligence**, adapted into the (renamed-in-spirit-only) Docling shape for compatibility with already-persisted data (`_shared/extraction/azure-layout-adapter.ts`). A new `azure_raw_response` column is now dual-written alongside `docling_raw` as the canonical name going forward; `docling_raw` is scheduled for removal in a later migration once verified unused.
 
 ---
 
@@ -19,11 +21,11 @@ flowchart TD
 
     IF -->|"detects module_type / document_subtype\nfile-detector.ts"| ROUTE{PDF lease?}
 
-    ROUTE -->|sync path| PPD[parse-pdf-docling]
+    ROUTE -->|sync path| PPD[parse-document-azure]
     ROUTE -->|"async fire-and-forget\nfor lease PDFs"| LEW[lease-extraction-worker]
 
     PPD -->|"delegates to\nparser.ts -> Azure Document Intelligence"| AZURE[(Azure Document\nIntelligence)]
-    AZURE -->|"docling_raw persisted\nstatus=pdf_parsed"| DB1
+    AZURE -->|"docling_raw + azure_raw_response\npersisted, status=pdf_parsed"| DB1
     PPD --> NPO[normalize-pdf-output]
 
     NPO -->|"business-extraction-orchestrator.ts\nchooses mode"| ORCH{Extraction mode}
@@ -177,15 +179,15 @@ flowchart LR
 |---|---|---|
 | Intake | `upload-handler`, `confirm-upload` | — |
 | Route | `ingest-file`, `_shared/file-detector.ts` | — |
-| Parse | `parse-pdf-docling` → `_shared/extraction/parser.ts` | **Azure Document Intelligence** |
+| Parse | `parse-document-azure` → `_shared/extraction/parser.ts` | **Azure Document Intelligence** |
 | Normalize (text cleanup) | `_shared/extraction/pipeline.ts` (`normalizeDoclingOutput`) | — |
 | Normalize (field aliasing) | `_shared/normalizer.ts` | — |
 | Normalize (type coercion) | `_shared/lease-normalizer.ts` | — |
-| Field/fact extraction | `normalize-pdf-output` → `business-extraction-orchestrator.ts` → `llm-extractor.ts` / `vertex-fact-ledger/fact-ledger-extractor.ts` | **OpenAI `gpt-4o-mini`** (via `_shared/llm.ts`) |
+| Field/fact extraction | `normalize-pdf-output` → `business-extraction-orchestrator.ts` → `llm-extractor.ts` / `openai-fact-ledger/fact-ledger-extractor.ts` | **OpenAI `gpt-4o-mini`** (via `_shared/llm.ts`) |
 | Expense-rule extraction | `extract-lease-expense-rules` | **OpenAI `gpt-4o-mini`** |
 | Background durable worker | `lease-extraction-worker` + `pipeline_jobs` | Azure DI + OpenAI |
 | Human review | `LeaseReview.jsx`, `review-approve`, `reject-lease-abstract`, `send-lease-back-for-reextraction` | — |
 | Validate/store | `validate-data`, `store-data` | — |
 | Compute | `compute-lease`, `compute-cam`, `compute-expense`, `compute-revenue`, `compute-budget`, `compute-reconciliation` | deterministic, no LLM |
 
-**Dormant/legacy code, not on the live path:** `_shared/vertex-ai.ts` (Gemini client), `phase52-vertex-diagnostic` (HTTP 410), `extract-document-fields` (HTTP 410, deprecated).
+**Dormant/legacy code, not on the live path:** `extract-document-fields` (HTTP 410, deprecated). The `vertex-ai.ts` Gemini-compat client and `phase52-vertex-diagnostic` route described in earlier revisions of this doc have since been deleted entirely, along with the `parse-pdf-docling`/`ocr-vision-extract` alias routes.

@@ -53,6 +53,7 @@ function statusClass(status) {
 function sanitizeReviewWarning(warning) {
   const text = String(warning || "");
   if (/no tables found/i.test(text)) return null;
+  // deprecated-provider-scan-allow: redacts credential-shaped substrings from a displayed warning message; does not read the env var
   if (/GOOGLE_SERVICE_ACCOUNT_KEY|service account|private_key|JWT/i.test(text)) {
     return "AI fallback extraction is unavailable. Deterministic document parsing still ran.";
   }

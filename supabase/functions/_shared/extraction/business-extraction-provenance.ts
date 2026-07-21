@@ -2,9 +2,14 @@
 /**
  * Azure Document Intelligence + OpenAI business-extraction provenance.
  *
- * New metadata uses openai_* provider names. Legacy vertex_* provider names
- * are still accepted and mirrored so existing rows, flags, and UI consumers
- * continue to work during the compatibility window.
+ * "vertex_fact_ledger"/"vertex_primary_legacy_fallback" are legacy names for
+ * an internal extraction algorithm choice (fact-ledger vs. rule/table/LLM
+ * hybrid), not a vendor selection -- both terminate in OpenAI. They remain
+ * accepted as aliases of their openai_* equivalents so existing Supabase
+ * secrets, internal debug calls, and already-persisted rows keep working.
+ * Any other unrecognized value supplied as a fresh override/env value (as
+ * opposed to a value being read back off an already-persisted row) fails
+ * closed via UnsupportedBusinessExtractionModeError.
  */
 
 export type CanonicalBusinessExtractionMode =
@@ -20,12 +25,28 @@ export type BusinessExtractionMode = CanonicalBusinessExtractionMode | LegacyBus
 
 export type EffectiveBusinessExtractionProvider = "openai_fact_ledger" | "legacy_hybrid";
 
-export function normalizeBusinessExtractionMode(value: string | null | undefined): CanonicalBusinessExtractionMode {
+export class UnsupportedBusinessExtractionModeError extends Error {
+  constructor(public readonly value: string, public readonly source: "override" | "env") {
+    super(
+      `Unsupported business extraction mode "${value}" (from ${source}). Only ` +
+        `"legacy_hybrid", "openai_fact_ledger", "openai_primary_legacy_fallback" ` +
+        `(and their legacy vertex_* aliases) are supported.`,
+    );
+    this.name = "UnsupportedBusinessExtractionModeError";
+  }
+}
+
+export function normalizeBusinessExtractionMode(
+  value: string | null | undefined,
+  opts: { source: "override" | "env" | "persisted_row" } = { source: "persisted_row" },
+): CanonicalBusinessExtractionMode {
   const raw = String(value ?? "").trim().toLowerCase();
   if (raw === "vertex_fact_ledger") return "openai_fact_ledger";
   if (raw === "vertex_primary_legacy_fallback") return "openai_primary_legacy_fallback";
   if (raw === "openai_fact_ledger" || raw === "openai_primary_legacy_fallback" || raw === "legacy_hybrid") return raw;
-  return "legacy_hybrid";
+  if (!raw) return "legacy_hybrid";
+  if (opts.source === "persisted_row") return "legacy_hybrid";
+  throw new UnsupportedBusinessExtractionModeError(raw, opts.source);
 }
 
 export interface BusinessExtractionProvenance {
@@ -37,10 +58,6 @@ export interface BusinessExtractionProvenance {
   fallback_reason: string | null;
   openai_attempt_count: number;
   openai_model: string | null;
-  /** @deprecated Compatibility mirror of openai_attempt_count. */
-  vertex_attempt_count: number;
-  /** @deprecated Compatibility mirror of openai_model. */
-  vertex_model: string | null;
   legacy_pipeline_version: string;
   semantic_schema_version: string;
   canonical_layout_schema_version: string | number | null;
@@ -63,18 +80,12 @@ export function buildProvenance(args: {
   fallbackReason?: string | null;
   openaiAttemptCount?: number;
   openaiModel?: string | null;
-  /** @deprecated Use openaiAttemptCount. */
-  vertexAttemptCount?: number;
-  /** @deprecated Use openaiModel. */
-  vertexModel?: string | null;
   canonicalLayoutSchemaVersion?: string | number | null;
   sourceContentHash?: string | null;
   correlationId: string;
   providerMocked?: boolean;
   mockScenario?: string | null;
 }): BusinessExtractionProvenance {
-  const openaiAttemptCount = args.openaiAttemptCount ?? args.vertexAttemptCount ?? 0;
-  const openaiModel = args.openaiModel ?? args.vertexModel ?? null;
   return {
     attempt_id: args.attemptId,
     requested_provider: normalizeBusinessExtractionMode(args.requestedProvider),
@@ -82,10 +93,8 @@ export function buildProvenance(args: {
     acceptance_state: args.acceptanceState,
     fallback_used: args.fallbackUsed,
     fallback_reason: args.fallbackReason ?? null,
-    openai_attempt_count: openaiAttemptCount,
-    openai_model: openaiModel,
-    vertex_attempt_count: openaiAttemptCount,
-    vertex_model: openaiModel,
+    openai_attempt_count: args.openaiAttemptCount ?? 0,
+    openai_model: args.openaiModel ?? null,
     legacy_pipeline_version: LEGACY_PIPELINE_VERSION,
     semantic_schema_version: SEMANTIC_SCHEMA_VERSION,
     canonical_layout_schema_version: args.canonicalLayoutSchemaVersion ?? null,

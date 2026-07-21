@@ -1,16 +1,26 @@
 // @ts-nocheck
 /**
- * OpenAI transport wrapper with legacy filename/function compatibility.
+ * OpenAI transport wrapper — P1.4.
  *
- * Older imports can still call this compatibility function, but the
- * implementation delegates to _shared/llm.ts and records provider=openai.
+ * Sole call point for provider_invocations rows covering OpenAI LLM calls
+ * made from the extraction pipeline. No-op when the flag is off or the
+ * stage has no provenance identity, fail-closed on a start-persistence
+ * failure, never alters the underlying call's own result -- errors
+ * propagate unchanged. All invocations are recorded with provider="openai";
+ * there is only ever one LLM provider.
  */
 
 import { callLLMText, LLMProviderError } from "../../../llm.ts";
 import { isExtractionProvenanceEnabled } from "../feature-flag.ts";
 import { persistArtifact, ProvenancePersistenceError, sanitizeErrorMessage } from "../recorder.ts";
 import type { ProvenanceContext } from "../types.ts";
-import { mapOpenAIFailureToGeneric } from "./vertex.ts";
+
+export function mapOpenAIFailureToGeneric(
+  classification: string | undefined,
+): string {
+  if (!classification) return "unknown";
+  return classification; // LLMProviderError classification maps 1:1 to generic categories
+}
 
 async function settleInvocation(
   supabaseAdmin: any,
@@ -50,24 +60,28 @@ async function settleInvocation(
   }
 }
 
-export async function callGeminiWithAPIKeyAndProvenance(
+const defaultCallFn = async (opts: any) => {
+  const res = await callLLMText({
+    systemPrompt: opts.systemPrompt ?? "",
+    userPrompt: opts.userPrompt,
+    temperature: opts.temperature,
+    maxOutputTokens: opts.maxOutputTokens,
+  });
+  return {
+    content: res.content,
+    model: res.model,
+    inputTokens: res.promptTokens,
+    outputTokens: res.completionTokens,
+    finishReason: res.finishReason,
+    responseId: res.responseId,
+  };
+};
+
+export async function callOpenAIWithProvenance(
   supabaseAdmin: any,
   context: ProvenanceContext,
   opts: any,
-  callFn: (opts: any) => Promise<any> = async (o: any) => {
-    const res = await callLLMText({
-      systemPrompt: o.systemPrompt ?? "",
-      userPrompt: o.userPrompt,
-      temperature: o.temperature,
-      maxOutputTokens: o.maxOutputTokens,
-    });
-    return {
-      content: res.content,
-      model: res.model,
-      inputTokens: res.promptTokens,
-      outputTokens: res.completionTokens,
-    };
-  },
+  callFn: (opts: any) => Promise<any> = defaultCallFn,
 ): Promise<any> {
   if (!isExtractionProvenanceEnabled() || !context.extractionRunId || !context.stageRunId) {
     return callFn(opts);
@@ -83,6 +97,8 @@ export async function callGeminiWithAPIKeyAndProvenance(
     providerAttempt,
   ].join(":");
 
+  const modelName = opts.model ?? (Deno.env.get("OPENAI_MODEL") || "gpt-4o-mini");
+
   const { data: startResult, error: startError } = await supabaseAdmin.rpc(
     "start_provider_invocation",
     {
@@ -93,7 +109,7 @@ export async function callGeminiWithAPIKeyAndProvenance(
       p_operation: context.operation,
       p_invocation_key: invocationKey,
       p_provider_attempt: providerAttempt,
-      p_model: opts.model ?? null,
+      p_model: modelName,
       p_chunk_index: context.chunkIndex ?? null,
     },
   );
@@ -120,29 +136,44 @@ export async function callGeminiWithAPIKeyAndProvenance(
     runId: context.extractionRunId,
     stageRunId: context.stageRunId,
     artifactType: "provider_raw_request",
-    content: { systemPrompt: opts.systemPrompt, userPrompt: opts.userPrompt, model: opts.model },
+    content: {
+      systemPrompt: opts.systemPrompt,
+      userPrompt: opts.userPrompt,
+      model: modelName,
+      temperature: opts.temperature ?? 0.1,
+      prompt_version: opts.promptVersion,
+    },
     linkToInvocationId: invocationId,
     linkRole: "request",
   });
 
   try {
     const result = await callFn(opts);
+
     await settleInvocation(supabaseAdmin, invocationId, context.orgId, {
       status: "completed",
       success: true,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
       latencyMs: Date.now() - startedAt,
+      providerErrorCode: result.finishReason ?? null,
     });
+
     await persistArtifact(supabaseAdmin, {
       orgId: context.orgId,
       runId: context.extractionRunId,
       stageRunId: context.stageRunId,
       artifactType: "provider_raw_response",
-      content: { content: result.content, model: result.model },
+      content: {
+        content: result.content,
+        model: result.model,
+        response_id: result.responseId,
+        finish_reason: result.finishReason,
+      },
       linkToInvocationId: invocationId,
       linkRole: "response",
     });
+
     return result;
   } catch (err) {
     const isProviderError = err instanceof LLMProviderError;
@@ -151,7 +182,7 @@ export async function callGeminiWithAPIKeyAndProvenance(
       success: false,
       latencyMs: Date.now() - startedAt,
       httpStatus: isProviderError ? err.httpStatus ?? null : null,
-      failureClassification: mapOpenAIFailureToGeneric(isProviderError ? err.classification : undefined),
+      failureClassification: mapOpenAIFailureToGeneric(isProviderError ? err.classification : "unknown"),
       providerErrorCode: isProviderError ? err.classification : null,
       errorMessage: err?.message ?? String(err),
     });

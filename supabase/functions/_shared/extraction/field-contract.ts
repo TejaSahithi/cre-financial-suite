@@ -18,7 +18,7 @@
  *     Do not conflate the two — resolveCanonicalKey() only follows `aliases`.
  *
  * Inert on creation: nothing imports this file yet. See
- * supabase/functions/_shared/extraction/vertex-fact-ledger/fact-field-mapper.ts
+ * supabase/functions/_shared/extraction/openai-fact-ledger/fact-field-mapper.ts
  * for the first real consumer (Phase 3).
  */
 

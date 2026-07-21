@@ -60,14 +60,11 @@ supabase functions deploy generate-budget
 # Email sending (F-006) — get key from resend.com
 supabase secrets set RESEND_API_KEY=re_YOUR_KEY
 
-# AI lease extraction (F-004) — pick ONE provider:
-# Option A: Anthropic Claude
-supabase secrets set ANTHROPIC_API_KEY=sk-ant-YOUR_KEY
-
-# Option B: Google Vertex AI (alternative to Anthropic)
-supabase secrets set VERTEX_PROJECT_ID=your-gcp-project-id
-supabase secrets set VERTEX_LOCATION=us-central1
-supabase secrets set GOOGLE_SERVICE_ACCOUNT_KEY='{"type":"service_account","project_id":"...","private_key":"..."}'
+# AI lease extraction (F-004) — Azure Document Intelligence (parsing) + OpenAI (LLM extraction):
+supabase secrets set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT=https://your-resource.cognitiveservices.azure.com
+supabase secrets set AZURE_DOCUMENT_INTELLIGENCE_KEY=your-azure-key
+supabase secrets set OPENAI_API_KEY=sk-YOUR_KEY
+supabase secrets set OPENAI_MODEL=gpt-4o-mini
 
 # Inter-function authentication (F-005) — generate any 32-char random string
 supabase secrets set WORKER_INTERNAL_SECRET=CHANGE_ME_TO_A_RANDOM_32_CHAR_SECRET
@@ -154,7 +151,8 @@ openssl rand -hex 16
 - [ ] `supabase db push` completed without errors
 - [ ] `supabase functions deploy` completed
 - [ ] RESEND_API_KEY set
-- [ ] ANTHROPIC_API_KEY (or Vertex creds) set
+- [ ] AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT + AZURE_DOCUMENT_INTELLIGENCE_KEY set
+- [ ] OPENAI_API_KEY set
 - [ ] WORKER_INTERNAL_SECRET set
 - [ ] STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET set
 - [ ] `financial-uploads` storage bucket exists

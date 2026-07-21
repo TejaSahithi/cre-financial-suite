@@ -1,29 +1,16 @@
 // @ts-nocheck
-// P1.4 — mocked-call tests for the Vertex AI provenance transport wrapper.
-// Mocks callVertexAI itself (not the network) so these tests assert the
-// wrapper's OWN behavior (invocation lifecycle, classification mapping,
-// error propagation) without depending on vertex-ai.ts's real HTTP path.
+// P1.4 — mocked-call tests for the OpenAI provenance transport wrapper.
+// Verifies the wrapper's OWN behavior (invocation lifecycle, classification
+// mapping, error propagation, provider identity) without depending on
+// llm.ts's real HTTP path: the no-op path (flag off), the fail-closed start
+// path, the invocation_key-reuse guard, and callFn injection are all
+// reachable without a real OpenAI call.
 
 import { assert, assertEquals, assertRejects, assertStrictEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-// vertex-ai.ts's callVertexAI is imported by the wrapper at module load
-// time, so we stub it via Deno's module mocking is not available here --
-// instead the wrapper module is re-imported per test isn't feasible either
-// (Deno caches modules). Given that, we test through the same seam the
-// wrapper actually calls: we monkey-patch the exported callVertexAI symbol
-// is not possible from outside (ES module bindings are read-only), so
-// these tests instead verify the wrapper's provenance bookkeeping using
-// its OWN control flow guarantees that don't require intercepting
-// callVertexAI: the no-op path (flag off), the fail-closed start path, and
-// the invocation_key-reuse guard -- all reachable without a real Vertex
-// call. Success/failure settlement content is covered structurally by the
-// recorder module's own settlement tests (identical RPC shape) plus the
-// classification-mapping unit test below (pure function, no I/O).
-
-import { callOpenAIWithProvenance, mapOpenAIFailureToGeneric } from "../_shared/extraction/provenance/transport/vertex.ts";
+import { callOpenAIWithProvenance, mapOpenAIFailureToGeneric } from "../_shared/extraction/provenance/transport/openai.ts";
 import { ProvenancePersistenceError } from "../_shared/extraction/provenance/recorder.ts";
 import { LLMProviderError } from "../_shared/llm.ts";
-
 
 const BASE_CONTEXT = {
   orgId: "org-1",
@@ -67,27 +54,23 @@ function makeMockSupabase(rpcResponses: Record<string, Array<{ data: any; error:
   };
 }
 
-Deno.test("callOpenAIWithProvenance: flag disabled makes zero RPC calls", async () => {
+Deno.test("callOpenAIWithProvenance: flag disabled calls callFn directly and makes zero RPC calls", async () => {
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
-  // Belt-and-suspenders: this is the one path in this file where the
-  // wrapper calls through to the REAL callVertexAI. Setting this (the same
-  // guard vertex-ai.ts's own call sites already check via
-  // assertExternalProviderCallsAllowed) makes it throw deterministically
-  // and immediately -- no live network attempt is possible here, matching
-  // the "no live Vertex calls" policy for local tests.
-  Deno.env.set("DISABLE_EXTERNAL_PROVIDER_CALLS", "true");
   const supabaseAdmin = makeMockSupabase({});
-  await assertRejects(() => callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }));
+  const mockCallFn = async () => ({ content: "ok", model: "gpt-4o-mini", inputTokens: 10, outputTokens: 5 });
+  const result = await callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }, mockCallFn);
+  assertEquals(result.content, "ok");
   assertEquals(supabaseAdmin.calls.length, 0);
-  Deno.env.delete("DISABLE_EXTERNAL_PROVIDER_CALLS");
 });
 
 Deno.test("callOpenAIWithProvenance: missing stageRunId makes zero RPC calls even with flag on", async () => {
   Deno.env.set("ENABLE_EXTRACTION_PROVENANCE", "true");
   const supabaseAdmin = makeMockSupabase({});
-  await assertRejects(() =>
-    callOpenAIWithProvenance(supabaseAdmin, { ...BASE_CONTEXT, stageRunId: null }, { userPrompt: "test" })
+  const mockCallFn = async () => ({ content: "ok", model: "gpt-4o-mini", inputTokens: 10, outputTokens: 5 });
+  const result = await callOpenAIWithProvenance(
+    supabaseAdmin, { ...BASE_CONTEXT, stageRunId: null }, { userPrompt: "test" }, mockCallFn,
   );
+  assertEquals(result.content, "ok");
   assertEquals(supabaseAdmin.calls.length, 0);
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
 });
@@ -97,15 +80,28 @@ Deno.test("callOpenAIWithProvenance: start_provider_invocation failure fails clo
   const supabaseAdmin = makeMockSupabase({
     start_provider_invocation: [{ data: null, error: { message: "insert failed" } }],
   });
+  let called = false;
+  const mockCallFn = async () => { called = true; return {} as any; };
   const err = await assertRejects(
-    () => callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }),
+    () => callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }, mockCallFn),
     ProvenancePersistenceError,
   );
   assertEquals((err as any).code, "PROVENANCE_PERSISTENCE_FAILED");
-  // Exactly one call (the start attempt) -- proves the real provider call
-  // (which would need network access and fail loudly/slowly) was never reached.
-  assertEquals(supabaseAdmin.calls.length, 1);
-  assertEquals(supabaseAdmin.calls[0].fn, "start_provider_invocation");
+  assertEquals(called, false, "must not proceed to call the provider on a start-persistence failure");
+  Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
+});
+
+Deno.test("callOpenAIWithProvenance: start_provider_invocation records provider='openai'", async () => {
+  Deno.env.set("ENABLE_EXTRACTION_PROVENANCE", "true");
+  const supabaseAdmin = makeMockSupabase({
+    start_provider_invocation: [{ data: { invocation_id: "inv-1", created: true, status: "running" }, error: null }],
+    settle_provider_invocation: [{ data: { settled_by_this_call: true, status: "completed" }, error: null }],
+  });
+  const mockCallFn = async () => ({ content: "ok", model: "gpt-4o-mini", inputTokens: 10, outputTokens: 5 });
+  await callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }, mockCallFn);
+
+  const startCall = supabaseAdmin.calls.find((c) => c.fn === "start_provider_invocation");
+  assertEquals(startCall.args.p_provider, "openai");
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
 });
 
@@ -114,12 +110,14 @@ Deno.test("callOpenAIWithProvenance: reused invocation_key already terminal thro
   const supabaseAdmin = makeMockSupabase({
     start_provider_invocation: [{ data: { invocation_id: "inv-1", created: false, status: "completed" }, error: null }],
   });
+  let called = false;
+  const mockCallFn = async () => { called = true; return {} as any; };
   const err = await assertRejects(
-    () => callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }),
+    () => callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }, mockCallFn),
     ProvenancePersistenceError,
   );
   assertEquals((err as any).code, "PROVENANCE_INVOCATION_KEY_REUSED");
-  assertEquals(supabaseAdmin.calls.length, 1, "must not proceed to call the provider on a reused terminal key");
+  assertEquals(called, false, "must not proceed to call the provider on a reused terminal key");
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
 });
 
@@ -131,8 +129,9 @@ Deno.test("callOpenAIWithProvenance: invocation_key includes providerAttempt so 
       { data: null, error: { message: "boom" } },
     ],
   });
-  await assertRejects(() => callOpenAIWithProvenance(supabaseAdmin, { ...BASE_CONTEXT, providerAttempt: 1 }, { userPrompt: "test" }));
-  await assertRejects(() => callOpenAIWithProvenance(supabaseAdmin, { ...BASE_CONTEXT, providerAttempt: 2 }, { userPrompt: "test" }));
+  const mockCallFn = async () => ({} as any);
+  await assertRejects(() => callOpenAIWithProvenance(supabaseAdmin, { ...BASE_CONTEXT, providerAttempt: 1 }, { userPrompt: "test" }, mockCallFn));
+  await assertRejects(() => callOpenAIWithProvenance(supabaseAdmin, { ...BASE_CONTEXT, providerAttempt: 2 }, { userPrompt: "test" }, mockCallFn));
   const keys = supabaseAdmin.calls.map((c) => c.args.p_invocation_key);
   assertEquals(new Set(keys).size, 2, "different providerAttempt values must produce different invocation_key values");
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
@@ -150,7 +149,7 @@ Deno.test("callOpenAIWithProvenance: a running invocation exists BEFORE the mock
     // provider call is still "in flight" -- proving start happens BEFORE
     // the outbound call, not after.
     invocationStatusMidFlight = supabaseAdmin.calls.find((c) => c.fn === "start_provider_invocation") ? "running" : "missing";
-    return { content: "ok", model: "gemini-test", inputTokens: 100, outputTokens: 50 };
+    return { content: "ok", model: "gpt-4o-mini", inputTokens: 100, outputTokens: 50 };
   };
   const result = await callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }, mockCallFn);
   assertEquals(invocationStatusMidFlight, "running");
@@ -164,7 +163,7 @@ Deno.test("callOpenAIWithProvenance: success terminalizes with tokens and latenc
     start_provider_invocation: [{ data: { invocation_id: "inv-1", created: true, status: "running" }, error: null }],
     settle_provider_invocation: [{ data: { settled_by_this_call: true, status: "completed" }, error: null }],
   });
-  const mockCallFn = async () => ({ content: "ok", model: "gemini-test", inputTokens: 123, outputTokens: 45 });
+  const mockCallFn = async () => ({ content: "ok", model: "gpt-4o-mini", inputTokens: 123, outputTokens: 45 });
   await callOpenAIWithProvenance(supabaseAdmin, BASE_CONTEXT, { userPrompt: "test" }, mockCallFn);
 
   const settleCall = supabaseAdmin.calls.find((c) => c.fn === "settle_provider_invocation");
@@ -177,13 +176,13 @@ Deno.test("callOpenAIWithProvenance: success terminalizes with tokens and latenc
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
 });
 
-Deno.test("callOpenAIWithProvenance: failure terminalizes with generic AND provider-specific classification, then re-throws the original error unchanged", async () => {
+Deno.test("callOpenAIWithProvenance: failure terminalizes with classification, then re-throws the original error unchanged", async () => {
   Deno.env.set("ENABLE_EXTRACTION_PROVENANCE", "true");
   const supabaseAdmin = makeMockSupabase({
     start_provider_invocation: [{ data: { invocation_id: "inv-1", created: true, status: "running" }, error: null }],
     settle_provider_invocation: [{ data: { settled_by_this_call: true, status: "failed" }, error: null }],
   });
-  const originalError = new LLMProviderError("rate limited by Vertex", "rate_limited", 429);
+  const originalError = new LLMProviderError("rate limited by OpenAI", "rate_limit", 429);
   const mockCallFn = async () => { throw originalError; };
 
   const thrown = await assertRejects(
@@ -192,19 +191,19 @@ Deno.test("callOpenAIWithProvenance: failure terminalizes with generic AND provi
   // Re-thrown completely unchanged: same instance, same classification,
   // same message -- proving this wrapper never alters caller-visible error behavior.
   assertStrictEquals(thrown, originalError);
-  assertEquals((thrown as LLMProviderError).classification, "rate_limited");
+  assertEquals((thrown as LLMProviderError).classification, "rate_limit");
 
   const settleCall = supabaseAdmin.calls.find((c) => c.fn === "settle_provider_invocation");
   assertEquals(settleCall.args.p_status, "failed");
   assertEquals(settleCall.args.p_success, false);
   assertEquals(settleCall.args.p_failure_classification, "rate_limit");
-  assertEquals(settleCall.args.p_provider_error_code, "rate_limited");
+  assertEquals(settleCall.args.p_provider_error_code, "rate_limit");
   assertEquals(settleCall.args.p_http_status, 429);
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
 });
 
 Deno.test("callOpenAIWithProvenance: flag-on success result is deep-equal to the flag-off passthrough result (compatibility)", async () => {
-  const mockCallFn = async () => ({ content: "same content", model: "gemini-test", inputTokens: 10, outputTokens: 5 });
+  const mockCallFn = async () => ({ content: "same content", model: "gpt-4o-mini", inputTokens: 10, outputTokens: 5 });
 
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
   const flagOffResult = await callOpenAIWithProvenance(makeMockSupabase({}), BASE_CONTEXT, { userPrompt: "test" }, mockCallFn);
@@ -220,7 +219,7 @@ Deno.test("callOpenAIWithProvenance: flag-on success result is deep-equal to the
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
 });
 
-Deno.test("mapOpenAIFailureToGeneric: maps every OpenAI classification to a value in the schema's generic taxonomy", () => {
+Deno.test("mapOpenAIFailureToGeneric: passes through a classification already in the generic taxonomy, and defaults to unknown", () => {
   const ALLOWED = new Set([
     "authentication", "authorization", "quota", "rate_limit", "resource_exhausted", "timeout",
     "transport", "provider_client_error", "provider_server_error", "invalid_response",
@@ -228,14 +227,10 @@ Deno.test("mapOpenAIFailureToGeneric: maps every OpenAI classification to a valu
   ]);
   const cases: Array<[any, string]> = [
     ["timeout", "timeout"],
-    ["rate_limited", "rate_limit"],
-    ["server_error", "provider_server_error"],
-    ["auth_error", "authentication"],
-    ["network_error", "transport"],
-    ["budget_exhausted", "resource_exhausted"],
-    ["model_unavailable", "provider_client_error"],
-    ["malformed_response", "invalid_response"],
-    ["empty_extraction", "schema_validation"],
+    ["rate_limit", "rate_limit"],
+    ["provider_server_error", "provider_server_error"],
+    ["authentication", "authentication"],
+    ["transport", "transport"],
     ["unknown", "unknown"],
     [undefined, "unknown"],
   ];

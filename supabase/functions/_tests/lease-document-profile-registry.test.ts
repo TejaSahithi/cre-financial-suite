@@ -16,7 +16,7 @@ import { DOCUMENT_PROFILE_REGISTRY_VERSION } from "../_shared/extraction/documen
 // (not imported) so this test also catches drift if profile-registry.ts is
 // edited without updating this list, or vice versa. Sources:
 //   document_subtype: supabase/migrations/20260423001000_phase1_observability_baseline.sql:111-128
-//   document_profile: supabase/functions/_shared/extraction/vertex-fact-ledger/profile-classifier.ts:20-28
+//   document_profile: supabase/functions/_shared/extraction/openai-fact-ledger/profile-classifier.ts:20-28
 const REAL_DOCUMENT_SUBTYPE_VALUES = [
   "base_lease", "amendment", "assignment", "consent", "extension", "addendum",
   "expense_backup", "cam_support", "budget_support", "rent_roll", "generic",

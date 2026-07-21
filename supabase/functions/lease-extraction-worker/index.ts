@@ -113,6 +113,7 @@ async function runParseStageInline(
       failed_step: "parse",
       extraction_method: args.providerUsed ?? "none",
       docling_raw: doclingRaw,
+      azure_raw_response: doclingRaw,
       ui_review_payload: payload,
       normalized_output: mergePipelineIntoNormalizedOutput(null, pipeline, {
         method: "blocked_pipeline_failure",
@@ -252,6 +253,7 @@ async function runParseStageInline(
       "pdf_parsed",
       {
         docling_raw: persistedLayout,
+        azure_raw_response: persistedLayout,
         extraction_method: extractionMethod,
         parsed_data: [],
         row_count: (doclingOutput.tables ?? []).reduce(

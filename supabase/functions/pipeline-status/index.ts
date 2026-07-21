@@ -31,6 +31,7 @@ const FULL_FILE_SELECT = [
   "reviewed_output",
   "normalized_output",
   "docling_raw",
+  "azure_raw_response",
   "row_count",
   "valid_count",
   "error_count",
@@ -304,6 +305,9 @@ Deno.serve(async (req: Request) => {
           message: fileResult.error?.message || "Invalid file_id",
           schema_warnings: schemaWarnings,
         }, 404);
+      }
+      if ("azure_raw_response" in fileResult.data) {
+        fileResult.data.docling_raw = fileResult.data.azure_raw_response ?? fileResult.data.docling_raw ?? null;
       }
 
       const latestJobResult = includeDetails

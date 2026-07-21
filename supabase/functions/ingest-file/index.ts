@@ -260,11 +260,12 @@ async function enqueueLeaseExtractionJob(args: {
   if (forceReextract) {
     const { data: existingFile } = await supabaseAdmin
       .from("uploaded_files")
-      .select("docling_raw")
+      .select("docling_raw, azure_raw_response")
       .eq("id", fileRecord.id)
       .maybeSingle();
-    const existingText = String(existingFile?.docling_raw?.full_text ?? "").trim();
-    const existingMethod = String(existingFile?.docling_raw?.extraction_method ?? "");
+    const existingParsed = existingFile?.azure_raw_response ?? existingFile?.docling_raw ?? null;
+    const existingText = String(existingParsed?.full_text ?? "").trim();
+    const existingMethod = String(existingParsed?.extraction_method ?? "");
     if (existingText.length >= 200 && KNOWN_GOOD_PARSER_METHODS.has(existingMethod)) {
       initialStage = "normalize";
       console.log(
@@ -795,13 +796,14 @@ async function parkForBlockedPipeline(args: {
 async function readParserState(supabaseAdmin: any, fileId: string) {
   const { data, error } = await supabaseAdmin
     .from("uploaded_files")
-    .select("id, status, processing_status, error_message, extraction_method, docling_raw")
+    .select("id, status, processing_status, error_message, extraction_method, docling_raw, azure_raw_response")
     .eq("id", fileId)
     .maybeSingle();
   if (error) {
     console.warn("[ingest-file] Could not read parser state:", error);
     return { record: null, pipeline: {}, parserStatus: null, fullTextChars: 0, pageCount: null };
   }
+  if (data) data.docling_raw = data.azure_raw_response ?? data.docling_raw ?? null;
   const pipeline = extractPipelineMetadata(data);
   const doclingRaw = data?.docling_raw ?? null;
   const fullTextChars = Number(

@@ -1,5 +1,7 @@
 # Bugfix Requirements Document
 
+> **Superseded**: This document's provider references (Docling, Vertex AI, Gemini) describe an earlier architecture. The live pipeline now runs on Azure Document Intelligence (parsing) + OpenAI (LLM extraction) exclusively — see `docs/extraction-pipeline-architecture.md` for current behavior. Retained here for historical planning context.
+
 ## Introduction
 
 The document extraction pipeline is broken, preventing successful processing of uploaded documents across multiple file formats. The system should read documents of any format (PDF, DOC, DOCX, TXT, images, etc.), parse them using appropriate tools, then use AI to interpret and map the extracted data to UI fields with support for custom field creation when needed. There's currently a break in the upload and extraction process that affects the core functionality of document processing for lease assignments and other commercial real estate documents.

@@ -20,39 +20,13 @@ Tests the file format detection and module type detection logic in `_shared/file
 - Module type inference from filenames and content
 - Confidence boost when multiple detection methods agree
 
-### 2. `ingest-file-routing.test.ts`
-Tests the pipeline routing logic and edge function call mechanisms in `ingest-file/index.ts`.
-
-**Coverage:**
-- **Routing Decisions**: PDF → parse-pdf-docling, CSV → parse-file, Excel → parse-pdf-docling, unknown formats
-- **Edge Function Calls**: Success scenarios, retry logic with exponential backoff, client error handling
-- **File Operations**: File download from storage, text preview extraction, error handling
-- **Status Updates**: Processing state transitions, error status updates
-- **Two-Step Processing**: PDF pipeline with extraction and normalization steps
-
-**Key Test Cases:**
-- Routing logic for different file formats
-- Retry mechanisms for transient failures
-- No retry for client errors (4xx)
-- Status tracking throughout pipeline stages
-
-### 3. `parse-pdf-docling.test.ts`
-Tests the document extraction functions in `parse-pdf-docling/index.ts`.
-
-**Coverage:**
-- **Docling API Integration**: Successful calls, retry logic, client error handling, timeout handling
-- **Gemini Fallback**: Native extraction when Docling unavailable, retry mechanisms
-- **Response Normalization**: Converting various Docling response formats to canonical structure
-- **Mock Output Generation**: Format-specific mock data for PDF, Excel, Word, images
-- **Error Handling**: Extraction failures, API unavailability, invalid responses
-- **File Format Support**: Validation of supported MIME types and formats
-
-**Key Test Cases:**
-- Docling API call with retry logic and exponential backoff
-- Gemini native extraction as fallback
-- Response normalization handling various field names
-- Mock output generation for different document types
-- Comprehensive error handling and recovery
+### 2. Document parsing
+Document parsing runs entirely through Azure Document Intelligence
+(`_shared/extraction/parser.ts#parseDocument()` -> `parse-document-azure/index.ts`).
+There is no separate Docling/Gemini extraction step or fallback; parser
+provider selection is covered by `extraction-provider.test.ts`
+(fail-closed on any unsupported provider value) and `pipeline-health-check.test.ts`
+(config presence).
 
 ### 4. `extract-document-fields.test.ts`
 Tests the AI interpretation and field mapping logic in `extract-document-fields/index.ts`.
@@ -97,12 +71,6 @@ Tests the custom field management API in `custom-fields/index.ts`.
 # Run file detector tests
 deno test --allow-all supabase/functions/_tests/file-detector.test.ts
 
-# Run routing tests
-deno test --allow-all supabase/functions/_tests/ingest-file-routing.test.ts
-
-# Run extraction tests
-deno test --allow-all supabase/functions/_tests/parse-pdf-docling.test.ts
-
 # Run AI interpretation tests
 deno test --allow-all supabase/functions/_tests/extract-document-fields.test.ts
 
@@ -135,7 +103,7 @@ These tests validate the requirements specified in task 4.1:
 - **Validation Logic**: Input validation and sanitization testing
 
 ### Mock Strategy
-- **External APIs**: Mocked Docling API, Vertex AI, Supabase calls
+- **External APIs**: Mocked Azure Document Intelligence, OpenAI, Supabase calls
 - **File Operations**: Mocked file downloads and storage operations
 - **Database Operations**: Mocked Supabase admin client operations
 - **Network Calls**: Mocked fetch operations with configurable responses

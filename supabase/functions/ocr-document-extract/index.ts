@@ -123,7 +123,7 @@ Deno.serve(async (req: Request) => {
 
     let query = supabaseAdmin
       .from("uploaded_files")
-      .select("id, org_id, file_name, file_url, mime_type, status, parsed_data, docling_raw, normalized_output, reviewed_output, ui_review_payload")
+      .select("id, org_id, file_name, file_url, mime_type, status, parsed_data, docling_raw, azure_raw_response, normalized_output, reviewed_output, ui_review_payload")
       .eq("id", fileId);
     if (orgId) query = query.eq("org_id", orgId);
 
@@ -134,6 +134,7 @@ Deno.serve(async (req: Request) => {
         404,
       );
     }
+    fileRecord.docling_raw = fileRecord.azure_raw_response ?? fileRecord.docling_raw ?? null;
 
     const initialText = extractTextFromFileRecord(fileRecord);
     let ingestData: any = null;
@@ -148,13 +149,14 @@ Deno.serve(async (req: Request) => {
 
     const { data: refreshedFile, error: refreshError } = await supabaseAdmin
       .from("uploaded_files")
-      .select("id, org_id, file_name, file_url, mime_type, status, parsed_data, docling_raw, normalized_output, reviewed_output, ui_review_payload")
+      .select("id, org_id, file_name, file_url, mime_type, status, parsed_data, docling_raw, azure_raw_response, normalized_output, reviewed_output, ui_review_payload")
       .eq("id", fileId)
       .maybeSingle();
 
     if (refreshError) {
       throw new Error(`Failed to refresh parsed file: ${refreshError.message}`);
     }
+    if (refreshedFile) refreshedFile.docling_raw = refreshedFile.azure_raw_response ?? refreshedFile.docling_raw ?? null;
 
     const outputFile = refreshedFile || fileRecord;
     const text = extractTextFromFileRecord(outputFile) || initialText;

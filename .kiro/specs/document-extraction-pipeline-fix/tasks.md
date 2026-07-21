@@ -1,5 +1,7 @@
 # Implementation Plan
 
+> **Superseded**: This task list's provider references (Docling, Vertex AI, Gemini) describe an earlier architecture. The live pipeline now runs on Azure Document Intelligence (parsing) + OpenAI (LLM extraction) exclusively — see `docs/extraction-pipeline-architecture.md` for current behavior. Retained here for historical planning context.
+
 - [x] 1. Write bug condition exploration test
   - **Property 1: Bug Condition** - Document Extraction Pipeline Failures
   - **CRITICAL**: This test MUST FAIL on unfixed code - failure confirms the bug exists

@@ -13,8 +13,8 @@ import {
   getFieldContract,
   getFieldsForGroup,
 } from "../_shared/extraction/field-contract.ts";
-import { mapFactsToStandardFields } from "../_shared/extraction/vertex-fact-ledger/fact-field-mapper.ts";
-import type { Fact } from "../_shared/extraction/vertex-fact-ledger/types.ts";
+import { mapFactsToStandardFields } from "../_shared/extraction/openai-fact-ledger/fact-field-mapper.ts";
+import type { Fact } from "../_shared/extraction/openai-fact-ledger/types.ts";
 
 const { __test__: workflowTest } = await import("../_shared/extraction/lease-workflow.ts");
 

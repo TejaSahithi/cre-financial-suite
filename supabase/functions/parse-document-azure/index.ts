@@ -272,6 +272,7 @@ Deno.serve(async (req: Request) => {
         failed_step: "parse",
         extraction_method: args.providerUsed ?? "none",
         docling_raw: doclingRaw,
+        azure_raw_response: doclingRaw,
         ui_review_payload: payload,
         normalized_output: mergePipelineIntoNormalizedOutput(null, pipeline, {
           method: "blocked_pipeline_failure",
@@ -595,6 +596,7 @@ Deno.serve(async (req: Request) => {
         "pdf_parsed",
         {
           docling_raw: persistedLayout,
+          azure_raw_response: persistedLayout,
           extraction_method: extractionMethod,
           parsed_data: [],
           row_count: (doclingOutput.tables ?? []).reduce(
@@ -689,13 +691,16 @@ Deno.serve(async (req: Request) => {
     const isAuthError = /unauthorized|missing authorization|invalid token|auth failed/i.test(errMsg);
     const isOcrError = /azure document intelligence|document intelligence|ocr (failed|required)|No parser backend/i.test(errMsg);
     const isProviderMissing = /No parser backend|AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT|AZURE_DOCUMENT_INTELLIGENCE_KEY/i.test(errMsg);
+    const isUnsupportedProvider = /Unsupported extraction provider/i.test(errMsg);
     const outerErrorCode = isAuthError
       ? "UNAUTHORIZED_INTERNAL_PARSE_CALL"
-      : isProviderMissing
-        ? "PARSER_PROVIDER_UNAVAILABLE"
-        : isOcrError
-          ? "OCR_FAILED"
-          : "PDF_PARSING_FAILED";
+      : isUnsupportedProvider
+        ? "UNSUPPORTED_EXTRACTION_PROVIDER"
+        : isProviderMissing
+          ? "PARSER_PROVIDER_UNAVAILABLE"
+          : isOcrError
+            ? "OCR_FAILED"
+            : "PDF_PARSING_FAILED";
     // Idempotent with the inner catch's stage.fail() above when this error
     // was re-thrown from there (same status "failed" -> safe no-op); this
     // is the only path for errors that occur BEFORE the inner try (auth,

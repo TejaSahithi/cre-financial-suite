@@ -26,10 +26,10 @@ Browser (React SPA)
 Supabase Auth + Postgres (RLS-enforced)
         │
         ▼
-Supabase Edge Functions (Deno/TypeScript)   ←→   Google Vertex AI / Gemini
-        │                                          (OCR + LLM extraction)
+Supabase Edge Functions (Deno/TypeScript)   ←→   Azure Document Intelligence
+        │                                          (document parsing + OCR)
+        │                                    ←→   OpenAI (LLM field extraction)
         ▼
-        │──── Docling API (PDF structure parsing)
         │──── Stripe (billing / subscription)
         │──── Resend (transactional email)
         └──── UPS Address Validation API
@@ -79,10 +79,8 @@ Supabase Edge Functions (Deno/TypeScript)   ←→   Google Vertex AI / Gemini
 
 | Component | Technology |
 |---|---|
-| PDF structure parsing | Docling (self-hosted API or managed) |
-| OCR (scanned PDFs) | Google Vertex AI — Gemini Vision |
-| LLM field extraction | Google Vertex AI — Gemini 1.5 Pro (JSON mode) |
-| Fallback OCR | Gemini API key (GOOGLE_API_KEY) |
+| PDF/document parsing + OCR | Azure Document Intelligence (`prebuilt-layout`) |
+| LLM field extraction | OpenAI (`gpt-4o-mini`, JSON mode) |
 
 ### Infrastructure / Services
 
@@ -103,12 +101,12 @@ Uploading a lease triggers a deterministic, multi-step pipeline:
 ```
 1. upload-handler       — accepts file, creates uploaded_files row
 2. ingest-file          — dispatches to parse and normalize
-3. parse-pdf-docling    — Docling extracts text/tables; Gemini Vision handles scanned pages
+3. parse-document-azure — Azure Document Intelligence extracts text/tables (including scanned pages)
 4. normalize-pdf-output — runs 6-step extraction pipeline:
        Step 0: Normalize OCR text (noise removal, dedup, whitespace)
        Step 1: Rule-based extraction (regex + label:value patterns)
-       Step 2: Table extraction (structured Docling tables → fields)
-       Step 3: LLM extraction (Gemini — only for fields missed by steps 1+2)
+       Step 2: Table extraction (structured tables → fields)
+       Step 3: LLM extraction (OpenAI — only for fields missed by steps 1+2)
        Step 4: Merge (rule confidence 0.95 > table 0.85 > LLM 0.70)
        Step 5: Validate (type checks, enum membership, range constraints)
        Step 6: Calculate derived fields (annual rent = monthly × 12, etc.)
@@ -184,7 +182,7 @@ All backend logic runs as Supabase Edge Functions (Deno, TypeScript). Key functi
 |---|---|
 | `upload-handler` | Receives uploaded files, stores in Supabase Storage |
 | `ingest-file` | Dispatches parse → normalize pipeline |
-| `parse-pdf-docling` | Extracts text and tables via Docling + Gemini Vision OCR |
+| `parse-document-azure` | Extracts text and tables via Azure Document Intelligence |
 | `parse-file` | Native PDF text extraction fallback |
 | `normalize-pdf-output` | Runs the full 6-step extraction pipeline |
 | `lease-extraction-worker` | Background orchestrator with timeout handling |
@@ -325,10 +323,10 @@ VITE_SUPABASE_ANON_KEY=<anon-key>
 VITE_STRIPE_PUBLISHABLE_KEY=<stripe-pk>
 
 # Supabase Edge Function Secrets
-VERTEX_PROJECT_ID=<gcp-project-id>
-GOOGLE_SERVICE_ACCOUNT_KEY=<json-key>
-VERTEX_LOCATION=us-central1
-DOCLING_API_URL=https://<your-docling-instance>
+AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT=https://<your-resource>.cognitiveservices.azure.com
+AZURE_DOCUMENT_INTELLIGENCE_KEY=<azure-key>
+OPENAI_API_KEY=<openai-key>
+OPENAI_MODEL=gpt-4o-mini
 RESEND_API_KEY=<resend-key>
 STRIPE_SECRET_KEY=<stripe-sk>
 STRIPE_WEBHOOK_SECRET=<stripe-webhook-secret>

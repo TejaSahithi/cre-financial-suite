@@ -96,25 +96,12 @@ verify_jwt = true
 enabled = true
 verify_jwt = false
 
-# Compatibility alias retained for older deployed clients. The implementation
-# delegates to parse-document-azure; do not remove until all external callers
-# have moved to the Azure route.
-[functions.parse-pdf-docling]
-enabled = true
-verify_jwt = false
-
 [functions.normalize-pdf-output]
 enabled = true
 verify_jwt = false
 
 
 [functions.ocr-document-extract]
-enabled = true
-verify_jwt = false
-
-# Compatibility alias retained for older callers; implementation delegates to
-# ocr-document-extract.
-[functions.ocr-vision-extract]
 enabled = true
 verify_jwt = false
 
@@ -167,11 +154,6 @@ verify_jwt = true
 enabled = true
 verify_jwt = true
 
-# Compatibility alias retained for older diagnostic callers; implementation
-# delegates to phase52-openai-diagnostic.
-[functions.phase52-vertex-diagnostic]
-enabled = true
-verify_jwt = true
 [functions.pipeline-health-check]
 enabled = true
 verify_jwt = true

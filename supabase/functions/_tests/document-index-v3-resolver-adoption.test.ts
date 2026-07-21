@@ -11,7 +11,7 @@
 // Run: deno test --allow-env --allow-read --no-lock document-index-v3-resolver-adoption.test.ts
 
 import { assert, assertEquals, assertFalse } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { resolveDocumentIndex, buildCanonicalDocumentIndexFromLayout } from "../_shared/extraction/vertex-fact-ledger/document-index-v3.ts";
+import { resolveDocumentIndex, buildCanonicalDocumentIndexFromLayout } from "../_shared/extraction/openai-fact-ledger/document-index-v3.ts";
 import { legacyDoclingToCanonicalLayout } from "../_shared/extraction/document-intelligence-v3/canonical-layout.ts";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -190,7 +190,7 @@ Deno.test("resolver adoption: warnings do not affect control flow -- a layout wi
   // file contains no `warnings.some`/`warnings.find`/`warning.code ===`
   // pattern (verified once here via source scan, complementing Phase 3A's
   // manual audit).
-  const source = await Deno.readTextFile(new URL("../_shared/extraction/vertex-fact-ledger/document-index-v3.ts", import.meta.url));
+  const source = await Deno.readTextFile(new URL("../_shared/extraction/openai-fact-ledger/document-index-v3.ts", import.meta.url));
   assertFalse(/resolution\.warnings\.(some|find)\(/.test(source), "resolveDocumentIndex must never branch on resolution.warnings contents");
   assertFalse(/warning\.code\s*===/.test(source), "resolveDocumentIndex must never branch on an individual warning's code");
 });

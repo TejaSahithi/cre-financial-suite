@@ -56,7 +56,7 @@ Deno.test("61/62/63/64/65: migration does not add runtime pipeline call sites or
   assert(!/document_canonical_field_projections|lease_claim_projections|buildCompatibility|compatibility_payload/i.test(sql));
 
   const runtimeFiles = [
-    "supabase/functions/parse-pdf-docling/index.ts",
+    "supabase/functions/parse-document-azure/index.ts",
     "supabase/functions/normalize-pdf-output/index.ts",
     "supabase/functions/lease-extraction-worker/index.ts",
     "supabase/functions/approve-lease-workflow/index.ts",

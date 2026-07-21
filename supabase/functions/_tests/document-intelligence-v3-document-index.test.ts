@@ -1,6 +1,6 @@
 // @ts-nocheck
-// Phase 6 unit tests for the canonical-layout-backed vertex_fact_ledger
-// document index (supabase/functions/_shared/extraction/vertex-fact-ledger/
+// Phase 6 unit tests for the canonical-layout-backed openai_fact_ledger
+// document index (supabase/functions/_shared/extraction/openai-fact-ledger/
 // document-index-v3.ts). Pure-function tests only -- no DB, no network.
 // Run: deno test --allow-env --allow-read --no-lock document-intelligence-v3-document-index.test.ts
 
@@ -9,7 +9,7 @@ import {
   resolveDocumentIndex,
   buildCanonicalDocumentIndexFromLayout,
   enrichFactWithBlockEvidence,
-} from "../_shared/extraction/vertex-fact-ledger/document-index-v3.ts";
+} from "../_shared/extraction/openai-fact-ledger/document-index-v3.ts";
 import { buildCanonicalLayoutFromAzureLikeOutput } from "../_shared/extraction/document-intelligence-v3/canonical-layout.ts";
 
 function azureLikeDoclingRaw() {

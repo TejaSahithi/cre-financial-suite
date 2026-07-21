@@ -130,8 +130,8 @@ function resolveBusinessExtractionProvider(
   internalDebugOverride?: string | null,
 ): CanonicalBusinessExtractionMode {
   const override = String(internalDebugOverride ?? "").trim().toLowerCase();
-  if (override) return normalizeBusinessExtractionMode(override);
-  return normalizeBusinessExtractionMode(Deno.env.get("BUSINESS_EXTRACTION_PROVIDER"));
+  if (override) return normalizeBusinessExtractionMode(override, { source: "override" });
+  return normalizeBusinessExtractionMode(Deno.env.get("BUSINESS_EXTRACTION_PROVIDER"), { source: "env" });
 }
 /**
  * Azure+OpenAI Phase 4E (local implementation): local-only, test-only mock
@@ -1851,7 +1851,7 @@ async function handleEnrichMode(args: {
     .from("uploaded_files")
     .select(
       "id, org_id, file_name, module_type, status, review_required, document_subtype, " +
-      "extraction_method, docling_raw, normalized_output, ui_review_payload, active_generation_id",
+      "extraction_method, docling_raw, azure_raw_response, normalized_output, ui_review_payload, active_generation_id",
     )
     .eq("id", fileId)
     .eq("org_id", orgId)
@@ -1863,6 +1863,7 @@ async function handleEnrichMode(args: {
       404,
     );
   }
+  fileRecord.docling_raw = fileRecord.azure_raw_response ?? fileRecord.docling_raw ?? null;
 
   // P0.3: generation fencing. This job may have been superseded by a newer
   // explicit re-extraction generation while it was queued/running — a stale
@@ -2332,7 +2333,7 @@ Deno.serve(async (req: Request) => {
       .from("uploaded_files")
       .select(
         "id, org_id, file_name, file_url, file_size, mime_type, module_type, " +
-        "status, review_required, document_subtype, extraction_method, docling_raw",
+        "status, review_required, document_subtype, extraction_method, docling_raw, azure_raw_response",
       )
       .eq("id", file_id)
       .eq("org_id", orgId)
@@ -2348,6 +2349,7 @@ Deno.serve(async (req: Request) => {
         404,
       );
     }
+    fileRecord.docling_raw = fileRecord.azure_raw_response ?? fileRecord.docling_raw ?? null;
     const logger = createLogger(supabaseAdmin, file_id, orgId);
 
     let finalPipelineJobId = pipeline_job_id || job_id;
@@ -3351,7 +3353,14 @@ Deno.serve(async (req: Request) => {
     const isAuthError = /unauthorized|missing authorization|invalid token|auth failed/i.test(
       String(err.message ?? ""),
     );
-    const outerErrorCode = isAuthError ? "UNAUTHORIZED_NORMALIZE_CALL" : "NORMALIZATION_FAILED";
+    const isUnsupportedProvider = /Unsupported (extraction provider|business extraction mode)/i.test(
+      String(err.message ?? ""),
+    );
+    const outerErrorCode = isAuthError
+      ? "UNAUTHORIZED_NORMALIZE_CALL"
+      : isUnsupportedProvider
+        ? "UNSUPPORTED_EXTRACTION_PROVIDER"
+        : "NORMALIZATION_FAILED";
     // Idempotent with the inner catch's stage.fail() when re-thrown from
     // there; the only path for errors before the inner try (auth, status
     // transitions) or truly unexpected exceptions.

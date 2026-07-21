@@ -68,7 +68,7 @@ Deno.test("runBusinessExtraction: existing direct vertex_fact_ledger mode preser
     legacyRunner: async () => { legacyCalls++; return acceptedResult(); },
   }));
   assertEquals(legacyCalls, 0, "direct vertex_fact_ledger mode must never trigger legacy fallback");
-  assertEquals(result.metadata.provenance.effective_provider, "vertex_fact_ledger");
+  assertEquals(result.metadata.provenance.effective_provider, "openai_fact_ledger");
   assertEquals(result.metadata.provenance.fallback_used, false);
 });
 
@@ -80,7 +80,7 @@ Deno.test("runBusinessExtraction: vertex_primary_legacy_fallback — accepted Ve
     legacyRunner: async () => { legacyCalls++; return acceptedResult(); },
   }));
   assertEquals(legacyCalls, 0);
-  assertEquals(result.metadata.provenance.effective_provider, "vertex_fact_ledger");
+  assertEquals(result.metadata.provenance.effective_provider, "openai_fact_ledger");
   assertEquals(result.metadata.provenance.acceptance_state, "accepted");
 });
 
@@ -188,10 +188,10 @@ Deno.test("runBusinessExtraction: requested/effective provider and fallback reas
     vertexRunner: async () => emptyResult("rate_limited"),
     legacyRunner: async () => acceptedResult(),
   }));
-  assertEquals(result.metadata.provenance.requested_provider, "vertex_primary_legacy_fallback");
+  assertEquals(result.metadata.provenance.requested_provider, "openai_primary_legacy_fallback");
   assertEquals(result.metadata.provenance.effective_provider, "legacy_hybrid");
   assertEquals(result.metadata.provenance.fallback_reason, "rate_limited");
-  assertEquals(result.metadata.provenance.vertex_attempt_count, 1);
+  assertEquals(result.metadata.provenance.openai_attempt_count, 1);
 });
 
 Deno.test("runBusinessExtraction: provenance is attached for every mode, including plain legacy_hybrid", async () => {

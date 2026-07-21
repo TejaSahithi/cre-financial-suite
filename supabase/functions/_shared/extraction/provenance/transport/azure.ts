@@ -2,7 +2,7 @@
 /**
  * Azure Document Intelligence transport wrapper — P1.4.
  *
- * Same shape and guarantees as the OpenAI compatibility wrapper (transport/vertex.ts):
+ * Same shape and guarantees as the OpenAI transport wrapper (transport/openai.ts):
  * sole call point for provider_invocations rows covering Azure Document
  * Intelligence calls, no-op when the flag is off or the stage has no
  * provenance identity, fail-closed on a start-persistence failure, never

@@ -70,7 +70,7 @@ Deno.test("P4.2 feature-mode boundary: default remains off and source has no P4.
 
   const runtimeSources = await Promise.all([
     Deno.readTextFile("supabase/functions/normalize-pdf-output/index.ts").catch(() => ""),
-    Deno.readTextFile("supabase/functions/parse-pdf-docling/index.ts").catch(() => ""),
+    Deno.readTextFile("supabase/functions/parse-document-azure/index.ts").catch(() => ""),
     Deno.readTextFile("supabase/functions/ingest-file/index.ts").catch(() => ""),
   ]);
   const runtimeText = runtimeSources.join("\n");

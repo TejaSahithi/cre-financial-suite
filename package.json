@@ -12,7 +12,8 @@
     "test": "vitest run src/",
     "test:watch": "vitest src/",
     "preview": "vite preview",
-    "test:e2e:phase5f": "playwright test e2e/phase5f/lease-review-workflow.spec.js"
+    "test:e2e:phase5f": "playwright test e2e/phase5f/lease-review-workflow.spec.js",
+    "check:deprecated-providers": "node scripts/check-no-deprecated-providers.mjs"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^17.0.0",
