@@ -2980,7 +2980,7 @@ Deno.serve(async (req: Request) => {
           supabaseAdmin,
           orgId,
           uploadedFileId: file_id,
-          uploadedFile: fileRecord,
+          uploadedFile: { ...fileRecord, ui_review_payload: minimalPayload },
           leaseId: null,
           pipelineJobId: finalPipelineJobId ?? null,
           result,

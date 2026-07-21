@@ -37,3 +37,19 @@ export function isParseQualityApprovalBlockingEnabled(env: EnvLike = Deno.env): 
 }
 
 export const PARSE_QUALITY_APPROVAL_BLOCKING_ENV_NAME = PARSE_QUALITY_APPROVAL_BLOCKING_FLAG_NAME;
+
+const CANONICAL_REVIEW_PAYLOAD_FLAG_NAME = "ENABLE_CANONICAL_REVIEW_PAYLOAD";
+const CANONICAL_REVIEW_PAYLOAD_STRICT_FLAG_NAME = "ENABLE_CANONICAL_REVIEW_PAYLOAD_STRICT";
+
+export function isCanonicalReviewPayloadEnabled(env: EnvLike = Deno.env): boolean {
+  const raw = String(env.get(CANONICAL_REVIEW_PAYLOAD_FLAG_NAME) ?? "").trim().toLowerCase();
+  return TRUTHY_VALUES.has(raw);
+}
+
+export function isCanonicalReviewPayloadStrictEnabled(env: EnvLike = Deno.env): boolean {
+  const raw = String(env.get(CANONICAL_REVIEW_PAYLOAD_STRICT_FLAG_NAME) ?? "").trim().toLowerCase();
+  return TRUTHY_VALUES.has(raw);
+}
+
+export const CANONICAL_REVIEW_PAYLOAD_ENV_NAME = CANONICAL_REVIEW_PAYLOAD_FLAG_NAME;
+export const CANONICAL_REVIEW_PAYLOAD_STRICT_ENV_NAME = CANONICAL_REVIEW_PAYLOAD_STRICT_FLAG_NAME;

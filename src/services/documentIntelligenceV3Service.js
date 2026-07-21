@@ -150,3 +150,53 @@ export async function fetchDocumentIntelligenceV3RunMetrics({ uploadedFileId = n
     return { error: true, message: err?.message || "Failed to load Document Intelligence v3 run metrics." };
   }
 }
+
+/**
+ * Document Intelligence v4 - Enterprise review payload fetch. This is the
+ * canonical-review authority read model; it still returns legacy payload for
+ * rollback and diagnostics when canonical authority is disabled.
+ */
+export async function fetchDocumentIntelligenceV4ReviewPayload({ uploadedFileId = null, runId = null } = {}) {
+  if (!uploadedFileId && !runId) {
+    return { error: true, message: "No uploaded_file_id or run_id available for this document." };
+  }
+
+  try {
+    const data = await invokeEdgeFunction("document-intelligence-v4-review-payload", {
+      uploaded_file_id: uploadedFileId,
+      run_id: runId,
+    });
+    return {
+      error: false,
+      mode: data?.mode ?? "legacy",
+      enterpriseReviewPayload: data?.enterpriseReviewPayload ?? null,
+      legacyReviewPayload: data?.legacyReviewPayload ?? null,
+      authorityReadiness: data?.authorityReadiness ?? null,
+      diagnostics: data?.diagnostics ?? null,
+    };
+  } catch (err) {
+    return { error: true, message: err?.message || "Failed to load Document Intelligence v4 review payload." };
+  }
+}
+
+/** Persist a Release 4 reviewer action without mutating the original projection. */
+export async function submitDocumentFieldReviewAction({ uploadedFileId, runId, generationId = null, canonicalFieldKey, action, overrideValue = null, reason = null } = {}) {
+  if (!uploadedFileId || !runId || !canonicalFieldKey || !action) {
+    return { error: true, message: "uploadedFileId, runId, canonicalFieldKey, and action are required." };
+  }
+
+  try {
+    const data = await invokeEdgeFunction("document-field-review-action", {
+      uploadedFileId,
+      runId,
+      generationId,
+      canonicalFieldKey,
+      action,
+      overrideValue,
+      reason,
+    });
+    return { error: false, ...data };
+  } catch (err) {
+    return { error: true, message: err?.message || "Failed to submit review action." };
+  }
+}

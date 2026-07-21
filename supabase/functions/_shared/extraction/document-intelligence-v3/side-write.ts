@@ -28,7 +28,7 @@
  * run_id, so prior completed runs are never mutated by an unrelated retry.
  */
 
-import { isDocumentIntelligenceV3Enabled, isParseQualityApprovalBlockingEnabled } from "./feature-flag.ts";
+import { isDocumentIntelligenceV3Enabled, isParseQualityApprovalBlockingEnabled, isCanonicalReviewPayloadEnabled, isCanonicalReviewPayloadStrictEnabled } from "./feature-flag.ts";
 import { buildDocumentIntelligenceV3Skeleton } from "./adapter.ts";
 import {
   extractOpenAIFactLedgerClaims,
@@ -48,6 +48,9 @@ import { buildStaticCoverageImportanceSummary } from "./coverage-importance.ts";
 import { upsertPackageGraphForRun } from "./package-graph.ts";
 import { buildTemporalSupersessionDiagnostics } from "./temporal-supersession.ts";
 import { validateEvidenceAnchors } from "./evidence-anchor-validator.ts";
+import { buildCanonicalReviewFieldRegistry } from "./canonical-review-field-registry.ts";
+import { buildEnterpriseReviewPayload } from "./enterprise-review-payload.ts";
+import { persistEnterpriseReviewPayload } from "./enterprise-review-persistence.ts";
 
 export interface DocumentIntelligenceV3SideWriteInput {
   supabaseAdmin: any;
@@ -71,6 +74,22 @@ export interface DocumentIntelligenceV3SideWriteResult {
   error: string | null;
 }
 
+
+function release4SourceMode(): "legacy" | "canonical_hybrid" | "canonical_strict" {
+  if (!isCanonicalReviewPayloadEnabled()) return "legacy";
+  return isCanonicalReviewPayloadStrictEnabled() ? "canonical_strict" : "canonical_hybrid";
+}
+
+function release4CanonicalDocument(uploadedFile: Record<string, unknown>) {
+  const layout = (uploadedFile as any)?.canonical_layout_v3 ?? null;
+  const provider = layout?.provider ?? null;
+  return {
+    layoutHash: (uploadedFile as any)?.canonical_layout_v3_hash ?? layout?.metadata?.canonical_layout_v3?.canonicalLayoutHash ?? null,
+    layoutSchemaVersion: (uploadedFile as any)?.canonical_layout_v3_schema_version ?? layout?.schema_version ?? null,
+    layoutSource: provider === "azure_document_intelligence" ? "azure_native" : layout ? "legacy_lossy" : null,
+    geometryAvailable: Array.isArray(layout?.pages) && layout.pages.some((page: any) => Array.isArray(page?.blocks) && page.blocks.some((block: any) => Array.isArray(block?.polygon) && block.polygon.length >= 8)),
+  };
+}
 function skippedResult(): DocumentIntelligenceV3SideWriteResult {
   return {
     attempted: false,
@@ -438,8 +457,8 @@ export async function runDocumentIntelligenceV3SideWrite(
       if (insertDropsError) throw new Error(`Failed to insert document_validation_drops: ${insertDropsError.message}`);
     }
 
-    if (canonicalFieldProjections.length > 0) {
-      const projectionsWithRunId = canonicalFieldProjections.map((row) => ({ ...row, run_id: runId }));
+    const projectionsWithRunId = canonicalFieldProjections.map((row) => ({ ...row, run_id: runId }));
+    if (projectionsWithRunId.length > 0) {
       const { error: insertProjectionsError } = await supabaseAdmin
         .from("document_canonical_field_projections")
         .insert(projectionsWithRunId);
@@ -486,11 +505,45 @@ export async function runDocumentIntelligenceV3SideWrite(
     const temporalSupersession = buildTemporalSupersessionDiagnostics({
       run: { id: runId, uploaded_file_id: uploadedFileId, lease_id: leaseId, profile_key: profile.profileKey, profile_confidence: profile.profileConfidence },
       claims,
-      projections: canonicalFieldProjections.map((row) => ({ ...row, run_id: runId })),
+      projections: projectionsWithRunId,
       packageGraph,
       profileKey: profile.profileKey,
       extractionPlan,
     });
+
+    let release4EnterprisePayload: Record<string, unknown> = { status: "not_attempted" };
+    try {
+      const registry = buildCanonicalReviewFieldRegistry("lease");
+      const built = await buildEnterpriseReviewPayload({
+        orgId,
+        uploadedFileId,
+        leaseId,
+        run: { id: runId, uploaded_file_id: uploadedFileId, lease_id: leaseId },
+        sourceMode: release4SourceMode(),
+        registry,
+        projectionRows: projectionsWithRunId,
+        evidenceRows,
+        legacyPayload: (uploadedFile as any)?.ui_review_payload ?? null,
+        canonicalDocument: release4CanonicalDocument(uploadedFile),
+      });
+      const persisted = await persistEnterpriseReviewPayload({ supabaseAdmin, payload: built.payload });
+      release4EnterprisePayload = {
+        status: persisted.error ? "persistence_failed" : "persisted",
+        payload_id: persisted.id,
+        payload_hash: built.payload.payloadHash,
+        source_mode: built.payload.sourceMode,
+        coverage_summary: built.payload.coverage.totals,
+        authority_ready: built.authorityReadiness.ready,
+        persistence_error: persisted.error,
+      };
+    } catch (error: any) {
+      release4EnterprisePayload = { status: "failed", error: error?.message ?? String(error) };
+      await safeLog(logger, "enterprise_review_payload", "failed", {
+        run_id: runId,
+        uploaded_file_id: uploadedFileId,
+        error: error?.message ?? String(error),
+      });
+    }
 
     const summary: DocumentIntelligenceV3SideWriteResult = {
       attempted: true,
@@ -528,6 +581,7 @@ export async function runDocumentIntelligenceV3SideWrite(
           package_graph_error: packageGraphError,
           temporal_supersession: temporalSupersession,
           temporal_status: temporalSupersession.temporal_status,
+          release4_enterprise_review_payload: release4EnterprisePayload,
         },
         error_message: null,
       })
