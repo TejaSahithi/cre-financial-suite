@@ -98,3 +98,55 @@ export async function fetchDocumentIntelligenceV3AdvisoryAuditBatch({
     return { error: true, message: err?.message || "Failed to load Document Intelligence v3 batch advisory audit." };
   }
 }
+/**
+ * Document Intelligence v3 - Projection diff fetch (Release 2). Read-only
+ * diagnostic call comparing the live ui_review_payload against a v3 run's
+ * document_canonical_field_projections, per field, with type-aware
+ * normalization. Used only by the admin Extraction Debug panel.
+ *
+ * @param {Object} params
+ * @param {string|null} [params.uploadedFileId]
+ * @param {string|null} [params.runId]
+ * @returns {Promise<{error: false, projectionDiff: Object, diagnosticsContext: Object} | {error: true, message: string}>}
+ */
+export async function fetchDocumentIntelligenceV3ProjectionDiff({ uploadedFileId = null, runId = null } = {}) {
+  if (!uploadedFileId && !runId) {
+    return { error: true, message: "No uploaded_file_id or run_id available for this document." };
+  }
+
+  try {
+    const data = await invokeEdgeFunction("document-intelligence-v3-projection-diff", {
+      uploaded_file_id: uploadedFileId,
+      run_id: runId,
+    });
+    return { error: false, projectionDiff: data?.projection_diff ?? null, diagnosticsContext: data?.diagnostics_context ?? null };
+  } catch (err) {
+    return { error: true, message: err?.message || "Failed to load Document Intelligence v3 projection diff." };
+  }
+}
+/**
+ * Document Intelligence v3 - Run operational metrics fetch (Release 2).
+ * Read-only diagnostic call: pages/blocks/claims/evidence/projection
+ * counts, stage durations/failures, provider-aware table-write health, and
+ * transport-wrapper readiness. Used only by the admin Extraction Debug panel.
+ *
+ * @param {Object} params
+ * @param {string|null} [params.uploadedFileId]
+ * @param {string|null} [params.runId]
+ * @returns {Promise<{error: false, runMetrics: Object, diagnosticsContext: Object} | {error: true, message: string}>}
+ */
+export async function fetchDocumentIntelligenceV3RunMetrics({ uploadedFileId = null, runId = null } = {}) {
+  if (!uploadedFileId && !runId) {
+    return { error: true, message: "No uploaded_file_id or run_id available for this document." };
+  }
+
+  try {
+    const data = await invokeEdgeFunction("document-intelligence-v3-run-metrics", {
+      uploaded_file_id: uploadedFileId,
+      run_id: runId,
+    });
+    return { error: false, runMetrics: data?.run_metrics ?? null, diagnosticsContext: data?.diagnostics_context ?? null };
+  } catch (err) {
+    return { error: true, message: err?.message || "Failed to load Document Intelligence v3 run metrics." };
+  }
+}

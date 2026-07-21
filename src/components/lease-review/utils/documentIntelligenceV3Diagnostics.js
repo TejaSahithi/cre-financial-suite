@@ -471,6 +471,45 @@ export function buildV3DiagnosticsFilename(uploadedFileId) {
   return `document-intelligence-v3-diagnostics-${uploadedFileId || "unknown"}.json`;
 }
 
+// Release 2 -- summarizers for the two new diagnostic edge functions.
+// Both endpoints already return clean, display-ready shapes (see
+// projection-diff.ts/run-metrics.ts), so these are thin null-guards, same
+// convention as summarizeAdvisoryAudit() above.
+export function summarizeProjectionDiffResponse(projectionDiff) {
+  const pd = projectionDiff && typeof projectionDiff === "object" ? projectionDiff : null;
+  if (!pd) return null;
+  return {
+    runId: pd.run_id ?? null,
+    uploadedFileId: pd.uploaded_file_id ?? null,
+    comparisonStatus: pd.comparison_status ?? "unavailable_no_fact_ledger",
+    reason: pd.reason ?? null,
+    summary: pd.summary ?? null,
+    diffs: Array.isArray(pd.diffs) ? pd.diffs : [],
+    raw: pd,
+  };
+}
+
+export function summarizeRunMetricsResponse(runMetrics) {
+  const rm = runMetrics && typeof runMetrics === "object" ? runMetrics : null;
+  if (!rm) return null;
+  return {
+    runId: rm.run_id ?? null,
+    uploadedFileId: rm.uploaded_file_id ?? null,
+    metrics: rm.metrics ?? null,
+    tableHealth: Array.isArray(rm.table_health) ? rm.table_health : [],
+    transportWrapperReadiness: rm.transport_wrapper_readiness ?? null,
+    raw: rm,
+  };
+}
+
+export function buildV3ProjectionDiffFilename(uploadedFileId) {
+  return `document-intelligence-v3-projection-diff-${uploadedFileId || "unknown"}.json`;
+}
+
+export function buildV3RunMetricsFilename(uploadedFileId) {
+  return `document-intelligence-v3-run-metrics-${uploadedFileId || "unknown"}.json`;
+}
+
 export const DOCUMENT_INTELLIGENCE_V3_NOT_AVAILABLE_MESSAGE = NOT_AVAILABLE_MESSAGE;
 
 

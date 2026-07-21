@@ -72,7 +72,7 @@ const GROUP_TO_DOMAIN: Record<FieldGroup, string> = {
 // Value-type inference -- documented heuristic over real canonicalKey
 // naming conventions already consistently used across all 92 entries.
 // ---------------------------------------------------------------------------
-function inferValueType(canonicalKey: string): ClaimValueType {
+export function inferValueType(canonicalKey: string): ClaimValueType {
   if (/_date$/.test(canonicalKey)) return "date";
   if (/_months$|_days$/.test(canonicalKey)) return "integer";
   if (/_rate$|_pct$|_percent$/.test(canonicalKey)) return "percentage";

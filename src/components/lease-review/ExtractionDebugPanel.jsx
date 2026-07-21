@@ -14,6 +14,8 @@ import {
   fetchDocumentIntelligenceV3Readiness,
   fetchDocumentIntelligenceV3AdvisoryAudit,
   fetchDocumentIntelligenceV3AdvisoryAuditBatch,
+  fetchDocumentIntelligenceV3ProjectionDiff,
+  fetchDocumentIntelligenceV3RunMetrics,
 } from "@/services/documentIntelligenceV3Service";
 import {
   LEASE_REVIEW_FIELDS,
@@ -32,6 +34,8 @@ import {
   summarizeV3Diagnostics,
   summarizeAdvisoryAudit,
   summarizeAdvisoryAuditBatch,
+  summarizeProjectionDiffResponse,
+  summarizeRunMetricsResponse,
   buildV3DiagnosticsFilename,
   buildV3AdvisoryAuditFilename,
   buildV3AdvisoryAuditBatchFilename,
@@ -181,6 +185,39 @@ export default function ExtractionDebugPanel({ lease }) {
     : null;
   const v3BatchAuditFetchError = v3BatchAuditResponse?.error ? v3BatchAuditResponse.message : null;
 
+  // Release 2 -- projection diff (legacy vs. canonical, per field) and
+  // run operational metrics. Same fetch-on-click convention as the v3
+  // diagnostics above.
+  const {
+    data: v3ProjectionDiffResponse,
+    isFetching: v3ProjectionDiffLoading,
+    refetch: refetchV3ProjectionDiff,
+  } = useQuery({
+    queryKey: ["debug-v3-projection-diff", v3UploadedFileId],
+    enabled: false,
+    queryFn: () => fetchDocumentIntelligenceV3ProjectionDiff({ uploadedFileId: v3UploadedFileId }),
+    retry: false,
+  });
+  const v3ProjectionDiff = v3ProjectionDiffResponse && !v3ProjectionDiffResponse.error
+    ? summarizeProjectionDiffResponse(v3ProjectionDiffResponse.projectionDiff)
+    : null;
+  const v3ProjectionDiffFetchError = v3ProjectionDiffResponse?.error ? v3ProjectionDiffResponse.message : null;
+
+  const {
+    data: v3RunMetricsResponse,
+    isFetching: v3RunMetricsLoading,
+    refetch: refetchV3RunMetrics,
+  } = useQuery({
+    queryKey: ["debug-v3-run-metrics", v3UploadedFileId],
+    enabled: false,
+    queryFn: () => fetchDocumentIntelligenceV3RunMetrics({ uploadedFileId: v3UploadedFileId }),
+    retry: false,
+  });
+  const v3RunMetrics = v3RunMetricsResponse && !v3RunMetricsResponse.error
+    ? summarizeRunMetricsResponse(v3RunMetricsResponse.runMetrics)
+    : null;
+  const v3RunMetricsFetchError = v3RunMetricsResponse?.error ? v3RunMetricsResponse.message : null;
+
   const handleLoadV3Diagnostics = async () => {
     if (!v3UploadedFileId) {
       toast.error("No source file linked to this lease â€” cannot load v3 diagnostics.");
@@ -299,7 +336,33 @@ export default function ExtractionDebugPanel({ lease }) {
       console.error("[ExtractionDebug] download v3 batch advisory audit failed:", err);
       toast.error("Could not download JSON.");
     }
-  };  const doclingRaw = uploadedFile?.docling_raw || null;
+  };
+
+  // Release 2 -- projection diff / run metrics load handlers, same
+  // fetch-on-click pattern as the v3 diagnostics above.
+  const handleLoadV3ProjectionDiff = async () => {
+    if (!v3UploadedFileId) {
+      toast.error("No source file linked to this lease — cannot load the projection diff.");
+      return;
+    }
+    const result = await refetchV3ProjectionDiff();
+    if (result?.data?.error) {
+      console.error("[ExtractionDebug] v3 projection diff fetch failed:", result.data.message);
+    }
+  };
+
+  const handleLoadV3RunMetrics = async () => {
+    if (!v3UploadedFileId) {
+      toast.error("No source file linked to this lease — cannot load run metrics.");
+      return;
+    }
+    const result = await refetchV3RunMetrics();
+    if (result?.data?.error) {
+      console.error("[ExtractionDebug] v3 run metrics fetch failed:", result.data.message);
+    }
+  };
+
+  const doclingRaw = uploadedFile?.docling_raw || null;
   const fullText = doclingRaw?.full_text || "";
   const textBlocks = Array.isArray(doclingRaw?.text_blocks) ? doclingRaw.text_blocks : [];
   const doclingFields = Array.isArray(doclingRaw?.fields) ? doclingRaw.fields : [];
@@ -934,6 +997,26 @@ export default function ExtractionDebugPanel({ lease }) {
             {v3BatchAuditLoading && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
             Run Batch Advisory Audit
           </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleLoadV3ProjectionDiff}
+            disabled={v3ProjectionDiffLoading || !v3UploadedFileId}
+            title={v3UploadedFileId ? "Compare legacy vs. canonical field projections (Release 2)" : "No source file linked"}
+          >
+            {v3ProjectionDiffLoading && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+            Load Projection Diff
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleLoadV3RunMetrics}
+            disabled={v3RunMetricsLoading || !v3UploadedFileId}
+            title={v3UploadedFileId ? "Load run operational metrics and table-write health (Release 2)" : "No source file linked"}
+          >
+            {v3RunMetricsLoading && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+            Load Run Metrics
+          </Button>
           {v3AdvisoryAuditBatch && (
             <>
               <Button size="sm" variant="outline" onClick={handleCopyV3AdvisoryAuditBatchJson}>
@@ -1110,6 +1193,200 @@ export default function ExtractionDebugPanel({ lease }) {
             </div>
           </div>
         )}
+
+        {v3ProjectionDiffFetchError && (
+          <p className="text-xs text-red-600">Projection diff error: {v3ProjectionDiffFetchError}</p>
+        )}
+        {v3ProjectionDiff && (
+          <div className="space-y-2 rounded border border-slate-200 bg-slate-50 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[11px] font-semibold uppercase text-slate-500">Projection Diff (Release 2) — Legacy vs. Canonical</div>
+              <Badge className="bg-slate-100 text-slate-700">diagnostic_only</Badge>
+            </div>
+            <p className="text-xs text-slate-500">
+              Compares ui_review_payload (legacy) against this run&apos;s document_canonical_field_projections
+              (canonical), per field, with type-aware normalization. Read-only — no UI field ever reads from
+              canonical projections yet.
+            </p>
+            {v3ProjectionDiff.comparisonStatus !== "available" ? (
+              <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <span className="font-semibold">comparison_status: {v3ProjectionDiff.comparisonStatus}</span>
+                {v3ProjectionDiff.comparisonStatus === "unavailable_no_fact_ledger" && (
+                  <p className="mt-1">
+                    No claims exist for this run — expected under BUSINESS_EXTRACTION_PROVIDER=legacy_hybrid
+                    (Mode A, infrastructure verification only). Nothing to compare, not a 0% agreement.
+                  </p>
+                )}
+                {v3ProjectionDiff.comparisonStatus === "unavailable_no_projections" && (
+                  <p className="mt-1">
+                    Claims exist for this run but produced zero canonical field projections — a real gap
+                    worth investigating, distinct from the legacy_hybrid case above.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    ["field_count", v3ProjectionDiff.summary?.fieldCount ?? "—"],
+                    ["exact_match_rate", v3ProjectionDiff.summary?.exactMatchRate != null ? `${(v3ProjectionDiff.summary.exactMatchRate * 100).toFixed(1)}%` : "—"],
+                    ["normalized_match_rate", v3ProjectionDiff.summary?.normalizedMatchRate != null ? `${(v3ProjectionDiff.summary.normalizedMatchRate * 100).toFixed(1)}%` : "—"],
+                    ["critical_field_agreement_rate", v3ProjectionDiff.summary?.criticalFieldAgreementRate != null ? `${(v3ProjectionDiff.summary.criticalFieldAgreementRate * 100).toFixed(1)}%` : "—"],
+                    ["material_conflict_count", v3ProjectionDiff.summary?.materialConflictCount ?? "—"],
+                    ["ambiguous_date_count", v3ProjectionDiff.summary?.ambiguousDateCount ?? "—"],
+                    ["evidence_page_mismatch_count", v3ProjectionDiff.summary?.evidencePageMismatchCount ?? "—"],
+                  ].map(([key, value]) => (
+                    <div key={key} className="rounded border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-[10px] font-semibold uppercase text-slate-500">{key.replace(/_/g, " ")}</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">{String(value)}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="max-h-72 overflow-auto rounded border border-slate-200">
+                  <table className="w-full text-[11px]">
+                    <thead className="bg-slate-50">
+                      <tr>
+                        <th className="px-2 py-1 text-left">Field</th>
+                        <th className="px-2 py-1 text-left">Legacy Value</th>
+                        <th className="px-2 py-1 text-left">Canonical Value</th>
+                        <th className="px-2 py-1 text-left">Difference</th>
+                        <th className="px-2 py-1 text-left">Materiality</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...v3ProjectionDiff.diffs]
+                        .sort((a, b) => {
+                          const order = { critical: 0, material: 1, informational: 2 };
+                          return (order[a.materiality] ?? 3) - (order[b.materiality] ?? 3);
+                        })
+                        .map((diff) => (
+                          <tr key={diff.fieldKey} className="border-t border-slate-100">
+                            <td className="px-2 py-1 font-medium text-slate-700">{diff.fieldKey}</td>
+                            <td className="px-2 py-1 text-slate-600">{String(diff.legacyValue ?? "—")}</td>
+                            <td className="px-2 py-1 text-slate-600">{String(diff.canonicalValue ?? "—")}</td>
+                            <td className="px-2 py-1 text-slate-600">
+                              {diff.differenceType}
+                              {diff.dateAmbiguous && <span className="ml-1 text-amber-600">(ambiguous format)</span>}
+                            </td>
+                            <td className="px-2 py-1">
+                              <Badge
+                                className={
+                                  diff.materiality === "critical"
+                                    ? "bg-red-100 text-red-700"
+                                    : diff.materiality === "material"
+                                      ? "bg-amber-100 text-amber-700"
+                                      : "bg-slate-100 text-slate-600"
+                                }
+                              >
+                                {diff.materiality}
+                              </Badge>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {v3RunMetricsFetchError && (
+          <p className="text-xs text-red-600">Run metrics error: {v3RunMetricsFetchError}</p>
+        )}
+        {v3RunMetrics && (
+          <div className="space-y-2 rounded border border-slate-200 bg-slate-50 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[11px] font-semibold uppercase text-slate-500">Run Operational Metrics (Release 2)</div>
+              <Badge className="bg-slate-100 text-slate-700">diagnostic_only</Badge>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                ["pages_received", v3RunMetrics.metrics?.pages_received ?? "—"],
+                ["pages_parsed", v3RunMetrics.metrics?.pages_parsed ?? "—"],
+                ["canonical_blocks", v3RunMetrics.metrics?.canonical_blocks ?? "—"],
+                ["canonical_tables", v3RunMetrics.metrics?.canonical_tables ?? "—"],
+                ["claims_extracted", v3RunMetrics.metrics?.claims_extracted ?? "—"],
+                ["claims_with_evidence", v3RunMetrics.metrics?.claims_with_evidence ?? "—"],
+                ["claims_rejected", v3RunMetrics.metrics?.claims_rejected ?? "—"],
+                ["canonical_projections_created", v3RunMetrics.metrics?.canonical_projections_created ?? "—"],
+                ["legacy_fields_populated", v3RunMetrics.metrics?.legacy_fields_populated ?? "—"],
+                ["canonical_fields_populated", v3RunMetrics.metrics?.canonical_fields_populated ?? "—"],
+              ].map(([key, value]) => (
+                <div key={key} className="rounded border border-slate-200 bg-white px-3 py-2">
+                  <div className="text-[10px] font-semibold uppercase text-slate-500">{key.replace(/_/g, " ")}</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900">{String(value)}</div>
+                </div>
+              ))}
+            </div>
+            <div className="rounded border border-slate-200 bg-white px-3 py-2">
+              <div className="text-[10px] font-semibold uppercase text-slate-500">
+                readiness ({v3RunMetrics.metrics?.readiness_source ?? "computed"}, version {v3RunMetrics.metrics?.readiness_version ?? "—"}) — not a persisted historical value, recomputed on every load
+              </div>
+              <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-[11px] text-slate-700">
+                {prettyJson({ status: v3RunMetrics.metrics?.readiness?.readiness?.status, blockers: v3RunMetrics.metrics?.readiness?.blockers?.length ?? 0 }, 800)}
+              </pre>
+            </div>
+            {v3RunMetrics.metrics?.stage_failures?.length > 0 && (
+              <div className="rounded border border-red-200 bg-red-50 px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase text-red-600">stage_failures</div>
+                <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-[11px] text-red-700">{prettyJson(v3RunMetrics.metrics.stage_failures, 1000)}</pre>
+              </div>
+            )}
+            <div className="grid gap-2 lg:grid-cols-2">
+              <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase text-slate-500">transport_wrapper_readiness</div>
+                <pre className="mt-1 whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3RunMetrics.transportWrapperReadiness, 600)}</pre>
+              </div>
+              <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase text-slate-500">stage_durations</div>
+                <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3RunMetrics.metrics?.stage_durations, 600)}</pre>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {v3RunMetrics?.tableHealth?.length > 0 && (
+          <div className="space-y-2 rounded border border-slate-200 bg-white p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[11px] font-semibold uppercase text-slate-500">Provenance / Table-Write Health (Release 2)</div>
+              <Badge className="bg-slate-100 text-slate-700">diagnostic_only</Badge>
+            </div>
+            <p className="text-xs text-slate-500">
+              Expected-row rules are provider-aware — a healthy legacy_hybrid run with zero claims/
+              projections is labeled &ldquo;expected,&rdquo; not broken. See run_type in diagnostics_context.
+            </p>
+            <div className="overflow-auto rounded border border-slate-200">
+              <table className="w-full text-[11px]">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="px-2 py-1 text-left">Table</th>
+                    <th className="px-2 py-1 text-left">Rule</th>
+                    <th className="px-2 py-1 text-left">Actual Count</th>
+                    <th className="px-2 py-1 text-left">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {v3RunMetrics.tableHealth.map((row) => (
+                    <tr key={row.table} className="border-t border-slate-100">
+                      <td className="px-2 py-1 font-medium text-slate-700">{row.table}</td>
+                      <td className="px-2 py-1 text-slate-600">{row.rule}</td>
+                      <td className="px-2 py-1 text-slate-600">{row.actualCount}</td>
+                      <td className="px-2 py-1">
+                        {row.unexpected ? (
+                          <Badge className="bg-red-100 text-red-700">missing expected rows</Badge>
+                        ) : (
+                          <Badge className="bg-emerald-100 text-emerald-700">as expected</Badge>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {v3Diagnostics && v3Diagnostics.available && (
           <div className="space-y-3">
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">

@@ -29,6 +29,13 @@
 import type { FieldDef } from "./schemas.ts";
 import type { ModuleType } from "./types.ts";
 
+// Bumped only when the decision order/semantics in evaluateCandidateForField
+// change in a way that could shift historical accept/reject/needs_review
+// outcomes — surfaced in Release 2's diagnostics_context so a projection
+// diff taken against an older engine version isn't silently assumed
+// comparable to one taken after a semantics change.
+export const CANDIDATE_DECISION_VERSION = "release-1";
+
 export type CandidateDecision = "accept" | "reject" | "needs_review" | "unconstrained";
 
 export interface EvidenceValidationResult {

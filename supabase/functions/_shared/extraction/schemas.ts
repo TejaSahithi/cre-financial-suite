@@ -12,6 +12,12 @@
 
 import type { ModuleType } from "./types.ts";
 
+// Bumped only when a change to LEASE_SCHEMA/other module schemas' field set,
+// types, or evidence-policy configuration could invalidate a diagnostic
+// snapshot taken against an older version (Release 2's diagnostics_context —
+// see document-intelligence-v3/run-metrics.ts).
+export const LEASE_SCHEMA_VERSION = "release-1";
+
 // ── Field definition ─────────────────────────────────────────────────────────
 
 export type FieldType = "string" | "number" | "date" | "boolean" | "enum";
