@@ -53,3 +53,18 @@ export function isCanonicalReviewPayloadStrictEnabled(env: EnvLike = Deno.env): 
 
 export const CANONICAL_REVIEW_PAYLOAD_ENV_NAME = CANONICAL_REVIEW_PAYLOAD_FLAG_NAME;
 export const CANONICAL_REVIEW_PAYLOAD_STRICT_ENV_NAME = CANONICAL_REVIEW_PAYLOAD_STRICT_FLAG_NAME;
+const CANONICAL_APPROVAL_GATING_FLAG_NAME = "ENABLE_CANONICAL_APPROVAL_GATING";
+const CANONICAL_HYBRID_EMERGENCY_FALLBACK_FLAG_NAME = "ENABLE_CANONICAL_HYBRID_EMERGENCY_FALLBACK";
+
+export function isCanonicalApprovalGatingEnabled(env: EnvLike = Deno.env): boolean {
+  const raw = String(env.get(CANONICAL_APPROVAL_GATING_FLAG_NAME) ?? "").trim().toLowerCase();
+  return TRUTHY_VALUES.has(raw);
+}
+
+export function isCanonicalHybridEmergencyFallbackEnabled(env: EnvLike = Deno.env): boolean {
+  const raw = String(env.get(CANONICAL_HYBRID_EMERGENCY_FALLBACK_FLAG_NAME) ?? "").trim().toLowerCase();
+  return TRUTHY_VALUES.has(raw);
+}
+
+export const CANONICAL_APPROVAL_GATING_ENV_NAME = CANONICAL_APPROVAL_GATING_FLAG_NAME;
+export const CANONICAL_HYBRID_EMERGENCY_FALLBACK_ENV_NAME = CANONICAL_HYBRID_EMERGENCY_FALLBACK_FLAG_NAME;

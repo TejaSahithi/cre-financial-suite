@@ -1,7 +1,7 @@
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 
 /**
- * Document Intelligence v3 â€” Readiness diagnostic fetch (Phase 4).
+ * Document Intelligence v3 Ã¢â‚¬â€ Readiness diagnostic fetch (Phase 4).
  *
  * Unlike invokeEdgeFunction itself (which throws on any failure),
  * this wrapper always resolves and never throws -- callers (currently only
@@ -156,7 +156,7 @@ export async function fetchDocumentIntelligenceV3RunMetrics({ uploadedFileId = n
  * canonical-review authority read model; it still returns legacy payload for
  * rollback and diagnostics when canonical authority is disabled.
  */
-export async function fetchDocumentIntelligenceV4ReviewPayload({ uploadedFileId = null, runId = null } = {}) {
+export async function fetchDocumentIntelligenceV4ReviewPayload({ uploadedFileId = null, runId = null, generationId = null } = {}) {
   if (!uploadedFileId && !runId) {
     return { error: true, message: "No uploaded_file_id or run_id available for this document." };
   }
@@ -165,13 +165,17 @@ export async function fetchDocumentIntelligenceV4ReviewPayload({ uploadedFileId 
     const data = await invokeEdgeFunction("document-intelligence-v4-review-payload", {
       uploaded_file_id: uploadedFileId,
       run_id: runId,
+      generation_id: generationId,
     });
     return {
       error: false,
       mode: data?.mode ?? "legacy",
+      sourceMode: data?.sourceMode ?? data?.source_mode ?? null,
+      uiAuthority: data?.uiAuthority ?? data?.ui_authority ?? "legacy",
       enterpriseReviewPayload: data?.enterpriseReviewPayload ?? null,
       legacyReviewPayload: data?.legacyReviewPayload ?? null,
       authorityReadiness: data?.authorityReadiness ?? null,
+      approvalReadiness: data?.approvalReadiness ?? null,
       diagnostics: data?.diagnostics ?? null,
     };
   } catch (err) {
@@ -198,5 +202,19 @@ export async function submitDocumentFieldReviewAction({ uploadedFileId, runId, g
     return { error: false, ...data };
   } catch (err) {
     return { error: true, message: err?.message || "Failed to submit review action." };
+  }
+}
+/** Document Intelligence v4 - Corpus readiness metrics for canonical hybrid rollout. */
+export async function fetchDocumentIntelligenceV4ReadinessMetrics({ uploadedFileId = null, runId = null, since = null, limit = 200 } = {}) {
+  try {
+    const data = await invokeEdgeFunction("document-intelligence-v4-readiness-metrics", {
+      uploaded_file_id: uploadedFileId,
+      run_id: runId,
+      since,
+      limit,
+    });
+    return { error: false, readinessMetrics: data?.readinessMetrics ?? null, diagnostics: data?.diagnostics ?? null };
+  } catch (err) {
+    return { error: true, message: err?.message || "Failed to load Document Intelligence v4 readiness metrics." };
   }
 }

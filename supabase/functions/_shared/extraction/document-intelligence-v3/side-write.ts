@@ -1,8 +1,8 @@
 // @ts-nocheck
 /**
- * Document Intelligence v3 — Side-Write (Phase 2, extended in Phase 3 to
+ * Document Intelligence v3 â€” Side-Write (Phase 2, extended in Phase 3 to
  * also persist the classified document profile onto the run row so the
- * Phase 3 readiness evaluator has a durable source to read it from — see
+ * Phase 3 readiness evaluator has a durable source to read it from â€” see
  * 20260821000000_document_intelligence_v3_run_profile_columns.sql).
  *
  * Opt-in, best-effort durable write of the v3 claim/evidence scaffold
@@ -28,7 +28,7 @@
  * run_id, so prior completed runs are never mutated by an unrelated retry.
  */
 
-import { isDocumentIntelligenceV3Enabled, isParseQualityApprovalBlockingEnabled, isCanonicalReviewPayloadEnabled, isCanonicalReviewPayloadStrictEnabled } from "./feature-flag.ts";
+import { isDocumentIntelligenceV3Enabled, isParseQualityApprovalBlockingEnabled } from "./feature-flag.ts";
 import { buildDocumentIntelligenceV3Skeleton } from "./adapter.ts";
 import {
   extractOpenAIFactLedgerClaims,
@@ -51,6 +51,7 @@ import { validateEvidenceAnchors } from "./evidence-anchor-validator.ts";
 import { buildCanonicalReviewFieldRegistry } from "./canonical-review-field-registry.ts";
 import { buildEnterpriseReviewPayload } from "./enterprise-review-payload.ts";
 import { persistEnterpriseReviewPayload } from "./enterprise-review-persistence.ts";
+import { resolveCanonicalReviewRolloutForOrg } from "./canonical-review-rollout.ts";
 
 export interface DocumentIntelligenceV3SideWriteInput {
   supabaseAdmin: any;
@@ -59,6 +60,7 @@ export interface DocumentIntelligenceV3SideWriteInput {
   uploadedFile: Record<string, unknown>;
   leaseId?: string | null;
   pipelineJobId?: string | null;
+  generationId?: string | null;
   result: any;
   logger?: { event: (...args: any[]) => any } | null;
 }
@@ -74,11 +76,6 @@ export interface DocumentIntelligenceV3SideWriteResult {
   error: string | null;
 }
 
-
-function release4SourceMode(): "legacy" | "canonical_hybrid" | "canonical_strict" {
-  if (!isCanonicalReviewPayloadEnabled()) return "legacy";
-  return isCanonicalReviewPayloadStrictEnabled() ? "canonical_strict" : "canonical_hybrid";
-}
 
 function release4CanonicalDocument(uploadedFile: Record<string, unknown>) {
   const layout = (uploadedFile as any)?.canonical_layout_v3 ?? null;
@@ -312,6 +309,7 @@ export async function runDocumentIntelligenceV3SideWrite(
   const { supabaseAdmin, orgId, uploadedFileId, uploadedFile, result, logger } = input;
   const leaseId = input.leaseId ?? null;
   const pipelineJobId = input.pipelineJobId ?? null;
+  const generationId = input.generationId ?? (uploadedFile as any)?.active_generation_id ?? null;
 
   let runId: string | null = null;
 
@@ -364,6 +362,7 @@ export async function runDocumentIntelligenceV3SideWrite(
           uploaded_file_id: uploadedFileId,
           lease_id: leaseId,
           pipeline_job_id: pipelineJobId,
+          generation_id: generationId,
           contract_version: skeleton.contract_version,
           idempotency_key: idempotencyKey,
           layout_summary: layoutSummary,
@@ -457,7 +456,7 @@ export async function runDocumentIntelligenceV3SideWrite(
       if (insertDropsError) throw new Error(`Failed to insert document_validation_drops: ${insertDropsError.message}`);
     }
 
-    const projectionsWithRunId = canonicalFieldProjections.map((row) => ({ ...row, run_id: runId }));
+    const projectionsWithRunId = canonicalFieldProjections.map((row) => ({ ...row, run_id: runId, generation_id: generationId }));
     if (projectionsWithRunId.length > 0) {
       const { error: insertProjectionsError } = await supabaseAdmin
         .from("document_canonical_field_projections")
@@ -513,25 +512,42 @@ export async function runDocumentIntelligenceV3SideWrite(
 
     let release4EnterprisePayload: Record<string, unknown> = { status: "not_attempted" };
     try {
+      const rollout = await resolveCanonicalReviewRolloutForOrg({ supabaseAdmin, orgId, documentFamily: "lease" });
+      const payloadBuildStartedAt = Date.now();
       const registry = buildCanonicalReviewFieldRegistry("lease");
       const built = await buildEnterpriseReviewPayload({
         orgId,
         uploadedFileId,
         leaseId,
-        run: { id: runId, uploaded_file_id: uploadedFileId, lease_id: leaseId },
-        sourceMode: release4SourceMode(),
+        run: { id: runId, uploaded_file_id: uploadedFileId, lease_id: leaseId, generation_id: generationId },
+        generationId,
+        sourceMode: rollout.builderSourceMode,
         registry,
         projectionRows: projectionsWithRunId,
         evidenceRows,
         legacyPayload: (uploadedFile as any)?.ui_review_payload ?? null,
         canonicalDocument: release4CanonicalDocument(uploadedFile),
       });
-      const persisted = await persistEnterpriseReviewPayload({ supabaseAdmin, payload: built.payload });
+      const persisted = await persistEnterpriseReviewPayload({
+        supabaseAdmin,
+        payload: built.payload,
+        diagnostics: {
+          rolloutMode: rollout.mode,
+          rolloutSource: rollout.source,
+          payloadBuildDurationMs: Date.now() - payloadBuildStartedAt,
+          registryVersion: registry[0]?.schemaVersion ?? null,
+          projectionAlgorithmVersion: projectionsWithRunId.find((row: any) => row?.projection_algorithm_version)?.projection_algorithm_version ?? "projection-resolution-v1",
+          integrityViolationCount: built.rejectedProjectionCount,
+        },
+      });
       release4EnterprisePayload = {
         status: persisted.error ? "persistence_failed" : "persisted",
         payload_id: persisted.id,
         payload_hash: built.payload.payloadHash,
         source_mode: built.payload.sourceMode,
+        rollout_mode: rollout.mode,
+        rollout_source: rollout.source,
+        ui_authority: rollout.uiAuthority,
         coverage_summary: built.payload.coverage.totals,
         authority_ready: built.authorityReadiness.ready,
         persistence_error: persisted.error,

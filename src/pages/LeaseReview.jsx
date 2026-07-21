@@ -139,6 +139,10 @@ import LeaseReviewReadinessSummary from "@/components/lease-review/LeaseReviewRe
 import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
 import { getFieldPolicyLabel } from "@/lib/leaseReviewCurrentPolicy";
 import { isLeaseReviewEnrichmentInFlight } from "@/lib/leaseReviewUiState";
+import { normalizeEnterprisePayload, getEnterpriseField } from "@/lib/enterprisePayloadReader";
+import { EnterpriseHeaderIntelligenceBar } from "@/components/lease-review/EnterpriseHeaderIntelligenceBar";
+import { EnterpriseCoverageDashboard } from "@/components/lease-review/EnterpriseCoverageDashboard";
+import { EnterpriseFindings } from "@/components/lease-review/EnterpriseFindings";
 
 // Minimum number of source-backed fields required before a new extraction is
 // considered "richer" than the previous one. Used only for debug diagnostics.
@@ -209,6 +213,21 @@ export default function LeaseReview() {
     setDrawerField(field);
   };
 
+  const drawerEnterpriseField = useMemo(() => {
+    if (!drawerField?.key || !enterprisePayload) return null;
+    return getEnterpriseField(enterprisePayload, drawerField.key);
+  }, [drawerField?.key, enterprisePayload]);
+
+  const handleNavigateToField = (tabKey, fieldKey) => {
+    if (tabKey) setActiveTab(tabKey);
+    if (fieldKey) {
+      const targetField = LEASE_REVIEW_FIELDS.find((f) => f.key === fieldKey);
+      if (targetField) {
+        openDrawer(targetField);
+      }
+    }
+  };
+
   // Lease query
   const { data: lease, isLoading } = useQuery({
     queryKey: ["lease", leaseId],
@@ -250,6 +269,30 @@ export default function LeaseReview() {
       return isLeaseReviewEnrichmentInFlight(status) ? 4000 : false;
     },
   });
+
+  const { data: rawEnterprisePayload } = useQuery({
+    queryKey: ["document_enterprise_review_payload", lease?.org_id, resolvedSourceFileId],
+    queryFn: async () => {
+      if (!lease?.org_id || !resolvedSourceFileId) return null;
+      const { data, error } = await supabase
+        .from("document_enterprise_review_payloads")
+        .select("payload")
+        .eq("org_id", lease.org_id)
+        .eq("uploaded_file_id", resolvedSourceFileId)
+        .eq("is_current", true)
+        .maybeSingle();
+
+      if (error) {
+        return null;
+      }
+      return data?.payload ?? null;
+    },
+    enabled: Boolean(lease?.org_id && resolvedSourceFileId),
+  });
+
+  const enterprisePayload = useMemo(() => {
+    return normalizeEnterprisePayload(rawEnterprisePayload);
+  }, [rawEnterprisePayload]);
 
   // P0.7: files already sitting at review_required from before the P0.4/P0.5
   // migrations backfilled review_readiness conservatively to 'partial'
@@ -3054,6 +3097,8 @@ export default function LeaseReview() {
       </div>
       )}
 
+      <EnterpriseHeaderIntelligenceBar enterprisePayload={enterprisePayload} />
+
       <div className="mb-4">
         <LeaseReviewReadinessSummary
           summary={normalized.readinessSummary}
@@ -3071,6 +3116,8 @@ export default function LeaseReview() {
       <div className="mb-4">
         <DynamicFindings dynamicFindings={normalized.dynamicFindings} />
       </div>
+
+      <EnterpriseFindings findings={enterprisePayload?.findings} onNavigateToField={handleNavigateToField} />
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex h-auto flex-wrap justify-start gap-1 border bg-white">
@@ -3111,6 +3158,7 @@ export default function LeaseReview() {
 
         {/* Summary tab */}
         <TabsContent value="summary" className="mt-4 space-y-4">
+          <EnterpriseCoverageDashboard enterprisePayload={enterprisePayload} />
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Lease Summary</CardTitle>
@@ -3273,6 +3321,7 @@ export default function LeaseReview() {
                 rows={enterpriseTabs[tab.key] || []}
                 onOpenDetail={(row) => openDrawer(row, "view")}
                 onQuickAction={handleTabRowQuickAction}
+                enterprisePayload={enterprisePayload}
               />
             </TabsContent>
           ))}
@@ -3280,28 +3329,28 @@ export default function LeaseReview() {
           <div className="flex justify-end">
             <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setCustomFieldDialog({ tabKey: "rent_charges" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>+ Add Custom Field</Button>
           </div>
-          <LeaseReviewTabTable rows={enterpriseTabs.rent_charges || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} />
+          <LeaseReviewTabTable rows={enterpriseTabs.rent_charges || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} enterprisePayload={enterprisePayload} />
           <RentScheduleTable leaseId={lease.id} />
         </TabsContent>
 
         <TabsContent value="expenses_recoveries" className="mt-4 space-y-4">
-          <LeaseReviewTabTable rows={enterpriseTabs.expenses_recoveries || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} />
+          <LeaseReviewTabTable rows={enterpriseTabs.expenses_recoveries || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} enterprisePayload={enterprisePayload} />
         </TabsContent>
 
         <TabsContent value="cam_rules" className="mt-4 space-y-4">
-          <LeaseReviewTabTable rows={enterpriseTabs.cam_rules || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} />
+          <LeaseReviewTabTable rows={enterpriseTabs.cam_rules || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} enterprisePayload={enterprisePayload} />
         </TabsContent>
 
         <TabsContent value="clause_records" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.clause_records || []} onOpenDetail={(row) => openDrawer(row, "view")} />
+          <LeaseReviewTabTable rows={enterpriseTabs.clause_records || []} onOpenDetail={(row) => openDrawer(row, "view")} enterprisePayload={enterprisePayload} />
         </TabsContent>
 
         <TabsContent value="critical_dates" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.critical_dates || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} />
+          <LeaseReviewTabTable rows={enterpriseTabs.critical_dates || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} enterprisePayload={enterprisePayload} />
         </TabsContent>
 
         <TabsContent value="documents_exhibits" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.documents_exhibits || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} />
+          <LeaseReviewTabTable rows={enterpriseTabs.documents_exhibits || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} enterprisePayload={enterprisePayload} />
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-base">Source Document</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">
@@ -3312,7 +3361,7 @@ export default function LeaseReview() {
         </TabsContent>
 
         <TabsContent value="budget_preview" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.budget_preview || []} onOpenDetail={(row) => openDrawer(row, "view")} />
+          <LeaseReviewTabTable rows={enterpriseTabs.budget_preview || []} onOpenDetail={(row) => openDrawer(row, "view")} enterprisePayload={enterprisePayload} />
           <BudgetPreviewCard lease={lease} />
         </TabsContent>
 
@@ -3376,6 +3425,7 @@ export default function LeaseReview() {
         field={drawerField}
         lease={leaseFull}
         review={drawerReview}
+        enterpriseField={drawerEnterpriseField}
         initialMode={drawerMode}
         onAccept={(f) => handleAccept(f)}
         onReject={(f) => handleReject(f)}

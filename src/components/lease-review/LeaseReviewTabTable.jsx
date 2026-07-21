@@ -87,7 +87,7 @@ function shouldShowRow(row, showAdvanced) {
   return false;
 }
 
-export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAction, onNavigateRules }) {
+export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAction, onNavigateRules, enterprisePayload }) {
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -162,13 +162,27 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
                 if (onQuickAction) onQuickAction(row, "view_source");
                 else onOpenDetail?.(row);
               };
+              const fKey = row.key || row.fieldKey;
+              const entField = enterprisePayload?.fieldsByKey?.[fKey] ?? null;
+              const legacyVal = formatValue(row.value ?? row.normalized_value ?? row.normalizedValue);
+              const entVal = entField ? formatValue(entField.displayValue ?? entField.value) : "-";
+              const isMismatch = entField && legacyVal !== "-" && entVal !== "-" && legacyVal.trim().toLowerCase() !== entVal.trim().toLowerCase();
+
               return (
                 <TableRow key={row.key || row.fieldKey || `${row.rowType}-${index}`} className="align-top hover:bg-slate-50/70">
                   <TableCell className="text-xs font-medium text-slate-800">
                     {row.label || row.fieldKey || "Untitled"}
                     {row.rowType === "read_only_reference" && <div className="mt-1 text-[10px] font-normal text-slate-500">Read-only reference</div>}
                   </TableCell>
-                  <TableCell className="text-xs text-slate-700">{formatValue(row.value ?? row.normalized_value ?? row.normalizedValue)}</TableCell>
+                  <TableCell className="text-xs text-slate-700">
+                    {legacyVal}
+                    {isMismatch && (
+                      <div className="mt-1 flex items-center gap-1 text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5" title={`Canonical projection: ${entVal}`}>
+                        <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
+                        <span>Canonical: {entVal}</span>
+                      </div>
+                    )}
+                  </TableCell>
                   <TableCell className="text-xs"><Badge variant="outline" className={statusMeta.className}>{statusMeta.label}</Badge></TableCell>
                   <TableCell className="text-center text-xs text-slate-600">{confidence == null ? "-" : `${confidence}%`}</TableCell>
                   <TableCell className="text-xs"><Badge variant="outline" className={extractionModeMeta.className}>{extractionModeMeta.label}</Badge></TableCell>

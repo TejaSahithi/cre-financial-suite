@@ -2983,6 +2983,7 @@ Deno.serve(async (req: Request) => {
           uploadedFile: { ...fileRecord, ui_review_payload: minimalPayload },
           leaseId: null,
           pipelineJobId: finalPipelineJobId ?? null,
+          generationId: generation_id ?? jobGenerationId ?? fileRecord.active_generation_id ?? null,
           result,
           logger,
         });

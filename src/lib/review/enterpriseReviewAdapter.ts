@@ -1,3 +1,6 @@
+// @ts-nocheck
+import { canonicalStatusToReviewStatus, shouldUseCanonicalReviewPayload as shouldUseCanonicalReviewPayloadForMode } from "./reviewStatusPresentation";
+
 export function enterpriseReviewPayloadToLeaseReviewViewModel(payload, legacyPayload = null) {
   if (!payload || payload.schemaVersion !== "enterprise-review-payload-v1") {
     return {
@@ -16,11 +19,13 @@ export function enterpriseReviewPayloadToLeaseReviewViewModel(payload, legacyPay
   const values = {};
   const fieldObjects = {};
   const standardFields = Object.values(fields).map((field) => {
+    const reviewStatus = canonicalStatusToReviewStatus(field.status);
     values[field.canonicalFieldKey] = field.value;
     fieldObjects[field.canonicalFieldKey] = {
       value: field.value,
       confidence: field.confidence,
-      status: field.status,
+      status: reviewStatus,
+      canonical_status: field.status,
       evidence: field.evidence,
       authoritative_source: field.authoritativeSource,
     };
@@ -28,7 +33,8 @@ export function enterpriseReviewPayloadToLeaseReviewViewModel(payload, legacyPay
       field_key: field.canonicalFieldKey,
       value: field.value,
       display_value: field.displayValue,
-      status: field.status,
+      status: reviewStatus,
+      canonical_status: field.status,
       confidence: field.confidence,
       evidence: field.evidence,
       authoritative_source: field.authoritativeSource,
@@ -69,10 +75,11 @@ export function enterpriseReviewPayloadToLeaseReviewViewModel(payload, legacyPay
       legacyFallbackCount: payload.compatibility?.fallbackFieldCount ?? 0,
       coverageReady: payload.coverage?.approvalReady ?? false,
       unresolvedConflictCount: payload.unresolvedConflicts?.length ?? 0,
+      overrideCount: payload.validationSummary?.overrideCount ?? 0,
     },
   };
 }
 
 export function shouldUseEnterpriseReviewPayload(response) {
-  return Boolean(response?.enterpriseReviewPayload && response?.mode && response.mode !== "legacy");
+  return shouldUseCanonicalReviewPayloadForMode(response);
 }

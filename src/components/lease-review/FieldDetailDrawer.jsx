@@ -49,6 +49,7 @@ import {
   getLeaseFieldLabel,
   hasLeaseFieldOptions,
 } from "@/lib/leaseFieldOptions";
+import { FieldDrawerIntelligence } from "@/components/lease-review/FieldDrawerIntelligence";
 
 const confidenceClass = (score) => {
   const bucket = classifyConfidence(score);
@@ -70,6 +71,7 @@ export default function FieldDetailDrawer({
   field,
   lease,
   review,
+  enterpriseField,
   initialMode = "view",
   onAccept,
   onReject,
@@ -507,6 +509,8 @@ export default function FieldDetailDrawer({
               </p>
             )}
           </section>
+
+          <FieldDrawerIntelligence enterpriseField={enterpriseField} legacyValue={value} />
         </div>
 
         <div className="sticky bottom-0 border-t border-slate-200 bg-white px-5 py-3">

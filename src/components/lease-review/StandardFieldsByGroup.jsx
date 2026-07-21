@@ -3,6 +3,7 @@ import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { STANDARD_FIELD_GROUPS } from "@/lib/leaseFieldContract";
+import { getReviewStatusPresentation } from "@/lib/review/reviewStatusPresentation";
 
 const STATUS_BADGE = {
   auto_populated: { label: "Auto-populated", className: "bg-emerald-50 text-emerald-700" },
@@ -51,7 +52,7 @@ function GroupStats({ rows }) {
 }
 
 function FieldRow({ row, onOpenDetail }) {
-  const statusMeta = STATUS_BADGE[row.status] || STATUS_BADGE.missing;
+  const statusMeta = getReviewStatusPresentation(row.canonicalStatus || row.canonical_status || row.status) || STATUS_BADGE[row.status] || STATUS_BADGE.missing;
   const confidenceMeta = CONFIDENCE_BADGE[confidenceBucket(row.confidence)];
 
   return (

@@ -268,6 +268,7 @@ export async function buildEnterpriseReviewPayload(args: {
   evidenceRows?: any[];
   legacyPayload?: unknown;
   canonicalDocument?: EnterpriseReviewPayload["canonicalDocument"];
+  activeOverrides?: any[];
 }): Promise<EnterpriseReviewBuildResult> {
   const generationId = args.generationId ?? args.run?.generation_id ?? null;
   const strict = args.sourceMode === "canonical_strict";
@@ -298,13 +299,35 @@ export async function buildEnterpriseReviewPayload(args: {
   const coverage = buildCanonicalCoverageLedger({ registry: args.registry, projections, legacyPayload, legacyValueResolver: readLegacyFieldValue, strict });
   const parity = buildCanonicalLegacyParity({ registry: args.registry, projections, legacyPayload, legacyValueResolver: readLegacyFieldValue, moduleType: "lease" });
   const coverageByKey = new Map(coverage.entries.map((entry) => [entry.canonicalFieldKey, entry]));
+  const overridesByKey = new Map((args.activeOverrides ?? []).filter((row: any) => row?.is_active !== false).map((row: any) => [row.canonical_field_key ?? row.canonicalFieldKey, row]));
   const fields: Record<string, EnterpriseReviewField> = {};
   for (const field of args.registry) {
     const projection = projectionsByKey.get(field.canonicalFieldKey) ?? null;
     const coverageEntry = coverageByKey.get(field.canonicalFieldKey)!;
     const legacyValue = readLegacyFieldValue(field, legacyPayload);
-    const source = fieldSource({ sourceMode: args.sourceMode, strict, field, projection, coverageStatus: coverageEntry.coverageStatus, legacyValue });
-    const value = fieldValueFor({ source, projection, legacyValue });
+    const override = overridesByKey.get(field.canonicalFieldKey) ?? null;
+    let effectiveStatus = coverageEntry.coverageStatus;
+    let source = fieldSource({ sourceMode: args.sourceMode, strict, field, projection, coverageStatus: coverageEntry.coverageStatus, legacyValue });
+    let value = fieldValueFor({ source, projection, legacyValue });
+    let overrideRequiresAttention = false;
+    let overrideBlocking = false;
+    if (override) {
+      source = "reviewer_override";
+      const action = override.action ?? "overridden";
+      if (action === "accepted") value = projection?.normalizedValue ?? projection?.value ?? value;
+      if (action === "overridden") value = override.override_value ?? override.overrideValue ?? value;
+      if (action === "cleared") {
+        value = null;
+        effectiveStatus = field.requiredForApproval ? "missing" : "not_applicable";
+        overrideBlocking = Boolean(field.requiredForApproval);
+      }
+      if (action === "marked_not_applicable") {
+        value = null;
+        effectiveStatus = "not_applicable";
+        overrideBlocking = Boolean(field.requiredForApproval);
+      }
+      if (action === "needs_followup") overrideRequiresAttention = true;
+    }
     const evidence = evidenceReferencesFor(projection, args.evidenceRows ?? []);
     fields[field.canonicalFieldKey] = {
       canonicalFieldKey: field.canonicalFieldKey,
@@ -312,7 +335,7 @@ export async function buildEnterpriseReviewPayload(args: {
       domain: field.domain,
       value,
       displayValue: hasValue(value) ? String(value) : projection?.displayValue ?? null,
-      status: coverageEntry.coverageStatus,
+      status: effectiveStatus,
       confidence: projection?.confidence ?? null,
       authoritativeSource: source,
       evidence,
@@ -320,18 +343,27 @@ export async function buildEnterpriseReviewPayload(args: {
       conflict: projection?.conflict ?? null,
       review: {
         editable: field.allowReviewerOverride,
-        requiresAttention: coverageEntry.blocking || ["needs_review", "conflict", "missing_source_evidence", "legacy_fallback"].includes(coverageEntry.coverageStatus),
-        blocking: coverageEntry.blocking,
+        requiresAttention: overrideRequiresAttention || overrideBlocking || coverageEntry.blocking || ["needs_review", "conflict", "missing_source_evidence", "legacy_fallback"].includes(effectiveStatus),
+        blocking: override ? overrideBlocking : coverageEntry.blocking,
         reasonCodes: [...coverageEntry.blockingReasons, ...coverageEntry.warningReasons],
       },
     };
   }
   const findings = buildFindings({ coverage, fields, parity, rejectedProjectionReasons });
+  const overrideCount = (args.activeOverrides ?? []).filter((row: any) => row?.is_active !== false).length;
+  const effectiveFields = Object.values(fields);
+  const effectiveBlockingIssueCount = effectiveFields.filter((field: any) => field?.review?.blocking).length;
+  const effectiveMissingRequiredCount = args.registry.filter((field) => field.requiredForApproval && fields[field.canonicalFieldKey]?.status === "missing").length;
   const validationSummary = {
-    valid: coverage.totals.blocking === 0,
-    approvalEligible: args.sourceMode === "legacy" ? true : coverage.approvalReady,
-    blockingIssueCount: coverage.totals.blocking,
+    valid: effectiveBlockingIssueCount === 0,
+    approvalEligible: args.sourceMode === "legacy" ? true : effectiveBlockingIssueCount === 0,
+    blockingIssueCount: effectiveBlockingIssueCount,
     warningCount: findings.filter((finding) => finding.severity === "warning" || finding.severity === "material").length,
+    conflictCount: coverage.totals.conflicts,
+    missingRequiredCount: effectiveMissingRequiredCount,
+    missingEvidenceCount: coverage.totals.missingSourceEvidence,
+    fallbackCount: coverage.totals.legacyFallbacks,
+    overrideCount,
     reasonCodes: [...new Set(findings.flatMap((finding) => finding.reasonCodes))],
   };
   const payloadWithoutHash = {
