@@ -9,6 +9,7 @@
 
 import type { DoclingOutput, ExtractedRecord, ModuleType } from "../types.ts";
 import type { EvidenceIndex } from "../evidence-index.ts";
+import type { CanonicalDocumentLayout } from "../document-intelligence-v3/canonical-layout.ts";
 
 // ── Canonical document index ─────────────────────────────────────────────────
 
@@ -126,6 +127,7 @@ export interface OpenAIFactLedgerInput {
   moduleType: ModuleType;
   suggestCustomFields?: boolean;
   documentSubtype?: string | null;
+  canonicalLayout?: CanonicalDocumentLayout | null;
 }
 
 export type VertexFactLedgerInput = OpenAIFactLedgerInput;

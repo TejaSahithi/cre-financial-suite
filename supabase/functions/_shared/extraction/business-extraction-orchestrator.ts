@@ -62,6 +62,7 @@ export interface RunBusinessExtractionOptions {
   fileMimeType?: string;
   correlationId: string;
   canonicalLayoutSchemaVersion?: number | null;
+  canonicalLayout?: import("./document-intelligence-v3/canonical-layout.ts").CanonicalDocumentLayout | null;
   // Test-only injection seam. Both default to the real pipelines; never
   // used outside tests / the triple-gated local mock path.
   openaiRunner?: typeof runOpenAIFactLedgerPipeline;
@@ -232,6 +233,7 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
         fileName: opts.fileName,
         docling: opts.document ?? opts.docling,
         documentSubtype: opts.documentSubtype,
+        canonicalLayout: opts.canonicalLayout ?? null,
         ...(opts.fileBase64 ? { fileBase64: opts.fileBase64, fileMimeType: opts.fileMimeType || "application/pdf" } : {}),
       },
       { deadlineAt: startTime + OPENAI_TOTAL_BUDGET_MS },

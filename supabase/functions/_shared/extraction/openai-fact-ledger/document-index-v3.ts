@@ -146,6 +146,7 @@ export interface ResolveDocumentIndexOptions {
    *  backward API compatibility; no current caller (runtime or test) sets
    *  it, confirmed by inspection before this change. */
   context?: BuildCanonicalLayoutContext;
+  canonicalLayout?: CanonicalDocumentLayout | null;
 }
 
 export interface ResolveDocumentIndexResult {
@@ -199,7 +200,7 @@ export async function resolveDocumentIndex(
   }
 
   try {
-    const resolution = await resolveCanonicalDocumentLayout({ doclingRaw });
+    const resolution = await resolveCanonicalDocumentLayout({ canonicalLayout: options.canonicalLayout ?? null, doclingRaw });
 
     if (!resolution.layout) {
       throw new Error(`canonical layout resolution returned no layout (source: ${resolution.source})`);

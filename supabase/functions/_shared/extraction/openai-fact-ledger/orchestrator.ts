@@ -130,7 +130,7 @@ export async function runOpenAIFactLedgerPipeline(
     // only), falling straight back to the existing legacy_evidence_index path
     // (document-index.ts, untouched) on any failure. Default/flag-off
     // behavior is byte-for-byte what this line did before Phase 6.
-    indexResolution = await resolveDocumentIndex(doclingRaw);
+    indexResolution = await resolveDocumentIndex(doclingRaw, { canonicalLayout: input.canonicalLayout ?? null });
     const docIndex = indexResolution.index;
 
     if (docIndex.fullText.trim().length < 10 && !input.fileBase64) {
