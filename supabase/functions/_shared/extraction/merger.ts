@@ -18,6 +18,7 @@
 
 import type { ExtractedField, ExtractedRecord, StepResult, ModuleType } from "./types.ts";
 import { getSchema } from "./schemas.ts";
+import { evaluateCandidateForField } from "./candidate-decision.ts";
 
 /** Priority order for tie-breaking */
 const SOURCE_PRIORITY: Record<string, number> = {
@@ -70,7 +71,7 @@ export function mergeResults(
     const tableRecord = tableResult.records[i];
     if (tableRecord) {
       for (const [key, field] of Object.entries(tableRecord.fields)) {
-        mergeField(fields, key, field);
+        mergeField(fields, key, field, moduleType, schema);
       }
     }
 
@@ -92,7 +93,7 @@ export function mergeResults(
       const ruleRecord = ruleResult.records[i] ?? ruleResult.records[0];
       if (ruleRecord) {
         for (const [key, field] of Object.entries(ruleRecord.fields)) {
-          mergeField(fields, key, field);
+          mergeField(fields, key, field, moduleType, schema);
         }
       }
     }
@@ -112,31 +113,60 @@ export function mergeResults(
 
 /**
  * Merge a single field into the record, keeping the higher-confidence value.
+ * Domain-aware (Release 1): a candidate whose source text is hard-rejected
+ * for this field (wrong clause domain, or an explicit exclusion pattern) is
+ * dropped regardless of confidence — see candidate-decision.ts. A
+ * "needs_review" candidate is still merged (preserving pre-Release-1
+ * behavior) but flagged via evidenceDecision for the audit trail.
  */
 function mergeField(
   target: Record<string, ExtractedField>,
   key: string,
   incoming: ExtractedField,
+  moduleType: ModuleType,
+  schema: ReturnType<typeof getSchema>,
 ): void {
   const existing = target[key];
+  const fieldDef = schema[key];
+
+  let incomingToMerge = incoming;
+  if (fieldDef) {
+    const result = evaluateCandidateForField({
+      field: fieldDef,
+      fieldKey: key,
+      moduleType,
+      value: incoming.value,
+      sourceText: incoming.sourceText ?? null,
+      confidence: incoming.confidence,
+      sourceType: incoming.source,
+    });
+    if (result.decision === "reject") {
+      // Hard veto — this candidate never overwrites, never merges, and
+      // never becomes `existing` for future comparisons.
+      return;
+    }
+    if (result.decision === "needs_review") {
+      incomingToMerge = { ...incoming, evidenceDecision: "needs_review" };
+    }
+  }
 
   if (!existing) {
-    target[key] = incoming;
+    target[key] = incomingToMerge;
     return;
   }
 
   // Higher confidence wins
-  if (incoming.confidence > existing.confidence) {
-    target[key] = incoming;
+  if (incomingToMerge.confidence > existing.confidence) {
+    target[key] = incomingToMerge;
     return;
   }
 
   // Equal confidence — use source priority
   if (
-    incoming.confidence === existing.confidence &&
-    (SOURCE_PRIORITY[incoming.source] ?? 0) > (SOURCE_PRIORITY[existing.source] ?? 0)
+    incomingToMerge.confidence === existing.confidence &&
+    (SOURCE_PRIORITY[incomingToMerge.source] ?? 0) > (SOURCE_PRIORITY[existing.source] ?? 0)
   ) {
-    target[key] = incoming;
+    target[key] = incomingToMerge;
   }
 }
 

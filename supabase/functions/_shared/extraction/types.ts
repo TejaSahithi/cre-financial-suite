@@ -27,6 +27,11 @@ export interface ExtractedField {
   confidence: number;
   sourceText?: string; // the raw text snippet this was extracted from
   sourcePage?: number | null; // page number in the source document, if known
+  /** Set by candidate-decision.ts's evaluateCandidateForField() when this
+   *  candidate's domain match was ambiguous ("needs_review") — the merge
+   *  still accepted it (preserving pre-Release-1 merge behavior), but it's
+   *  flagged for the rejected/needs-review candidate audit trail. */
+  evidenceDecision?: "needs_review";
 }
 
 /** One extracted record (row) — a map of fieldName → ExtractedField */

@@ -133,6 +133,7 @@ import {
 } from "@/components/lease-review/SpecializedTables";
 import ExtractionDebugPanel from "@/components/lease-review/ExtractionDebugPanel";
 import ApprovalBlockersPanel from "@/components/lease-review/ApprovalBlockersPanel";
+import DynamicFindings from "@/components/lease-review/DynamicFindings";
 import LeaseReviewTabTable from "@/components/lease-review/LeaseReviewTabTable";
 import LeaseReviewReadinessSummary from "@/components/lease-review/LeaseReviewReadinessSummary";
 import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
@@ -3063,6 +3064,12 @@ export default function LeaseReview() {
 
       <div className="mb-4">
         <ApprovalBlockersPanel approvalBlockers={normalized.approvalBlockers} />
+      </div>
+
+      {/* Release 1: read-only, informational, never blocks approval -- see
+          DynamicFindings.jsx header comment. Renders nothing when empty. */}
+      <div className="mb-4">
+        <DynamicFindings dynamicFindings={normalized.dynamicFindings} />
       </div>
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>

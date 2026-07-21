@@ -27,6 +27,15 @@ const STATUS_META = {
   rejected: { label: "Rejected", className: "bg-red-50 text-red-700 border-red-100" },
   approved: { label: "Approved", className: "bg-emerald-50 text-emerald-700 border-emerald-100" },
   pending: { label: "Pending", className: "bg-slate-100 text-slate-700 border-slate-200" },
+  // Release 1: distinct badges for states computeFieldStatus() (in
+  // leaseReviewFieldNormalizer.js) previously collapsed into a flat
+  // "missing" before a reviewer ever saw the row.
+  not_found: { label: "Not Stated", className: "bg-slate-100 text-slate-600 border-slate-200" },
+  not_applicable: { label: "N/A", className: "bg-slate-50 text-slate-500 border-slate-200" },
+  // Pre-existing gap: computeFieldStatus() could already return this, but
+  // with no matching entry here it silently fell back to the generic
+  // "Pending" badge (see the `|| STATUS_META.pending` fallback below).
+  manually_edited: { label: "Edited", className: "bg-blue-50 text-blue-700 border-blue-100" },
 };
 
 // Phase 40: "how did this value come to exist" — distinct from STATUS_META

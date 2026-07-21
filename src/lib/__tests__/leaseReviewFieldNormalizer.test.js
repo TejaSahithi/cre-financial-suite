@@ -145,10 +145,14 @@ describe("Old legacy payloads still render", () => {
     const tenantRow = result.standardFields.find((r) => r.canonicalKey === "tenant_name");
     expect(tenantRow.value).toBe("Old Format Tenant LLC");
     // The new gap fields (added in the field-contract-reconciliation task)
-    // must gracefully resolve to missing, not throw or invent a value.
+    // must gracefully resolve to no value, not throw or invent one. Status
+    // is "not_found" (Release 1), not "missing" -- extraction_data.fields
+    // is present (the extractor ran, per resolveExtractionStatus's
+    // extractorRan check), it just didn't find building_rsf in this legacy
+    // payload shape. "missing" now means the extractor never ran at all.
     const buildingRsfRow = result.standardFields.find((r) => r.canonicalKey === "building_rsf");
     expect(buildingRsfRow.value).toBeNull();
-    expect(buildingRsfRow.status).toBe("missing");
+    expect(buildingRsfRow.status).toBe("not_found");
   });
 });
 
@@ -266,7 +270,10 @@ describe("Phase 39: invalid markup value sanitizer", () => {
     };
     const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "landlord_name");
     expect(row.value).toBeNull();
-    expect(row.status).toBe("missing");
+    // Release 1: "not_found", not "missing" -- extraction_data.fields is
+    // present (the extractor ran), it just produced a rejected/nulled
+    // value for this field. "missing" now means the extractor never ran.
+    expect(row.status).toBe("not_found");
     expect(row.evidenceVerified).toBe(false);
     expect(row.invalidValueRejected).toBe(true);
     expect(row.validationMessage).toMatch(/layout\/markup artifact/i);

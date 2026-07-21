@@ -368,6 +368,18 @@ export default function ExtractionDebugPanel({ lease }) {
     || uploadedFile?.docling_raw?._metadata?.pipeline
     || {};
   const debugRead = (key) => extractionDebug?.[key] ?? pipelineDebug?.[key];
+  // Release 1: how much of the schema has real (enforced) domain/evidence
+  // validation vs. advisory-only vs. no check at all -- see
+  // schemas.ts#getEvidencePolicyCoverage. Admin-only visibility so the
+  // configuration gap stays honest rather than looking silently "done".
+  const evidencePolicyCoverage =
+    uploadedFile?.normalized_output?.metadata?.evidence_policy_coverage
+    || uploadedFile?.ui_review_payload?.metadata?.evidence_policy_coverage
+    || null;
+  const rejectedCandidates =
+    debugRead("rejected_candidates")
+    || pipelineDebug?.openai_fact_ledger?.rejected_candidates
+    || [];
   const doclingPagesParsed = workflowOutput?.summary?.docling_pages_parsed
     ?? workflowOutput?.summary?.pages_detected
     ?? new Set(textBlocks.map((block) => block?.page ?? block?.page_number ?? block?.source_page).filter(Boolean)).size;
@@ -517,6 +529,11 @@ export default function ExtractionDebugPanel({ lease }) {
     // object every other Lease Review section now uses.
     standard_fields_total: normalized.standardFields.length,
     standard_fields_populated: normalized.debugCounts.standard_fields_populated,
+    // Release 1: evidence-policy coverage + rejected-candidate audit trail.
+    evidence_policy_enforced: evidencePolicyCoverage ? `${evidencePolicyCoverage.enforced} / ${evidencePolicyCoverage.total}` : "â€”",
+    evidence_policy_advisory: evidencePolicyCoverage ? `${evidencePolicyCoverage.advisory} / ${evidencePolicyCoverage.total}` : "â€”",
+    evidence_policy_unconfigured: evidencePolicyCoverage ? `${evidencePolicyCoverage.unconfigured} / ${evidencePolicyCoverage.total}` : "â€”",
+    rejected_candidates_count: rejectedCandidates.length,
     standard_fields_source_backed: normalized.debugCounts.standard_fields_source_backed,
     dynamic_findings_count: normalized.dynamicFindings.length,
     expense_rules_count: normalized.expenseRules.length,

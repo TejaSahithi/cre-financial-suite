@@ -75,12 +75,29 @@ export interface FactLedgerResult {
 
 // ── Field mapping ─────────────────────────────────────────────────────────────
 
+/** A candidate the domain-aware decision engine rejected or flagged before
+ *  it could populate a field — the Release-1 audit trail. No DB table yet;
+ *  carried in extractionDebug so it's visible today (ExtractionDebugPanel)
+ *  and forward-compatible with document_validation_drops (same shape). */
+export interface RejectedCandidate {
+  field_key: string;
+  candidate_value: unknown;
+  candidate_category: string;
+  decision: string;
+  reason: string;
+  source_page: number | null;
+  source_text: string;
+}
+
 export interface FactFieldMappingResult {
   records: ExtractedRecord[];
   validationErrors: import("../types.ts").ValidationError[];
   /** Facts that did not map to any LEASE_SCHEMA field — passed through to
    *  dynamic-fact-surfacer.ts unchanged. */
   unmappedFacts: Fact[];
+  /** Facts the domain-aware decision engine hard-rejected for a field their
+   *  own labels/keywords would otherwise have matched. */
+  rejectedCandidates: RejectedCandidate[];
 }
 
 // ── Approval blockers (backend-only, advisory in this pass) ─────────────────

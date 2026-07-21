@@ -14,9 +14,16 @@ function formatValue(value) {
  * Reads `dynamicFindings` from normalizeLeaseReviewData() (leaseReviewFieldNormalizer.js),
  * which itself wraps the existing collectExtractedDocumentItems() — not a
  * new extraction path.
+ *
+ * Release 1 scope: read-only. No map-to-field/dismiss/mark-non-material
+ * actions yet (those are a Release 2+ decision, once there's somewhere to
+ * persist them) and this panel never blocks approval. Renders nothing when
+ * there are no findings, rather than an empty-state card, so it doesn't add
+ * persistent clutter to every document.
  */
 export default function DynamicFindings({ dynamicFindings }) {
   const rows = dynamicFindings || [];
+  if (rows.length === 0) return null;
 
   return (
     <Card>
@@ -24,42 +31,38 @@ export default function DynamicFindings({ dynamicFindings }) {
         <div>
           <CardTitle className="text-base">Dynamic Findings</CardTitle>
           <p className="text-xs text-slate-500">
-            Facts extracted from the document that don't map to a standard field.
+            Facts extracted from the document that don't map to a standard field. For review — mapping actions coming soon.
           </p>
         </div>
         <Badge className="bg-slate-100 text-slate-700">{rows.length} found</Badge>
       </CardHeader>
       <CardContent>
-        {rows.length === 0 ? (
-          <p className="text-sm text-slate-500">No unmapped findings for this document.</p>
-        ) : (
-          <div className="space-y-2">
-            {rows.map((row, idx) => (
-              <div key={`${row.label}-${idx}`} className="rounded-md border border-slate-100 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-slate-800">{row.label}</span>
-                  <div className="flex items-center gap-1.5">
-                    <Badge className="bg-slate-100 text-slate-600">{row.category}</Badge>
-                    {typeof row.confidence === "number" && (
-                      <Badge className="bg-blue-50 text-blue-700">{Math.round(row.confidence)}%</Badge>
-                    )}
-                  </div>
-                </div>
-                <div className="mt-1 flex items-center justify-between gap-2 text-xs text-slate-500">
-                  <span className="truncate">{formatValue(row.value)}</span>
-                  {row.sourcePage != null && <span className="shrink-0">p.{row.sourcePage}</span>}
-                </div>
-                {row.sourceText && (
-                  <p className="mt-1 line-clamp-2 text-xs italic text-slate-400">"{row.sourceText}"</p>
-                )}
-                <div className="mt-1 flex gap-3 text-[10px] uppercase tracking-wide text-slate-400">
-                  <span>Maps to existing field: {row.mapsToExistingField ? "Yes" : "No"}</span>
-                  <span>Creates dynamic row: {row.createsDynamicRow ? "Yes" : "No"}</span>
+        <div className="space-y-2">
+          {rows.map((row, idx) => (
+            <div key={`${row.label}-${idx}`} className="rounded-md border border-slate-100 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-slate-800">{row.label}</span>
+                <div className="flex items-center gap-1.5">
+                  <Badge className="bg-slate-100 text-slate-600">{row.category}</Badge>
+                  {typeof row.confidence === "number" && (
+                    <Badge className="bg-blue-50 text-blue-700">{Math.round(row.confidence)}%</Badge>
+                  )}
                 </div>
               </div>
-            ))}
-          </div>
-        )}
+              <div className="mt-1 flex items-center justify-between gap-2 text-xs text-slate-500">
+                <span className="truncate">{formatValue(row.value)}</span>
+                {row.sourcePage != null && <span className="shrink-0">p.{row.sourcePage}</span>}
+              </div>
+              {row.sourceText && (
+                <p className="mt-1 line-clamp-2 text-xs italic text-slate-400">"{row.sourceText}"</p>
+              )}
+              <div className="mt-1 flex gap-3 text-[10px] uppercase tracking-wide text-slate-400">
+                <span>Maps to existing field: {row.mapsToExistingField ? "Yes" : "No"}</span>
+                <span>Creates dynamic row: {row.createsDynamicRow ? "Yes" : "No"}</span>
+              </div>
+            </div>
+          ))}
+        </div>
       </CardContent>
     </Card>
   );

@@ -234,6 +234,13 @@ export async function runOpenAIFactLedgerPipeline(
             facts_unmapped_count: mapped.unmappedFacts.length,
             approval_blockers: approvalBlockers.blockers,
             dynamic_items: dynamicItems,
+            // Release 1 candidate-decision audit trail: facts the domain-aware
+            // mapper rejected for a field their own labels/keywords would
+            // otherwise have matched (e.g. a late-fee clause that would have
+            // scored against admin_fee_pct on keyword length alone). No DB
+            // table yet — visible here for debugging/tuning; forward-
+            // compatible with document_validation_drops (Release 2).
+            rejected_candidates: mapped.rejectedCandidates,
             // Phase 6 Task G: diagnostic-only, not read by any business logic.
             document_index_source: indexResolution.indexSource,
             document_index_fallback_reason: indexResolution.fallbackReason,

@@ -300,6 +300,22 @@ export default function FieldDetailDrawer({
             )}
           </section>
 
+          {/* Release 1: calculated fields carry a derivation trace
+              (e.g. "monthly_rent(1470) x 12" for annual_rent) all the way
+              to the persisted record, but nothing rendered it — a reviewer
+              saw the "Calculated" mode badge with no way to see the actual
+              formula/inputs. readFieldEvidence() already resolves this from
+              evidence.derivation_trace (leaseReviewSchema.js), so this is
+              purely a rendering gap being closed, not new data plumbing. */}
+          {evidence?.derivationTrace && (
+            <section className="space-y-1 rounded-md border border-cyan-200 bg-cyan-50/60 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-cyan-700">
+                Calculated From
+              </p>
+              <p className="text-xs text-cyan-900">{evidence.derivationTrace}</p>
+            </section>
+          )}
+
           {/* Editable evidence form — reviewer can correct extractor output
               without re-running the pipeline. Persists via onSaveEvidence. */}
           <section className="space-y-3 rounded-md border border-slate-200 bg-slate-50/50 p-3">

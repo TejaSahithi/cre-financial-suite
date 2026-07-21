@@ -33,7 +33,55 @@ export interface FieldDef {
   derived?: boolean;
   /** Human-readable description for LLM prompt */
   description: string;
+
+  // ── Candidate-decision engine metadata (Release 1) ──────────────────────
+  /** Coarse business domain this field belongs to. Explicit on high-risk
+   *  fields; inferred for the rest from LEASE_GROUPS membership via
+   *  getFieldDomain() — most fields do not set this literal directly. */
+  domain?: LeaseFieldDomain;
+  /** CLAUSE_DEFINITIONS[].type strings (lease-workflow.ts) a fact's category
+   *  must match to count as a strong positive signal for this field. Not a
+   *  hard requirement — see evaluateCandidateForField()'s decision order. */
+  allowedClauseCategories?: string[];
+  /** CLAUSE_DEFINITIONS[].type strings that, if matched, hard-reject a
+   *  candidate for this field regardless of confidence or keyword score. */
+  rejectedClauseCategories?: string[];
+  /** Field-specific exclusion phrasing that a clause-category vocabulary
+   *  can't express (e.g. landlord_name rejecting M&A/assignment context).
+   *  A match hard-rejects, same as rejectedClauseCategories. */
+  rejectedEvidencePatterns?: RegExp[];
+  /** Positive text signal used only when no fact category is available
+   *  (the legacy rule/table/LLM path never has one). */
+  requiredEvidencePatterns?: RegExp[];
+  /** "enforced": allow/reject lists and patterns are populated and gate
+   *  candidates. "advisory": domain is known (for reporting/soft-penalty
+   *  purposes) but nothing is gated yet. Absent/"unconfigured": no check
+   *  possible, current behavior preserved exactly. See
+   *  getFieldEvidencePolicy() for the actual resolved value — most fields
+   *  don't set this literal directly, same reasoning as `domain`. */
+  evidencePolicy?: "enforced" | "advisory" | "unconfigured";
 }
+
+/** Coarse business domains for candidate-decision reconciliation (Release 1
+ *  of the document-coverage architecture audit). Lease-specific — other
+ *  module schemas (property/expense/...) don't populate this. */
+export type LeaseFieldDomain =
+  | "parties"
+  | "premises"
+  | "dates"
+  | "rent"
+  | "late_payment"
+  | "cam"
+  | "operating_expenses"
+  | "taxes"
+  | "insurance"
+  | "utilities"
+  | "repairs"
+  | "renewal"
+  | "termination"
+  | "assignment"
+  | "legal"
+  | "notices";
 
 export type ModuleSchema = Record<string, FieldDef>;
 
@@ -66,6 +114,12 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "DO NOT use the signatory, signer, contact person, or 'By:' name. " +
       "If the lease reads 'Tenant: Mindful Tech Solutions, Inc.  By: John Doe', return 'Mindful Tech Solutions, Inc.', NOT 'John Doe'. " +
       "Also look for opening-clause format: 'between [Landlord Entity] ... and [Tenant Entity] (referred to as \"Tenant\")'.",
+    domain: "parties",
+    evidencePolicy: "enforced",
+    // Migrated from the old hardcoded isLlmSourceTextRelevantToField() guard —
+    // rejects source text pulled from an M&A/assignment clause instead of the
+    // actual identity clause.
+    rejectedEvidencePatterns: [/\b(closely held|voting shares|reorganization|merger|consolidation|assignee|permitted transfer)\b/i],
   },
   tenant_signatory_name: {
     type: "string",
@@ -165,6 +219,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "DO NOT use the signatory or signer. " +
       "If the lease reads 'Landlord: 224 Partners, LLC  By: Jane Doe', return '224 Partners, LLC', NOT 'Jane Doe'. " +
       "Look for two opening-clause formats: (1) 'between [Entity], or its assigns (referred to as \"Landlord\")' and (2) 'between [Entity] (\"Landlord\") and ...' — in both cases extract the entity name BEFORE the parenthetical.",
+    domain: "parties",
+    evidencePolicy: "enforced",
+    rejectedEvidencePatterns: [/\b(closely held|voting shares|reorganization|merger|consolidation|assignee|permitted transfer)\b/i],
   },
   // ─── Contact/notice addresses — added to close a gap flagged in
   // docs/lease-standard-field-model.md: these already had working
@@ -463,6 +520,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
     tableHeaders: ["late_fee", "late fee", "late charge"],
     patterns: [/(?:late\s+fee|late\s+charge)[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i],
     description: "Explicit late fee amount in USD, if stated in the lease",
+    domain: "late_payment",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["late_fees"],
   },
   returned_payment_fee_amount: {
     type: "number",
@@ -717,6 +777,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "If the lease states the notice period in DAYS, convert: return Math.round(days / 30). " +
       "Conversion examples: '180 days' → 6. '90 days' → 3. '60 days' → 2. '30 days' → 1. '6 months' → 6. " +
       "Look for phrases like 'not less than X months prior written notice' or 'not less than X days prior written notice' to exercise the option.",
+    domain: "renewal",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["renewal_option"],
   },
   termination_notice_months: {
     type: "number",
@@ -734,6 +797,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["option deadline", "option exercise deadline", "exercise deadline"],
     tableHeaders: ["option_exercise_deadline"],
     description: "Latest date to exercise a renewal/extension option, in YYYY-MM-DD",
+    domain: "renewal",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["renewal_option"],
   },
 
   // ─── Rent extension ─────────────────────────────────────────────────
@@ -769,6 +835,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     tableHeaders: ["responsibility_taxes", "tax responsibility"],
     patterns: [/\b(?:real\s+estate\s+taxes|property\s+taxes|taxes)\b[^\n]{0,120}\b(tenant|landlord|landlord\s+with\s+cap|shared|both)\b/i],
     description: "Party responsible for property/real estate taxes: landlord, tenant, shared, landlord_with_cap",
+    domain: "taxes",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["taxes"],
+    rejectedClauseCategories: ["renewal_option"],
   },
   responsibility_insurance: {
     type: "enum",
@@ -851,6 +921,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "Do NOT extract: default interest rates, late charge percentages, profit percentages, " +
       "revenue shares, escalation rates, or any percentage that is not specifically a property management or " +
       "administrative fee on CAM recoveries. Written-out forms like 'five percent (5%)' → return 5.",
+    domain: "cam",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["cam_recoveries", "operating_expense_recovery"],
+    rejectedClauseCategories: ["late_fees", "default"],
   },
   management_fee_basis: {
     type: "enum",
@@ -1712,4 +1786,105 @@ export function getFieldGroups(moduleType: ModuleType): FieldGroup[] {
   }
 
   return groups;
+}
+
+// ── Candidate-decision engine: domain/evidence-policy resolution ────────────
+//
+// Most LEASE_SCHEMA fields don't set `domain`/`evidencePolicy` literally —
+// only the handful of known-ambiguous fields (admin_fee_pct, late_fee_amount,
+// responsibility_taxes, etc.) are fully "enforced" with allow/reject lists.
+// Every other field's domain is inferred from its LEASE_GROUPS membership so
+// the whole schema has a reportable domain without hand-tagging ~80 fields
+// individually — those default to "advisory" (domain known, nothing gated
+// yet). A field in no group and with no explicit config is "unconfigured".
+
+const LEASE_GROUP_DOMAINS: Record<string, LeaseFieldDomain> = {
+  parties: "parties",
+  assignment: "assignment",
+  dates: "dates",
+  financial: "rent",
+  terms: "legal",
+  expense_recovery: "operating_expenses",
+  cam_structure: "cam",
+  insurance: "insurance",
+  legal_options: "legal",
+};
+
+// Per-field overrides where a field's true domain is narrower/different than
+// its display group's default (e.g. renewal fields live in the "dates"
+// group for prompting purposes but are conceptually "renewal").
+const LEASE_FIELD_DOMAIN_OVERRIDES: Record<string, LeaseFieldDomain> = {
+  renewal_notice_months: "renewal",
+  option_exercise_deadline: "renewal",
+  renewal_options: "renewal",
+  renewal_type: "renewal",
+  termination_notice_months: "termination",
+  early_termination_option: "termination",
+  responsibility_taxes: "taxes",
+  responsibility_insurance: "insurance",
+  responsibility_utilities: "utilities",
+  responsibility_repairs: "repairs",
+};
+
+let leaseFieldToGroupNameCache: Record<string, string> | null = null;
+function fieldToGroupName(fieldKey: string): string | null {
+  if (!leaseFieldToGroupNameCache) {
+    const map: Record<string, string> = {};
+    for (const group of LEASE_GROUPS) {
+      for (const field of group.fields) map[field] = group.name;
+    }
+    leaseFieldToGroupNameCache = map;
+  }
+  return leaseFieldToGroupNameCache[fieldKey] ?? null;
+}
+
+/** Resolves a field's domain: explicit FieldDef.domain, then a per-field
+ *  override, then its LEASE_GROUPS group's default domain, else undefined.
+ *  Only meaningful for moduleType "lease" — other schemas have no domain
+ *  concept. */
+export function getFieldDomain(fieldKey: string, moduleType: ModuleType): LeaseFieldDomain | undefined {
+  if (normalizeModuleType(moduleType as string) !== "lease") return undefined;
+  const def = LEASE_SCHEMA[fieldKey];
+  if (def?.domain) return def.domain;
+  if (LEASE_FIELD_DOMAIN_OVERRIDES[fieldKey]) return LEASE_FIELD_DOMAIN_OVERRIDES[fieldKey];
+  const groupName = fieldToGroupName(fieldKey);
+  return groupName ? LEASE_GROUP_DOMAINS[groupName] : undefined;
+}
+
+/** Resolves the effective evidence policy for a field: explicit
+ *  FieldDef.evidencePolicy, else "advisory" if a domain is known, else
+ *  "unconfigured". Used by getEvidencePolicyCoverage() for schema-wide
+ *  reporting by field key. evaluateCandidateForField() (candidate-decision.ts)
+ *  derives the same logic directly from the FieldDef object it's given
+ *  rather than calling this, since it may be handed a field definition that
+ *  isn't reachable via a plain schema[fieldKey] lookup. */
+export function getFieldEvidencePolicy(
+  fieldKey: string,
+  moduleType: ModuleType,
+): "enforced" | "advisory" | "unconfigured" {
+  const schema = getSchema(moduleType);
+  const def = schema[fieldKey];
+  if (def?.evidencePolicy) return def.evidencePolicy;
+  return getFieldDomain(fieldKey, moduleType) ? "advisory" : "unconfigured";
+}
+
+export interface EvidencePolicyCoverage {
+  total: number;
+  enforced: number;
+  advisory: number;
+  unconfigured: number;
+}
+
+/** Reports how much of a module's schema has real (enforced) evidence
+ *  validation vs. advisory-only vs. no check at all — surfaced in the admin
+ *  debug panel so the configuration gap stays visible rather than looking
+ *  silently "done" once schema-driven validation exists for a few fields. */
+export function getEvidencePolicyCoverage(moduleType: ModuleType): EvidencePolicyCoverage {
+  const schema = getSchema(moduleType);
+  const fieldNames = Object.keys(schema).filter((name) => !schema[name].derived);
+  const coverage: EvidencePolicyCoverage = { total: fieldNames.length, enforced: 0, advisory: 0, unconfigured: 0 };
+  for (const fieldName of fieldNames) {
+    coverage[getFieldEvidencePolicy(fieldName, moduleType)]++;
+  }
+  return coverage;
 }

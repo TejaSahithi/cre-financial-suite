@@ -28,7 +28,8 @@ import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
 import { runBusinessExtraction } from "../_shared/extraction/business-extraction-orchestrator.ts";
 import { normalizeBusinessExtractionMode, type CanonicalBusinessExtractionMode } from "../_shared/extraction/business-extraction-provenance.ts";
 import { isAzureLayoutOutput } from "../_shared/extraction/extraction-provider.ts";
-import { getFieldGroups, getSchema } from "../_shared/extraction/schemas.ts";
+import { getFieldGroups, getSchema, getEvidencePolicyCoverage } from "../_shared/extraction/schemas.ts";
+import { evaluateCandidateForField } from "../_shared/extraction/candidate-decision.ts";
 import { buildLeaseWorkflowAbstraction } from "../_shared/extraction/lease-workflow.ts";
 import { cleanEvidenceSnippet, findPageForSnippet, resolveVerifiedSourcePage } from "../_shared/extraction/evidence-index.ts";
 import { detectFileMagic } from "../_shared/file-magic.ts";
@@ -374,18 +375,30 @@ function isGenericSourceText(value: unknown): boolean {
   return false;
 }
 
-function isLlmSourceTextRelevantToField(fieldKey: string, sourceText: string | null): boolean {
-  if (!sourceText) return true;
-  // Insurance fields must contain insurance-domain language
-  if (["tenant_insurance_required", "general_liability_min", "property_insurance",
-    "responsibility_insurance", "insurance_responsibility"].includes(fieldKey)) {
-    return /\b(insurance|insure|insured|coverage|carrier|policy|certificate|liability limit)\b/i.test(sourceText);
-  }
-  // Party name fields: reject source text from assignment/transfer clauses
-  if (["landlord_name", "tenant_name"].includes(fieldKey)) {
-    if (/\b(closely held|voting shares|reorganization|merger|consolidation|assignee|permitted transfer)\b/i.test(sourceText)) return false;
-  }
-  return true;
+// Release 1: generalized to every field via candidate-decision.ts, schema-
+// driven from FieldDef.rejectedEvidencePatterns/requiredEvidencePatterns —
+// previously hardcoded to exactly 2 field families (insurance, landlord/
+// tenant name). Those two families' old regexes now live as
+// rejectedEvidencePatterns on their fields in schemas.ts (see landlord_name/
+// tenant_name); insurance fields are not yet migrated to enforced (advisory
+// only for Release 1 — see getEvidencePolicyCoverage), so this preserves
+// current behavior for every field except the two that were already
+// enforced under the old hardcoded logic.
+function isLlmSourceTextRelevantToField(
+  fieldKey: string,
+  sourceText: string | null,
+  moduleType,
+  fieldDef,
+): boolean {
+  if (!sourceText || !fieldDef) return true;
+  const result = evaluateCandidateForField({
+    field: fieldDef,
+    fieldKey,
+    moduleType,
+    sourceText,
+    sourceType: "llm",
+  });
+  return result.decision !== "reject";
 }
 
 function usableSourceText(value: unknown): string | null {
@@ -1193,6 +1206,14 @@ function buildReviewPayload(opts: {
     const fieldConfidences = (r._field_confidences ?? {}) as Record<string, number>;
     const fieldSources = (r._field_sources ?? {}) as Record<string, string>;
     const fieldEvidence = (r._field_evidence ?? {}) as Record<string, { source_text?: string | null; source_page?: number | null }>;
+    // Release 1: calculator.ts's Step6 (_shared/extraction/calculator.ts)
+    // computes a real derivation trace for every field it derives (e.g.
+    // "monthly_rent(1470) x 12" for annual_rent), but this was previously
+    // never read here — stripInternalKeys() above only strips `_`-prefixed
+    // keys from `values`, it doesn't delete them from `r`, so the trace was
+    // silently discarded rather than actually lost. Read directly off the
+    // raw row `r`, same pattern as fieldConfidences/fieldSources above.
+    const calculatorDerivationTraces = (r._derivation_traces ?? {}) as Record<string, string>;
     const rowConfidence = normalizeConfidence(
       r.confidence_score ?? result.metadata?.avgConfidence,
     ) ?? avgConfidence;
@@ -1259,7 +1280,7 @@ function buildReviewPayload(opts: {
       const llmEvidence = fieldEvidence[fieldKey];
       // Reject LLM source text that is irrelevant to this field's domain
       const rawLlmSourceText = usableSourceText(llmEvidence?.source_text);
-      const llmSourceText = isLlmSourceTextRelevantToField(fieldKey, rawLlmSourceText)
+      const llmSourceText = isLlmSourceTextRelevantToField(fieldKey, rawLlmSourceText, extractionModuleType, def)
         ? rawLlmSourceText
         : null;
       const workflowSourceText = usableSourceText(workflowField?.source_clause);
@@ -1344,6 +1365,13 @@ function buildReviewPayload(opts: {
           source_clause: mergedSourceText,
           source_quality: selectedEvidence?.source === "fallback" ? fallbackEvidence?.source_quality ?? null : null,
           matched_needle: selectedEvidence?.source === "fallback" ? fallbackEvidence?.matched_needle ?? null : null,
+          // Release 1: prefer lease-workflow.ts's derivation_trace (richer,
+          // field-specific business logic already reaching the UI for
+          // annual_rent/rent_per_sf/lease_term/etc.) and fall back to
+          // calculator.ts's trace for the fields only it derives
+          // (monthly_rent, square_footage, lease_term_months) that
+          // previously had no UI-visible provenance at all.
+          derivation_trace: workflowField?.derivation_trace ?? calculatorDerivationTraces?.[fieldKey] ?? null,
         },
         status: finalStatus,
         editable: workflowField?.editable ?? true,
@@ -1450,6 +1478,10 @@ function buildReviewPayload(opts: {
     metadata: {
       ...(result.metadata ?? {}),
       workflow_output: workflowSummary,
+      // Release 1: how much of the schema has real (enforced) evidence
+      // validation vs. advisory-only vs. no check at all — admin-only,
+      // keeps the configuration gap honestly visible. See schemas.ts#getEvidencePolicyCoverage.
+      evidence_policy_coverage: getEvidencePolicyCoverage(extractionModuleType),
     },
     built_at: new Date().toISOString(),
   };

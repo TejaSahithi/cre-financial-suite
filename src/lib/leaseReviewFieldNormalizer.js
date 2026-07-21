@@ -400,10 +400,44 @@ function describeApprovalImpact(contract) {
   return parts.length ? parts.join("; ") : "Advisory only — no downstream gate today.";
 }
 
+// Release 1: resolveExtractionStatus() (leaseReviewSchema.js) already
+// distinguishes not_found/missing -- genuinely different states ("the lease
+// doesn't state this" vs "extraction never ran at all") -- and
+// extractionStatus carries that distinction into this function. The
+// pre-Release-1 version of this function ignored it in the blank-value
+// case, collapsing both into a single flat "missing" badge before a
+// reviewer ever saw the row. Fixed here by branching on extractionStatus
+// instead of short-circuiting on hasValue alone.
+//
+// Scope note: an earlier version of this fix also special-cased
+// EXTRACTION_STATUSES.MISSING_SOURCE_EVIDENCE for the has-a-value branch,
+// and returned a distinct "conflicting" badge for EXTRACTION_STATUSES.CONFLICT
+// instead of "needs_review". Both were reverted: the former conflicted with
+// an existing, deliberately-designed case (a value pieced together from
+// multiple source snippets, e.g. an addendum total, that intentionally
+// resolves to the generic "needs_review"); the latter is read verbatim by
+// readinessSummary's needsReviewFields computation (leaseReviewFieldNormalizer.js),
+// so renaming it would also require auditing every downstream consumer of
+// that exact string, which is a bigger change than this fix warrants.
+// Scoped to exactly what the audit found: the blank-value collapse.
+//
+// Precedence (highest to lowest): reviewer edits always win over any
+// extraction signal; not_found/not_applicable/missing come next for blank
+// values; auto_populated is the only state that requires everything to
+// have gone right; needs_review is the catch-all (including conflicts).
+//
+// Follow-up (deferred past Release 1, per review): splitting this single
+// overloaded `status` into independent extractionStatus/validationStatus/
+// reviewStatus properties instead of layering more meanings onto one field.
+// Revisit if this precedence list stops being sufficient.
 function computeFieldStatus({ hasValue, evidenceVerified, confidenceBucket, reviewStatus, extractionStatus }) {
   if (reviewStatus === REVIEW_STATUSES.EDITED) return "manually_edited";
   if (extractionStatus === EXTRACTION_STATUSES.CONFLICT) return "needs_review";
-  if (!hasValue) return "missing";
+  if (!hasValue) {
+    if (extractionStatus === EXTRACTION_STATUSES.NOT_FOUND) return "not_found";
+    if (reviewStatus === REVIEW_STATUSES.N_A) return "not_applicable";
+    return "missing";
+  }
   if (evidenceVerified && confidenceBucket === "high") return "auto_populated";
   return "needs_review";
 }
