@@ -35,6 +35,7 @@ import {
 } from "../_shared/extraction/pipeline-contract.ts";
 import { withExtractionStage } from "../_shared/extraction/provenance/recorder.ts";
 import type { StageHandle } from "../_shared/extraction/provenance/types.ts";
+import { extractPdfPageCountFromBytes } from "../_shared/extraction/pdf-metadata.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -421,12 +422,28 @@ Deno.serve(async (req: Request) => {
         );
       }
 
+      const pdfMetadataPageCount = mimeType.toLowerCase().includes("pdf") && fileBytes
+        ? extractPdfPageCountFromBytes(fileBytes)
+        : null;
+
       // 6. Delegate to the canonical parser (Azure Document Intelligence).
       const doclingOutput = await parseDocument(fileBytes, fileName, mimeType, {
         fileUrl: sourceStrategy.sendUrlToAzure ? signedOrStoredUrl : undefined,
         providerOverride: provider_override,
+        uploadedFileId: file_id,
+        orgId,
+        generationId: generation_id ?? fileRecord.active_generation_id ?? null,
       });
       const extractionMethod = doclingOutput.extraction_method ?? "unknown";
+      const canonicalLayoutV3 = (doclingOutput as any)._canonical_layout_v3;
+      const canonicalLayoutV3Update = canonicalLayoutV3 !== undefined
+        ? {
+          canonical_layout_v3: canonicalLayoutV3 ?? null,
+          canonical_layout_v3_hash: (doclingOutput as any)._canonical_layout_v3_hash ?? null,
+          canonical_layout_v3_schema_version: (doclingOutput as any)._canonical_layout_v3_schema_version ?? null,
+          canonical_layout_v3_adapter_version: (doclingOutput as any)._canonical_layout_v3_adapter_version ?? null,
+        }
+        : {};
 
       // 7. Persist raw output + metadata + transition to 'pdf_parsed'
       //
@@ -500,6 +517,7 @@ Deno.serve(async (req: Request) => {
         table_count: rawTableCount,
         field_count: rawFieldCount,
         text_block_count: rawBlockCount,
+        pdf_metadata_page_count: pdfMetadataPageCount,
         has_content: !!(
           doclingOutput.full_text ||
           rawTableCount > 0 ||
@@ -604,6 +622,7 @@ Deno.serve(async (req: Request) => {
             0,
           ),
           processing_completed_at: new Date().toISOString(),
+          ...canonicalLayoutV3Update,
         },
       );
 

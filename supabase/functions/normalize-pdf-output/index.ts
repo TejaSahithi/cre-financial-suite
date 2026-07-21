@@ -1883,7 +1883,7 @@ async function handleEnrichMode(args: {
     .from("uploaded_files")
     .select(
       "id, org_id, file_name, module_type, status, review_required, document_subtype, " +
-      "extraction_method, docling_raw, azure_raw_response, normalized_output, ui_review_payload, active_generation_id",
+      "extraction_method, docling_raw, azure_raw_response, canonical_layout_v3, canonical_layout_v3_hash, canonical_layout_v3_schema_version, canonical_layout_v3_adapter_version, normalized_output, ui_review_payload, active_generation_id",
     )
     .eq("id", fileId)
     .eq("org_id", orgId)
@@ -2365,7 +2365,7 @@ Deno.serve(async (req: Request) => {
       .from("uploaded_files")
       .select(
         "id, org_id, file_name, file_url, file_size, mime_type, module_type, " +
-        "status, review_required, document_subtype, extraction_method, docling_raw, azure_raw_response",
+        "status, review_required, document_subtype, extraction_method, docling_raw, azure_raw_response, canonical_layout_v3, canonical_layout_v3_hash, canonical_layout_v3_schema_version, canonical_layout_v3_adapter_version",
       )
       .eq("id", file_id)
       .eq("org_id", orgId)
@@ -2737,6 +2737,7 @@ Deno.serve(async (req: Request) => {
         ...(fileBase64 && !azureLayoutMode ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
         correlationId: file_id,
         canonicalLayoutSchemaVersion: (fileRecord.docling_raw as any)?.layout_contract_version ?? null,
+        canonicalLayout: (fileRecord as any).canonical_layout_v3 ?? null,
         ...(mockOpenAIScenario ? { mockOpenAIScenario } : {}),
       });
       stampBusinessExtractionPersistedAt(result, new Date().toISOString());

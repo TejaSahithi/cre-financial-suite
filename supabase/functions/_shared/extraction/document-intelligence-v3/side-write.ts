@@ -28,7 +28,7 @@
  * run_id, so prior completed runs are never mutated by an unrelated retry.
  */
 
-import { isDocumentIntelligenceV3Enabled } from "./feature-flag.ts";
+import { isDocumentIntelligenceV3Enabled, isParseQualityApprovalBlockingEnabled } from "./feature-flag.ts";
 import { buildDocumentIntelligenceV3Skeleton } from "./adapter.ts";
 import {
   extractOpenAIFactLedgerClaims,
@@ -39,10 +39,15 @@ import {
 } from "./fact-mapper.ts";
 import { summarizeCanonicalLayout } from "./canonical-layout.ts";
 import { resolveCanonicalDocumentLayout } from "./canonical-layout-resolver.ts";
+import { describeLayoutProvenance } from "./layout-provenance.ts";
+import { computePageQuality, PAGE_QUALITY_VERSION } from "./page-quality.ts";
+import { reconcilePageCounts } from "./page-count-reconciliation.ts";
+import { buildSectionHierarchy } from "./section-hierarchy.ts";
 import { buildDiagnosticProfileAndPlan } from "./profile-planner.ts";
 import { buildStaticCoverageImportanceSummary } from "./coverage-importance.ts";
 import { upsertPackageGraphForRun } from "./package-graph.ts";
 import { buildTemporalSupersessionDiagnostics } from "./temporal-supersession.ts";
+import { validateEvidenceAnchors } from "./evidence-anchor-validator.ts";
 
 export interface DocumentIntelligenceV3SideWriteInput {
   supabaseAdmin: any;
@@ -210,7 +215,11 @@ async function computeCanonicalLayoutAndSummary(
   const doclingRaw = uploadedFile?.docling_raw as Record<string, unknown> | null | undefined;
   if (!doclingRaw) return { summary: {}, contentHash: null };
   try {
-    const resolution = await resolveCanonicalDocumentLayout({ doclingRaw });
+    const persistedCanonicalLayout = uploadedFile?.canonical_layout_v3 as any;
+    const resolution = await resolveCanonicalDocumentLayout({
+      canonicalLayout: persistedCanonicalLayout ?? null,
+      doclingRaw,
+    });
 
     if (!resolution.layout) {
       throw new Error(`layout resolution returned no layout (source: ${resolution.source})`);
@@ -220,8 +229,44 @@ async function computeCanonicalLayoutAndSummary(
       throw new Error(`layout failed validation (fatal: ${fatalCodes})`);
     }
 
+    const summary = summarizeCanonicalLayout(resolution.layout) as unknown as Record<string, unknown>;
+    if (persistedCanonicalLayout && resolution.source === "provided_canonical_layout") {
+      const provenance = describeLayoutProvenance({
+        layout: resolution.layout,
+        resolution,
+        canonicalLayoutHash: (uploadedFile as any).canonical_layout_v3_hash ?? null,
+        schemaVersion: (uploadedFile as any).canonical_layout_v3_schema_version ?? null,
+        adapterVersion: (uploadedFile as any).canonical_layout_v3_adapter_version ?? null,
+      });
+      const pageQuality = computePageQuality(resolution.layout, {
+        expectedPageCount: Number((doclingRaw as any)?.page_count ?? resolution.layout.page_count ?? 0) || null,
+        azureNative: provenance.layoutSource === "azure_native",
+      });
+      const reconciliation = reconcilePageCounts({
+        pdfMetadataPageCount: (doclingRaw as any)?._metadata?.pdf_metadata_page_count ?? null,
+        azurePageCount: (doclingRaw as any)?.page_count ?? null,
+        canonicalLayout: resolution.layout,
+        legacyParsedPageCount: (doclingRaw as any)?.page_count ?? null,
+        pageQuality,
+        azureNative: provenance.layoutSource === "azure_native",
+      });
+      const hierarchy = buildSectionHierarchy(resolution.layout);
+      Object.assign(summary, {
+        provenance,
+        page_quality: {
+          version: PAGE_QUALITY_VERSION,
+          approval_blocking_enabled: isParseQualityApprovalBlockingEnabled(),
+          pages: pageQuality,
+          reconciliation,
+        },
+        sections: hierarchy.sections,
+        section_hierarchy_version: hierarchy.version,
+        section_summary: hierarchy.summary,
+      });
+    }
+
     return {
-      summary: summarizeCanonicalLayout(resolution.layout) as unknown as Record<string, unknown>,
+      summary,
       contentHash: resolution.layout.content_hash,
     };
   } catch (error: any) {
@@ -349,7 +394,25 @@ export async function runDocumentIntelligenceV3SideWrite(
       uploadedFileId,
       leaseId,
     });
-    const validationDrops = extractValidationDrops({ result, orgId, uploadedFileId });
+    const mappedValidationDrops = extractValidationDrops({ result, orgId, uploadedFileId });
+    const persistedCanonicalLayout = (uploadedFile as any).canonical_layout_v3 ?? null;
+    const anchorValidation = validateEvidenceAnchors({
+      evidence,
+      layout: persistedCanonicalLayout,
+      azureNative: persistedCanonicalLayout?.provider === "azure_document_intelligence",
+    });
+    const evidenceRows = persistedCanonicalLayout ? anchorValidation.sanitizedEvidence : evidence;
+    const anchorValidationDrops = anchorValidation.findings.map((finding) => ({
+      org_id: orgId,
+      uploaded_file_id: uploadedFileId,
+      claim_id: finding.claimId ?? null,
+      field_key: null,
+      bad_value: finding,
+      reason: finding.code,
+      source_text: null,
+      action: "flagged" as const,
+    }));
+    const validationDrops = [...mappedValidationDrops, ...anchorValidationDrops];
     const canonicalFieldProjections = extractCanonicalFieldProjections({
       result,
       orgId,
@@ -364,8 +427,8 @@ export async function runDocumentIntelligenceV3SideWrite(
       if (insertClaimsError) throw new Error(`Failed to insert document_claims: ${insertClaimsError.message}`);
     }
 
-    if (evidence.length > 0) {
-      const { error: insertEvidenceError } = await supabaseAdmin.from("document_claim_evidence").insert(evidence);
+    if (evidenceRows.length > 0) {
+      const { error: insertEvidenceError } = await supabaseAdmin.from("document_claim_evidence").insert(evidenceRows);
       if (insertEvidenceError) throw new Error(`Failed to insert document_claim_evidence: ${insertEvidenceError.message}`);
     }
 
@@ -387,7 +450,7 @@ export async function runDocumentIntelligenceV3SideWrite(
 
     const staticCoverageImportance = buildStaticCoverageImportanceSummary({
       claims,
-      evidence,
+      evidence: evidenceRows,
       validationDrops,
       layoutSummary,
       extractionPlan,
@@ -434,7 +497,7 @@ export async function runDocumentIntelligenceV3SideWrite(
       status: "completed",
       runId,
       claimsCount: claims.length,
-      evidenceCount: evidence.length,
+      evidenceCount: evidenceRows.length,
       validationDropsCount: validationDrops.length,
       canonicalFieldProjectionCount: canonicalFieldProjections.length,
       error: null,
@@ -446,10 +509,10 @@ export async function runDocumentIntelligenceV3SideWrite(
         status: "completed",
         finished_at: new Date().toISOString(),
         coverage: {
-          source_backed_claims: evidence.length,
-          claims_missing_evidence: Math.max(0, claims.length - evidence.length),
+          source_backed_claims: evidenceRows.length,
+          claims_missing_evidence: Math.max(0, claims.length - evidenceRows.length),
           // Phase 7 Task E.
-          ...computeEvidenceDiagnosticCounts(claims, evidence, result),
+          ...computeEvidenceDiagnosticCounts(claims, evidenceRows, result),
           // Phase 9: diagnostic-only profile ensemble and planner output.
           profile_ensemble: profileEnsemble,
           extraction_plan: extractionPlan,
@@ -518,5 +581,3 @@ export async function runDocumentIntelligenceV3SideWrite(
     };
   }
 }
-
-

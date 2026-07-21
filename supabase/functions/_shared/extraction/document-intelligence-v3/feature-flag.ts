@@ -29,3 +29,11 @@ export function isDocumentIntelligenceV3Enabled(env: EnvLike = Deno.env): boolea
 }
 
 export const DOCUMENT_INTELLIGENCE_V3_FLAG_NAME = FLAG_NAME;
+const PARSE_QUALITY_APPROVAL_BLOCKING_FLAG_NAME = "ENABLE_PARSE_QUALITY_APPROVAL_BLOCKING";
+
+export function isParseQualityApprovalBlockingEnabled(env: EnvLike = Deno.env): boolean {
+  const raw = String(env.get(PARSE_QUALITY_APPROVAL_BLOCKING_FLAG_NAME) ?? "").trim().toLowerCase();
+  return TRUTHY_VALUES.has(raw);
+}
+
+export const PARSE_QUALITY_APPROVAL_BLOCKING_ENV_NAME = PARSE_QUALITY_APPROVAL_BLOCKING_FLAG_NAME;
