@@ -1,0 +1,48 @@
+{
+    "documentFamily":  {
+                           "id":  "ci-family-003"
+                       },
+    "amendmentEffects":  [
+
+                         ],
+    "fields":  {
+                   "monthly_rent":  {
+                                        "status":  "missing_source_evidence",
+                                        "evidence":  [
+
+                                                     ],
+                                        "value":  null,
+                                        "authoritativeSource":  "none"
+                                    },
+                   "tenant_name":  {
+                                       "status":  "resolved",
+                                       "evidence":  [
+                                                        {
+                                                            "page":  1
+                                                        }
+                                                    ],
+                                       "value":  "Northpoint Books Inc.",
+                                       "authoritativeSource":  "canonical_projection"
+                                   }
+               },
+    "crossReferences":  [
+
+                        ],
+    "findings":  [
+                     {
+                         "reviewerActionRequired":  true,
+                         "title":  "Monthly rent requires evidence",
+                         "type":  "missing_source_evidence",
+                         "severity":  "blocking"
+                     }
+                 ],
+    "definitions":  [
+
+                    ],
+    "schemaVersion":  "enterprise-review-payload-v2",
+    "familyEffectiveFields":  {
+                                  "tenant_name":  {
+                                                      "value":  "Northpoint Books Inc."
+                                                  }
+                              }
+}

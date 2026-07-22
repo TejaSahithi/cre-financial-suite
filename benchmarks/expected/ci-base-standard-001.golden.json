@@ -1,0 +1,127 @@
+{
+    "amendmentEffects":  [
+
+                         ],
+    "documentRole":  "base_lease",
+    "familyEffectiveFields":  {
+                                  "monthly_rent":  {
+                                                       "expectedStatus":  "resolved",
+                                                       "expectedClauseCategories":  [
+                                                                                        "rent"
+                                                                                    ],
+                                                       "tolerance":  {
+                                                                         "value":  0,
+                                                                         "type":  "numeric"
+                                                                     },
+                                                       "expectedValue":  10000,
+                                                       "evidencePages":  [
+                                                                             3
+                                                                         ],
+                                                       "materiality":  "financial"
+                                                   },
+                                  "expiration_date":  {
+                                                          "expectedStatus":  "resolved",
+                                                          "expectedClauseCategories":  [
+                                                                                           "term"
+                                                                                       ],
+                                                          "tolerance":  {
+                                                                            "value":  0,
+                                                                            "type":  "date"
+                                                                        },
+                                                          "expectedValue":  "2030-12-31",
+                                                          "evidencePages":  [
+                                                                                2
+                                                                            ],
+                                                          "materiality":  "approval_critical"
+                                                      }
+                              },
+    "expectedFindings":  [
+
+                         ],
+    "documentId":  "ci-base-standard-001",
+    "adjudication":  {
+                         "status":  "locked",
+                         "reviewers":  [
+                                           "synthetic-reviewer-a",
+                                           "synthetic-reviewer-b"
+                                       ],
+                         "adjudicatorRationale":  "Synthetic CI fixture with unambiguous lease terms.",
+                         "fixtureVersion":  "ci-1"
+                     },
+    "fields":  {
+                   "tenant_name":  {
+                                       "evidencePages":  [
+                                                             1
+                                                         ],
+                                       "expectedStatus":  "resolved",
+                                       "expectedValue":  "Acme Retail LLC",
+                                       "expectedClauseCategories":  [
+                                                                        "parties"
+                                                                    ],
+                                       "materiality":  "approval_critical"
+                                   },
+                   "expiration_date":  {
+                                           "expectedStatus":  "resolved",
+                                           "expectedClauseCategories":  [
+                                                                            "term"
+                                                                        ],
+                                           "tolerance":  {
+                                                             "value":  0,
+                                                             "type":  "date"
+                                                         },
+                                           "expectedValue":  "2030-12-31",
+                                           "evidencePages":  [
+                                                                 2
+                                                             ],
+                                           "materiality":  "approval_critical"
+                                       },
+                   "monthly_rent":  {
+                                        "expectedStatus":  "resolved",
+                                        "expectedClauseCategories":  [
+                                                                         "rent"
+                                                                     ],
+                                        "tolerance":  {
+                                                          "value":  0,
+                                                          "type":  "numeric"
+                                                      },
+                                        "expectedValue":  10000,
+                                        "evidencePages":  [
+                                                              3
+                                                          ],
+                                        "materiality":  "financial"
+                                    },
+                   "commencement_date":  {
+                                             "expectedStatus":  "resolved",
+                                             "expectedClauseCategories":  [
+                                                                              "term"
+                                                                          ],
+                                             "tolerance":  {
+                                                               "value":  0,
+                                                               "type":  "date"
+                                                           },
+                                             "expectedValue":  "2026-01-01",
+                                             "evidencePages":  [
+                                                                   2
+                                                               ],
+                                             "materiality":  "approval_critical"
+                                         }
+               },
+    "familyId":  "ci-family-001",
+    "crossReferences":  [
+                            {
+                                "sourceText":  "Section 3.1",
+                                "expectedStatus":  "resolved",
+                                "targetLabel":  "Section 3.1",
+                                "targetSectionKey":  "3.1"
+                            }
+                        ],
+    "schemaVersion":  "golden-truth-v1",
+    "definitions":  [
+                        {
+                            "termDisplay":  "Premises",
+                            "termNormalized":  "premises",
+                            "expectedStatus":  "resolved",
+                            "scopeKey":  "1.1"
+                        }
+                    ]
+}

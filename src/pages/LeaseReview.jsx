@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -142,12 +142,14 @@ import { isLeaseReviewEnrichmentInFlight } from "@/lib/leaseReviewUiState";
 import { EnterpriseHeaderIntelligenceBar } from "@/components/lease-review/EnterpriseHeaderIntelligenceBar";
 import { EnterpriseCoverageDashboard } from "@/components/lease-review/EnterpriseCoverageDashboard";
 import { EnterpriseFindings } from "@/components/lease-review/EnterpriseFindings";
-import DocumentFamilyTimeline from "@/components/lease-review/DocumentFamilyTimeline";
-import SemanticCoveragePanel from "@/components/lease-review/SemanticCoveragePanel";
-import FieldSearchCommand from "@/components/lease-review/FieldSearchCommand";
+import SemanticPanelBoundary from "@/components/lease-review/SemanticPanelBoundary";
 import ApprovalReadinessSummary from "@/components/review/ApprovalReadinessSummary";
 import { useReviewDocument } from "@/lib/review/useReviewDocument";
 import { reviewDocumentToLegacyReviewPayload, shouldBridgeReviewDocumentToLegacyPayload } from "@/lib/review/adapters/viewModelLegacyBridge";
+
+const DocumentFamilyTimeline = lazy(() => import("@/components/lease-review/DocumentFamilyTimeline"));
+const SemanticCoveragePanel = lazy(() => import("@/components/lease-review/SemanticCoveragePanel"));
+const FieldSearchCommand = lazy(() => import("@/components/lease-review/FieldSearchCommand"));
 
 // Minimum number of source-backed fields required before a new extraction is
 // considered "richer" than the previous one. Used only for debug diagnostics.
@@ -3094,9 +3096,13 @@ export default function LeaseReview() {
       )}
 
       <EnterpriseHeaderIntelligenceBar document={reviewDocument} />
-      <FieldSearchCommand document={reviewDocument} uploadedFileId={resolvedSourceFileId} onNavigateToField={handleNavigateToField} />
-      <DocumentFamilyTimeline documentFamily={reviewDocument?.documentFamily} />
-      <SemanticCoveragePanel semanticCoverage={reviewDocument?.semanticCoverage} definitions={reviewDocument?.definitions || []} crossReferences={reviewDocument?.crossReferences || []} />
+      <SemanticPanelBoundary>
+        <Suspense fallback={<div className="mb-4 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">Loading semantic review tools...</div>}>
+          <FieldSearchCommand document={reviewDocument} uploadedFileId={resolvedSourceFileId} onNavigateToField={handleNavigateToField} />
+          <DocumentFamilyTimeline documentFamily={reviewDocument?.documentFamily} />
+          <SemanticCoveragePanel semanticCoverage={reviewDocument?.semanticCoverage} definitions={reviewDocument?.definitions || []} crossReferences={reviewDocument?.crossReferences || []} />
+        </Suspense>
+      </SemanticPanelBoundary>
 
       <div className="mb-4">
         <LeaseReviewReadinessSummary

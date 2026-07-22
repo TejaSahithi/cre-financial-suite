@@ -78,6 +78,12 @@ export async function persistCrossReferences(args: { supabaseAdmin: any; orgId: 
     schema_version: ref.schemaVersion,
     algorithm_version: ref.algorithmVersion,
   }));
+  await args.supabaseAdmin.from("document_cross_references")
+    .delete()
+    .eq("organization_id", args.orgId)
+    .eq("uploaded_file_id", args.uploadedFileId)
+    .eq("run_id", args.runId)
+    .eq("generation_id", args.generationId);
   const { error } = await args.supabaseAdmin.from("document_cross_references").insert(rows);
   return { count: error ? 0 : rows.length, error: error?.message ?? null };
 }

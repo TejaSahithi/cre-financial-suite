@@ -14,7 +14,13 @@
     "preview": "vite preview",
     "test:e2e:phase5f": "playwright test e2e/phase5f/lease-review-workflow.spec.js",
     "check:deprecated-providers": "node scripts/check-no-deprecated-providers.mjs",
-    "check:review-schema": "node scripts/check-review-schema-boundaries.mjs"
+    "check:review-schema": "node scripts/check-review-schema-boundaries.mjs",
+    "benchmark:lease-intelligence": "node scripts/run-lease-intelligence-benchmark.mjs",
+    "benchmark:regression": "node scripts/run-lease-intelligence-benchmark.mjs --corpus ci --fail-on-threshold",
+    "test:release7": "vitest run src/lib/release7",
+    "test:load": "node scripts/check-release7-load-tests.mjs",
+    "test:tenant-isolation": "node scripts/check-release7-tenant-isolation.mjs",
+    "check:ga-readiness": "node scripts/check-ga-readiness.mjs"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^17.0.0",

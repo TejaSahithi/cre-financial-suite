@@ -1,0 +1,222 @@
+{
+  "schemaVersion": "lease-intelligence-benchmark-report-v1",
+  "generatedAt": "2026-07-22T01:19:32.297Z",
+  "corpus": "ci",
+  "payloadVersion": "v2",
+  "selectedDocumentCount": 3,
+  "selectedFamilyCount": 3,
+  "metrics": {
+    "fieldNormalizedAccuracy": 1,
+    "materialityWeightedAccuracy": 1,
+    "approvalCriticalNormalizedAccuracy": 1,
+    "financialNormalizedAccuracy": 1,
+    "statusAccuracy": 1,
+    "evidencePrecision": 1,
+    "evidenceRecall": 1,
+    "falsePositiveRate": 0,
+    "definitionResolutionAccuracy": 1,
+    "crossReferenceTargetAccuracy": 1,
+    "documentFamilyLinkingAccuracy": 1,
+    "amendmentEffectAccuracy": 1,
+    "familyEffectiveFieldAccuracy": 1,
+    "precedenceConflictRecall": 1,
+    "blockingFindingRecall": 1,
+    "unsupportedPayloadRate": 0,
+    "legacyFallbackRate": 0,
+    "staleGenerationAcceptanceRate": 0
+  },
+  "thresholdResults": [
+    {
+      "name": "approvalCriticalNormalizedAccuracy",
+      "passed": true,
+      "operator": ">=",
+      "actual": 1,
+      "threshold": 0.98
+    },
+    {
+      "name": "financialNormalizedAccuracy",
+      "passed": true,
+      "operator": ">=",
+      "actual": 1,
+      "threshold": 0.97
+    },
+    {
+      "name": "overallStatusAccuracy",
+      "passed": true,
+      "operator": ">=",
+      "actual": 1,
+      "threshold": 0.97
+    },
+    {
+      "name": "evidencePrecision",
+      "passed": true,
+      "operator": ">=",
+      "actual": 1,
+      "threshold": 0.98
+    },
+    {
+      "name": "evidenceRecall",
+      "passed": true,
+      "operator": ">=",
+      "actual": 1,
+      "threshold": 0.95
+    },
+    {
+      "name": "falsePositiveRate",
+      "passed": true,
+      "operator": "<=",
+      "actual": 0,
+      "threshold": 0.01
+    },
+    {
+      "name": "definitionResolutionAccuracy",
+      "passed": true,
+      "operator": ">=",
+      "actual": 1,
+      "threshold": 0.96
+    },
+    {
+      "name": "crossReferenceTargetAccuracy",
+      "passed": true,
+      "operator": ">=",
+      "actual": 1,
+      "threshold": 0.95
+    },
+    {
+      "name": "documentFamilyLinkingAccuracy",
+      "passed": true,
+      "operator": ">=",
+      "actual": 1,
+      "threshold": 0.99
+    },
+    {
+      "name": "amendmentEffectAccuracy",
+      "passed": true,
+      "operator": ">=",
+      "actual": 1,
+      "threshold": 0.97
+    },
+    {
+      "name": "familyEffectiveFieldAccuracy",
+      "passed": true,
+      "operator": ">=",
+      "actual": 1,
+      "threshold": 0.98
+    },
+    {
+      "name": "precedenceConflictRecall",
+      "passed": true,
+      "operator": ">=",
+      "actual": 1,
+      "threshold": 1
+    },
+    {
+      "name": "blockingFindingRecall",
+      "passed": true,
+      "operator": ">=",
+      "actual": 1,
+      "threshold": 1
+    },
+    {
+      "name": "legacyFallbackRate",
+      "passed": true,
+      "operator": "<=",
+      "actual": 0,
+      "threshold": 0.02
+    },
+    {
+      "name": "unsupportedPayloadRate",
+      "passed": true,
+      "operator": "<=",
+      "actual": 0,
+      "threshold": 0
+    },
+    {
+      "name": "staleGenerationAcceptanceRate",
+      "passed": true,
+      "operator": "<=",
+      "actual": 0,
+      "threshold": 0
+    }
+  ],
+  "documents": [
+    {
+      "documentId": "ci-base-standard-001",
+      "pass": 0,
+      "score": {
+        "documentId": "ci-base-standard-001",
+        "familyId": "ci-family-001",
+        "fieldNormalizedAccuracy": 1,
+        "materialityWeightedAccuracy": 1,
+        "approvalCriticalNormalizedAccuracy": 1,
+        "financialNormalizedAccuracy": 1,
+        "statusAccuracy": 1,
+        "evidencePrecision": 1,
+        "evidenceRecall": 1,
+        "falsePositiveRate": 0,
+        "definitionResolutionAccuracy": 1,
+        "crossReferenceTargetAccuracy": 1,
+        "documentFamilyLinkingAccuracy": 1,
+        "amendmentEffectAccuracy": 1,
+        "familyEffectiveFieldAccuracy": 1,
+        "precedenceConflictRecall": 1,
+        "blockingFindingRecall": 1,
+        "unsupportedPayloadRate": 0,
+        "legacyFallbackRate": 0,
+        "staleGenerationAcceptanceRate": 0
+      }
+    },
+    {
+      "documentId": "ci-amendment-extension-001",
+      "pass": 0,
+      "score": {
+        "documentId": "ci-amendment-extension-001",
+        "familyId": "ci-family-002",
+        "fieldNormalizedAccuracy": 1,
+        "materialityWeightedAccuracy": 1,
+        "approvalCriticalNormalizedAccuracy": 1,
+        "financialNormalizedAccuracy": 1,
+        "statusAccuracy": 1,
+        "evidencePrecision": 1,
+        "evidenceRecall": 1,
+        "falsePositiveRate": 0,
+        "definitionResolutionAccuracy": 1,
+        "crossReferenceTargetAccuracy": 1,
+        "documentFamilyLinkingAccuracy": 1,
+        "amendmentEffectAccuracy": 1,
+        "familyEffectiveFieldAccuracy": 1,
+        "precedenceConflictRecall": 1,
+        "blockingFindingRecall": 1,
+        "unsupportedPayloadRate": 0,
+        "legacyFallbackRate": 0,
+        "staleGenerationAcceptanceRate": 0
+      }
+    },
+    {
+      "documentId": "ci-degraded-scan-001",
+      "pass": 0,
+      "score": {
+        "documentId": "ci-degraded-scan-001",
+        "familyId": "ci-family-003",
+        "fieldNormalizedAccuracy": 1,
+        "materialityWeightedAccuracy": 1,
+        "approvalCriticalNormalizedAccuracy": 1,
+        "financialNormalizedAccuracy": 1,
+        "statusAccuracy": 1,
+        "evidencePrecision": 1,
+        "evidenceRecall": 1,
+        "falsePositiveRate": 0,
+        "definitionResolutionAccuracy": 1,
+        "crossReferenceTargetAccuracy": 1,
+        "documentFamilyLinkingAccuracy": 1,
+        "amendmentEffectAccuracy": 1,
+        "familyEffectiveFieldAccuracy": 1,
+        "precedenceConflictRecall": 1,
+        "blockingFindingRecall": 1,
+        "unsupportedPayloadRate": 0,
+        "legacyFallbackRate": 0,
+        "staleGenerationAcceptanceRate": 0
+      }
+    }
+  ]
+}

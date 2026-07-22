@@ -1,0 +1,67 @@
+{
+    "documentFamily":  {
+                           "id":  "ci-family-002"
+                       },
+    "amendmentEffects":  [
+                             {
+                                 "effectType":  "extend",
+                                 "targetCanonicalFieldKey":  "expiration_date",
+                                 "resolutionStatus":  "resolved",
+                                 "replacementValue":  "2032-12-31"
+                             },
+                             {
+                                 "effectType":  "replace",
+                                 "targetCanonicalFieldKey":  "monthly_rent",
+                                 "resolutionStatus":  "resolved",
+                                 "replacementValue":  12500
+                             }
+                         ],
+    "fields":  {
+                   "monthly_rent":  {
+                                        "status":  "resolved",
+                                        "evidence":  [
+                                                         {
+                                                             "page":  2
+                                                         }
+                                                     ],
+                                        "value":  12500,
+                                        "authoritativeSource":  "canonical_family_effective"
+                                    },
+                   "expiration_date":  {
+                                           "status":  "resolved",
+                                           "evidence":  [
+                                                            {
+                                                                "page":  1
+                                                            }
+                                                        ],
+                                           "value":  "2032-12-31",
+                                           "authoritativeSource":  "canonical_family_effective"
+                                       }
+               },
+    "crossReferences":  [
+                            {
+                                "sourceText":  "Section 3.1",
+                                "resolutionStatus":  "resolved",
+                                "targetLabel":  "Section 3.1",
+                                "targetSectionKey":  "3.1"
+                            }
+                        ],
+    "findings":  [
+
+                 ],
+    "definitions":  [
+                        {
+                            "definitionStatus":  "resolved",
+                            "termNormalized":  "extension term"
+                        }
+                    ],
+    "schemaVersion":  "enterprise-review-payload-v2",
+    "familyEffectiveFields":  {
+                                  "monthly_rent":  {
+                                                       "value":  12500
+                                                   },
+                                  "expiration_date":  {
+                                                          "value":  "2032-12-31"
+                                                      }
+                              }
+}

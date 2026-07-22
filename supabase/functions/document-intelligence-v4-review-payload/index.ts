@@ -145,6 +145,19 @@ async function persistSemanticSearchRecords(args: { supabaseAdmin: any; orgId: s
     reason_codes: record.reasonCodes ?? [],
     schema_version: "document-semantic-search-record-v1",
   }));
+  const scopes = [...new Map(rows.map((row) => [
+    [row.uploaded_file_id, row.run_id, row.generation_id].join("|"),
+    { uploadedFileId: row.uploaded_file_id, runId: row.run_id, generationId: row.generation_id },
+  ])).values()];
+  for (const scope of scopes) {
+    let deleteQuery = args.supabaseAdmin.from("document_semantic_search_records")
+      .delete()
+      .eq("organization_id", args.orgId)
+      .eq("uploaded_file_id", scope.uploadedFileId);
+    if (scope.runId) deleteQuery = deleteQuery.eq("run_id", scope.runId);
+    if (scope.generationId) deleteQuery = deleteQuery.eq("generation_id", scope.generationId);
+    await deleteQuery;
+  }
   const { error } = await args.supabaseAdmin.from("document_semantic_search_records").insert(rows);
   return { count: error ? 0 : rows.length, error: error?.message ?? null };
 }

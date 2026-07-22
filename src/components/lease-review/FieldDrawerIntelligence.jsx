@@ -1,13 +1,15 @@
-import React, { useState } from "react";
+import React, { Suspense, lazy, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { ChevronDown, ChevronRight, Cpu, FileText, AlertTriangle, UserCheck } from "lucide-react";
 import ReviewFieldStatus from "@/components/review/ReviewFieldStatus";
 import ReviewFieldEvidence from "@/components/review/ReviewFieldEvidence";
 import ReviewFieldConflict from "@/components/review/ReviewFieldConflict";
 import ReviewFieldDerivation from "@/components/review/ReviewFieldDerivation";
-import AmendmentLineage from "@/components/lease-review/AmendmentLineage";
-import DefinitionPopover from "@/components/lease-review/DefinitionPopover";
-import CrossReferenceLink from "@/components/lease-review/CrossReferenceLink";
+import SemanticPanelBoundary from "@/components/lease-review/SemanticPanelBoundary";
+
+const AmendmentLineage = lazy(() => import("@/components/lease-review/AmendmentLineage"));
+const DefinitionPopover = lazy(() => import("@/components/lease-review/DefinitionPopover"));
+const CrossReferenceLink = lazy(() => import("@/components/lease-review/CrossReferenceLink"));
 
 function formatSource(source) {
   if (!source || source === "none") return "None";
@@ -89,9 +91,13 @@ export function FieldDrawerIntelligence({ field }) {
             </div>
           )}
 
-          {field.lineage && <AmendmentLineage lineage={field.lineage} />}
-          {field.lineage?.definitionDependencies?.length > 0 && <DefinitionPopover definitions={field.lineage.definitionDependencies} />}
-          {field.lineage?.crossReferenceDependencies?.length > 0 && <CrossReferenceLink references={field.lineage.crossReferenceDependencies} />}
+          <SemanticPanelBoundary fallback={null}>
+            <Suspense fallback={<div className="rounded border border-slate-100 bg-slate-50 p-2 text-[11px] text-slate-500">Loading semantic lineage...</div>}>
+              {field.lineage && <AmendmentLineage lineage={field.lineage} />}
+              {field.lineage?.definitionDependencies?.length > 0 && <DefinitionPopover definitions={field.lineage.definitionDependencies} />}
+              {field.lineage?.crossReferenceDependencies?.length > 0 && <CrossReferenceLink references={field.lineage.crossReferenceDependencies} />}
+            </Suspense>
+          </SemanticPanelBoundary>
           {field.conflict && <ReviewFieldConflict conflict={field.conflict} />}
           {field.derivation && <ReviewFieldDerivation derivation={field.derivation} />}
 

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cre-financial-suite.local/schemas/golden-truth-v1.schema.json",
+  "title": "Lease Intelligence Golden Truth v1",
+  "type": "object",
+  "required": ["schemaVersion", "documentId", "documentRole", "fields", "definitions", "crossReferences", "amendmentEffects", "familyEffectiveFields", "expectedFindings"],
+  "properties": {
+    "schemaVersion": { "const": "golden-truth-v1" },
+    "documentId": { "type": "string" },
+    "familyId": { "type": ["string", "null"] },
+    "documentRole": { "type": "string" },
+    "fields": { "type": "object", "additionalProperties": { "$ref": "#/$defs/GoldenFieldTruth" } },
+    "definitions": { "type": "array", "items": { "$ref": "#/$defs/GoldenDefinitionTruth" } },
+    "crossReferences": { "type": "array", "items": { "$ref": "#/$defs/GoldenCrossReferenceTruth" } },
+    "amendmentEffects": { "type": "array", "items": { "$ref": "#/$defs/GoldenAmendmentEffectTruth" } },
+    "familyEffectiveFields": { "type": "object", "additionalProperties": { "$ref": "#/$defs/GoldenFieldTruth" } },
+    "expectedFindings": { "type": "array", "items": { "$ref": "#/$defs/GoldenFindingTruth" } },
+    "adjudication": { "$ref": "#/$defs/AdjudicationRecord" }
+  },
+  "$defs": {
+    "GoldenFieldTruth": {
+      "type": "object",
+      "required": ["expectedStatus", "expectedValue", "evidencePages", "expectedClauseCategories", "materiality"],
+      "properties": {
+        "expectedStatus": { "enum": ["resolved", "not_found", "missing", "missing_source_evidence", "conflict", "not_applicable"] },
+        "expectedValue": {},
+        "acceptedValues": { "type": "array" },
+        "tolerance": {
+          "type": "object",
+          "required": ["type", "value"],
+          "properties": { "type": { "enum": ["numeric", "date", "text_similarity", "set"] }, "value": { "type": "number" } }
+        },
+        "evidencePages": { "type": "array", "items": { "type": "integer" } },
+        "expectedClauseCategories": { "type": "array", "items": { "type": "string" } },
+        "materiality": { "enum": ["approval_critical", "financial", "operational", "informational"] },
+        "adjudicationNotes": { "type": "string" }
+      }
+    },
+    "GoldenDefinitionTruth": {
+      "type": "object",
+      "required": ["termNormalized", "expectedStatus"],
+      "properties": { "termNormalized": { "type": "string" }, "termDisplay": { "type": "string" }, "expectedStatus": { "type": "string" }, "scopeKey": { "type": ["string", "null"] } }
+    },
+    "GoldenCrossReferenceTruth": {
+      "type": "object",
+      "required": ["sourceText", "expectedStatus"],
+      "properties": { "sourceText": { "type": "string" }, "targetLabel": { "type": ["string", "null"] }, "targetSectionKey": { "type": ["string", "null"] }, "expectedStatus": { "type": "string" } }
+    },
+    "GoldenAmendmentEffectTruth": {
+      "type": "object",
+      "required": ["effectType", "expectedStatus"],
+      "properties": { "targetCanonicalFieldKey": { "type": ["string", "null"] }, "targetClauseKey": { "type": ["string", "null"] }, "targetDefinitionTerm": { "type": ["string", "null"] }, "effectType": { "type": "string" }, "replacementValue": {}, "expectedStatus": { "type": "string" }, "tolerance": { "type": "object" } }
+    },
+    "GoldenFindingTruth": {
+      "type": "object",
+      "required": ["type", "severity", "reviewerActionRequired"],
+      "properties": { "type": { "type": "string" }, "title": { "type": "string" }, "severity": { "type": "string" }, "reviewerActionRequired": { "type": "boolean" } }
+    },
+    "AdjudicationRecord": {
+      "type": "object",
+      "required": ["status", "fixtureVersion"],
+      "properties": { "status": { "enum": ["draft", "reviewer_a_complete", "reviewer_b_complete", "adjudicated", "locked"] }, "fixtureVersion": { "type": "string" }, "reviewers": { "type": "array" }, "adjudicatorRationale": { "type": "string" } }
+    }
+  }
+}

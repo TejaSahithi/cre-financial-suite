@@ -111,6 +111,24 @@ export async function persistAmendmentEffects(args: { supabaseAdmin: any; orgId:
     reason_codes: effect.reasonCodes,
     algorithm_version: effect.algorithmVersion,
   }));
+  const scopes = [...new Map(rows.map((row) => [
+    [row.document_family_id, row.source_uploaded_file_id, row.source_run_id, row.source_generation_id].join("|"),
+    {
+      documentFamilyId: row.document_family_id,
+      sourceUploadedFileId: row.source_uploaded_file_id,
+      sourceRunId: row.source_run_id,
+      sourceGenerationId: row.source_generation_id,
+    },
+  ])).values()];
+  for (const scope of scopes) {
+    await args.supabaseAdmin.from("document_amendment_effects")
+      .delete()
+      .eq("organization_id", args.orgId)
+      .eq("document_family_id", scope.documentFamilyId)
+      .eq("source_uploaded_file_id", scope.sourceUploadedFileId)
+      .eq("source_run_id", scope.sourceRunId)
+      .eq("source_generation_id", scope.sourceGenerationId);
+  }
   const { error } = await args.supabaseAdmin.from("document_amendment_effects").insert(rows);
   return { count: error ? 0 : rows.length, error: error?.message ?? null };
 }

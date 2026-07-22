@@ -1,0 +1,954 @@
+{
+    "minimumTargetFamilies":  50,
+    "documents":  [
+                      {
+                          "familyId":  "ci-family-001",
+                          "id":  "ci-base-standard-001",
+                          "expectedFixture":  "benchmarks/expected/ci-base-standard-001.golden.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "internal_cross_references",
+                                           "nested_definitions"
+                                       ],
+                          "permittedForCI":  true,
+                          "cachedProviderOutput":  "benchmarks/fixtures/ci-base-standard-001.actual.json",
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "synthetic://leases/ci-base-standard-001.pdf",
+                          "corpus":  "ci",
+                          "pages":  6,
+                          "propertyType":  "retail"
+                      },
+                      {
+                          "familyId":  "ci-family-002",
+                          "id":  "ci-amendment-extension-001",
+                          "expectedFixture":  "benchmarks/expected/ci-amendment-extension-001.golden.json",
+                          "documentType":  "amendment",
+                          "features":  [
+                                           "multiple_amendments",
+                                           "rent_replacement",
+                                           "term_extension"
+                                       ],
+                          "permittedForCI":  true,
+                          "cachedProviderOutput":  "benchmarks/fixtures/ci-amendment-extension-001.actual.json",
+                          "sequence":  1,
+                          "language":  "en",
+                          "difficulty":  "complex",
+                          "fileReference":  "synthetic://leases/ci-amendment-extension-001.pdf",
+                          "corpus":  "ci",
+                          "pages":  4,
+                          "propertyType":  "retail"
+                      },
+                      {
+                          "familyId":  "ci-family-003",
+                          "id":  "ci-degraded-scan-001",
+                          "expectedFixture":  "benchmarks/expected/ci-degraded-scan-001.golden.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "scanned",
+                                           "poor_contrast",
+                                           "missing_exhibit"
+                                       ],
+                          "permittedForCI":  true,
+                          "cachedProviderOutput":  "benchmarks/fixtures/ci-degraded-scan-001.actual.json",
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "degraded_scan",
+                          "fileReference":  "synthetic://leases/ci-degraded-scan-001.pdf",
+                          "corpus":  "ci",
+                          "pages":  8,
+                          "propertyType":  "mixed_use"
+                      },
+                      {
+                          "familyId":  "staging-family-001",
+                          "id":  "staging-family-001-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-001.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-001/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  21,
+                          "propertyType":  "retail"
+                      },
+                      {
+                          "familyId":  "staging-family-002",
+                          "id":  "staging-family-002-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-002.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-002/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  22,
+                          "propertyType":  "industrial"
+                      },
+                      {
+                          "familyId":  "staging-family-003",
+                          "id":  "staging-family-003-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-003.json",
+                          "documentType":  "amendment",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "multiple_amendments",
+                                           "rent_replacement"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-003/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  23,
+                          "propertyType":  "mixed_use"
+                      },
+                      {
+                          "familyId":  "staging-family-004",
+                          "id":  "staging-family-004-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-004.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-004/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  24,
+                          "propertyType":  "office"
+                      },
+                      {
+                          "familyId":  "staging-family-005",
+                          "id":  "staging-family-005-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-005.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "complex",
+                          "fileReference":  "secure://release7/private-corpus/family-005/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  25,
+                          "propertyType":  "retail"
+                      },
+                      {
+                          "familyId":  "staging-family-006",
+                          "id":  "staging-family-006-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-006.json",
+                          "documentType":  "amendment",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "multiple_amendments",
+                                           "rent_replacement"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-006/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  26,
+                          "propertyType":  "industrial"
+                      },
+                      {
+                          "familyId":  "staging-family-007",
+                          "id":  "staging-family-007-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-007.json",
+                          "documentType":  "assignment",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-007/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  27,
+                          "propertyType":  "mixed_use"
+                      },
+                      {
+                          "familyId":  "staging-family-008",
+                          "id":  "staging-family-008-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-008.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "scanned",
+                                           "poor_contrast"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "degraded_scan",
+                          "fileReference":  "secure://release7/private-corpus/family-008/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  28,
+                          "propertyType":  "office"
+                      },
+                      {
+                          "familyId":  "staging-family-009",
+                          "id":  "staging-family-009-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-009.json",
+                          "documentType":  "amendment",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "multiple_amendments",
+                                           "rent_replacement"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-009/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  29,
+                          "propertyType":  "retail"
+                      },
+                      {
+                          "familyId":  "staging-family-010",
+                          "id":  "staging-family-010-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-010.json",
+                          "documentType":  "commencement_certificate",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "complex",
+                          "fileReference":  "secure://release7/private-corpus/family-010/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  30,
+                          "propertyType":  "industrial"
+                      },
+                      {
+                          "familyId":  "staging-family-011",
+                          "id":  "staging-family-011-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-011.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "adversarial",
+                          "fileReference":  "secure://release7/private-corpus/family-011/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  31,
+                          "propertyType":  "mixed_use"
+                      },
+                      {
+                          "familyId":  "staging-family-012",
+                          "id":  "staging-family-012-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-012.json",
+                          "documentType":  "amendment",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "multiple_amendments",
+                                           "rent_replacement"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-012/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  32,
+                          "propertyType":  "office"
+                      },
+                      {
+                          "familyId":  "staging-family-013",
+                          "id":  "staging-family-013-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-013.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-013/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  33,
+                          "propertyType":  "retail"
+                      },
+                      {
+                          "familyId":  "staging-family-014",
+                          "id":  "staging-family-014-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-014.json",
+                          "documentType":  "assignment",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-014/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  34,
+                          "propertyType":  "industrial"
+                      },
+                      {
+                          "familyId":  "staging-family-015",
+                          "id":  "staging-family-015-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-015.json",
+                          "documentType":  "amendment",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "multiple_amendments",
+                                           "rent_replacement"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "complex",
+                          "fileReference":  "secure://release7/private-corpus/family-015/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  35,
+                          "propertyType":  "mixed_use"
+                      },
+                      {
+                          "familyId":  "staging-family-016",
+                          "id":  "staging-family-016-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-016.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "scanned",
+                                           "poor_contrast"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "degraded_scan",
+                          "fileReference":  "secure://release7/private-corpus/family-016/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  36,
+                          "propertyType":  "office"
+                      },
+                      {
+                          "familyId":  "staging-family-017",
+                          "id":  "staging-family-017-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-017.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-017/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  37,
+                          "propertyType":  "retail"
+                      },
+                      {
+                          "familyId":  "staging-family-018",
+                          "id":  "staging-family-018-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-018.json",
+                          "documentType":  "amendment",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "multiple_amendments",
+                                           "rent_replacement"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-018/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  38,
+                          "propertyType":  "industrial"
+                      },
+                      {
+                          "familyId":  "staging-family-019",
+                          "id":  "staging-family-019-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-019.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-019/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  39,
+                          "propertyType":  "mixed_use"
+                      },
+                      {
+                          "familyId":  "staging-family-020",
+                          "id":  "staging-family-020-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-020.json",
+                          "documentType":  "commencement_certificate",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "complex",
+                          "fileReference":  "secure://release7/private-corpus/family-020/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  40,
+                          "propertyType":  "office"
+                      },
+                      {
+                          "familyId":  "staging-family-021",
+                          "id":  "staging-family-021-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-021.json",
+                          "documentType":  "assignment",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-021/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  41,
+                          "propertyType":  "retail"
+                      },
+                      {
+                          "familyId":  "staging-family-022",
+                          "id":  "staging-family-022-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-022.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "adversarial",
+                          "fileReference":  "secure://release7/private-corpus/family-022/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  42,
+                          "propertyType":  "industrial"
+                      },
+                      {
+                          "familyId":  "staging-family-023",
+                          "id":  "staging-family-023-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-023.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-023/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  43,
+                          "propertyType":  "mixed_use"
+                      },
+                      {
+                          "familyId":  "staging-family-024",
+                          "id":  "staging-family-024-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-024.json",
+                          "documentType":  "amendment",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "multiple_amendments",
+                                           "rent_replacement",
+                                           "scanned",
+                                           "poor_contrast"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "degraded_scan",
+                          "fileReference":  "secure://release7/private-corpus/family-024/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  44,
+                          "propertyType":  "office"
+                      },
+                      {
+                          "familyId":  "staging-family-025",
+                          "id":  "staging-family-025-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-025.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "complex",
+                          "fileReference":  "secure://release7/private-corpus/family-025/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  45,
+                          "propertyType":  "retail"
+                      },
+                      {
+                          "familyId":  "staging-family-026",
+                          "id":  "staging-family-026-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-026.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-026/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  46,
+                          "propertyType":  "industrial"
+                      },
+                      {
+                          "familyId":  "staging-family-027",
+                          "id":  "staging-family-027-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-027.json",
+                          "documentType":  "amendment",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "multiple_amendments",
+                                           "rent_replacement"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-027/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  47,
+                          "propertyType":  "mixed_use"
+                      },
+                      {
+                          "familyId":  "staging-family-028",
+                          "id":  "staging-family-028-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-028.json",
+                          "documentType":  "assignment",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-028/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  48,
+                          "propertyType":  "office"
+                      },
+                      {
+                          "familyId":  "staging-family-029",
+                          "id":  "staging-family-029-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-029.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-029/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  49,
+                          "propertyType":  "retail"
+                      },
+                      {
+                          "familyId":  "staging-family-030",
+                          "id":  "staging-family-030-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-030.json",
+                          "documentType":  "commencement_certificate",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "complex",
+                          "fileReference":  "secure://release7/private-corpus/family-030/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  50,
+                          "propertyType":  "industrial"
+                      },
+                      {
+                          "familyId":  "staging-family-031",
+                          "id":  "staging-family-031-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-031.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-031/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  51,
+                          "propertyType":  "mixed_use"
+                      },
+                      {
+                          "familyId":  "staging-family-032",
+                          "id":  "staging-family-032-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-032.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "scanned",
+                                           "poor_contrast"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "degraded_scan",
+                          "fileReference":  "secure://release7/private-corpus/family-032/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  52,
+                          "propertyType":  "office"
+                      },
+                      {
+                          "familyId":  "staging-family-033",
+                          "id":  "staging-family-033-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-033.json",
+                          "documentType":  "amendment",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "multiple_amendments",
+                                           "rent_replacement"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "adversarial",
+                          "fileReference":  "secure://release7/private-corpus/family-033/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  53,
+                          "propertyType":  "retail"
+                      },
+                      {
+                          "familyId":  "staging-family-034",
+                          "id":  "staging-family-034-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-034.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-034/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  54,
+                          "propertyType":  "industrial"
+                      },
+                      {
+                          "familyId":  "staging-family-035",
+                          "id":  "staging-family-035-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-035.json",
+                          "documentType":  "assignment",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "complex",
+                          "fileReference":  "secure://release7/private-corpus/family-035/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  55,
+                          "propertyType":  "mixed_use"
+                      },
+                      {
+                          "familyId":  "staging-family-036",
+                          "id":  "staging-family-036-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-036.json",
+                          "documentType":  "amendment",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "multiple_amendments",
+                                           "rent_replacement"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-036/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  56,
+                          "propertyType":  "office"
+                      },
+                      {
+                          "familyId":  "staging-family-037",
+                          "id":  "staging-family-037-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-037.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-037/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  57,
+                          "propertyType":  "retail"
+                      },
+                      {
+                          "familyId":  "staging-family-038",
+                          "id":  "staging-family-038-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-038.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-038/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  58,
+                          "propertyType":  "industrial"
+                      },
+                      {
+                          "familyId":  "staging-family-039",
+                          "id":  "staging-family-039-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-039.json",
+                          "documentType":  "amendment",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "multiple_amendments",
+                                           "rent_replacement"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-039/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  59,
+                          "propertyType":  "mixed_use"
+                      },
+                      {
+                          "familyId":  "staging-family-040",
+                          "id":  "staging-family-040-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-040.json",
+                          "documentType":  "commencement_certificate",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "scanned",
+                                           "poor_contrast"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "degraded_scan",
+                          "fileReference":  "secure://release7/private-corpus/family-040/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  20,
+                          "propertyType":  "office"
+                      },
+                      {
+                          "familyId":  "staging-family-041",
+                          "id":  "staging-family-041-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-041.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-041/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  21,
+                          "propertyType":  "retail"
+                      },
+                      {
+                          "familyId":  "staging-family-042",
+                          "id":  "staging-family-042-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-042.json",
+                          "documentType":  "assignment",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-042/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  22,
+                          "propertyType":  "industrial"
+                      },
+                      {
+                          "familyId":  "staging-family-043",
+                          "id":  "staging-family-043-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-043.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-043/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  23,
+                          "propertyType":  "mixed_use"
+                      },
+                      {
+                          "familyId":  "staging-family-044",
+                          "id":  "staging-family-044-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-044.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "adversarial",
+                          "fileReference":  "secure://release7/private-corpus/family-044/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  24,
+                          "propertyType":  "office"
+                      },
+                      {
+                          "familyId":  "staging-family-045",
+                          "id":  "staging-family-045-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-045.json",
+                          "documentType":  "amendment",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "multiple_amendments",
+                                           "rent_replacement"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "complex",
+                          "fileReference":  "secure://release7/private-corpus/family-045/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  25,
+                          "propertyType":  "retail"
+                      },
+                      {
+                          "familyId":  "staging-family-046",
+                          "id":  "staging-family-046-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-046.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-046/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  26,
+                          "propertyType":  "industrial"
+                      },
+                      {
+                          "familyId":  "staging-family-047",
+                          "id":  "staging-family-047-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-047.json",
+                          "documentType":  "base_lease",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-047/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  27,
+                          "propertyType":  "mixed_use"
+                      },
+                      {
+                          "familyId":  "staging-family-048",
+                          "id":  "staging-family-048-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-048.json",
+                          "documentType":  "amendment",
+                          "features":  [
+                                           "secure_private_reference",
+                                           "multiple_amendments",
+                                           "rent_replacement",
+                                           "scanned",
+                                           "poor_contrast"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "degraded_scan",
+                          "fileReference":  "secure://release7/private-corpus/family-048/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  28,
+                          "propertyType":  "office"
+                      },
+                      {
+                          "familyId":  "staging-family-049",
+                          "id":  "staging-family-049-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-049.json",
+                          "documentType":  "assignment",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "standard",
+                          "fileReference":  "secure://release7/private-corpus/family-049/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  29,
+                          "propertyType":  "retail"
+                      },
+                      {
+                          "familyId":  "staging-family-050",
+                          "id":  "staging-family-050-doc-001",
+                          "expectedFixture":  "secure://release7/golden/family-050.json",
+                          "documentType":  "commencement_certificate",
+                          "features":  [
+                                           "secure_private_reference"
+                                       ],
+                          "permittedForCI":  false,
+                          "sequence":  0,
+                          "language":  "en",
+                          "difficulty":  "complex",
+                          "fileReference":  "secure://release7/private-corpus/family-050/document.pdf",
+                          "corpus":  "staging-private",
+                          "pages":  30,
+                          "propertyType":  "industrial"
+                      }
+                  ],
+    "schemaVersion":  "lease-intelligence-corpus-manifest-v1",
+    "description":  "Release 7 benchmark corpus manifest. CI entries are synthetic; staging-private entries are secure references and must not be committed as lease text."
+}

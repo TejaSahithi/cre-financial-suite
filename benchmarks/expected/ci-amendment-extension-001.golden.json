@@ -1,0 +1,112 @@
+{
+    "amendmentEffects":  [
+                             {
+                                 "effectType":  "extend",
+                                 "targetCanonicalFieldKey":  "expiration_date",
+                                 "expectedStatus":  "resolved",
+                                 "replacementValue":  "2032-12-31"
+                             },
+                             {
+                                 "effectType":  "replace",
+                                 "targetCanonicalFieldKey":  "monthly_rent",
+                                 "expectedStatus":  "resolved",
+                                 "replacementValue":  12500
+                             }
+                         ],
+    "documentRole":  "amendment",
+    "familyId":  "ci-family-002",
+    "expectedFindings":  [
+
+                         ],
+    "schemaVersion":  "golden-truth-v1",
+    "familyEffectiveFields":  {
+                                  "monthly_rent":  {
+                                                       "expectedStatus":  "resolved",
+                                                       "expectedClauseCategories":  [
+                                                                                        "rent"
+                                                                                    ],
+                                                       "tolerance":  {
+                                                                         "value":  0,
+                                                                         "type":  "numeric"
+                                                                     },
+                                                       "expectedValue":  12500,
+                                                       "evidencePages":  [
+                                                                             2
+                                                                         ],
+                                                       "materiality":  "financial"
+                                                   },
+                                  "expiration_date":  {
+                                                          "expectedStatus":  "resolved",
+                                                          "expectedClauseCategories":  [
+                                                                                           "term"
+                                                                                       ],
+                                                          "tolerance":  {
+                                                                            "value":  0,
+                                                                            "type":  "date"
+                                                                        },
+                                                          "expectedValue":  "2032-12-31",
+                                                          "evidencePages":  [
+                                                                                1
+                                                                            ],
+                                                          "materiality":  "approval_critical"
+                                                      }
+                              },
+    "fields":  {
+                   "monthly_rent":  {
+                                        "expectedStatus":  "resolved",
+                                        "expectedClauseCategories":  [
+                                                                         "rent"
+                                                                     ],
+                                        "tolerance":  {
+                                                          "value":  0,
+                                                          "type":  "numeric"
+                                                      },
+                                        "expectedValue":  12500,
+                                        "evidencePages":  [
+                                                              2
+                                                          ],
+                                        "materiality":  "financial"
+                                    },
+                   "expiration_date":  {
+                                           "expectedStatus":  "resolved",
+                                           "expectedClauseCategories":  [
+                                                                            "term"
+                                                                        ],
+                                           "tolerance":  {
+                                                             "value":  0,
+                                                             "type":  "date"
+                                                         },
+                                           "expectedValue":  "2032-12-31",
+                                           "evidencePages":  [
+                                                                 1
+                                                             ],
+                                           "materiality":  "approval_critical"
+                                       }
+               },
+    "crossReferences":  [
+                            {
+                                "sourceText":  "Section 3.1",
+                                "expectedStatus":  "resolved",
+                                "targetLabel":  "Section 3.1",
+                                "targetSectionKey":  "3.1"
+                            }
+                        ],
+    "adjudication":  {
+                         "status":  "locked",
+                         "reviewers":  [
+                                           "synthetic-reviewer-a",
+                                           "synthetic-reviewer-b"
+                                       ],
+                         "adjudicatorRationale":  "Synthetic CI fixture with unambiguous lease terms.",
+                         "fixtureVersion":  "ci-1"
+                     },
+    "documentId":  "ci-amendment-extension-001",
+    "definitions":  [
+                        {
+                            "termDisplay":  "Extension Term",
+                            "termNormalized":  "extension term",
+                            "expectedStatus":  "resolved",
+                            "scopeKey":  "2"
+                        }
+                    ]
+}

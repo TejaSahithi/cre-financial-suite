@@ -1,0 +1,69 @@
+{
+    "amendmentEffects":  [
+
+                         ],
+    "documentRole":  "base_lease",
+    "familyId":  "ci-family-003",
+    "expectedFindings":  [
+                             {
+                                 "reviewerActionRequired":  true,
+                                 "title":  "Monthly rent requires evidence",
+                                 "type":  "missing_source_evidence",
+                                 "severity":  "blocking"
+                             }
+                         ],
+    "schemaVersion":  "golden-truth-v1",
+    "familyEffectiveFields":  {
+                                  "tenant_name":  {
+                                                      "evidencePages":  [
+                                                                            1
+                                                                        ],
+                                                      "expectedStatus":  "resolved",
+                                                      "expectedValue":  "Northpoint Books Inc.",
+                                                      "expectedClauseCategories":  [
+                                                                                       "parties"
+                                                                                   ],
+                                                      "materiality":  "approval_critical"
+                                                  }
+                              },
+    "fields":  {
+                   "monthly_rent":  {
+                                        "evidencePages":  [
+
+                                                          ],
+                                        "expectedStatus":  "missing_source_evidence",
+                                        "expectedValue":  null,
+                                        "expectedClauseCategories":  [
+                                                                         "rent"
+                                                                     ],
+                                        "materiality":  "financial"
+                                    },
+                   "tenant_name":  {
+                                       "evidencePages":  [
+                                                             1
+                                                         ],
+                                       "expectedStatus":  "resolved",
+                                       "expectedValue":  "Northpoint Books Inc.",
+                                       "expectedClauseCategories":  [
+                                                                        "parties"
+                                                                    ],
+                                       "materiality":  "approval_critical"
+                                   }
+               },
+    "crossReferences":  [
+
+                        ],
+    "adjudication":  {
+                         "status":  "locked",
+                         "reviewers":  [
+                                           "synthetic-reviewer-a",
+                                           "synthetic-reviewer-b"
+                                       ],
+                         "adjudicatorRationale":  "Synthetic CI fixture with unambiguous lease terms.",
+                         "fixtureVersion":  "ci-1"
+                     },
+    "documentId":  "ci-degraded-scan-001",
+    "definitions":  [
+
+                    ]
+}
