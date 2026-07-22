@@ -14,6 +14,7 @@ import { createLogger } from "../_shared/logger.ts";
 import { uploadedFileRowHasMeaningfulValues } from "../_shared/extraction/payload-guard.ts";
 import { isExtractionProvenanceEnabled } from "../_shared/extraction/provenance/feature-flag.ts";
 import { EXTRACTION_CONTRACT_VERSION } from "../_shared/extraction/contract-version.ts";
+import { normalizeLeaseExtractionGenerationResult } from "../_shared/extraction/lease-extraction-queue.ts";
 import {
   buildBlockedReviewPayload,
   buildPipelineMetadata,
@@ -310,10 +311,11 @@ async function enqueueLeaseExtractionJob(args: {
     },
   );
 
-  if (generationError || !generationResult?.job_id) {
-    throw new Error(`Could not enqueue lease extraction job: ${generationError?.message || "missing job id"}`);
+  const generationJob = normalizeLeaseExtractionGenerationResult(generationResult, generationError);
+  if (generationJob.error) {
+    throw new Error(`Could not enqueue lease extraction job with a generation: ${generationJob.error}`);
   }
-  const job = { id: generationResult.job_id };
+  const job = generationJob.job;
 
   const statusResult = await setStatus(supabaseAdmin, fileRecord.id, "parsing", {
     processing_status: "lease_extraction_queued",
@@ -326,7 +328,7 @@ async function enqueueLeaseExtractionJob(args: {
 
   await logger.event(initialStage, "queued", {
     provider: "lease-extraction-worker",
-    metadata: { job_id: job.id, skip_parse: initialStage === "normalize" },
+    metadata: { job_id: job.id, generation_id: job.generationId, skip_parse: initialStage === "normalize" },
   });
 
   dispatchLeaseExtractionWorker(job.id, logger);
@@ -1095,6 +1097,7 @@ Deno.serve(async (req: Request) => {
           file_id,
           extraction_queued: true,
           job_id: job.id,
+          generation_id: job.generationId,
           status: "parsing",
           processing_status: "lease_extraction_queued",
           detection: detectionSummary,
