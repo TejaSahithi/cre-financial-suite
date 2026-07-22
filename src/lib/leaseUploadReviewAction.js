@@ -20,16 +20,22 @@ function firstMeaningfulId(...values) {
 export function isLeaseUploadReviewReady(fileRecord) {
   if (hasActiveLeaseExtractionJob(fileRecord)) return false;
 
-  return (
+  const explicitlyReviewable =
     fileRecord?.status === "review_required" ||
     fileRecord?.processing_status === "review_required" ||
-    fileRecord?.review_required === true ||
+    fileRecord?.review_required === true;
+  if (explicitlyReviewable) return true;
+
+  const hasExistingReviewTarget = firstMeaningfulId(resolveLeaseReviewIdFromUploadRecord(fileRecord));
+  return !!hasExistingReviewTarget && (
     fileRecord?.display_state === "ready_for_review" ||
     fileRecord?.next_action === "open_review"
   );
 }
 export function getLeaseUploadReviewStatusLabel(fileRecord, fallbackLabel = "Processing...") {
-  return isLeaseUploadReviewReady(fileRecord) ? "Review completed" : fallbackLabel;
+  if (isLeaseUploadReviewReady(fileRecord)) return "Review completed";
+  if (fileRecord?.display_state === "complete" || fileRecord?.status === "validated") return "Complete";
+  return fallbackLabel;
 }
 
 export function resolveLeaseReviewIdFromUploadRecord(fileRecord) {

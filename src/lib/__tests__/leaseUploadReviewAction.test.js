@@ -5,6 +5,7 @@ import {
   ensureLeaseReviewDraftForUpload,
   getLeaseUploadReviewStatusLabel,
   getLeaseReviewActionState,
+  isLeaseUploadReviewReady,
 } from "../leaseUploadReviewAction";
 
 describe("lease upload review action state", () => {
@@ -48,6 +49,35 @@ describe("lease upload review action state", () => {
     expect(action.canNavigate).toBe(true);
     expect(action.leaseId).toBe("lease-from-metadata");
   });
+
+  it("does not trust open_review when the upload is not review-required", () => {
+    expect(isLeaseUploadReviewReady({
+      status: "validated",
+      processing_status: "ready_for_review",
+      review_required: false,
+      display_state: "ready_for_review",
+      next_action: "open_review",
+    })).toBe(false);
+
+    expect(getLeaseReviewActionState({
+      status: "validated",
+      processing_status: "ready_for_review",
+      review_required: false,
+      display_state: "ready_for_review",
+      next_action: "open_review",
+    }).showOpenButton).toBe(false);
+  });
+
+
+  it("labels non-reviewable validated uploads as complete instead of review completed", () => {
+    expect(getLeaseUploadReviewStatusLabel({
+      status: "validated",
+      processing_status: "ready_for_review",
+      review_required: false,
+      display_state: "complete",
+    }, "Preparing review")).toBe("Complete");
+  });
+
   it("labels review_required uploads as Review completed on the Upload Lease page", () => {
     expect(getLeaseUploadReviewStatusLabel({ status: "review_required", failed_step: "parse" }, "Preparing review"))
       .toBe("Review completed");

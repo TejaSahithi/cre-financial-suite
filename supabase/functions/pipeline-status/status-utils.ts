@@ -148,6 +148,7 @@ function deriveDisplayStateCore(record: Record<string, any>, latestJob: Record<s
   const status = compactText(record?.status).toLowerCase();
   const reviewStatus = compactText(record?.review_status).toLowerCase();
   const processingStatus = compactText(record?.processing_status).toLowerCase();
+  const reviewRequired = record?.review_required === true;
   const pipeline = extractPipelineMetadata(record);
   const pipelineText = compactText([
     pipeline?.parser_status,
@@ -196,7 +197,7 @@ function deriveDisplayStateCore(record: Record<string, any>, latestJob: Record<s
     };
   }
 
-  if (status === "review_required" || ["pending", "saved", "manual_review_required", "review_ready"].includes(reviewStatus)) {
+  if (status === "review_required" || reviewRequired || ["pending", "saved", "manual_review_required", "review_ready"].includes(reviewStatus)) {
     return {
       display_state: "ready_for_review",
       message: "Lease extraction is ready for review.",
@@ -213,7 +214,7 @@ function deriveDisplayStateCore(record: Record<string, any>, latestJob: Record<s
   }
 
   if (["validated", "storing", "stored", "computing", "completed", "processed"].includes(status)) {
-    return { display_state: "ready_for_review", message: "Lease processing is complete.", next_action: "open_review" };
+    return { display_state: "complete", message: "Lease processing is complete.", next_action: null };
   }
 
   if (status === "parsing" || (latestJob?.status !== "completed" && latestJob?.stage === "parse")) {
