@@ -31,6 +31,7 @@ import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { updateLeaseExtractionField } from "@/services/leaseService";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
+import { getLeaseUploadPipelineState } from "@/lib/leaseUploadPipelineState";
 import { createPageUrl } from "@/utils";
 
 // Statuses that still need polling because a backend stage is in flight.
@@ -713,17 +714,11 @@ export default function LeaseUpload() {
   const hasActiveExtractionJob = hasActiveLeaseExtractionJob(fileRecord);
   const failed = fileRecord?.status === "failed";
 
-  // Detect a stuck pipeline: if the file has been in an intermediate active
-  // status for more than 3 minutes without progressing, the backend likely
-  // hit a compute-resource limit and left the status frozen. Show a clear
-  // message and make Re-run visible.
-  const isStuckInPipeline = useMemo(() => {
-    const stuckStatuses = new Set(["parsing", "validating", "validated", "storing"]);
-    if (!stuckStatuses.has(fileRecord?.status)) return false;
-    const updatedAt = fileRecord?.updated_at ? new Date(fileRecord.updated_at).getTime() : 0;
-    if (!updatedAt) return false;
-    return Date.now() - updatedAt > 3 * 60 * 1000; // stuck for > 3 minutes
-  }, [fileRecord?.status, fileRecord?.updated_at]);
+  const uploadPipelineState = useMemo(
+    () => getLeaseUploadPipelineState(fileRecord),
+    [fileRecord],
+  );
+  const isStuckInPipeline = uploadPipelineState.isLongRunning;
 
   const reviewReadyForAction = isLeaseUploadReviewReady(fileRecord);
   const leaseReviewAction = getLeaseReviewActionState(fileRecord, linkedLeaseId);
@@ -922,13 +917,33 @@ export default function LeaseUpload() {
             <p className="mt-1 text-sm font-medium text-blue-600">
               {uploadStatusLabel}
             </p>
+            {uploadPipelineState.isWaiting && (
+              <div className="mt-2 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 sm:grid-cols-3">
+                <div>
+                  <div className="font-semibold uppercase tracking-wide text-slate-400">Current stage</div>
+                  <div className="mt-0.5 font-medium text-slate-700">{displayCode(uploadPipelineState.stage) || "Processing"}</div>
+                </div>
+                <div>
+                  <div className="font-semibold uppercase tracking-wide text-slate-400">Last update</div>
+                  <div className="mt-0.5 font-medium text-slate-700">
+                    {uploadPipelineState.elapsedLabel ? `${uploadPipelineState.elapsedLabel} ago` : "Waiting for first update"}
+                  </div>
+                </div>
+                <div>
+                  <div className="font-semibold uppercase tracking-wide text-slate-400">Backend action</div>
+                  <div className="mt-0.5 font-medium text-slate-700">{fileRecord?.next_action || "wait"}</div>
+                </div>
+              </div>
+            )}
             <details className="mt-3 text-xs text-slate-400">
               <summary className="cursor-pointer select-none">Advanced</summary>
               <div className="mt-1 space-y-0.5 pl-2">
                 <p>status: {fileRecord?.status ?? "—"}</p>
                 <p>processing_status: {fileRecord?.processing_status ?? "—"}</p>
-                <p>failed_step: {fileRecord?.failed_step ?? "—"}</p>
-                <p>error_message: {fileRecord?.error_message ?? "—"}</p>
+                <p>current_stage: {uploadPipelineState.stage ?? "—"}</p>
+                <p>latest_job: {fileRecord?.latest_job?.status ?? "—"}</p>
+                <p>failed_step: {failed ? fileRecord?.failed_step ?? "—" : "—"}</p>
+                <p>error_message: {failed ? fileRecord?.error_message ?? "—" : "—"}</p>
               </div>
             </details>
             {failed && (
@@ -945,8 +960,7 @@ export default function LeaseUpload() {
             {isStuckInPipeline && !failed && (
               <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
                 <span>
-                  Extraction appears stuck — the AI pipeline may have run out of compute resources.
-                  Click <strong>Re-run Extraction</strong> to reset and retry.
+                  {uploadPipelineState.message || "Extraction is taking longer than usual."} {" "}Click <strong>Re-run Extraction</strong> to reset and retry.
                 </span>
                 <Button
                   size="sm"
