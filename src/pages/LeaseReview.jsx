@@ -139,10 +139,12 @@ import LeaseReviewReadinessSummary from "@/components/lease-review/LeaseReviewRe
 import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
 import { getFieldPolicyLabel } from "@/lib/leaseReviewCurrentPolicy";
 import { isLeaseReviewEnrichmentInFlight } from "@/lib/leaseReviewUiState";
-import { normalizeEnterprisePayload, getEnterpriseField } from "@/lib/enterprisePayloadReader";
 import { EnterpriseHeaderIntelligenceBar } from "@/components/lease-review/EnterpriseHeaderIntelligenceBar";
 import { EnterpriseCoverageDashboard } from "@/components/lease-review/EnterpriseCoverageDashboard";
 import { EnterpriseFindings } from "@/components/lease-review/EnterpriseFindings";
+import ApprovalReadinessSummary from "@/components/review/ApprovalReadinessSummary";
+import { useReviewDocument } from "@/lib/review/useReviewDocument";
+import { reviewDocumentToLegacyReviewPayload, shouldBridgeReviewDocumentToLegacyPayload } from "@/lib/review/adapters/viewModelLegacyBridge";
 
 // Minimum number of source-backed fields required before a new extraction is
 // considered "richer" than the previous one. Used only for debug diagnostics.
@@ -213,10 +215,6 @@ export default function LeaseReview() {
     setDrawerField(field);
   };
 
-  const drawerEnterpriseField = useMemo(() => {
-    if (!drawerField?.key || !enterprisePayload) return null;
-    return getEnterpriseField(enterprisePayload, drawerField.key);
-  }, [drawerField?.key, enterprisePayload]);
 
   const handleNavigateToField = (tabKey, fieldKey) => {
     if (tabKey) setActiveTab(tabKey);
@@ -259,7 +257,7 @@ export default function LeaseReview() {
       return data;
     },
     enabled: !!resolvedSourceFileId,
-    // §1/§2: while the deferred evidence/clause enrichment pass is still
+    // Section 1/Section 2: while the deferred evidence/clause enrichment pass is still
     // pending/running, poll so an already-open review screen picks up
     // completion without a manual reload. Uses the function form (reads the
     // latest fetched data directly) since enrichmentStatus/isEnrichmentInFlight
@@ -270,36 +268,31 @@ export default function LeaseReview() {
     },
   });
 
-  const { data: rawEnterprisePayload } = useQuery({
-    queryKey: ["document_enterprise_review_payload", lease?.org_id, resolvedSourceFileId],
-    queryFn: async () => {
-      if (!lease?.org_id || !resolvedSourceFileId) return null;
-      const { data, error } = await supabase
-        .from("document_enterprise_review_payloads")
-        .select("payload")
-        .eq("org_id", lease.org_id)
-        .eq("uploaded_file_id", resolvedSourceFileId)
-        .eq("is_current", true)
-        .maybeSingle();
-
-      if (error) {
-        return null;
-      }
-      return data?.payload ?? null;
-    },
-    enabled: Boolean(lease?.org_id && resolvedSourceFileId),
+  const reviewDocumentQuery = useReviewDocument({
+    uploadedFileId: resolvedSourceFileId,
+    uploadedFile,
+    legacyPayload: uploadedFile?.ui_review_payload ?? null,
+    generationId: uploadedFile?.active_generation_id ?? null,
+    enabled: Boolean(resolvedSourceFileId && uploadedFile),
+    allowLegacyFallbackOnCanonicalUnavailable: true,
   });
-
-  const enterprisePayload = useMemo(() => {
-    return normalizeEnterprisePayload(rawEnterprisePayload);
-  }, [rawEnterprisePayload]);
-
+  const reviewDocument = reviewDocumentQuery.document;
+  const effectiveUploadedFile = useMemo(() => {
+    if (!uploadedFile) return uploadedFile;
+    if (!shouldBridgeReviewDocumentToLegacyPayload(reviewDocument)) return uploadedFile;
+    return {
+      ...uploadedFile,
+      ui_review_payload: reviewDocumentToLegacyReviewPayload(reviewDocument, uploadedFile.ui_review_payload),
+    };
+  }, [reviewDocument, uploadedFile]);
+  const reviewFieldByKey = reviewDocument?.fields || {};
+  const drawerReviewField = drawerField?.key ? reviewFieldByKey[drawerField.key] || null : null;
   // P0.7: files already sitting at review_required from before the P0.4/P0.5
   // migrations backfilled review_readiness conservatively to 'partial'
-  // (never fabricating 'ready') — without this, they'd stay blocked from
+  // (never fabricating 'ready') - without this, they'd stay blocked from
   // approval forever since nothing re-runs the finalizer for them. This is
   // NOT starting extraction or creating a job: finalize_lease_extraction_for_review
-  // only evaluates already-persisted state and records the result — it is
+  // only evaluates already-persisted state and records the result - it is
   // the same idempotent, safe-to-recall function P0.5 wires after every
   // terminal pipeline event server-side, called here once per file/generation
   // to catch up a legacy row, not as an auto-extract side effect.
@@ -329,25 +322,25 @@ export default function LeaseReview() {
   // Mutation logic (save, approve, edit) continues to use the raw `lease`.
   const leaseFull = useMemo(() => {
     if (!lease) return lease;
-    if (!uploadedFile) return lease;
-    return { ...lease, uploaded_files: uploadedFile, uploaded_file: uploadedFile };
-  }, [lease, uploadedFile]);
+    if (!effectiveUploadedFile) return lease;
+    return { ...lease, uploaded_files: effectiveUploadedFile, uploaded_file: effectiveUploadedFile };
+  }, [lease, effectiveUploadedFile]);
 
   // Detect cases where the uploaded document's extracted fields contradict the
   // stored lease values - usually signals the wrong PDF was linked.
   const documentMismatches = useMemo(
-    () => detectDocumentMismatch(lease, uploadedFile),
-    [lease, uploadedFile],
+    () => detectDocumentMismatch(lease, effectiveUploadedFile),
+    [lease, effectiveUploadedFile],
   );
 
   const isStalePayload = useMemo(() => {
-    // §2: check the nested metadata.extractionDebug path FIRST — it's set
+    // Section 2: check the nested metadata.extractionDebug path FIRST - it's set
     // unconditionally as soon as ANY extraction runs (pipeline.ts, inside
     // runExtractionPipeline), including in the fast minimal payload, before
     // the deferred enrich pass ever completes. The top-level
     // metadata.extraction_contract_version is only guaranteed once the
     // minimal payload builder stamps it directly (P0.2) or the enrich pass
-    // finishes — checking it first previously produced false "older
+    // finishes - checking it first previously produced false "older
     // extractor" positives for genuinely current-contract files whose
     // enrichment just hadn't completed yet.
     const version =
@@ -355,7 +348,7 @@ export default function LeaseReview() {
       uploadedFile?.ui_review_payload?.metadata?.extraction_contract_version ??
       lease?.extraction_data?.extraction_debug?.extraction_contract_version ??
       lease?.extraction_data?.extraction_debug?.extractionDebug?.extraction_contract_version;
-    // Equality check, not string ordering — a lexicographic "<" comparison
+    // Equality check, not string ordering - a lexicographic "<" comparison
     // would misclassify e.g. a future "...-v10" as older than "...-v3".
     return !version || version !== CURRENT_EXTRACTION_CONTRACT_VERSION;
   }, [uploadedFile, lease]);
@@ -378,7 +371,7 @@ export default function LeaseReview() {
 
   const allReviewRows = useMemo(() => Object.values(fieldsForTab).flat(), [fieldsForTab]);
 
-  // Additive, normalized view of the same underlying payload — grouped by
+  // Additive, normalized view of the same underlying payload - grouped by
   // the 17 standard field-model groups. Computed once here and passed down
   // to the new grouped sections; does not replace fieldsForTab/allReviewRows,
   // which still drive the original tab structure unchanged.
@@ -989,7 +982,7 @@ export default function LeaseReview() {
   // columns (promoted from ui_review_payload JSONB in P0.4), falling back to
   // the JSONB location only for a row from before that migration's backfill
   // ran. review_readiness is the authoritative "is this file safe to call
-  // ready for review" signal — computed once by
+  // ready for review" signal - computed once by
   // evaluate_lease_extraction_readiness/finalize_lease_extraction_for_review
   // server-side (P0.4/P0.5), not re-derived ad hoc here the way this file
   // used to reconstruct "has extraction succeeded" from ~10 independent
@@ -1030,12 +1023,12 @@ export default function LeaseReview() {
   // P0.7: the mount-triggered auto-extract effect that used to live here has
   // been removed entirely, not narrowed. Page navigation must never spend
   // LLM tokens, create jobs, cancel jobs, start a new generation, or alter
-  // extraction truth as a side effect of rendering — that was exactly the
+  // extraction truth as a side effect of rendering - that was exactly the
   // defect this plan's audit found (LeaseReview.jsx never consulted the
   // authoritative pipeline_jobs/review_readiness signal and could silently
   // fire a force_reextract call on simple navigation). Lease Review is now a
   // passive consumer: it shows review_readiness/blocking_reasons (below) and
-  // a "Retry Extraction" affordance for the user to click explicitly —
+  // a "Retry Extraction" affordance for the user to click explicitly -
   // handleReextractLease remains available only as that explicit action.
 
   // --- Early returns -------------------------------------------------------
@@ -1413,7 +1406,7 @@ export default function LeaseReview() {
   })();
 
   const approvalBlockers = [];
-  // P0.7: server-computed review_readiness is the authoritative gate —
+  // P0.7: server-computed review_readiness is the authoritative gate -
   // approval is fail-closed on anything other than 'ready' (no waiver
   // bypass in this P0 release; 'manual_review' routes to a separate
   // resolution workflow, not this button). The actual enforcement lives
@@ -2746,7 +2739,7 @@ export default function LeaseReview() {
             variant="outline"
             onClick={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)}
           >
-            Review Expense Rules
+              Review expense rules
           </Button>
           <Button
             variant="outline"
@@ -2772,19 +2765,19 @@ export default function LeaseReview() {
       {showPostApprovalBanner && (
         <div className="mx-4 mt-3 flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm">
           <span className="text-amber-800">
-            Lease approved. Expense rules are being extracted — review and approve them before running CAM calculations.{" "}
+            Lease approved. Expense rules are being extracted - review and approve them before running CAM calculations.{" "}
             <button
               className="font-medium underline"
               onClick={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)}
             >
-              Review expense rules →
+              Review expense rules
             </button>
           </span>
           <button
             className="ml-3 text-amber-400 hover:text-amber-600"
             onClick={() => setShowPostApprovalBanner(false)}
           >
-            ✕
+            x
           </button>
         </div>
       )}
@@ -2903,7 +2896,7 @@ export default function LeaseReview() {
       )}
 
       {/* P0.7: failed enrichment previously showed no banner at all
-          (isLeaseReviewEnrichmentInFlight only covers pending/running) —
+          (isLeaseReviewEnrichmentInFlight only covers pending/running) -
           fixed to surface it, with the server's exact blocking_reasons,
           instead of silently letting the reviewer approve incomplete data. */}
       {!reextracting && !isReviewReady && (isEnrichmentFailed || reviewReadinessReasons.length > 0) && (
@@ -2911,7 +2904,7 @@ export default function LeaseReview() {
           <p className="font-semibold">
             {reviewReadiness === "manual_review"
               ? "This document requires manual review before it can be approved."
-              : "Extraction is not fully complete — review before approving."}
+              : "Extraction is not fully complete - review before approving."}
           </p>
           {reviewReadinessReasons.length > 0 && (
             <p className="mt-1 text-xs text-red-700">
@@ -3097,7 +3090,7 @@ export default function LeaseReview() {
       </div>
       )}
 
-      <EnterpriseHeaderIntelligenceBar enterprisePayload={enterprisePayload} />
+      <EnterpriseHeaderIntelligenceBar document={reviewDocument} />
 
       <div className="mb-4">
         <LeaseReviewReadinessSummary
@@ -3117,7 +3110,7 @@ export default function LeaseReview() {
         <DynamicFindings dynamicFindings={normalized.dynamicFindings} />
       </div>
 
-      <EnterpriseFindings findings={enterprisePayload?.findings} onNavigateToField={handleNavigateToField} />
+      <EnterpriseFindings findings={reviewDocument?.findings || []} onNavigateToField={handleNavigateToField} />
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex h-auto flex-wrap justify-start gap-1 border bg-white">
@@ -3158,7 +3151,8 @@ export default function LeaseReview() {
 
         {/* Summary tab */}
         <TabsContent value="summary" className="mt-4 space-y-4">
-          <EnterpriseCoverageDashboard enterprisePayload={enterprisePayload} />
+          <EnterpriseCoverageDashboard coverage={reviewDocument?.coverage} approval={reviewDocument?.approval} />
+          <ApprovalReadinessSummary approval={reviewDocument?.approval} />
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Lease Summary</CardTitle>
@@ -3220,7 +3214,7 @@ export default function LeaseReview() {
                   size="sm"
                   onClick={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)}
                 >
-                  Review Expense Rules
+              Review expense rules
                 </Button>
                 <Button
                   variant="outline"
@@ -3321,7 +3315,7 @@ export default function LeaseReview() {
                 rows={enterpriseTabs[tab.key] || []}
                 onOpenDetail={(row) => openDrawer(row, "view")}
                 onQuickAction={handleTabRowQuickAction}
-                enterprisePayload={enterprisePayload}
+                reviewFields={reviewFieldByKey}
               />
             </TabsContent>
           ))}
@@ -3329,28 +3323,28 @@ export default function LeaseReview() {
           <div className="flex justify-end">
             <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setCustomFieldDialog({ tabKey: "rent_charges" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>+ Add Custom Field</Button>
           </div>
-          <LeaseReviewTabTable rows={enterpriseTabs.rent_charges || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} enterprisePayload={enterprisePayload} />
+          <LeaseReviewTabTable rows={enterpriseTabs.rent_charges || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} />
           <RentScheduleTable leaseId={lease.id} />
         </TabsContent>
 
         <TabsContent value="expenses_recoveries" className="mt-4 space-y-4">
-          <LeaseReviewTabTable rows={enterpriseTabs.expenses_recoveries || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} enterprisePayload={enterprisePayload} />
+          <LeaseReviewTabTable rows={enterpriseTabs.expenses_recoveries || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} reviewFields={reviewFieldByKey} />
         </TabsContent>
 
         <TabsContent value="cam_rules" className="mt-4 space-y-4">
-          <LeaseReviewTabTable rows={enterpriseTabs.cam_rules || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} enterprisePayload={enterprisePayload} />
+          <LeaseReviewTabTable rows={enterpriseTabs.cam_rules || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} reviewFields={reviewFieldByKey} />
         </TabsContent>
 
         <TabsContent value="clause_records" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.clause_records || []} onOpenDetail={(row) => openDrawer(row, "view")} enterprisePayload={enterprisePayload} />
+          <LeaseReviewTabTable rows={enterpriseTabs.clause_records || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} />
         </TabsContent>
 
         <TabsContent value="critical_dates" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.critical_dates || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} enterprisePayload={enterprisePayload} />
+          <LeaseReviewTabTable rows={enterpriseTabs.critical_dates || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} />
         </TabsContent>
 
         <TabsContent value="documents_exhibits" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.documents_exhibits || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} enterprisePayload={enterprisePayload} />
+          <LeaseReviewTabTable rows={enterpriseTabs.documents_exhibits || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} />
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-base">Source Document</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">
@@ -3361,7 +3355,7 @@ export default function LeaseReview() {
         </TabsContent>
 
         <TabsContent value="budget_preview" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.budget_preview || []} onOpenDetail={(row) => openDrawer(row, "view")} enterprisePayload={enterprisePayload} />
+          <LeaseReviewTabTable rows={enterpriseTabs.budget_preview || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} />
           <BudgetPreviewCard lease={lease} />
         </TabsContent>
 
@@ -3425,7 +3419,7 @@ export default function LeaseReview() {
         field={drawerField}
         lease={leaseFull}
         review={drawerReview}
-        enterpriseField={drawerEnterpriseField}
+        reviewField={drawerReviewField}
         initialMode={drawerMode}
         onAccept={(f) => handleAccept(f)}
         onReject={(f) => handleReject(f)}
@@ -3610,7 +3604,7 @@ export default function LeaseReview() {
             };
             // updateLeaseExtractionField() above already persisted this patch
             // server-side (merged, not replaced, onto fields[key]/
-            // field_evidence[key]) — do not also write extraction_data
+            // field_evidence[key]) - do not also write extraction_data
             // directly here, that would be a redundant second write racing
             // the server's own merge with a client-reconstructed object.
             // Seed the cache with the new extraction_data immediately so the
@@ -3724,7 +3718,7 @@ export default function LeaseReview() {
                       <div key={b.kind} className="text-amber-700">
                         <span className="font-semibold">Approval blocked: {b.title}</span>
                         {b.detail && (
-                          <span className="ml-1 text-amber-600"> — {b.detail}</span>
+                          <span className="ml-1 text-amber-600"> - {b.detail}</span>
                         )}
                       </div>
                     ))}

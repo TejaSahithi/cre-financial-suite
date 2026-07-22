@@ -60,7 +60,7 @@ const confidenceClass = (score) => {
 };
 
 function formatTime(value) {
-  if (!value) return "—";
+  if (!value) return "â€”";
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString();
 }
@@ -71,7 +71,7 @@ export default function FieldDetailDrawer({
   field,
   lease,
   review,
-  enterpriseField,
+  reviewField,
   initialMode = "view",
   onAccept,
   onReject,
@@ -88,7 +88,7 @@ export default function FieldDetailDrawer({
   const [mode, setMode] = useState(initialMode);
   const [editValue, setEditValue] = useState("");
   const [overrideReason, setOverrideReason] = useState("");
-  // Editable evidence form state — reviewer can correct what extraction
+  // Editable evidence form state â€” reviewer can correct what extraction
   // missed or got wrong without re-running the pipeline.
   const [evRaw, setEvRaw] = useState("");
   const [evSourcePage, setEvSourcePage] = useState("");
@@ -292,7 +292,7 @@ export default function FieldDetailDrawer({
             ) : (
               <p className="rounded-md bg-slate-50 px-3 py-2 text-base font-medium text-slate-900">
                 {value == null || value === ""
-                  ? "—"
+                  ? "â€”"
                   : field.type === "currency" && !Number.isNaN(Number(value))
                   ? `$${Number(value).toLocaleString()}`
                   : field.type === "select" && hasLeaseFieldOptions(field.options || field.key)
@@ -304,7 +304,7 @@ export default function FieldDetailDrawer({
 
           {/* Release 1: calculated fields carry a derivation trace
               (e.g. "monthly_rent(1470) x 12" for annual_rent) all the way
-              to the persisted record, but nothing rendered it — a reviewer
+              to the persisted record, but nothing rendered it â€” a reviewer
               saw the "Calculated" mode badge with no way to see the actual
               formula/inputs. readFieldEvidence() already resolves this from
               evidence.derivation_trace (leaseReviewSchema.js), so this is
@@ -318,7 +318,7 @@ export default function FieldDetailDrawer({
             </section>
           )}
 
-          {/* Editable evidence form — reviewer can correct extractor output
+          {/* Editable evidence form â€” reviewer can correct extractor output
               without re-running the pipeline. Persists via onSaveEvidence. */}
           <section className="space-y-3 rounded-md border border-slate-200 bg-slate-50/50 p-3">
             <div className="flex items-center justify-between">
@@ -363,7 +363,7 @@ export default function FieldDetailDrawer({
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
-                <Label className="text-[10px] font-semibold uppercase text-slate-500">Confidence Score (0–100)</Label>
+                <Label className="text-[10px] font-semibold uppercase text-slate-500">Confidence Score (0â€“100)</Label>
                 <Input
                   className="mt-1"
                   type="number"
@@ -426,7 +426,7 @@ export default function FieldDetailDrawer({
 
           <section className="grid gap-3 sm:grid-cols-2">
             <Meta label="Review Status" value={REVIEW_STATUS_LABELS[status]} />
-            <Meta label="Reviewer" value={review?.reviewer || "—"} />
+            <Meta label="Reviewer" value={review?.reviewer || "â€”"} />
             <Meta label="Reviewed At" value={formatTime(review?.reviewed_at)} />
           </section>
 
@@ -451,7 +451,7 @@ export default function FieldDetailDrawer({
                     {(row.old_value || row.new_value) && (
                       <div className="mt-0.5 text-[11px] text-slate-500">
                         {row.old_value ? `from ${row.old_value} ` : ""}
-                        {row.new_value ? `→ ${row.new_value}` : ""}
+                        {row.new_value ? `â†’ ${row.new_value}` : ""}
                       </div>
                     )}
                   </li>
@@ -475,8 +475,8 @@ export default function FieldDetailDrawer({
             <Textarea
               placeholder={
                 needsOverride
-                  ? "Explain why this value is accepted without source evidence (e.g. confirmed verbally with tenant, reviewed in source PDF page 3)…"
-                  : "Optional reviewer note for this field…"
+                  ? "Explain why this value is accepted without source evidence (e.g. confirmed verbally with tenant, reviewed in source PDF page 3)â€¦"
+                  : "Optional reviewer note for this fieldâ€¦"
               }
               rows={3}
               value={overrideReason}
@@ -505,12 +505,12 @@ export default function FieldDetailDrawer({
             {needsOverride && (
               <p className="text-[11px] text-amber-700">
                 This required field has no extracted source page/text. Either provide an override reason here, or
-                Edit and re-confirm to attach evidence — otherwise approval stays blocked.
+                Edit and re-confirm to attach evidence â€” otherwise approval stays blocked.
               </p>
             )}
           </section>
 
-          <FieldDrawerIntelligence enterpriseField={enterpriseField} legacyValue={value} />
+          <FieldDrawerIntelligence field={reviewField} />
         </div>
 
         <div className="sticky bottom-0 border-t border-slate-200 bg-white px-5 py-3">

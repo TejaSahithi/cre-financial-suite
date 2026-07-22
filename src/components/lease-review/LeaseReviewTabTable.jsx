@@ -38,10 +38,10 @@ const STATUS_META = {
   manually_edited: { label: "Edited", className: "bg-blue-50 text-blue-700 border-blue-100" },
 };
 
-// Phase 40: "how did this value come to exist" — distinct from STATUS_META
+// Phase 40: "how did this value come to exist" â€” distinct from STATUS_META
 // ("is this row usable right now"). Values are resolved by
 // resolveLeaseReviewExtractionMode() (leaseReviewFieldNormalizer.js), never
-// guessed here — this map is presentation-only.
+// guessed here â€” this map is presentation-only.
 const EXTRACTION_MODE_META = {
   explicit: { label: "Explicit", className: "bg-emerald-50 text-emerald-700 border-emerald-100" },
   normalized: { label: "Normalized", className: "bg-blue-50 text-blue-700 border-blue-100" },
@@ -87,7 +87,7 @@ function shouldShowRow(row, showAdvanced) {
   return false;
 }
 
-export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAction, onNavigateRules, enterprisePayload }) {
+export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAction, onNavigateRules, reviewFields = {} }) {
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -163,10 +163,10 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
                 else onOpenDetail?.(row);
               };
               const fKey = row.key || row.fieldKey;
-              const entField = enterprisePayload?.fieldsByKey?.[fKey] ?? null;
-              const legacyVal = formatValue(row.value ?? row.normalized_value ?? row.normalizedValue);
-              const entVal = entField ? formatValue(entField.displayValue ?? entField.value) : "-";
-              const isMismatch = entField && legacyVal !== "-" && entVal !== "-" && legacyVal.trim().toLowerCase() !== entVal.trim().toLowerCase();
+              const reviewField = reviewFields?.[fKey] ?? null;
+              const rowValue = formatValue(row.value ?? row.normalized_value ?? row.normalizedValue);
+              const reviewValue = reviewField ? formatValue(reviewField.displayValue ?? reviewField.value) : "-";
+              const isMismatch = reviewField && rowValue !== "-" && reviewValue !== "-" && rowValue.trim().toLowerCase() !== reviewValue.trim().toLowerCase();
 
               return (
                 <TableRow key={row.key || row.fieldKey || `${row.rowType}-${index}`} className="align-top hover:bg-slate-50/70">
@@ -175,11 +175,11 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
                     {row.rowType === "read_only_reference" && <div className="mt-1 text-[10px] font-normal text-slate-500">Read-only reference</div>}
                   </TableCell>
                   <TableCell className="text-xs text-slate-700">
-                    {legacyVal}
+                    {rowValue}
                     {isMismatch && (
-                      <div className="mt-1 flex items-center gap-1 text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5" title={`Canonical projection: ${entVal}`}>
+                      <div className="mt-1 flex items-center gap-1 text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5" title={`Canonical projection: ${reviewValue}`}>
                         <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
-                        <span>Canonical: {entVal}</span>
+                        <span>Canonical: {reviewValue}</span>
                       </div>
                     )}
                   </TableCell>

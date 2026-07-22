@@ -3,23 +3,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2, AlertTriangle, HelpCircle, Layers, FileCheck } from "lucide-react";
 
-export function EnterpriseCoverageDashboard({ enterprisePayload }) {
-  if (!enterprisePayload || !enterprisePayload.coverage) return null;
+export function EnterpriseCoverageDashboard({ coverage, approval }) {
+  if (!coverage) return null;
 
-  const { coverage, validationSummary } = enterprisePayload;
-  const totals = coverage.totals;
-
-  if (!totals) return null;
-
-  const isApprovalReady = validationSummary?.approvalEligible ?? coverage?.approvalReady;
-  const isComputationReady = coverage?.computationReady;
+  const isApprovalReady = approval?.eligible;
+  const isComputationReady = coverage.configured > 0 && coverage.blocking === 0;
 
   const renderMetric = (label, value, variant = "default", helpText = null) => {
     if (value === undefined || value === null) {
       return (
-        <div className="flex flex-col p-3 rounded-lg bg-slate-50 border border-slate-100">
-          <span className="text-xs text-slate-500 font-medium">{label}</span>
-          <span className="text-sm font-semibold text-slate-400 mt-1">â€” (Unavailable)</span>
+        <div className="flex flex-col rounded-lg border border-slate-100 bg-slate-50 p-3">
+          <span className="text-xs font-medium text-slate-500">{label}</span>
+          <span className="mt-1 text-sm font-semibold text-slate-400">- (Unavailable)</span>
         </div>
       );
     }
@@ -30,57 +25,54 @@ export function EnterpriseCoverageDashboard({ enterprisePayload }) {
     if (variant === "danger" && value > 0) colorClass = "text-red-600";
 
     return (
-      <div className="flex flex-col p-3 rounded-lg bg-slate-50 border border-slate-100">
+      <div className="flex flex-col rounded-lg border border-slate-100 bg-slate-50 p-3">
         <div className="flex items-center justify-between">
-          <span className="text-xs text-slate-500 font-medium">{label}</span>
-          {helpText && <HelpCircle className="w-3.5 h-3.5 text-slate-400" title={helpText} />}
+          <span className="text-xs font-medium text-slate-500">{label}</span>
+          {helpText && <HelpCircle className="h-3.5 w-3.5 text-slate-400" title={helpText} />}
         </div>
-        <span className={`text-xl font-bold mt-1 ${colorClass}`}>{value}</span>
+        <span className={`mt-1 text-xl font-bold ${colorClass}`}>{value}</span>
       </div>
     );
   };
 
   return (
-    <Card className="mb-6 border-indigo-100 shadow-sm bg-white">
-      <CardHeader className="pb-3 border-b border-slate-100 bg-slate-50/50">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <CardTitle className="text-base font-semibold flex items-center gap-2 text-slate-800">
-            <Layers className="w-4 h-4 text-indigo-600" />
+    <Card className="mb-6 border-indigo-100 bg-white shadow-sm">
+      <CardHeader className="border-b border-slate-100 bg-slate-50/50 pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base font-semibold text-slate-800">
+            <Layers className="h-4 w-4 text-indigo-600" />
             Enterprise Canonical Field Coverage & Ledger
           </CardTitle>
 
           <div className="flex items-center gap-2">
             {isApprovalReady !== undefined && (
-              <Badge variant="outline" className={isApprovalReady ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}>
-                {isApprovalReady ? <CheckCircle2 className="w-3 h-3 mr-1 text-emerald-600" /> : <AlertTriangle className="w-3 h-3 mr-1 text-amber-600" />}
+              <Badge variant="outline" className={isApprovalReady ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700"}>
+                {isApprovalReady ? <CheckCircle2 className="mr-1 h-3 w-3 text-emerald-600" /> : <AlertTriangle className="mr-1 h-3 w-3 text-amber-600" />}
                 {isApprovalReady ? "Approval Eligible" : "Approval Blocked"}
               </Badge>
             )}
 
-            {isComputationReady !== undefined && (
-              <Badge variant="outline" className={isComputationReady ? "bg-blue-50 text-blue-700 border-blue-200" : "bg-slate-50 text-slate-600 border-slate-200"}>
-                <FileCheck className="w-3 h-3 mr-1 text-blue-600" />
-                {isComputationReady ? "Compute Engine Ready" : "Compute Incomplete"}
-              </Badge>
-            )}
+            <Badge variant="outline" className={isComputationReady ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-slate-50 text-slate-600"}>
+              <FileCheck className="mr-1 h-3 w-3 text-blue-600" />
+              {isComputationReady ? "Compute Engine Ready" : "Compute Incomplete"}
+            </Badge>
           </div>
         </div>
       </CardHeader>
 
       <CardContent className="pt-4">
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-          {renderMetric("Configured Fields", totals.configured)}
-          {renderMetric("Resolved", totals.resolved, "success")}
-          {renderMetric("Needs Review", totals.needsReview, totals.needsReview > 0 ? "warning" : "default")}
-          {renderMetric("Conflicts", totals.conflicts, totals.conflicts > 0 ? "danger" : "default")}
-          {renderMetric("Missing Required", totals.missing, totals.missing > 0 ? "danger" : "default")}
-          {renderMetric("Missing Evidence", totals.missingSourceEvidence, totals.missingSourceEvidence > 0 ? "warning" : "default")}
-          {renderMetric("Invalid Projections", totals.invalid, totals.invalid > 0 ? "danger" : "default")}
-          {renderMetric("Legacy Fallbacks", totals.legacyFallbacks, totals.legacyFallbacks > 0 ? "warning" : "default")}
-          {renderMetric("Blocking Total", totals.blocking, totals.blocking > 0 ? "danger" : "success")}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+          {renderMetric("Configured Fields", coverage.configured)}
+          {renderMetric("Resolved", coverage.resolved, "success")}
+          {renderMetric("Needs Review", coverage.needsReview, coverage.needsReview > 0 ? "warning" : "default")}
+          {renderMetric("Conflicts", coverage.conflicts, coverage.conflicts > 0 ? "danger" : "default")}
+          {renderMetric("Missing Required", coverage.missing, coverage.missing > 0 ? "danger" : "default")}
+          {renderMetric("Missing Evidence", coverage.missingSourceEvidence, coverage.missingSourceEvidence > 0 ? "warning" : "default")}
+          {renderMetric("Invalid Projections", coverage.invalid, coverage.invalid > 0 ? "danger" : "default")}
+          {renderMetric("Legacy Fallbacks", coverage.legacyFallbacks, coverage.legacyFallbacks > 0 ? "warning" : "default")}
+          {renderMetric("Blocking Total", coverage.blocking, coverage.blocking > 0 ? "danger" : "success")}
         </div>
       </CardContent>
     </Card>
   );
 }
-
