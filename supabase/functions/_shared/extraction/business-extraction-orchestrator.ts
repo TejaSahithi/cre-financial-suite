@@ -75,6 +75,14 @@ export interface RunBusinessExtractionOptions {
   mockOpenAIScenario?: MockOpenAIScenario["scenario"];
   /** @deprecated Use mockOpenAIScenario. */
   mockVertexScenario?: MockOpenAIScenario["scenario"];
+  /** P1.4: optional extraction-provenance identity, forwarded unchanged to
+   * whichever runner actually makes the OpenAI call (legacyRunner via
+   * ExtractionInput.provenance). Undefined for callers without stage/run
+   * provenance -- extraction behavior is identical either way. */
+  provenance?: {
+    supabaseAdmin: any;
+    context: import("./provenance/types.ts").ProvenanceContext;
+  };
 }
 
 function factLedgerDebug(debug: Record<string, unknown>): Record<string, unknown> {
@@ -171,6 +179,7 @@ async function runLegacySafely(
         fileName: opts.fileName,
         docling: opts.document ?? opts.docling,
         ...(opts.fileBase64 ? { fileBase64: opts.fileBase64, fileMimeType: opts.fileMimeType || "application/pdf" } : {}),
+        ...(opts.provenance ? { provenance: opts.provenance } : {}),
       },
       { maxLLMChunks: 50, chunkSize: 3000, llmTemperature: 0 },
     );

@@ -135,6 +135,15 @@ export interface ExtractionInput {
   fileName: string;
   moduleType: ModuleType;
   suggestCustomFields?: boolean;
+  /** P1.4: optional extraction-provenance identity, threaded unchanged from
+   * business-extraction-orchestrator.ts down through pipeline.ts to
+   * llm-extractor.ts's OpenAI call sites. Undefined for any caller that
+   * doesn't have stage/run provenance (tests, non-lease modules, dry runs)
+   * -- those keep calling the LLM exactly as before. */
+  provenance?: {
+    supabaseAdmin: any;
+    context: import("./provenance/types.ts").ProvenanceContext;
+  };
 }
 
 export interface ExtractionOptions {

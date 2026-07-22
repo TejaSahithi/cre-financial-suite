@@ -10,6 +10,8 @@
 
 import type { DoclingOutput } from "./types.ts";
 import { analyzeWithAzureLayout, getAzureDocumentIntelligenceConfig } from "../azure/document-intelligence.ts";
+import { analyzeWithAzureLayoutAndProvenance } from "./provenance/transport/azure.ts";
+import type { ProvenanceContext } from "./provenance/types.ts";
 import { normalizeAzureLayoutToDoclingOutput } from "./azure-layout-adapter.ts";
 import { azureAnalyzeResultToCanonicalLayout } from "./azure/azure-to-canonical-layout.ts";
 import { buildCanonicalLayoutArtifact } from "./document-intelligence-v3/canonical-layout-artifact.ts";
@@ -20,7 +22,18 @@ export async function parseDocument(
   fileBytes: Uint8Array | null,
   fileName: string,
   mimeType: string = "application/pdf",
-  options: { fileUrl?: string; providerOverride?: string | null; uploadedFileId?: string | null; orgId?: string | null; generationId?: string | null } = {},
+  options: {
+    fileUrl?: string;
+    providerOverride?: string | null;
+    uploadedFileId?: string | null;
+    orgId?: string | null;
+    generationId?: string | null;
+    /** P1.4: optional extraction-provenance identity for the Azure call.
+     * Undefined for any caller without stage/run provenance (tests, the
+     * dry-run comparison path, review-approve refreshes) -- those keep
+     * calling Azure exactly as before. */
+    provenance?: { supabaseAdmin: any; context: ProvenanceContext };
+  } = {},
 ): Promise<DoclingOutput> {
   const provider = resolveExtractionProvider(options.providerOverride);
   const config = getAzureDocumentIntelligenceConfig();
@@ -29,11 +42,18 @@ export async function parseDocument(
     `[parser] Azure Document Intelligence parse file="${fileName}" mime=${mimeType} provider=${provider.mode}`,
   );
 
-  const analyzeResult = await analyzeWithAzureLayout({
+  const azureArgs = {
     fileBytes: fileBytes ?? null,
     fileUrl: options.fileUrl,
     mimeType,
-  });
+  };
+  const analyzeResult = options.provenance
+    ? await analyzeWithAzureLayoutAndProvenance(
+      options.provenance.supabaseAdmin,
+      { ...options.provenance.context, operation: "azure_layout_analyze" },
+      azureArgs,
+    )
+    : await analyzeWithAzureLayout(azureArgs);
 
   const doclingOutput = normalizeAzureLayoutToDoclingOutput(analyzeResult, {
     apiVersion: config.apiVersion,

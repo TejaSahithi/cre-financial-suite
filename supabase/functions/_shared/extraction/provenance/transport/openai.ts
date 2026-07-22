@@ -10,7 +10,8 @@
  * there is only ever one LLM provider.
  */
 
-import { callLLMText, LLMProviderError } from "../../../llm.ts";
+import { callLLMJSON, callLLMText, LLMProviderError } from "../../../llm.ts";
+import type { LLMCallOpts, LLMJSONResponse } from "../../../llm.ts";
 import { isExtractionProvenanceEnabled } from "../feature-flag.ts";
 import { persistArtifact, ProvenancePersistenceError, sanitizeErrorMessage } from "../recorder.ts";
 import type { ProvenanceContext } from "../types.ts";
@@ -188,4 +189,34 @@ export async function callOpenAIWithProvenance(
     });
     throw err;
   }
+}
+
+/**
+ * JSON-mode counterpart of callOpenAIWithProvenance -- the actual call
+ * shape used by llm-extractor.ts / fact-ledger-extractor.ts (callLLMJSON,
+ * not callLLMText). Wraps callLLMJSON in the {content, model, inputTokens,
+ * outputTokens, finishReason, responseId} shape callOpenAIWithProvenance's
+ * settle/artifact logic expects, then unwraps back to the original
+ * LLMJSONResponse so call sites need no changes beyond swapping the import
+ * -- same guarantee as callOpenAIWithProvenance: a no-op passthrough to
+ * callLLMJSON when the flag is off or the stage has no provenance identity.
+ */
+export async function callLLMJSONWithProvenance(
+  supabaseAdmin: any,
+  context: ProvenanceContext,
+  opts: LLMCallOpts,
+): Promise<LLMJSONResponse> {
+  const wrapped = await callOpenAIWithProvenance(supabaseAdmin, context, opts, async (o: LLMCallOpts) => {
+    const raw = await callLLMJSON(o);
+    return {
+      content: JSON.stringify(raw.data ?? null),
+      model: raw.model,
+      inputTokens: raw.promptTokens,
+      outputTokens: raw.completionTokens,
+      finishReason: raw.finishReason,
+      responseId: raw.responseId,
+      __raw: raw,
+    };
+  });
+  return (wrapped as any).__raw ?? wrapped;
 }

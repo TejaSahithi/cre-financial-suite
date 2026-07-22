@@ -2739,6 +2739,22 @@ Deno.serve(async (req: Request) => {
         canonicalLayoutSchemaVersion: (fileRecord.docling_raw as any)?.layout_contract_version ?? null,
         canonicalLayout: (fileRecord as any).canonical_layout_v3 ?? null,
         ...(mockOpenAIScenario ? { mockOpenAIScenario } : {}),
+        ...(stage?.stageRunId
+          ? {
+            provenance: {
+              supabaseAdmin,
+              context: {
+                orgId,
+                uploadedFileId: file_id,
+                generationId: generation_id ?? "",
+                extractionRunId: provenanceExtractionRunId ?? null,
+                stageRunId: stage.stageRunId,
+                stageAttempt: Number(worker_attempt) || 1,
+                operation: "business_extraction",
+              },
+            },
+          }
+          : {}),
       });
       stampBusinessExtractionPersistedAt(result, new Date().toISOString());
       console.log(`[normalize-pdf-output] STAGE pipeline_done file_id=${file_id} rows=${result.rows?.length ?? 0} method=${result.method} provider=${businessExtractionProvider}`);

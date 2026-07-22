@@ -26,6 +26,7 @@ import type {
 import { getSchema, getFieldGroups, type FieldDef, type FieldGroup } from "./schemas.ts";
 import { buildRelevantSnippet, chunkDocument } from "./chunker.ts";
 import { callLLMJSON } from "../llm.ts";
+import { callLLMJSONWithProvenance } from "./provenance/transport/openai.ts";
 
 // -- System prompt - short, strict, no room for hallucination -----------------
 
@@ -429,18 +430,26 @@ async function callOpenAIAndParse<T = unknown>(
   _input: ExtractionInput,
   opts: { systemPrompt: string; userPrompt: string; maxOutputTokens?: number; temperature?: number },
   diag: ReturnType<typeof makeDiag>,
+  chunkIndex?: number,
 ): Promise<T | null> {
   diag.llm_call_attempted = true;
   diag.llm_text_mode_attempted = true;
   diag.text_chars_sent_to_llm += opts.userPrompt.length;
 
   try {
-    const response = await callLLMJSON({
+    const callOpts = {
       systemPrompt: opts.systemPrompt,
       userPrompt: opts.userPrompt,
       temperature: opts.temperature,
       maxOutputTokens: opts.maxOutputTokens,
-    });
+    };
+    const response = _input.provenance
+      ? await callLLMJSONWithProvenance(
+        _input.provenance.supabaseAdmin,
+        { ..._input.provenance.context, operation: "legacy_hybrid_field_group", chunkIndex },
+        callOpts,
+      )
+      : await callLLMJSON(callOpts);
 
     if (!diag.model_name) diag.model_name = response.model;
     diag.llm_raw_response_chars += JSON.stringify(response.data ?? "").length;
@@ -474,8 +483,9 @@ async function callLLMAndParse<T = unknown>(
   input: ExtractionInput,
   opts: { systemPrompt: string; userPrompt: string; maxOutputTokens?: number; temperature?: number },
   diag: ReturnType<typeof makeDiag>,
+  chunkIndex?: number,
 ): Promise<T | null> {
-  return callOpenAIAndParse<T>(input, opts, diag);
+  return callOpenAIAndParse<T>(input, opts, diag, chunkIndex);
 }
 
 // -- Main: LLM field-wise extraction ------------------------------------------
@@ -585,6 +595,7 @@ async function fillMissingFieldsForRecords(
         input,
         { systemPrompt: LLM_SYSTEM_PROMPT, userPrompt: prompt, maxOutputTokens: 4096, temperature },
         diag,
+        diag.groups_attempted - 1,
       );
 
       if (result == null) {
@@ -741,13 +752,14 @@ async function extractFieldGroups(
   const settled = await runWithConcurrency<GroupWork, GroupOutcome>(
     workItems,
     concurrencyLimit,
-    async ({ group, prompt }, _idx) => {
+    async ({ group, prompt }, idx) => {
       const groupStartMs = Date.now();
       try {
         const result = await callLLMAndParse(
           input,
           { systemPrompt: LLM_SYSTEM_PROMPT, userPrompt: prompt, maxOutputTokens: 4096, temperature },
           diag,
+          idx,
       );
 
         const groupMs = Date.now() - groupStartMs;

@@ -1021,7 +1021,7 @@ export function readFieldConfidence(lease, key, fallback = null) {
 
 // The extractor stores confidence as 0â€“1; everything else stores 0â€“100.
 // Treat values <= 1 as fractions and scale them so the UI sees one shape.
-function normalizeStoredConfidence(score) {
+export function normalizeStoredConfidence(score) {
   if (typeof score !== "number" || Number.isNaN(score)) return null;
   return score <= 1 ? Math.round(score * 100) : Math.round(score);
 }

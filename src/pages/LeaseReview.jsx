@@ -67,6 +67,7 @@ import {
   readFieldValue,
   readFieldEvidence,
   readFieldConfidence,
+  normalizeStoredConfidence,
   isResolvedReview,
   classifyConfidence,
   resolveFieldColumns,
@@ -1112,7 +1113,14 @@ export default function LeaseReview() {
         derivationTrace: f.derivation_trace,
       });
       if (["missing", "conflict", "inconsistent"].includes(sourceQuality)) return acc;
-      const score = typeof f.confidence === "number" ? f.confidence : readFieldConfidence(leaseFull, f.key);
+      // f.confidence, when present, comes straight from the row (may be the
+      // extractor's raw 0-1 scale); readFieldConfidence() already normalizes
+      // to 0-100. Both must be normalized the same way before classifyConfidence
+      // compares against its 0-100 thresholds, or a genuine 92% row carrying a
+      // raw 0.92 here gets misbucketed as "low".
+      const score = typeof f.confidence === "number"
+        ? normalizeStoredConfidence(f.confidence)
+        : readFieldConfidence(leaseFull, f.key);
       const bucket = classifyConfidence(score);
       if (f.evidence_type === "derived" && bucket === "unknown") {
         acc.unknown += 1;

@@ -101,7 +101,7 @@ async function fetchTimeline(uploadedFileId) {
   if (logsResult.warning) warnings.push(logsResult.warning);
 
   const runsResult = await selectOrEmpty({
-    table: "extraction_runs",
+    table: "extraction_runs_safe",
     select: "id, generation_id, run_type, provider_pipeline, contract_version, status, error_code, error_message, started_at, completed_at, created_at, updated_at, metadata",
     apply: (query) => query.eq("uploaded_file_id", uploadedFileId).order("started_at", { ascending: true }),
   });
@@ -111,7 +111,7 @@ async function fetchTimeline(uploadedFileId) {
   const runIds = runsResult.rows.map((run) => run.id).filter(Boolean);
   if (runIds.length > 0) {
     const stageResult = await selectOrEmpty({
-      table: "extraction_stage_runs",
+      table: "extraction_stage_runs_safe",
       select: "id, run_id, pipeline_job_id, stage, attempt, status, provider, error_code, error_message, started_at, finished_at, created_at, updated_at, output_summary",
       apply: (query) => query.in("run_id", runIds).order("started_at", { ascending: true }),
     });

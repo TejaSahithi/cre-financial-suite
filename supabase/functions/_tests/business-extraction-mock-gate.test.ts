@@ -57,9 +57,9 @@ Deno.test("Phase 4E mock gate permits kong only with local marker and kill switc
   }, () => {
     assertEquals(normalizeTest.isLocalSupabaseUrl(), true);
     assertEquals(
-      normalizeTest.resolveMockVertexScenario(
+      normalizeTest.resolveMockOpenAIScenario(
         internalRequest(),
-        { debug_vertex_mock_scenario: "success" },
+        { debug_openai_mock_scenario: "success" },
         "vertex_primary_legacy_fallback",
       ),
       "success",
@@ -76,9 +76,9 @@ Deno.test("Phase 4E mock gate rejects kong without local marker or kill switch",
   }, async () => {
     assertEquals(normalizeTest.isLocalSupabaseUrl(), false);
     assertThrows(
-      () => normalizeTest.resolveMockVertexScenario(
+      () => normalizeTest.resolveMockOpenAIScenario(
         internalRequest(),
-        { debug_vertex_mock_scenario: "success" },
+        { debug_openai_mock_scenario: "success" },
         "vertex_primary_legacy_fallback",
       ),
       Error,
@@ -94,9 +94,9 @@ Deno.test("Phase 4E mock gate rejects kong without local marker or kill switch",
   }, async () => {
     assertEquals(normalizeTest.isLocalSupabaseUrl(), true);
     assertThrows(
-      () => normalizeTest.resolveMockVertexScenario(
+      () => normalizeTest.resolveMockOpenAIScenario(
         internalRequest(),
-        { debug_vertex_mock_scenario: "success" },
+        { debug_openai_mock_scenario: "success" },
         "vertex_primary_legacy_fallback",
       ),
       Error,
@@ -115,9 +115,9 @@ Deno.test("Phase 4E mock gate rejects remote Supabase URL", async () => {
   }, async () => {
     assertEquals(normalizeTest.isLocalSupabaseUrl(), false);
     assertThrows(
-      () => normalizeTest.resolveMockVertexScenario(
+      () => normalizeTest.resolveMockOpenAIScenario(
         internalRequest(),
-        { debug_vertex_mock_scenario: "success" },
+        { debug_openai_mock_scenario: "success" },
         "vertex_primary_legacy_fallback",
       ),
       Error,

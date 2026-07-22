@@ -433,6 +433,22 @@ Deno.serve(async (req: Request) => {
         uploadedFileId: file_id,
         orgId,
         generationId: generation_id ?? fileRecord.active_generation_id ?? null,
+        ...(stage?.stageRunId
+          ? {
+            provenance: {
+              supabaseAdmin,
+              context: {
+                orgId,
+                uploadedFileId: file_id,
+                generationId: generation_id ?? fileRecord.active_generation_id ?? null,
+                extractionRunId: extraction_run_id ?? null,
+                stageRunId: stage.stageRunId,
+                stageAttempt: Number(worker_attempt) || 1,
+                operation: "azure_layout_analyze",
+              },
+            },
+          }
+          : {}),
       });
       const extractionMethod = doclingOutput.extraction_method ?? "unknown";
       const canonicalLayoutV3 = (doclingOutput as any)._canonical_layout_v3;

@@ -623,7 +623,7 @@ function cleanRecoveredReviewEntity(candidate) {
     .replace(/\([^)]*\b(?:landlord|tenant|broker|agent|lessor|lessee)\b[^)]*\)/gi, " ")
     .replace(/\b(?:referred to as|as)\s+["']?(?:landlord|tenant|broker|agent|lessor|lessee)["']?/gi, " ")
     .replace(/^(?:and|between|by and between|landlord|tenant|brokers?|agent|address of landlord|address of tenant)\s*:?\s*/i, "")
-    .replace(/\s*[-,;:]\s*(?:Narendra|Tenant|Landlord|Broker|Agent)\b.*$/i, "")
+    .replace(/\s*[-,;:]\s*(?:Tenant|Landlord|Broker|Agent)\b.*$/i, "")
     .replace(/\s+/g, " ")
     .replace(/^[,;:\-\s]+|[,;:\-\s]+$/g, "")
     .trim();
@@ -679,13 +679,18 @@ function recoverReviewEntityFromSource(key, sourceText) {
     const labeled = cleanRecoveredReviewEntity(labelMatch?.[1]);
     if (labeled) return labeled;
 
-    const introMatch = source.match(/\bby and between\s+(.+?)\s*(?:\(["']?Landlord["']?\)|["']?Landlord["']?)\s+and\s+(.+?)\s*(?:\(["']?Tenant["']?\)|["']?Tenant["']?)/i);
-    const intro = cleanRecoveredReviewEntity(introMatch?.[2]);
-    if (intro) return intro;
-
+    // Tried before the looser "by and between ... and ... (Tenant)" intro
+    // match below: a "Company - Contact Person (Tenant)" listing has an
+    // explicit company-suffix boundary (Inc/LLC/Corp/...), so this isolates
+    // just the company name generically -- no need to know or special-case
+    // any specific contact person's name to strip it.
     const dashTenant = source.match(/\band\s+([A-Z][A-Za-z0-9&.' -]{1,90}?\s+(?:Inc\.?|LLC|Corporation|Corp\.?|Company|Co\.?))\s*-\s*[^()]{2,80}\(\s*Tenant\s*\)/i);
     const dashCandidate = cleanRecoveredReviewEntity(dashTenant?.[1]);
     if (dashCandidate) return dashCandidate;
+
+    const introMatch = source.match(/\bby and between\s+(.+?)\s*(?:\(["']?Landlord["']?\)|["']?Landlord["']?)\s+and\s+(.+?)\s*(?:\(["']?Tenant["']?\)|["']?Tenant["']?)/i);
+    const intro = cleanRecoveredReviewEntity(introMatch?.[2]);
+    if (intro) return intro;
   }
 
   const companies = companyCandidatesFromReviewEvidence(source);
@@ -849,9 +854,6 @@ function normalizeReviewValueForField(key, value, sourceText, options = {}) {
   }
 
   if (["premises_use", "permitted_use", "use_clause"].includes(normalizedKey)) {
-    if (/\b(?:buffalo\s+wild\s+wings|wings|restaurant|food\s+service|casual\s+dining|bar|cafe|coffee)\b/i.test(combined)) {
-      return "restaurant";
-    }
     // Reject if the VALUE itself contains restriction or non-use language (check
     // lowerValue not combined so that the source clause text doesn't cause
     // false positives - lease sources almost always contain restriction clauses).

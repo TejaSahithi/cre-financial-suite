@@ -44,8 +44,8 @@ export default function DynamicFindings({ dynamicFindings }) {
                 <span className="text-sm font-medium text-slate-800">{row.label}</span>
                 <div className="flex items-center gap-1.5">
                   <Badge className="bg-slate-100 text-slate-600">{row.category}</Badge>
-                  {typeof row.confidence === "number" && (
-                    <Badge className="bg-blue-50 text-blue-700">{Math.round(row.confidence)}%</Badge>
+                  {typeof row.confidencePercent === "number" && (
+                    <Badge className="bg-blue-50 text-blue-700">{Math.round(row.confidencePercent)}%</Badge>
                   )}
                 </div>
               </div>
