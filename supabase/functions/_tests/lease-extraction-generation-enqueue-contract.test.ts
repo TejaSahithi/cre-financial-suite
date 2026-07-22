@@ -1,6 +1,9 @@
 // @ts-nocheck
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { normalizeLeaseExtractionGenerationResult } from "../_shared/extraction/lease-extraction-queue.ts";
+import {
+  buildLeaseExtractionQueuedStatusPatch,
+  normalizeLeaseExtractionGenerationResult,
+} from "../_shared/extraction/lease-extraction-queue.ts";
 
 Deno.test("lease extraction enqueue contract: accepts only generation-scoped queue results", () => {
   const result = normalizeLeaseExtractionGenerationResult({ job_id: "job-1", generation_id: "generation-1" });
@@ -35,5 +38,15 @@ Deno.test("lease extraction enqueue contract: surfaces database enqueue errors",
   assertEquals(result, {
     job: null,
     error: "null value in column generation_id",
+  });
+});
+Deno.test("lease extraction enqueue contract: queued lease uploads preserve review requirement", () => {
+  assertEquals(buildLeaseExtractionQueuedStatusPatch(), {
+    processing_status: "lease_extraction_queued",
+    review_required: true,
+    review_status: "pending",
+    error_message: null,
+    failed_step: null,
+    processing_completed_at: null,
   });
 });

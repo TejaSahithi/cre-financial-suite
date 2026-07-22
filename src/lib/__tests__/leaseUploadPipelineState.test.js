@@ -28,6 +28,21 @@ describe("getLeaseUploadPipelineState", () => {
     expect(state.isLongRunning).toBe(false);
   });
 
+
+  it("does not keep complete uploads waiting because of a completed job stage", () => {
+    const state = getLeaseUploadPipelineState({
+      status: "validated",
+      processing_status: "complete",
+      display_state: "complete",
+      latest_job: { status: "completed", stage: "normalize" },
+      updated_at: "2026-07-22T14:55:00.000Z",
+    }, now);
+
+    expect(state.stage).toBe("complete");
+    expect(state.isWaiting).toBe(false);
+    expect(state.isLongRunning).toBe(false);
+  });
+
   it("does not mark review-ready records as waiting", () => {
     const state = getLeaseUploadPipelineState({
       status: "review_required",

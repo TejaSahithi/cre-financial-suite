@@ -24,3 +24,14 @@ export function normalizeLeaseExtractionGenerationResult(generationResult: any, 
     error: null,
   };
 }
+
+export function buildLeaseExtractionQueuedStatusPatch() {
+  return {
+    processing_status: "lease_extraction_queued",
+    review_required: true,
+    review_status: "pending",
+    error_message: null,
+    failed_step: null,
+    processing_completed_at: null,
+  };
+}

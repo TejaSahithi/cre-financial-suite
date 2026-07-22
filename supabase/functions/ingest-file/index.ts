@@ -14,7 +14,10 @@ import { createLogger } from "../_shared/logger.ts";
 import { uploadedFileRowHasMeaningfulValues } from "../_shared/extraction/payload-guard.ts";
 import { isExtractionProvenanceEnabled } from "../_shared/extraction/provenance/feature-flag.ts";
 import { EXTRACTION_CONTRACT_VERSION } from "../_shared/extraction/contract-version.ts";
-import { normalizeLeaseExtractionGenerationResult } from "../_shared/extraction/lease-extraction-queue.ts";
+import {
+  buildLeaseExtractionQueuedStatusPatch,
+  normalizeLeaseExtractionGenerationResult,
+} from "../_shared/extraction/lease-extraction-queue.ts";
 import {
   buildBlockedReviewPayload,
   buildPipelineMetadata,
@@ -317,14 +320,12 @@ async function enqueueLeaseExtractionJob(args: {
   }
   const job = generationJob.job;
 
-  const statusResult = await setStatus(supabaseAdmin, fileRecord.id, "parsing", {
-    processing_status: "lease_extraction_queued",
-    review_required: false,
-    review_status: null,
-    error_message: null,
-    failed_step: null,
-    processing_completed_at: null,
-  });
+  const statusResult = await setStatus(
+    supabaseAdmin,
+    fileRecord.id,
+    "parsing",
+    buildLeaseExtractionQueuedStatusPatch(),
+  );
   if (statusResult.error) {
     throw new Error(`Could not mark lease extraction as queued: ${statusResult.error.message}`);
   }

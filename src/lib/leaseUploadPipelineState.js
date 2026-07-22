@@ -35,15 +35,17 @@ export function getLeaseUploadPipelineState(fileRecord, nowMs = Date.now()) {
   const latestJob = fileRecord?.latest_job || fileRecord?.latestJob || null;
   const latestJobStatus = normalizeStatus(latestJob?.status);
   const latestJobStage = normalizeStatus(latestJob?.stage);
+  const activeJobStage = latestJobStatus === "completed" ? "" : latestJobStage;
   const updatedAtMs = fileRecord?.updated_at ? new Date(fileRecord.updated_at).getTime() : NaN;
   const elapsedMs = Number.isFinite(updatedAtMs) ? nowMs - updatedAtMs : null;
   const elapsedLabel = elapsedMs == null ? null : formatElapsed(elapsedMs);
-  const activeValues = [status, processingStatus, displayState, latestJobStage].filter(Boolean);
+  const activeValues = [status, processingStatus, displayState, activeJobStage].filter(Boolean);
   const hasActiveStatus = activeValues.some((value) => ACTIVE_UPLOAD_STATUSES.has(value));
   const hasActiveJob = ACTIVE_JOB_STATUSES.has(latestJobStatus);
   const isTerminal =
     ["failed", "cancelled", "review_required", "approved", "completed", "processed"].includes(status) ||
-    ["ready_for_review", "failed", "blocked"].includes(displayState);
+    ["complete", "ready_for_review", "failed", "blocked"].includes(displayState) ||
+    ["complete", "ready_for_review", "failed", "blocked"].includes(processingStatus);
   const isLongRunning =
     !isTerminal &&
     (hasActiveStatus || hasActiveJob) &&
@@ -51,7 +53,7 @@ export function getLeaseUploadPipelineState(fileRecord, nowMs = Date.now()) {
     elapsedMs >= LONG_RUNNING_THRESHOLD_MS;
 
   return {
-    stage: latestJobStage || processingStatus || displayState || status || "unknown",
+    stage: activeJobStage || processingStatus || displayState || status || "unknown",
     status,
     processingStatus,
     displayState,
