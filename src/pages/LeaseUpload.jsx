@@ -172,6 +172,7 @@ function normalizePipelineStatusRecord(data, id) {
     active_generation_id: data?.active_generation_id || fileMetadata.active_generation_id || null,
     review_readiness: data?.review_readiness ?? null,
     review_readiness_reasons: Array.isArray(data?.review_readiness_reasons) ? data.review_readiness_reasons : [],
+    docling_summary: data?.docling_summary ?? null,
     updated_at: data?.updated_at || fileMetadata.updated_at || null,
     created_at: data?.created_at || fileMetadata.created_at || null,
     display_state: data?.display_state || null,
@@ -964,6 +965,15 @@ export default function LeaseUpload() {
                   <>
                     <p>latest_job_error_code: {fileRecord?.latest_job?.error_code ?? "—"}</p>
                     <p>latest_job_error_message: {fileRecord?.latest_job?.error_message ?? "—"}</p>
+                  </>
+                )}
+                {fileRecord?.docling_summary && (
+                  <>
+                    <p>azure_page_count: {fileRecord.docling_summary.page_count ?? "—"}</p>
+                    <p>azure_paragraph_count: {fileRecord.docling_summary.paragraph_count ?? "—"}</p>
+                    <p>azure_table_count: {fileRecord.docling_summary.table_count ?? "—"}</p>
+                    <p>azure_content_length: {fileRecord.docling_summary.content_length ?? "—"}</p>
+                    <p>azure_raw_response_stored: {String(fileRecord.docling_summary.raw_response_stored ?? "—")}</p>
                   </>
                 )}
                 <p>active_generation: {fileRecord?.active_generation_id ?? "—"}</p>

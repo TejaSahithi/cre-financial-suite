@@ -210,6 +210,16 @@ async function fetchRecentLogs(supabaseAdmin: any, fileId: string, orgId: string
 
 function formatFileRecord(record: Record<string, any>, extras: Record<string, any> = {}) {
   const pipeline = extractPipelineMetadata(record);
+  // Lightweight Azure response summary (page/paragraph/table/content counts)
+  // -- always populated by azure-layout-adapter.ts regardless of the
+  // STORE_FULL_AZURE_RAW_RESPONSE flag (that flag only gates the full raw
+  // response, not this summary). Surfacing it lets the UI distinguish "Azure
+  // saw a real multi-page document but extraction dropped it" from "Azure
+  // genuinely received almost nothing" without exposing the full response.
+  const doclingSummary =
+    (record.docling_raw as any)?.raw_response_summary ??
+    (record.azure_raw_response as any)?.raw_response_summary ??
+    null;
   return {
     ok: true,
     error: false,
@@ -256,6 +266,7 @@ function formatFileRecord(record: Record<string, any>, extras: Record<string, an
       updated_at: record.updated_at,
     },
     pipeline,
+    docling_summary: doclingSummary,
     ui_review_payload: record.ui_review_payload ?? null,
     reviewed_output: record.reviewed_output ?? null,
     normalized_output_summary: summarizeNormalizedOutput(record.normalized_output),
