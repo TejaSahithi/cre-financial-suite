@@ -16,6 +16,7 @@ import {
   ensureLeaseReviewDraftForUpload,
   getLeaseUploadReviewStatusLabel,
   getLeaseReviewActionState,
+  hasActiveLeaseExtractionJob,
   isLeaseUploadReviewReady,
   resolveLeaseReviewIdFromUploadRecord,
 } from "@/lib/leaseUploadReviewAction";

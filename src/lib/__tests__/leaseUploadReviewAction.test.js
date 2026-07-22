@@ -139,8 +139,11 @@ describe("ensureLeaseReviewDraftForUpload", () => {
     })).rejects.toThrow("Could not create Lease Review record from this upload.");
   });
 
-  it("does not reference the removed client-side createLeaseDraftFromUploadedFile fallback", () => {
+  it("keeps LeaseUpload helpers imported for render-time status checks", () => {
     const uploadSource = readFileSync(resolve(process.cwd(), "src/pages/LeaseUpload.jsx"), "utf8");
     expect(uploadSource).not.toContain("createLeaseDraftFromUploadedFile");
+    expect(uploadSource).toContain("hasActiveLeaseExtractionJob,");
+    expect(uploadSource).toContain("fileRecordActiveJobRef.current = hasActiveLeaseExtractionJob(fileRecord)");
+    expect(uploadSource).toContain("const hasActiveExtractionJob = hasActiveLeaseExtractionJob(fileRecord)");
   });
 });
