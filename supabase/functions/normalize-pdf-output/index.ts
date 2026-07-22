@@ -68,6 +68,63 @@ const MAX_INLINE_FILE_BYTES = 20 * 1024 * 1024;
 
 const AZURE_PAGE_MARKER_RE = /\[\[\s*PAGE\s+\d+\s*\]\]/i;
 
+// document_intelligence_v3 is a deliberately unpushed/flag-gated scaffold
+// (see docs/database/migration-repair.md) -- its migrations are not applied
+// on every environment. Selecting these columns unconditionally previously
+// made every normalize call fail outright with "column ... does not exist"
+// wherever the v3 migrations aren't deployed. Isolate them so a schema-cache
+// miss degrades to nulls (the same as the feature being off) instead of
+// blocking the entire pipeline.
+const CANONICAL_LAYOUT_V3_COLUMNS =
+  "canonical_layout_v3, canonical_layout_v3_hash, canonical_layout_v3_schema_version, canonical_layout_v3_adapter_version";
+const CANONICAL_LAYOUT_V3_NULLS = {
+  canonical_layout_v3: null,
+  canonical_layout_v3_hash: null,
+  canonical_layout_v3_schema_version: null,
+  canonical_layout_v3_adapter_version: null,
+};
+
+function isMissingColumnError(error: any): boolean {
+  const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`.toLowerCase();
+  return (
+    text.includes("42703") ||
+    text.includes("pgrst204") ||
+    text.includes("schema cache") ||
+    /column .* does not exist/i.test(text) ||
+    /could not find .* column/i.test(text)
+  );
+}
+
+/**
+ * Select an uploaded_files row by id+org_id, appending the v3 canonical-layout
+ * columns when available and degrading to nulls for them (not failing the
+ * whole query) when they aren't -- see CANONICAL_LAYOUT_V3_COLUMNS above.
+ */
+async function selectUploadedFileWithV3Fallback(supabaseAdmin: any, baseColumns: string, fileId: string, orgId: string) {
+  const withV3 = await supabaseAdmin
+    .from("uploaded_files")
+    .select(`${baseColumns}, ${CANONICAL_LAYOUT_V3_COLUMNS}`)
+    .eq("id", fileId)
+    .eq("org_id", orgId)
+    .single();
+
+  if (!withV3.error || !isMissingColumnError(withV3.error)) {
+    return withV3;
+  }
+
+  const withoutV3 = await supabaseAdmin
+    .from("uploaded_files")
+    .select(baseColumns)
+    .eq("id", fileId)
+    .eq("org_id", orgId)
+    .single();
+
+  if (withoutV3.data) {
+    withoutV3.data = { ...CANONICAL_LAYOUT_V3_NULLS, ...withoutV3.data };
+  }
+  return withoutV3;
+}
+
 /**
  * Build the exact minimal object handed to runExtractionPipeline — no
  * top-level `markdown` duplicate (a 1:1 copy of full_text that rides through
@@ -1900,15 +1957,13 @@ async function handleEnrichMode(args: {
   const logger = createLogger(supabaseAdmin, fileId, orgId);
   let stage: StageHandle | null = null;
 
-  const { data: fileRecord, error: fetchError } = await supabaseAdmin
-    .from("uploaded_files")
-    .select(
-      "id, org_id, file_name, module_type, status, review_required, document_subtype, " +
-      "extraction_method, docling_raw, azure_raw_response, canonical_layout_v3, canonical_layout_v3_hash, canonical_layout_v3_schema_version, canonical_layout_v3_adapter_version, normalized_output, ui_review_payload, active_generation_id",
-    )
-    .eq("id", fileId)
-    .eq("org_id", orgId)
-    .single();
+  const { data: fileRecord, error: fetchError } = await selectUploadedFileWithV3Fallback(
+    supabaseAdmin,
+    "id, org_id, file_name, module_type, status, review_required, document_subtype, " +
+      "extraction_method, docling_raw, azure_raw_response, normalized_output, ui_review_payload, active_generation_id",
+    fileId,
+    orgId,
+  );
 
   if (fetchError || !fileRecord) {
     return jsonResponse(
@@ -2382,15 +2437,13 @@ Deno.serve(async (req: Request) => {
     // SELECT * would also load ui_review_payload, normalized_output, parsed_data,
     // and reviewed_output from previous runs — each can be 1–3 MB — pushing the
     // Edge Function over the memory limit (546) before extraction even starts.
-    const { data: fileRecord, error: fetchError } = await supabaseAdmin
-      .from("uploaded_files")
-      .select(
-        "id, org_id, file_name, file_url, file_size, mime_type, module_type, " +
-        "status, review_required, document_subtype, extraction_method, docling_raw, azure_raw_response, canonical_layout_v3, canonical_layout_v3_hash, canonical_layout_v3_schema_version, canonical_layout_v3_adapter_version",
-      )
-      .eq("id", file_id)
-      .eq("org_id", orgId)
-      .single();
+    const { data: fileRecord, error: fetchError } = await selectUploadedFileWithV3Fallback(
+      supabaseAdmin,
+      "id, org_id, file_name, file_url, file_size, mime_type, module_type, " +
+        "status, review_required, document_subtype, extraction_method, docling_raw, azure_raw_response",
+      file_id,
+      orgId,
+    );
 
     if (fetchError || !fileRecord) {
       return jsonResponse(

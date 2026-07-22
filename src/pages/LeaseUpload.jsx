@@ -29,7 +29,7 @@ import { Button } from "@/components/ui/button";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
-import { updateLeaseExtractionField } from "@/services/leaseService";
+import { updateLeaseExtractionField, deleteUploadedFile } from "@/services/leaseService";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { getLeaseUploadPipelineState } from "@/lib/leaseUploadPipelineState";
@@ -156,6 +156,7 @@ function normalizePipelineStatusRecord(data, id) {
     review_status: data?.review_status ?? null,
     document_subtype: data?.document_subtype || fileMetadata.document_subtype || null,
     extraction_method: data?.extraction_method || null,
+    openai_extraction_attempted: data?.openai_extraction_attempted ?? null,
     ui_review_payload: data?.ui_review_payload || null,
     reviewed_output: data?.reviewed_output || null,
     normalized_output: {
@@ -981,7 +982,12 @@ export default function LeaseUpload() {
                   latest_job_generation: {fileRecord?.latest_job?.generation_id ?? "—"}
                   {currentGenerationFailureNotice.show ? " (current — failed)" : ""}
                 </p>
+                <p>extraction_method: {fileRecord?.extraction_method ?? "—"}</p>
+                <p>openai_extraction_attempted: {String(fileRecord?.openai_extraction_attempted ?? "—")}</p>
                 <p>review_readiness: {fileRecord?.review_readiness ?? "—"}</p>
+                {fileRecord?.review_readiness_reasons?.length > 0 && (
+                  <p>review_readiness_reasons: {fileRecord.review_readiness_reasons.join(", ")}</p>
+                )}
               </div>
             </details>
             {Array.isArray(fileRecord?.recent_logs) && fileRecord.recent_logs.length > 0 && (
