@@ -142,6 +142,9 @@ import { isLeaseReviewEnrichmentInFlight } from "@/lib/leaseReviewUiState";
 import { EnterpriseHeaderIntelligenceBar } from "@/components/lease-review/EnterpriseHeaderIntelligenceBar";
 import { EnterpriseCoverageDashboard } from "@/components/lease-review/EnterpriseCoverageDashboard";
 import { EnterpriseFindings } from "@/components/lease-review/EnterpriseFindings";
+import DocumentFamilyTimeline from "@/components/lease-review/DocumentFamilyTimeline";
+import SemanticCoveragePanel from "@/components/lease-review/SemanticCoveragePanel";
+import FieldSearchCommand from "@/components/lease-review/FieldSearchCommand";
 import ApprovalReadinessSummary from "@/components/review/ApprovalReadinessSummary";
 import { useReviewDocument } from "@/lib/review/useReviewDocument";
 import { reviewDocumentToLegacyReviewPayload, shouldBridgeReviewDocumentToLegacyPayload } from "@/lib/review/adapters/viewModelLegacyBridge";
@@ -3091,6 +3094,9 @@ export default function LeaseReview() {
       )}
 
       <EnterpriseHeaderIntelligenceBar document={reviewDocument} />
+      <FieldSearchCommand document={reviewDocument} uploadedFileId={resolvedSourceFileId} onNavigateToField={handleNavigateToField} />
+      <DocumentFamilyTimeline documentFamily={reviewDocument?.documentFamily} />
+      <SemanticCoveragePanel semanticCoverage={reviewDocument?.semanticCoverage} definitions={reviewDocument?.definitions || []} crossReferences={reviewDocument?.crossReferences || []} />
 
       <div className="mb-4">
         <LeaseReviewReadinessSummary

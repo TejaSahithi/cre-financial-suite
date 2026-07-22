@@ -47,4 +47,31 @@ describe("enterprise review adapter", () => {
     expect(legacy.records[0].standard_fields[0].status).toBe("auto_populated");
     expect(legacy.metadata.review_document_view_model.source_mode).toBe("canonical_hybrid");
   });
+
+  it("adapts enterprise review payload v2 semantic metadata", () => {
+    const v2 = payload("resolved", 0.93);
+    v2.schemaVersion = "enterprise-review-payload-v2";
+    v2.fields.tenant_name.authoritativeSource = "canonical_family_effective";
+    v2.fields.tenant_name.lineage = {
+      selectedLayer: "family_effective",
+      familyEffectiveValue: "Acme Holdings LLC",
+      amendmentPrecedence: { resolutionStatus: "resolved", reasonCodes: ["explicit_later_amendment_effect"] },
+    };
+    v2.documentFamily = { id: "family-1", role: "base_lease", members: [{ uploadedFileId: "file-1", role: "base_lease" }] };
+    v2.definitions = [{ termDisplay: "Tenant", definitionStatus: "resolved" }];
+    v2.crossReferences = [{ sourceText: "Section 1.1", resolutionStatus: "resolved" }];
+    v2.semanticCoverage = { definitionsDetected: 1, crossReferencesResolved: 1 };
+    v2.searchCapabilities = { enabled: true, entityTypes: ["field", "definition"] };
+
+    const document = adaptEnterpriseReviewPayload(v2);
+
+    expect(document.diagnostics.backendSchemaVersion).toBe("enterprise-review-payload-v2");
+    expect(document.fields.tenant_name.source).toBe("canonical_family_effective");
+    expect(document.fields.tenant_name.lineage.selectedLayer).toBe("family_effective");
+    expect(document.documentFamily.id).toBe("family-1");
+    expect(document.definitions).toHaveLength(1);
+    expect(document.crossReferences).toHaveLength(1);
+    expect(document.semanticCoverage.definitionsDetected).toBe(1);
+    expect(document.searchCapabilities.enabled).toBe(true);
+  });
 });

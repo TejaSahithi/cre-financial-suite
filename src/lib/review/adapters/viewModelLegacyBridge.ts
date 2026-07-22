@@ -51,7 +51,7 @@ export function reviewDocumentToLegacyReviewPayload(document, basePayload = null
       requires_attention: field.requiresAttention,
       blocking: field.blocking,
       reason_codes: field.reasonCodes,
-      extraction_mode: field.source === "derived" ? "calculated" : field.source === "reviewer_override" ? "reviewer_entered" : field.source === "legacy_fallback" ? "legacy_fallback" : "canonical_projection",
+      extraction_mode: field.source === "derived" ? "calculated" : field.source === "reviewer_override" ? "reviewer_entered" : field.source === "legacy_fallback" ? "legacy_fallback" : field.source === "canonical_family_effective" ? "family_effective" : "canonical_projection",
       source_text: field.evidence?.[0]?.text ?? null,
       source_page: field.evidence?.[0]?.pageNumber ?? null,
     };

@@ -46,7 +46,7 @@ function reviewerActionFor(field) {
 
 function normalizeSource(source) {
   const normalized = String(source || "none");
-  if (["canonical_projection", "legacy", "legacy_fallback", "reviewer_override", "derived", "none"].includes(normalized)) return normalized;
+  if (["canonical_projection", "legacy", "legacy_fallback", "reviewer_override", "canonical_family_effective", "derived", "none"].includes(normalized)) return normalized;
   return "none";
 }
 
@@ -104,6 +104,10 @@ function normalizeFinding(finding, index) {
     reasonCodes: Array.isArray(finding?.reasonCodes) ? finding.reasonCodes : Array.isArray(finding?.reason_codes) ? finding.reason_codes : [],
     reviewerActionRequired: Boolean(finding?.reviewerActionRequired ?? finding?.reviewer_action_required),
     resolutionStatus: String(finding?.resolutionStatus ?? finding?.resolution_status ?? "open"),
+    affectedFieldKeys: Array.isArray(finding?.affectedFieldKeys) ? finding.affectedFieldKeys : Array.isArray(finding?.affected_field_keys) ? finding.affected_field_keys : [],
+    sourceDocumentIds: Array.isArray(finding?.sourceDocumentIds) ? finding.sourceDocumentIds : Array.isArray(finding?.source_document_ids) ? finding.source_document_ids : [],
+    evidenceIds: Array.isArray(finding?.evidenceIds) ? finding.evidenceIds : Array.isArray(finding?.evidence_ids) ? finding.evidence_ids : [],
+    resolutionGuidance: finding?.resolutionGuidance ?? finding?.resolution_guidance ?? null,
   };
 }
 
@@ -131,6 +135,7 @@ function adaptEnterpriseV1(payload, mode = payload?.sourceMode || "canonical_hyb
       evidence: normalizeEvidence(rawField?.evidence),
       conflict: normalizeConflict(rawField?.conflict),
       derivation: rawField?.derivation ?? null,
+      lineage: rawField?.lineage ?? null,
       reviewerAction: reviewerActionFor(rawField),
     };
   }
@@ -146,6 +151,11 @@ function adaptEnterpriseV1(payload, mode = payload?.sourceMode || "canonical_hyb
     findings: (Array.isArray(payload?.findings) ? payload.findings : []).map(normalizeFinding),
     coverage,
     approval: approvalFromPayload(payload, coverage),
+    documentFamily: payload?.documentFamily ?? payload?.document_family ?? null,
+    definitions: Array.isArray(payload?.definitions) ? payload.definitions : [],
+    crossReferences: Array.isArray(payload?.crossReferences) ? payload.crossReferences : Array.isArray(payload?.cross_references) ? payload.cross_references : [],
+    semanticCoverage: payload?.semanticCoverage ?? payload?.semantic_coverage ?? null,
+    searchCapabilities: payload?.searchCapabilities ?? payload?.search_capabilities ?? null,
     diagnostics: {
       backendSchemaVersion: payload?.schemaVersion ?? null,
       payloadHash: payload?.payloadHash ?? payload?.payload_hash ?? null,
@@ -159,6 +169,7 @@ function adaptEnterpriseV1(payload, mode = payload?.sourceMode || "canonical_hyb
 export function adaptEnterpriseReviewPayload(payload, options = {}) {
   switch (payload?.schemaVersion) {
     case "enterprise-review-payload-v1":
+    case "enterprise-review-payload-v2":
       return adaptEnterpriseV1(payload, options.mode);
     default:
       throw new UnsupportedReviewPayloadSchemaError(payload?.schemaVersion);
@@ -208,7 +219,7 @@ export function enterpriseReviewPayloadToLegacyShape(payload) {
 }
 
 export function enterpriseReviewPayloadToLeaseReviewViewModel(payload, legacyPayload = null) {
-  if (!payload || payload.schemaVersion !== "enterprise-review-payload-v1") {
+  if (!payload || !["enterprise-review-payload-v1", "enterprise-review-payload-v2"].includes(payload.schemaVersion)) {
     return { sourceMode: "legacy", legacyPayload, records: legacyPayload?.records || legacyPayload?.rows || [], fields: {}, canonicalMetadataByField: {}, findings: [], coverage: null, approvalSummary: null, document: null };
   }
   const document = adaptEnterpriseReviewPayload(payload);

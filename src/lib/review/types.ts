@@ -53,6 +53,7 @@ export interface ReviewFieldViewModel {
   evidence: ReviewEvidenceViewModel[];
   conflict: ReviewConflictViewModel | null;
   derivation: unknown | null;
+  lineage?: unknown | null;
   reviewerAction: {
     state: "none" | "accepted" | "overridden" | "cleared" | "not_applicable" | "follow_up";
     reason: string | null;

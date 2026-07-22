@@ -5,6 +5,9 @@ import ReviewFieldStatus from "@/components/review/ReviewFieldStatus";
 import ReviewFieldEvidence from "@/components/review/ReviewFieldEvidence";
 import ReviewFieldConflict from "@/components/review/ReviewFieldConflict";
 import ReviewFieldDerivation from "@/components/review/ReviewFieldDerivation";
+import AmendmentLineage from "@/components/lease-review/AmendmentLineage";
+import DefinitionPopover from "@/components/lease-review/DefinitionPopover";
+import CrossReferenceLink from "@/components/lease-review/CrossReferenceLink";
 
 function formatSource(source) {
   if (!source || source === "none") return "None";
@@ -86,6 +89,9 @@ export function FieldDrawerIntelligence({ field }) {
             </div>
           )}
 
+          {field.lineage && <AmendmentLineage lineage={field.lineage} />}
+          {field.lineage?.definitionDependencies?.length > 0 && <DefinitionPopover definitions={field.lineage.definitionDependencies} />}
+          {field.lineage?.crossReferenceDependencies?.length > 0 && <CrossReferenceLink references={field.lineage.crossReferenceDependencies} />}
           {field.conflict && <ReviewFieldConflict conflict={field.conflict} />}
           {field.derivation && <ReviewFieldDerivation derivation={field.derivation} />}
 

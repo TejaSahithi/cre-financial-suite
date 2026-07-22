@@ -218,3 +218,34 @@ export async function fetchDocumentIntelligenceV4ReadinessMetrics({ uploadedFile
     return { error: true, message: err?.message || "Failed to load Document Intelligence v4 readiness metrics." };
   }
 }
+
+/** Document Intelligence v6 - Semantic field/document search. */
+export async function searchDocumentIntelligenceV6Fields({
+  uploadedFileId = null,
+  documentFamilyId = null,
+  query = "",
+  entityTypes = [],
+  statuses = [],
+  limit = 20,
+} = {}) {
+  if (!String(query || "").trim()) {
+    return { error: true, message: "Search query is required." };
+  }
+  if (!uploadedFileId && !documentFamilyId) {
+    return { error: true, message: "uploadedFileId or documentFamilyId is required." };
+  }
+
+  try {
+    const data = await invokeEdgeFunction("document-intelligence-v6-field-search", {
+      uploadedFileId,
+      documentFamilyId,
+      query,
+      entityTypes,
+      statuses,
+      limit,
+    });
+    return { error: false, results: data?.results ?? [], resultCount: data?.resultCount ?? 0, diagnostics: data?.diagnostics ?? null };
+  } catch (err) {
+    return { error: true, message: err?.message || "Failed to search semantic document records." };
+  }
+}

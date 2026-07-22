@@ -7,7 +7,14 @@ import { buildCanonicalReviewFieldRegistry } from "../_shared/extraction/documen
 import { buildEnterpriseReviewPayload } from "../_shared/extraction/document-intelligence-v3/enterprise-review-payload.ts";
 import { persistEnterpriseReviewPayload } from "../_shared/extraction/document-intelligence-v3/enterprise-review-persistence.ts";
 import { resolveCanonicalReviewRolloutForOrg } from "../_shared/extraction/document-intelligence-v3/canonical-review-rollout.ts";
-import { isCanonicalApprovalGatingEnabled, isCanonicalHybridEmergencyFallbackEnabled } from "../_shared/extraction/document-intelligence-v3/feature-flag.ts";
+import { isCanonicalApprovalGatingEnabled, isCanonicalHybridEmergencyFallbackEnabled, isDocumentSemanticsV6Enabled, isEnterpriseReviewPayloadV2Enabled, isSemanticFieldSearchV6Enabled } from "../_shared/extraction/document-intelligence-v3/feature-flag.ts";
+import { buildDefinitionRecords, persistDefinitionRecords } from "../_shared/extraction/document-semantics/definitions.ts";
+import { parseCrossReferences } from "../_shared/extraction/document-semantics/cross-reference-parser.ts";
+import { resolveCrossReferences, persistCrossReferences } from "../_shared/extraction/document-semantics/cross-reference-resolver.ts";
+import { classifyDocumentFamily } from "../_shared/extraction/document-semantics/document-family-classifier.ts";
+import { buildDocumentFamilyMember, orderDocumentFamilyMembers } from "../_shared/extraction/document-semantics/document-family-builder.ts";
+import { extractAmendmentEffects, persistAmendmentEffects } from "../_shared/extraction/document-semantics/amendment-effect-extractor.ts";
+import { buildEnterpriseReviewPayloadV2 } from "../_shared/extraction/document-semantics/enterprise-review-payload-v2.ts";
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -35,7 +42,7 @@ function parseRequest(req: Request) {
 async function fetchUploadedFile({ supabaseAdmin, orgId, uploadedFileId }: { supabaseAdmin: any; orgId: string; uploadedFileId: string }) {
   const { data, error } = await supabaseAdmin
     .from("uploaded_files")
-    .select("id, org_id, module_type, ui_review_payload, active_generation_id, canonical_layout_v3, canonical_layout_v3_hash, canonical_layout_v3_schema_version, canonical_layout_v3_adapter_version")
+    .select("id, org_id, module_type, file_name, ui_review_payload, active_generation_id, canonical_layout_v3, canonical_layout_v3_hash, canonical_layout_v3_schema_version, canonical_layout_v3_adapter_version")
     .eq("id", uploadedFileId)
     .eq("org_id", orgId)
     .maybeSingle();
@@ -43,14 +50,14 @@ async function fetchUploadedFile({ supabaseAdmin, orgId, uploadedFileId }: { sup
   return data ?? null;
 }
 
-async function fetchCurrentEnterprisePayload(args: { supabaseAdmin: any; orgId: string; uploadedFileId: string; runId: string; sourceMode: string; generationId?: string | null }) {
+async function fetchCurrentEnterprisePayload(args: { supabaseAdmin: any; orgId: string; uploadedFileId: string; runId: string; sourceMode: string; generationId?: string | null; schemaVersion?: string | null }) {
   const { data, error } = await args.supabaseAdmin
     .from("document_enterprise_review_payloads")
     .select("id, payload, payload_hash, source_mode, generation_id, rollout_mode, rollout_source, created_at")
     .eq("org_id", args.orgId)
     .eq("uploaded_file_id", args.uploadedFileId)
     .eq("run_id", args.runId)
-    .eq("schema_version", "enterprise-review-payload-v1")
+    .eq("schema_version", args.schemaVersion ?? "enterprise-review-payload-v1")
     .eq("source_mode", args.sourceMode)
     .eq("is_current", true)
     .order("created_at", { ascending: false })
@@ -87,6 +94,60 @@ function canonicalDocumentFromUploadedFile(uploadedFile: any) {
   };
 }
 
+
+function semanticBlocksFromUploadedFile(uploadedFile: any) {
+  const layout = uploadedFile?.canonical_layout_v3 ?? null;
+  const blocks: any[] = [];
+  for (const page of layout?.pages ?? []) {
+    for (const block of page?.blocks ?? []) {
+      const text = block?.text ?? block?.content ?? block?.plain_text ?? "";
+      if (!String(text).trim()) continue;
+      blocks.push({
+        blockId: String(block?.id ?? block?.block_id ?? `${page?.page_number ?? page?.pageNumber ?? 1}:${blocks.length}`),
+        text: String(text),
+        pageNumber: page?.page_number ?? page?.pageNumber ?? null,
+        sectionKey: block?.section_key ?? block?.sectionKey ?? null,
+        heading: block?.role === "sectionHeading" || block?.kind === "heading" ? String(text) : block?.heading ?? null,
+        documentId: uploadedFile?.id ?? null,
+      });
+    }
+  }
+  if (!blocks.length) {
+    const records = uploadedFile?.ui_review_payload?.records ?? uploadedFile?.ui_review_payload?.rows ?? [];
+    for (const record of records) {
+      for (const field of record?.standard_fields ?? []) {
+        const text = [field?.label, field?.source_text, field?.value].filter(Boolean).join(" ");
+        if (text.trim()) blocks.push({ blockId: `legacy-field:${field.field_key ?? blocks.length}`, text, pageNumber: field?.source_page ?? null, sectionKey: null, heading: null, documentId: uploadedFile?.id ?? null });
+      }
+    }
+  }
+  return blocks;
+}
+
+async function persistSemanticSearchRecords(args: { supabaseAdmin: any; orgId: string; records: any[] }) {
+  if (!args.records?.length) return { count: 0, error: null };
+  const rows = args.records.map((record) => ({
+    organization_id: args.orgId,
+    uploaded_file_id: record.uploadedFileId || null,
+    document_family_id: record.documentFamilyId || null,
+    run_id: record.runId || null,
+    generation_id: record.generationId || null,
+    entity_type: record.entityType,
+    entity_key: record.key,
+    label: record.label,
+    searchable_text: record.matchedText ?? record.label,
+    field_key: record.fieldKey,
+    section_key: record.sectionKey,
+    page_number: record.pageNumber,
+    status: record.status,
+    source: record.source,
+    evidence_ids: record.evidenceIds ?? [],
+    reason_codes: record.reasonCodes ?? [],
+    schema_version: "document-semantic-search-record-v1",
+  }));
+  const { error } = await args.supabaseAdmin.from("document_semantic_search_records").insert(rows);
+  return { count: error ? 0 : rows.length, error: error?.message ?? null };
+}
 function staleGenerationResponse(args: { currentRunId: string | null; currentGenerationId: string | null }) {
   return jsonResponse({
     error: true,
@@ -149,7 +210,8 @@ Deno.serve(async (req: Request) => {
     }
 
     const sourceMode = rollout.builderSourceMode;
-    const current = await fetchCurrentEnterprisePayload({ supabaseAdmin, orgId, uploadedFileId, runId: run.id, sourceMode, generationId: currentGenerationId });
+    const payloadSchemaVersion = isEnterpriseReviewPayloadV2Enabled() && isDocumentSemanticsV6Enabled() ? "enterprise-review-payload-v2" : "enterprise-review-payload-v1";
+    const current = await fetchCurrentEnterprisePayload({ supabaseAdmin, orgId, uploadedFileId, runId: run.id, sourceMode, generationId: currentGenerationId, schemaVersion: payloadSchemaVersion });
     if (current.row?.payload) {
       return jsonResponse({
         mode: rollout.mode,
@@ -190,9 +252,39 @@ Deno.serve(async (req: Request) => {
         canonicalDocument: canonicalDocumentFromUploadedFile(uploadedFile),
         activeOverrides,
       });
+      let enterpriseReviewPayload = built.payload;
+      const semanticDiagnostics: any = { enabled: false };
+      if (isEnterpriseReviewPayloadV2Enabled() && isDocumentSemanticsV6Enabled()) {
+        const semanticBlocks = semanticBlocksFromUploadedFile(uploadedFile);
+        const definitions = buildDefinitionRecords(semanticBlocks);
+        const crossReferences = resolveCrossReferences({ references: parseCrossReferences(semanticBlocks), blocks: semanticBlocks, definitions });
+        const familyClassification = classifyDocumentFamily({ filename: uploadedFile.file_name ?? uploadedFile.name ?? null, title: semanticBlocks[0]?.text ?? null, blocks: semanticBlocks });
+        const family = buildDocumentFamilyMember({ uploadedFileId, classification: familyClassification, fallbackFamilyId: null });
+        const amendmentEffects = extractAmendmentEffects({ blocks: semanticBlocks, sourceUploadedFileId: uploadedFileId, sourceRunId: run.id, sourceGenerationId: String(currentGenerationId ?? run.generation_id ?? ""), documentFamilyId: family.documentFamilyId });
+        enterpriseReviewPayload = await buildEnterpriseReviewPayloadV2({
+          payloadV1: built.payload,
+          documentFamilyId: family.documentFamilyId,
+          documentRole: familyClassification.documentRole,
+          familyMembers: orderDocumentFamilyMembers([family.member]),
+          chronologyStatus: family.chronologyStatus,
+          definitions,
+          crossReferences,
+          amendmentEffects,
+          activeOverrides,
+          semanticSearchEnabled: isSemanticFieldSearchV6Enabled(),
+        });
+        semanticDiagnostics.enabled = true;
+        semanticDiagnostics.definitionCount = definitions.length;
+        semanticDiagnostics.crossReferenceCount = crossReferences.length;
+        semanticDiagnostics.amendmentEffectCount = amendmentEffects.length;
+        await persistDefinitionRecords({ supabaseAdmin, orgId, uploadedFileId, runId: run.id, generationId: String(currentGenerationId ?? run.generation_id ?? ""), definitions });
+        await persistCrossReferences({ supabaseAdmin, orgId, uploadedFileId, runId: run.id, generationId: String(currentGenerationId ?? run.generation_id ?? ""), references: crossReferences });
+        if (family.documentFamilyId) await persistAmendmentEffects({ supabaseAdmin, orgId, effects: amendmentEffects });
+        await persistSemanticSearchRecords({ supabaseAdmin, orgId, records: enterpriseReviewPayload.semanticSearchRecords ?? [] });
+      }
       const persisted = await persistEnterpriseReviewPayload({
         supabaseAdmin,
-        payload: built.payload,
+        payload: enterpriseReviewPayload,
         diagnostics: {
           rolloutMode: rollout.mode,
           rolloutSource: rollout.source,
@@ -207,10 +299,10 @@ Deno.serve(async (req: Request) => {
         mode: rollout.mode,
         sourceMode,
         uiAuthority: rollout.uiAuthority,
-        enterpriseReviewPayload: built.payload,
+        enterpriseReviewPayload,
         legacyReviewPayload: uploadedFile.ui_review_payload ?? null,
         authorityReadiness: built.authorityReadiness,
-        approvalReadiness: approvalReadiness(built.payload, isCanonicalApprovalGatingEnabled()),
+        approvalReadiness: approvalReadiness(enterpriseReviewPayload, isCanonicalApprovalGatingEnabled()),
         diagnostics: {
           rollout,
           persistedPayloadId: persisted.id,
@@ -218,6 +310,7 @@ Deno.serve(async (req: Request) => {
           rejectedProjectionCount: built.rejectedProjectionCount,
           rejectedProjectionReasons: built.rejectedProjectionReasons,
           activeOverrideCount: activeOverrides.length,
+          semanticDiagnostics,
         },
       });
     } catch (buildError: any) {
