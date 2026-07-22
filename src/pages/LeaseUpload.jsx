@@ -717,6 +717,7 @@ export default function LeaseUpload() {
 
   const hasActiveExtractionJob = hasActiveLeaseExtractionJob(fileRecord);
   const failed = fileRecord?.status === "failed";
+  const latestJobFailed = fileRecord?.latest_job?.status === "failed";
 
   const uploadPipelineState = useMemo(
     () => getLeaseUploadPipelineState(fileRecord),
@@ -959,6 +960,12 @@ export default function LeaseUpload() {
                 <p>latest_job: {fileRecord?.latest_job?.status ?? "—"}</p>
                 <p>failed_step: {failed ? fileRecord?.failed_step ?? "—" : "—"}</p>
                 <p>error_message: {failed ? fileRecord?.error_message ?? "—" : "—"}</p>
+                {latestJobFailed && (
+                  <>
+                    <p>latest_job_error_code: {fileRecord?.latest_job?.error_code ?? "—"}</p>
+                    <p>latest_job_error_message: {fileRecord?.latest_job?.error_message ?? "—"}</p>
+                  </>
+                )}
                 <p>active_generation: {fileRecord?.active_generation_id ?? "—"}</p>
                 <p>
                   latest_job_generation: {fileRecord?.latest_job?.generation_id ?? "—"}
@@ -967,6 +974,24 @@ export default function LeaseUpload() {
                 <p>review_readiness: {fileRecord?.review_readiness ?? "—"}</p>
               </div>
             </details>
+            {Array.isArray(fileRecord?.recent_logs) && fileRecord.recent_logs.length > 0 && (
+              <details className="mt-3 text-xs text-slate-400">
+                <summary className="cursor-pointer select-none">Pipeline Logs</summary>
+                <div className="mt-1 space-y-1.5 pl-2">
+                  {fileRecord.recent_logs.map((log, index) => (
+                    <div key={`${log.created_at || index}-${log.stage || index}`} className="border-l-2 border-slate-200 pl-2">
+                      <p className="font-medium text-slate-600">
+                        {log.stage || "—"} · {log.status || "—"}
+                        {log.error_code ? ` · ${displayCode(log.error_code)}` : ""}
+                      </p>
+                      {(log.message || log.error_message) && (
+                        <p className="text-slate-500">{log.error_message || log.message}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
             {failed && (
               <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
                 <div className="font-medium">
