@@ -3,6 +3,8 @@ import { supabase } from "@/services/supabaseClient";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 
+const ACTIVE_JOB_STATUSES = new Set(["queued", "running"]);
+
 /**
  * Terminal statuses — stop polling once reached.
  */
@@ -210,8 +212,11 @@ export default function useFileStatus(fileId, options = {}) {
       const data = await fetchStatus();
       if (!mounted) return;
 
-      // Stop polling if we've reached a terminal status.
-      if (data?.status && TERMINAL_STATUSES.has(data.status)) {
+      const latestJobStatus = data?.latest_job?.status;
+      const hasActiveJob = latestJobStatus && ACTIVE_JOB_STATUSES.has(latestJobStatus);
+
+      // Stop polling if we've reached a terminal status and no current job is still active.
+      if (data?.status && TERMINAL_STATUSES.has(data.status) && !hasActiveJob) {
         clearTimer();
         return;
       }

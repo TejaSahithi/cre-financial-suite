@@ -319,8 +319,11 @@ async function enqueueLeaseExtractionJob(args: {
 
   const statusResult = await setStatus(supabaseAdmin, fileRecord.id, "parsing", {
     processing_status: "lease_extraction_queued",
+    review_required: false,
+    review_status: null,
     error_message: null,
     failed_step: null,
+    processing_completed_at: null,
   });
   if (statusResult.error) {
     throw new Error(`Could not mark lease extraction as queued: ${statusResult.error.message}`);

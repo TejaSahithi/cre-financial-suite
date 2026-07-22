@@ -295,9 +295,11 @@ export default function LeaseUpload() {
   // Ref keeps the latest fileRecord status visible inside the polling interval
   // without requiring the interval to be recreated on every status change.
   const fileRecordStatusRef = useRef(null);
+  const fileRecordActiveJobRef = useRef(false);
 
   // Keep ref in sync so polling interval always reads the latest status.
   fileRecordStatusRef.current = fileRecord?.status ?? null;
+  fileRecordActiveJobRef.current = hasActiveLeaseExtractionJob(fileRecord);
 
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
@@ -707,6 +709,7 @@ export default function LeaseUpload() {
     };
   }, [fileId, fileRecord]);
 
+  const hasActiveExtractionJob = hasActiveLeaseExtractionJob(fileRecord);
   const failed = fileRecord?.status === "failed";
 
   // Detect a stuck pipeline: if the file has been in an intermediate active
@@ -724,10 +727,12 @@ export default function LeaseUpload() {
   const reviewReadyForAction = isLeaseUploadReviewReady(fileRecord);
   const leaseReviewAction = getLeaseReviewActionState(fileRecord, linkedLeaseId);
   const canOpenReview = leaseReviewAction.showOpenButton;
-  const uploadStatusLabel = getLeaseUploadReviewStatusLabel(
-    fileRecord,
-    getFriendlyExtractionLabel(fileRecord?.status),
-  );
+  const uploadStatusLabel = hasActiveExtractionJob
+    ? getFriendlyExtractionLabel(fileRecord?.latest_job?.stage || fileRecord?.processing_status || "parsing")
+    : getLeaseUploadReviewStatusLabel(
+      fileRecord,
+      getFriendlyExtractionLabel(fileRecord?.status),
+    );
   const hasValidReviewPayload =
     reviewReadyForAction &&
     fileRecord?.ui_review_payload != null &&
@@ -845,7 +850,7 @@ export default function LeaseUpload() {
               </div>
             </div>
 
-            {hasValidReviewPayload && (
+            {hasValidReviewPayload && !hasActiveExtractionJob && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
                 <p className="text-sm font-medium text-amber-900">Extraction ready</p>
                 <p className="text-xs text-amber-700">Your lease fields are ready for review.</p>

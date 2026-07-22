@@ -960,7 +960,7 @@ function buildFieldSummary(uiReviewPayload) {
 }
 
 function ExtractionStatusRow({ fileId, fileName, fileType, onOpenReview }) {
-  const { status, isLoading, pollError, processingStatus, failedStep, errorMessage } = useFileStatus(fileId);
+  const { status, isLoading, pollError, processingStatus, failedStep, errorMessage, latestJob } = useFileStatus(fileId, { include_details: true });
   const [retrying, setRetrying] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [reviewPayload, setReviewPayload] = useState(null);
@@ -1017,8 +1017,9 @@ function ExtractionStatusRow({ fileId, fileName, fileType, onOpenReview }) {
   const isFailed = status === "failed";
   const isCancelled = status === "cancelled";
   const isComplete = status === "completed";
+  const hasActiveExtractionJob = ["queued", "running"].includes(String(latestJob?.status || "")) && (!latestJob?.job_type || latestJob.job_type === "lease_extraction");
   const hasFields = payloadHasMeaningfulFields(reviewPayload);
-  const isReviewReady = status === "review_required" && hasFields;
+  const isReviewReady = status === "review_required" && hasFields && !hasActiveExtractionJob;
   const isPreparingReview = status === "review_required" && !hasFields;
   // Once a record has valid extracted fields (or is otherwise terminal),
   // never offer to cancel it from this generic upload row — only Lease
@@ -1027,9 +1028,11 @@ function ExtractionStatusRow({ fileId, fileName, fileType, onOpenReview }) {
 
   const label = pollError
     ? pollError
-    : isReviewReady
-      ? "Extraction ready"
-      : getFriendlyExtractionLabel(status);
+    : hasActiveExtractionJob
+      ? getFriendlyExtractionLabel(latestJob?.stage || processingStatus || "parsing")
+      : isReviewReady
+        ? "Extraction ready"
+        : getFriendlyExtractionLabel(status);
   const color = pollError
     ? "text-amber-600"
     : STATUS_COLORS[status] || (isActive ? "text-blue-600" : "text-slate-500");

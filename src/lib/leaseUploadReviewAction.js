@@ -1,3 +1,13 @@
+
+const ACTIVE_EXTRACTION_JOB_STATUSES = new Set(["queued", "running"]);
+
+export function hasActiveLeaseExtractionJob(fileRecord) {
+  const latestJob = fileRecord?.latest_job || fileRecord?.latestJob || null;
+  if (!latestJob) return false;
+  const jobType = String(latestJob.job_type || latestJob.jobType || "");
+  const status = String(latestJob.status || "");
+  return ACTIVE_EXTRACTION_JOB_STATUSES.has(status) && (!jobType || jobType === "lease_extraction");
+}
 function firstMeaningfulId(...values) {
   for (const value of values) {
     if (value == null) continue;
@@ -8,6 +18,8 @@ function firstMeaningfulId(...values) {
 }
 
 export function isLeaseUploadReviewReady(fileRecord) {
+  if (hasActiveLeaseExtractionJob(fileRecord)) return false;
+
   return (
     fileRecord?.status === "review_required" ||
     fileRecord?.processing_status === "review_required" ||
