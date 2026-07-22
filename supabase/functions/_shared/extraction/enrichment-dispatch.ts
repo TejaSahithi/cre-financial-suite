@@ -1,13 +1,13 @@
 // @ts-nocheck
 /**
  * Shared enqueue + fire-and-forget dispatch for the "enrich" pipeline stage
- * (evidence attachment + clause records — the expensive pass deferred out of
+ * (evidence attachment + clause records - the expensive pass deferred out of
  * normalize-pdf-output's main request per the P0.1 fix). Used by both
  * normalize-pdf-output (after a fast minimal payload persists) and
  * lease-extraction-worker's reconciliation path (defensive re-dispatch if a
  * process died before the first dispatch landed).
  *
- * Deliberately does NOT touch uploaded_files.status — unlike the initial
+ * Deliberately does NOT touch uploaded_files.status - unlike the initial
  * lease_extraction job (which transitions status to "parsing"), an enrich
  * job runs after the file already has a durable, visible minimal payload;
  * touching status here would hide already-correct data from the UI.
@@ -62,15 +62,17 @@ export async function enqueueEnrichmentJob(args: {
   fileId: string;
   moduleType?: string | null;
   logger?: any;
+  dispatchWorker?: (jobId: string, logger?: any) => void;
 }) {
   const { supabaseAdmin, orgId, fileId, moduleType, logger } = args;
+  const dispatchWorker = args.dispatchWorker ?? dispatchEnrichmentWorker;
   const now = new Date().toISOString();
 
   // enqueue_pipeline_job adds the "enrich" stage to the file's EXISTING
   // active generation (started earlier by start_lease_extraction_generation
-  // during ingest/re-extraction) — it never creates a generation itself.
+  // during ingest/re-extraction) - it never creates a generation itself.
   // Same-generation duplicate calls (this function is deliberately called
-  // from two places — see header comment above — as a defensive re-dispatch)
+  // from two places - see header comment above - as a defensive re-dispatch)
   // return the already-queued/running job instead of creating a second row,
   // replacing the previous non-atomic "cancel then insert" pair.
   // See supabase/migrations/20260824000200_pipeline_jobs_generation_rpcs.sql.
@@ -98,12 +100,14 @@ export async function enqueueEnrichmentJob(args: {
 
   if (!result.created) {
     console.log(`[normalize-pdf-output] enrichment_job_already_active file_id=${fileId} job_id=${jobId}`);
-    return { id: jobId };
+    await logger?.event?.("enrich", "redispatched", { provider: "lease-extraction-worker", metadata: { job_id: jobId } });
+    dispatchWorker(jobId, logger);
+    return { id: jobId, existing: true };
   }
 
   await logger?.event?.("enrich", "queued", { provider: "lease-extraction-worker", metadata: { job_id: jobId } });
   console.log(`[normalize-pdf-output] enrichment_job_enqueued file_id=${fileId} job_id=${jobId}`);
 
-  dispatchEnrichmentWorker(jobId, logger);
-  return { id: jobId };
+  dispatchWorker(jobId, logger);
+  return { id: jobId, existing: false };
 }
