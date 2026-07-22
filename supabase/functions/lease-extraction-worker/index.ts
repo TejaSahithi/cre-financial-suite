@@ -226,7 +226,7 @@ async function runParseStageInline(
       providerOverride: "azure_document_intelligence", // Force Azure Document Intelligence
     });
 
-    const fullTextChars = countTextChars(doclingOutput);
+    const fullTextChars = countTextChars(doclingOutput.full_text);
     const parserStatus = parserStatusForTextLength(fullTextChars);
 
     const extractionMethod = doclingOutput.extraction_method || "azure_layout";
