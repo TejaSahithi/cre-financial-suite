@@ -1,0 +1,1 @@
+{ "scenarioId": "portfolio-100-mixed", "leaseCount": 100, "minimumScores": { "factBuildAccuracy": 0.97, "criticalDateAccuracy": 0.95, "obligationAccuracy": 0.9, "rentScheduleAccuracy": 0.9, "riskFindingPrecision": 0.9, "riskFindingRecall": 0.85, "portfolioTotalAccuracy": 0.95, "searchPlanAccuracy": 0.95, "refreshLatency": 0.9 } }

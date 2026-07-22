@@ -1,0 +1,1 @@
+{ "scenarioId": "portfolio-10-clean", "leaseCount": 10, "minimumScores": { "factBuildAccuracy": 1, "criticalDateAccuracy": 1, "obligationAccuracy": 0.95, "rentScheduleAccuracy": 0.95, "riskFindingPrecision": 1, "riskFindingRecall": 0.9, "portfolioTotalAccuracy": 1, "searchPlanAccuracy": 1, "refreshLatency": 1 } }

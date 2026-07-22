@@ -20,7 +20,11 @@
     "test:release7": "vitest run src/lib/release7",
     "test:load": "node scripts/check-release7-load-tests.mjs",
     "test:tenant-isolation": "node scripts/check-release7-tenant-isolation.mjs",
-    "check:ga-readiness": "node scripts/check-ga-readiness.mjs"
+    "check:ga-readiness": "node scripts/check-ga-readiness.mjs",
+    "benchmark:portfolio": "node scripts/run-portfolio-benchmark.mjs",
+    "test:portfolio-isolation": "node scripts/check-portfolio-isolation.mjs",
+    "test:portfolio-load": "node scripts/check-portfolio-load-tests.mjs",
+    "check:portfolio-readiness": "node scripts/check-portfolio-readiness.mjs"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^17.0.0",

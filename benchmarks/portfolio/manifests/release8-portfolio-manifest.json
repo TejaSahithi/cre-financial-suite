@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "portfolio-benchmark-manifest-v1",
+  "scenarios": [
+    { "id": "portfolio-10-clean", "leaseCount": 10, "approvalState": "approved", "currencyMix": ["USD"], "expected": "portfolio-10-clean.expected.json" },
+    { "id": "portfolio-100-mixed", "leaseCount": 100, "approvalState": "mixed", "currencyMix": ["USD", "CAD"], "expected": "portfolio-100-mixed.expected.json" },
+    { "id": "portfolio-1000-amendment-heavy", "leaseCount": 1000, "approvalState": "mixed", "currencyMix": ["USD", "EUR"], "expected": "portfolio-1000-amendment-heavy.expected.json" }
+  ],
+  "metrics": ["factBuildAccuracy", "criticalDateAccuracy", "obligationAccuracy", "rentScheduleAccuracy", "riskFindingPrecision", "riskFindingRecall", "portfolioTotalAccuracy", "searchPlanAccuracy", "refreshLatency"]
+}

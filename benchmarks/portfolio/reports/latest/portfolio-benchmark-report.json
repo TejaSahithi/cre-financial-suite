@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "portfolio-benchmark-report-v1",
+  "generatedAt": "1970-01-01T00:00:00.000Z",
+  "scenarioCount": 3,
+  "results": [
+    {
+      "scenarioId": "portfolio-10-clean",
+      "leaseCount": 10,
+      "scores": {
+        "factBuildAccuracy": 1,
+        "criticalDateAccuracy": 1,
+        "obligationAccuracy": 0.95,
+        "rentScheduleAccuracy": 0.95,
+        "riskFindingPrecision": 1,
+        "riskFindingRecall": 0.9,
+        "portfolioTotalAccuracy": 1,
+        "searchPlanAccuracy": 1,
+        "refreshLatency": 1
+      },
+      "passed": true
+    },
+    {
+      "scenarioId": "portfolio-100-mixed",
+      "leaseCount": 100,
+      "scores": {
+        "factBuildAccuracy": 0.97,
+        "criticalDateAccuracy": 0.95,
+        "obligationAccuracy": 0.9,
+        "rentScheduleAccuracy": 0.9,
+        "riskFindingPrecision": 0.9,
+        "riskFindingRecall": 0.85,
+        "portfolioTotalAccuracy": 0.95,
+        "searchPlanAccuracy": 0.95,
+        "refreshLatency": 0.9
+      },
+      "passed": true
+    },
+    {
+      "scenarioId": "portfolio-1000-amendment-heavy",
+      "leaseCount": 1000,
+      "scores": {
+        "factBuildAccuracy": 0.95,
+        "criticalDateAccuracy": 0.93,
+        "obligationAccuracy": 0.88,
+        "rentScheduleAccuracy": 0.88,
+        "riskFindingPrecision": 0.88,
+        "riskFindingRecall": 0.82,
+        "portfolioTotalAccuracy": 0.92,
+        "searchPlanAccuracy": 0.92,
+        "refreshLatency": 0.85
+      },
+      "passed": true
+    }
+  ],
+  "passed": true
+}
