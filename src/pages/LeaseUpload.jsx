@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import FileUploader, { getFriendlyExtractionLabel } from "@/components/FileUploader";
 import {
   ensureLeaseReviewDraftForUpload,
+  getCurrentGenerationFailureNotice,
   getLeaseUploadReviewStatusLabel,
   getLeaseReviewActionState,
   hasActiveLeaseExtractionJob,
@@ -168,6 +169,9 @@ function normalizePipelineStatusRecord(data, id) {
     property_id: data?.property_id || fileMetadata.property_id || null,
     building_id: data?.building_id || fileMetadata.building_id || null,
     unit_id: data?.unit_id || fileMetadata.unit_id || null,
+    active_generation_id: data?.active_generation_id || fileMetadata.active_generation_id || null,
+    review_readiness: data?.review_readiness ?? null,
+    review_readiness_reasons: Array.isArray(data?.review_readiness_reasons) ? data.review_readiness_reasons : [],
     updated_at: data?.updated_at || fileMetadata.updated_at || null,
     created_at: data?.created_at || fileMetadata.created_at || null,
     display_state: data?.display_state || null,
@@ -733,6 +737,10 @@ export default function LeaseUpload() {
     reviewReadyForAction &&
     fileRecord?.ui_review_payload != null &&
     fileRecord?.status !== "failed";
+  const currentGenerationFailureNotice = useMemo(
+    () => getCurrentGenerationFailureNotice(fileRecord),
+    [fileRecord],
+  );
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
@@ -853,6 +861,13 @@ export default function LeaseUpload() {
               </div>
             )}
 
+            {currentGenerationFailureNotice.show && (
+              <div className="rounded-lg border border-orange-200 bg-orange-50 p-3">
+                <p className="text-sm font-medium text-orange-900">New extraction attempt failed</p>
+                <p className="text-xs text-orange-700">{currentGenerationFailureNotice.message}</p>
+              </div>
+            )}
+
             <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
               {canOpenReview && (
                 <Button
@@ -944,6 +959,12 @@ export default function LeaseUpload() {
                 <p>latest_job: {fileRecord?.latest_job?.status ?? "—"}</p>
                 <p>failed_step: {failed ? fileRecord?.failed_step ?? "—" : "—"}</p>
                 <p>error_message: {failed ? fileRecord?.error_message ?? "—" : "—"}</p>
+                <p>active_generation: {fileRecord?.active_generation_id ?? "—"}</p>
+                <p>
+                  latest_job_generation: {fileRecord?.latest_job?.generation_id ?? "—"}
+                  {currentGenerationFailureNotice.show ? " (current — failed)" : ""}
+                </p>
+                <p>review_readiness: {fileRecord?.review_readiness ?? "—"}</p>
               </div>
             </details>
             {failed && (

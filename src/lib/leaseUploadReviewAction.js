@@ -63,6 +63,35 @@ export function getLeaseReviewActionState(fileRecord, linkedLeaseId = null) {
   };
 }
 
+// A fresh extraction attempt (the file's current active_generation_id) can
+// fail while status/review_required/ui_review_payload still reflect an
+// earlier, already-completed generation -- those legacy columns are not
+// reset when a new generation starts (only the newer, generation-scoped
+// review_readiness column is). Without this check, isLeaseUploadReviewReady
+// above (which reads those stale legacy columns) shows "Review completed"
+// at the same time latest_job reports the current generation as failed,
+// with nothing distinguishing which generation each signal describes.
+export function getCurrentGenerationFailureNotice(fileRecord) {
+  const activeGenerationId = fileRecord?.active_generation_id || null;
+  const latestJob = fileRecord?.latest_job || fileRecord?.latestJob || null;
+  const latestJobGenerationId = latestJob?.generation_id || null;
+  const belongsToActiveGeneration =
+    !!activeGenerationId && !!latestJobGenerationId && activeGenerationId === latestJobGenerationId;
+
+  if (!belongsToActiveGeneration || latestJob?.status !== "failed") {
+    return { show: false };
+  }
+  if (!isLeaseUploadReviewReady(fileRecord)) {
+    // Nothing else on screen could be mistaken for describing this failure.
+    return { show: false };
+  }
+
+  return {
+    show: true,
+    message: "The latest extraction attempt failed. The review below reflects a previous, already-completed extraction and is unaffected.",
+  };
+}
+
 export function extractLeaseIdFromPrepareResponse(response) {
   return firstMeaningfulId(
     response?.lease_id,

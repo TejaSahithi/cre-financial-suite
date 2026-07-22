@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   ensureLeaseReviewDraftForUpload,
+  getCurrentGenerationFailureNotice,
   getLeaseUploadReviewStatusLabel,
   getLeaseReviewActionState,
   isLeaseUploadReviewReady,
@@ -83,6 +84,57 @@ describe("lease upload review action state", () => {
       .toBe("Review completed");
     expect(getLeaseUploadReviewStatusLabel({ status: "validating" }, "Extracting lease fields"))
       .toBe("Extracting lease fields");
+  });
+});
+
+describe("getCurrentGenerationFailureNotice", () => {
+  it("shows the notice when the active generation's latest job failed but a prior generation's review is still shown as completed", () => {
+    const notice = getCurrentGenerationFailureNotice({
+      status: "review_required",
+      lease_id: "lease-123",
+      active_generation_id: "gen-2",
+      latest_job: { status: "failed", generation_id: "gen-2" },
+    });
+    expect(notice.show).toBe(true);
+    expect(notice.message).toMatch(/failed/i);
+  });
+
+  it("does not show the notice when the latest job belongs to an older, superseded generation", () => {
+    const notice = getCurrentGenerationFailureNotice({
+      status: "review_required",
+      lease_id: "lease-123",
+      active_generation_id: "gen-2",
+      latest_job: { status: "failed", generation_id: "gen-1" },
+    });
+    expect(notice.show).toBe(false);
+  });
+
+  it("does not show the notice when the current generation's latest job succeeded", () => {
+    const notice = getCurrentGenerationFailureNotice({
+      status: "review_required",
+      lease_id: "lease-123",
+      active_generation_id: "gen-2",
+      latest_job: { status: "completed", generation_id: "gen-2" },
+    });
+    expect(notice.show).toBe(false);
+  });
+
+  it("does not show the notice when there is nothing review-ready to contradict", () => {
+    const notice = getCurrentGenerationFailureNotice({
+      status: "uploaded",
+      active_generation_id: "gen-1",
+      latest_job: { status: "failed", generation_id: "gen-1" },
+    });
+    expect(notice.show).toBe(false);
+  });
+
+  it("does not show the notice when generation ids are absent (legacy rows / older data)", () => {
+    const notice = getCurrentGenerationFailureNotice({
+      status: "review_required",
+      lease_id: "lease-123",
+      latest_job: { status: "failed" },
+    });
+    expect(notice.show).toBe(false);
   });
 });
 

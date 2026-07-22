@@ -112,6 +112,7 @@ export function sanitizeJob(job: Record<string, any> | null | undefined): Record
   return {
     id: job.id,
     job_type: job.job_type,
+    generation_id: job.generation_id ?? null,
     status: job.status,
     stage: job.stage,
     attempt: job.attempt,

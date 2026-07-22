@@ -19,7 +19,7 @@
 //
 // Run: deno test --allow-env --allow-net --no-lock golden-lease-naren-extraction.integration.test.ts
 
-import { assertExists } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assertEquals, assertExists, assertNotEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.99.2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
@@ -66,7 +66,7 @@ Deno.test("golden lease: page-1 explicit fields resolve to their documented valu
   const client = adminClient();
   const { data: file, error } = await client
     .from("uploaded_files")
-    .select("id, status, review_readiness, ui_review_payload")
+    .select("id, status, review_readiness, ui_review_payload, openai_extraction_attempted, extraction_method")
     .eq("id", UPLOADED_FILE_ID)
     .maybeSingle();
 
@@ -94,4 +94,25 @@ Deno.test("golden lease: page-1 explicit fields resolve to their documented valu
       failed.map((r) => `  ${r.field}: expected ${JSON.stringify(r.expected)}, got ${JSON.stringify(r.actual)}`).join("\n"),
     );
   }
+});
+
+// Enforces the Azure -> OpenAI pipeline guarantee end-to-end on a real,
+// already-processed row: a document that reached review_readiness must have
+// had OpenAI attempted, and the extraction method actually used must not be
+// the rule-only fallback path (openai_extraction_attempted_gate migration
+// blocks readiness otherwise; this proves the gate reflects live behavior,
+// not just the migration's own unit tests).
+Deno.test("golden lease: OpenAI was attempted and the extraction method is not rule_only", async () => {
+  const client = adminClient();
+  const { data: file, error } = await client
+    .from("uploaded_files")
+    .select("id, review_readiness, openai_extraction_attempted, extraction_method")
+    .eq("id", UPLOADED_FILE_ID)
+    .maybeSingle();
+
+  if (error) throw new Error(JSON.stringify(error));
+  assertExists(file, `uploaded_files row ${UPLOADED_FILE_ID} not found`);
+
+  assertEquals(file.openai_extraction_attempted, true);
+  assertNotEquals(file.extraction_method, "rule_only");
 });
