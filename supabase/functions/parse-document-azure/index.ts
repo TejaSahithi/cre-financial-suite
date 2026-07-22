@@ -363,6 +363,50 @@ Deno.serve(async (req: Request) => {
       );
       const strictAzureMode = providerSelection.mode === "azure_document_intelligence";
 
+      // Confirm the source bytes actually exist in storage before asking
+      // Azure to fetch them. Without this, a file whose upload never
+      // durably landed (uploaded_files row created, but storage.objects
+      // has no matching row) previously surfaced as a confusing
+      // "document parser returned only N readable characters" error --
+      // Azure OCR'ing a tiny storage-error response body instead of the
+      // real PDF -- rather than a clear, immediate, actionable failure.
+      const storagePathParts = storagePath.split("/");
+      const storageFileName = storagePathParts.pop() ?? "";
+      const storageDir = storagePathParts.join("/");
+      const { data: storageListing, error: storageListError } = await supabaseAdmin
+        .storage
+        .from("financial-uploads")
+        .list(storageDir, { search: storageFileName, limit: 1 });
+      const storageObjectExists = !storageListError &&
+        Array.isArray(storageListing) &&
+        storageListing.some((entry: any) => entry?.name === storageFileName);
+      if (!storageObjectExists) {
+        const reason =
+          `Source file is missing from storage (path="${storagePath}"). The upload did not durably ` +
+          `complete, so there is nothing for Azure Document Intelligence to read.`;
+        console.error(`[parse-document-azure] ${reason}`, storageListError ?? "");
+        const payload = await persistBlockedParse({
+          parserStatus: PARSER_STATUSES.OCR_REQUIRED,
+          errorCode: "SOURCE_FILE_MISSING_FROM_STORAGE",
+          message: reason,
+          fullTextChars: 0,
+          pageCount: null,
+          providerUsed: "azure_document_intelligence",
+          warnings: [reason],
+        });
+        await stage?.fail("SOURCE_FILE_MISSING_FROM_STORAGE", reason, { outcome: "terminal_failure" });
+        return jsonResponse({
+          error: true,
+          file_id,
+          processing_status: "failed",
+          extraction_method: "azure_document_intelligence",
+          parser_status: PARSER_STATUSES.OCR_REQUIRED,
+          error_code: "SOURCE_FILE_MISSING_FROM_STORAGE",
+          message: reason,
+          ui_review_payload: payload,
+        }, 422);
+      }
+
       const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin
         .storage
         .from("financial-uploads")
