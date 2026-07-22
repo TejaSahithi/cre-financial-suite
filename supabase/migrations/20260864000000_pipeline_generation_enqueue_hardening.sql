@@ -27,6 +27,7 @@ DECLARE
   v_provenance_enabled BOOLEAN;
   v_run_type TEXT;
   v_extraction_run_id UUID;
+  v_has_extraction_runs BOOLEAN;
 BEGIN
   IF p_org_id IS NULL THEN
     RAISE EXCEPTION 'org_id is required';
@@ -66,17 +67,21 @@ BEGIN
    WHERE uploaded_file_id = p_uploaded_file_id
      AND status = 'running';
 
-  UPDATE public.extraction_runs
-     SET status = 'superseded',
-         completed_at = v_now,
-         updated_at = v_now,
-         metadata = metadata || jsonb_build_object(
-           'terminal_reason', 'superseded_by_new_generation',
-           'superseded_by_generation_id', v_new_generation_id
-         )
-   WHERE uploaded_file_id = p_uploaded_file_id
-     AND status = 'running'
-     AND generation_id <> v_new_generation_id;
+  v_has_extraction_runs := to_regclass('public.extraction_runs') IS NOT NULL;
+
+  IF v_has_extraction_runs THEN
+    UPDATE public.extraction_runs
+       SET status = 'superseded',
+           completed_at = v_now,
+           updated_at = v_now,
+           metadata = metadata || jsonb_build_object(
+             'terminal_reason', 'superseded_by_new_generation',
+             'superseded_by_generation_id', v_new_generation_id
+           )
+     WHERE uploaded_file_id = p_uploaded_file_id
+       AND status = 'running'
+       AND generation_id <> v_new_generation_id;
+  END IF;
 
   v_idempotency_key := format(
     'lease-extraction:%s:%s:%s:%s',
@@ -110,7 +115,7 @@ BEGIN
 
   v_provenance_enabled := COALESCE(NULLIF(p_metadata->>'provenance_enabled', '')::boolean, false);
 
-  IF v_provenance_enabled THEN
+  IF v_provenance_enabled AND v_has_extraction_runs THEN
     v_run_type := COALESCE(NULLIF(p_metadata->>'run_type', ''), 'initial_extraction');
     IF v_run_type NOT IN ('initial_extraction', 're_extraction', 'admin_replay') THEN
       v_run_type := 'initial_extraction';
