@@ -212,14 +212,15 @@ function deriveDisplayStateCore(record: Record<string, any>, latestJob: Record<s
     };
   }
 
-  if (status === "parsing" || latestJob?.stage === "parse") {
-    return { display_state: "parsing", message: "The document parser is reading the lease.", next_action: "wait" };
-  }
-  if (status === "pdf_parsed" || status === "validating" || latestJob?.stage === "normalize") {
-    return { display_state: "normalizing", message: "Lease text is being normalized for review.", next_action: "wait" };
-  }
   if (["validated", "storing", "stored", "computing", "completed", "processed"].includes(status)) {
     return { display_state: "ready_for_review", message: "Lease processing is complete.", next_action: "open_review" };
+  }
+
+  if (status === "parsing" || (latestJob?.status !== "completed" && latestJob?.stage === "parse")) {
+    return { display_state: "parsing", message: "The document parser is reading the lease.", next_action: "wait" };
+  }
+  if (status === "pdf_parsed" || status === "validating" || (latestJob?.status !== "completed" && latestJob?.stage === "normalize")) {
+    return { display_state: "normalizing", message: "Lease text is being normalized for review.", next_action: "wait" };
   }
   if (status === "uploaded") {
     return { display_state: "queued", message: "Lease extraction is starting.", next_action: "wait" };

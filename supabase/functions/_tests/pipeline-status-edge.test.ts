@@ -28,6 +28,20 @@ Deno.test("pipeline-status maps queued and running jobs to display states", () =
   );
 });
 
+
+Deno.test("pipeline-status does not keep validated files waiting on a completed normalize job", () => {
+  const state = deriveDisplayState({
+    status: "validated",
+    processing_status: "pdf_parsed",
+  }, {
+    status: "completed",
+    stage: "normalize",
+  });
+
+  assertEquals(state.display_state, "ready_for_review");
+  assertEquals(state.next_action, "open_review");
+});
+
 Deno.test("pipeline-status maps parser blocked and failed states clearly", () => {
   assertEquals(
     deriveDisplayState({
