@@ -357,7 +357,11 @@ Deno.serve(async (req: Request) => {
       // Azure mode is URL-first: Azure fetches the document itself via a signed
       // Supabase Storage URL, so downloading the file into Edge Function memory
       // only wastes heap except for local development fallbacks.
-      const storagePath = fileRecord.file_url.replace(
+      // Prefer the canonical storage_path column (set directly by
+      // upload-handler from the same variable it uploaded with -- no string
+      // parsing); fall back to parsing file_url only for rows that predate
+      // that column existing.
+      const storagePath = fileRecord.storage_path || fileRecord.file_url.replace(
         /^.*\/storage\/v1\/object\/public\/financial-uploads\//,
         "",
       );

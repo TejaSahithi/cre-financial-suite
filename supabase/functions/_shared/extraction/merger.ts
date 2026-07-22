@@ -28,6 +28,22 @@ const SOURCE_PRIORITY: Record<string, number> = {
 };
 
 /**
+ * A candidate mergeField() hard-rejected (evaluateCandidateForField's
+ * "reject" decision) -- previously dropped with no record anywhere. Shape
+ * mirrors openai-fact-ledger/fact-field-mapper.ts's rejectedCandidates so
+ * both reconciliation paths produce lineage in the same form.
+ */
+export interface RejectedMergeCandidate {
+  field_key: string;
+  candidate_value: unknown;
+  candidate_source: string;
+  decision: "reject";
+  reason: string;
+  source_page: number | null;
+  source_text: string | null;
+}
+
+/**
  * Merge extraction results from all three steps.
  *
  * @param ruleResult    Step 1 output (0 or 1 records typically)
@@ -41,9 +57,10 @@ export function mergeResults(
   tableResult: StepResult,
   llmResult: StepResult,
   moduleType: ModuleType,
-): { records: ExtractedRecord[]; warnings: string[] } {
+): { records: ExtractedRecord[]; warnings: string[]; rejectedCandidates: RejectedMergeCandidate[] } {
   const schema = getSchema(moduleType);
   const warnings: string[] = [];
+  const rejectedCandidates: RejectedMergeCandidate[] = [];
 
   // Determine the primary record set (most rows)
   const tableCt = tableResult.records.length;
@@ -71,7 +88,7 @@ export function mergeResults(
     const tableRecord = tableResult.records[i];
     if (tableRecord) {
       for (const [key, field] of Object.entries(tableRecord.fields)) {
-        mergeField(fields, key, field, moduleType, schema);
+        mergeField(fields, key, field, moduleType, schema, rejectedCandidates);
       }
     }
 
@@ -93,7 +110,7 @@ export function mergeResults(
       const ruleRecord = ruleResult.records[i] ?? ruleResult.records[0];
       if (ruleRecord) {
         for (const [key, field] of Object.entries(ruleRecord.fields)) {
-          mergeField(fields, key, field, moduleType, schema);
+          mergeField(fields, key, field, moduleType, schema, rejectedCandidates);
         }
       }
     }
@@ -108,7 +125,7 @@ export function mergeResults(
     warnings.push("Merge produced no records");
   }
 
-  return { records: merged, warnings };
+  return { records: merged, warnings, rejectedCandidates };
 }
 
 /**
@@ -125,6 +142,7 @@ function mergeField(
   incoming: ExtractedField,
   moduleType: ModuleType,
   schema: ReturnType<typeof getSchema>,
+  rejectedCandidates: RejectedMergeCandidate[],
 ): void {
   const existing = target[key];
   const fieldDef = schema[key];
@@ -142,7 +160,19 @@ function mergeField(
     });
     if (result.decision === "reject") {
       // Hard veto — this candidate never overwrites, never merges, and
-      // never becomes `existing` for future comparisons.
+      // never becomes `existing` for future comparisons. Previously dropped
+      // with no record anywhere; now retained for lineage (never silently
+      // discarded — matches openai-fact-ledger's rejected-candidate audit
+      // trail, which the default legacy_hybrid/merger.ts path lacked).
+      rejectedCandidates.push({
+        field_key: key,
+        candidate_value: incoming.value,
+        candidate_source: incoming.source,
+        decision: "reject",
+        reason: result.reasons.join("; ") || "domain_mismatch",
+        source_page: incoming.sourcePage ?? null,
+        source_text: incoming.sourceText ?? null,
+      });
       return;
     }
     if (result.decision === "needs_review") {

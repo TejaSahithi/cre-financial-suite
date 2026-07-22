@@ -186,6 +186,40 @@ Deno.serve(async (req: Request) => {
       }, 500);
     }
 
+    // Confirm the object actually landed before creating a durable
+    // uploaded_files row that points at it. The SDK's upload() returning no
+    // error is not itself proof the object is retrievable -- a real,
+    // observed failure mode this session was a row created with a file_url
+    // referencing storage that, on inspection, had no matching object at
+    // all, which only surfaced much later as a confusing Azure OCR error
+    // ("15 readable characters") instead of a clear upload failure here.
+    const { data: storageListing, error: storageListError } = await supabaseAdmin.storage
+      .from("financial-uploads")
+      .list(orgId, { search: fileId, limit: 1 });
+    const storageObjectExists = !storageListError &&
+      Array.isArray(storageListing) &&
+      storageListing.some((entry) => entry?.name === fileId);
+    if (!storageObjectExists) {
+      console.error(
+        `[upload-handler] Storage upload reported success but object is not retrievable at ${storagePath}`,
+        storageListError ?? "",
+      );
+      await supabaseAdmin.storage.from("financial-uploads").remove([storagePath]);
+      return jsonResponse({
+        error: true,
+        error_code: "STORAGE_UPLOAD_FAILED",
+        message: "The file upload did not durably complete; please try uploading again.",
+      }, 500);
+    }
+
+    // getPublicUrl() always formats a "/object/public/..." URL string
+    // regardless of whether the bucket is actually public -- financial-uploads
+    // is private, so this value is never itself a working fetchable URL (the
+    // real, working access path is a signed URL generated fresh by whichever
+    // function later reads the file, e.g. parse-document-azure). It's kept
+    // only for backward-compatible display; storage_bucket/storage_path
+    // below are the canonical, unambiguous location downstream code should
+    // read instead of regex-parsing this URL back apart.
     const { data: urlData } = supabaseAdmin.storage
       .from("financial-uploads")
       .getPublicUrl(storagePath);
@@ -197,6 +231,8 @@ Deno.serve(async (req: Request) => {
       module_type: fileType,
       file_name: file.name,
       file_url: urlData.publicUrl,
+      storage_bucket: "financial-uploads",
+      storage_path: storagePath,
       file_size: file.size,
       mime_type: file.type || "application/octet-stream",
       uploaded_by: user.email,

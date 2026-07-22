@@ -65,9 +65,9 @@ RULES:
      Output: landlord_name.value = "John Smith"  (the entity here is a natural person)
              tenant_name.value = "Acme Corp"
 
-     Input:  "entered into by and between 224 Partners, LLC (\"Landlord\") and Mindful Tech Solutions Inc. (\"Tenant\")"
-     Output: landlord_name.value = "224 Partners, LLC"
-             tenant_name.value = "Mindful Tech Solutions Inc."
+     Input:  "entered into by and between Sunbelt Holdings, LLC (\"Landlord\") and Riverside Consulting Inc. (\"Tenant\")"
+     Output: landlord_name.value = "Sunbelt Holdings, LLC"
+             tenant_name.value = "Riverside Consulting Inc."
 
    In a "by and between ... (Landlord) and ... (Tenant)" parties clause:
    - landlord_name is the entity that appears BEFORE the (Landlord) parenthetical
@@ -125,7 +125,7 @@ RULES:
     NEVER return a calendar month name (January, February, March, April, May, June, July,
     August, September, October, November, December) - those are dates, not person names.
       BAD:  tenant_contact_name = "January"  (extracted from "January 9, 2024")
-      GOOD: tenant_contact_name = "Narendra Pydi"  (actual name from the tenant line)
+      GOOD: tenant_contact_name = "Morgan Reyes"  (actual name from the tenant line)
     For property_name: return ONLY the official trade/marketing name of the building (e.g.
     "Markets at Choto", "The Commons"). If no such name is stated, return null. NEVER return
     clause text, parking clauses, or any phrase that contains the word "Tenant".

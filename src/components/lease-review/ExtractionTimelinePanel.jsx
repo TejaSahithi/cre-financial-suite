@@ -100,9 +100,16 @@ async function fetchTimeline(uploadedFileId) {
   });
   if (logsResult.warning) warnings.push(logsResult.warning);
 
+  // extraction_runs_safe / extraction_stage_runs_safe deliberately expose a
+  // narrower column set than the base tables (no error_message/output_summary/
+  // metadata/pipeline_job_id -- those may carry document content or internal
+  // detail, sanitized out of the view granted to authenticated clients).
+  // error_code alone is available for a Detail fallback here; full error text
+  // comes from pipeline_logs below instead, which already carries it in its
+  // own metadata column.
   const runsResult = await selectOrEmpty({
     table: "extraction_runs_safe",
-    select: "id, generation_id, run_type, provider_pipeline, contract_version, status, error_code, error_message, started_at, completed_at, created_at, updated_at, metadata",
+    select: "id, generation_id, run_type, provider_pipeline, contract_version, status, error_code, started_at, completed_at, created_at, updated_at",
     apply: (query) => query.eq("uploaded_file_id", uploadedFileId).order("started_at", { ascending: true }),
   });
   if (runsResult.warning) warnings.push(runsResult.warning);
@@ -112,7 +119,7 @@ async function fetchTimeline(uploadedFileId) {
   if (runIds.length > 0) {
     const stageResult = await selectOrEmpty({
       table: "extraction_stage_runs_safe",
-      select: "id, run_id, pipeline_job_id, stage, attempt, status, provider, error_code, error_message, started_at, finished_at, created_at, updated_at, output_summary",
+      select: "id, run_id, stage, attempt, status, provider, error_code, started_at, finished_at, created_at, updated_at",
       apply: (query) => query.in("run_id", runIds).order("started_at", { ascending: true }),
     });
     if (stageResult.warning) warnings.push(stageResult.warning);
@@ -217,7 +224,10 @@ export default function ExtractionTimelinePanel({ uploadedFile, uploadedFileId, 
         startedAt: stageRun.started_at || stageRun.created_at,
         finishedAt: stageRun.finished_at || (String(stageRun.status).toLowerCase() === "running" ? null : stageRun.updated_at),
         duration: durationMs(stageRun.started_at || stageRun.created_at, stageRun.finished_at || (String(stageRun.status).toLowerCase() === "running" ? null : stageRun.updated_at)),
-        detail: stageRun.error_message || stageRun.error_code || compactJson(stageRun.output_summary),
+        // error_message/output_summary aren't exposed by extraction_stage_runs_safe
+        // (see the comment in fetchTimeline) -- error_code plus the matching
+        // pipeline_logs row (below) is where the full detail comes from.
+        detail: stageRun.error_code || null,
       });
     }
 
@@ -355,14 +365,23 @@ export default function ExtractionTimelinePanel({ uploadedFile, uploadedFileId, 
                 <TableRow>
                   <TableCell colSpan={4} className="text-sm text-slate-500">No pipeline logs found for this file.</TableCell>
                 </TableRow>
-              ) : (data?.logs || []).map((log, index) => (
-                <TableRow key={`${log.timestamp || index}-${log.step || "log"}`}>
-                  <TableCell className="whitespace-nowrap text-xs text-slate-600">{formatDate(log.timestamp)}</TableCell>
-                  <TableCell className="text-xs font-medium text-slate-900">{log.step || "-"}</TableCell>
-                  <TableCell><Badge className={statusBadgeClass(log.level)}>{log.level || "info"}</Badge></TableCell>
-                  <TableCell className="max-w-xl truncate text-xs text-slate-600" title={log.message || ""}>{log.message || compactJson(log.metadata) || "-"}</TableCell>
-                </TableRow>
-              ))}
+              ) : (data?.logs || []).map((log, index) => {
+                // The message alone (e.g. "pipeline_stage:parse:failed") never
+                // includes *why* -- error_code/error_message live in metadata.
+                // Previously this used message || compactJson(metadata), so the
+                // metadata branch never ran whenever message was present (nearly
+                // always), hiding the one thing worth seeing on a failed row.
+                const metaDetail = compactJson(log.metadata);
+                const combined = [log.message, metaDetail].filter(Boolean).join(" — ");
+                return (
+                  <TableRow key={`${log.timestamp || index}-${log.step || "log"}`}>
+                    <TableCell className="whitespace-nowrap text-xs text-slate-600">{formatDate(log.timestamp)}</TableCell>
+                    <TableCell className="text-xs font-medium text-slate-900">{log.step || "-"}</TableCell>
+                    <TableCell><Badge className={statusBadgeClass(log.level)}>{log.level || "info"}</Badge></TableCell>
+                    <TableCell className="max-w-xl truncate text-xs text-slate-600" title={combined}>{combined || "-"}</TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </CardContent>

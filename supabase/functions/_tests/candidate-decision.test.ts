@@ -271,3 +271,21 @@ Deno.test("mergeResults: domain veto -- a rejected-pattern candidate never overw
   // LLM candidate must survive instead of being silently overwritten.
   assertEquals(merged.records[0].fields.landlord_name.value, "224 Partners, LLC");
 });
+
+Deno.test("mergeResults: a hard-rejected candidate is retained in rejectedCandidates lineage, not silently dropped", () => {
+  const llmLow = stepResult({
+    landlord_name: { value: "224 Partners, LLC", source: "llm", confidence: 0.6, sourceText: "between 224 Partners, LLC (\"Landlord\") and..." },
+  });
+  const tableHigh = stepResult({
+    landlord_name: { value: "Some Assignee Corp", source: "table", confidence: 0.99, sourceText: "the closely held voting shares held by the permitted transfer assignee" },
+  });
+  const merged = mergeResults(empty, tableHigh, llmLow, "lease");
+  assertEquals(merged.rejectedCandidates.length, 1);
+  const [rejected] = merged.rejectedCandidates;
+  assertEquals(rejected.field_key, "landlord_name");
+  assertEquals(rejected.candidate_value, "Some Assignee Corp");
+  assertEquals(rejected.candidate_source, "table");
+  assertEquals(rejected.decision, "reject");
+  assert(rejected.reason.length > 0);
+  assertEquals(rejected.source_text, "the closely held voting shares held by the permitted transfer assignee");
+});

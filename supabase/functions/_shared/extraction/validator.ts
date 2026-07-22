@@ -398,7 +398,7 @@ function looksLikePersonNotEntity(value: string): boolean {
   if (/\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Bank|Holdings|Partners?)\b/i.test(value)) {
     return false;
   }
-  // Short all-caps name with no entity marker → likely a signatory ("JOHN DOE", "NARENDRA PYDI").
+  // Short all-caps name with no entity marker → likely a signatory ("JOHN DOE", "MORGAN REYES").
   const words = value.trim().split(/\s+/);
   if (words.length > 0 && words.length <= 4) {
     const allCaps = words.every((w) => w === w.toUpperCase() && /^[A-Z][A-Z'.-]+$/.test(w));

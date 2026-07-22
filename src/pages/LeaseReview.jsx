@@ -2985,11 +2985,13 @@ export default function LeaseReview() {
             <div>
               <p className="font-semibold">No fields were auto-extracted</p>
               <p className="mt-1 text-xs text-red-600">
-                The AI extraction backend is not configured or could not read this document, so no
-                fields were populated automatically. You can still <strong>fill in all fields manually</strong> below
-                and approve the abstract. To enable AI extraction, set{" "}
-                <code>AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT</code>, <code>AZURE_DOCUMENT_INTELLIGENCE_KEY</code>, and <code>OPENAI_API_KEY</code> in your Supabase Edge Function secrets. After updating secrets,
-                redeploy the edge functions and click <strong>Re-extract Lease</strong> to retry.
+                No fields were populated automatically. This can happen if the AI extraction backend
+                isn't configured, or if this specific document failed to parse for another reason (a
+                blocked/insufficient-text parse, a storage issue, etc.) — check the{" "}
+                <strong>Extraction Timeline</strong> tab for the actual stage and error that stopped
+                extraction. You can still <strong>fill in all fields manually</strong> below and approve
+                the abstract, or click <strong>Re-extract Lease</strong> to retry once the underlying
+                issue is resolved.
               </p>
             </div>
           </div>

@@ -127,12 +127,26 @@ function buildPipelineLayoutInput(
  * openai_primary_legacy_fallback. The old vertex_* values are accepted as
  * aliases so existing Supabase secrets and internal debug calls do not break.
  */
+// Fail-safe default for the LIVE routing decision only: an unset
+// BUSINESS_EXTRACTION_PROVIDER must never silently resolve to a rule-only
+// path (normalizeBusinessExtractionMode()'s own "!raw -> legacy_hybrid"
+// default is intentionally left alone -- it's also what a persisted_row
+// with no recorded provider correctly degrades to, since that row genuinely
+// ran legacy_hybrid historically; changing it there would misrepresent
+// history). This is the one place that decides what runs when nothing is
+// configured, so it defaults to an OpenAI-enabled mode instead.
+const DEFAULT_LIVE_BUSINESS_EXTRACTION_PROVIDER = "openai_primary_legacy_fallback";
+
 function resolveBusinessExtractionProvider(
   internalDebugOverride?: string | null,
 ): CanonicalBusinessExtractionMode {
   const override = String(internalDebugOverride ?? "").trim().toLowerCase();
   if (override) return normalizeBusinessExtractionMode(override, { source: "override" });
-  return normalizeBusinessExtractionMode(Deno.env.get("BUSINESS_EXTRACTION_PROVIDER"), { source: "env" });
+  const envValue = Deno.env.get("BUSINESS_EXTRACTION_PROVIDER");
+  return normalizeBusinessExtractionMode(
+    envValue && envValue.trim() ? envValue : DEFAULT_LIVE_BUSINESS_EXTRACTION_PROVIDER,
+    { source: "env" },
+  );
 }
 /**
  * Azure+OpenAI Phase 4E (local implementation): local-only, test-only mock
@@ -1214,6 +1228,12 @@ function buildReviewPayload(opts: {
     // silently discarded rather than actually lost. Read directly off the
     // raw row `r`, same pattern as fieldConfidences/fieldSources above.
     const calculatorDerivationTraces = (r._derivation_traces ?? {}) as Record<string, string>;
+    // Same rationale as calculatorDerivationTraces above: calculator.ts now
+    // also records which input fields fed each derivation (source_field_keys),
+    // read the identical way -- leaseReviewSchema.js's readFieldEvidence()
+    // already expects this shape (entry.evidence?.source_field_keys), it just
+    // never received it for the fields only calculator.ts derives.
+    const calculatorDerivationSourceFields = (r._derivation_source_fields ?? {}) as Record<string, string[]>;
     const rowConfidence = normalizeConfidence(
       r.confidence_score ?? result.metadata?.avgConfidence,
     ) ?? avgConfidence;
@@ -1372,6 +1392,7 @@ function buildReviewPayload(opts: {
           // (monthly_rent, square_footage, lease_term_months) that
           // previously had no UI-visible provenance at all.
           derivation_trace: workflowField?.derivation_trace ?? calculatorDerivationTraces?.[fieldKey] ?? null,
+          source_field_keys: workflowField?.source_field_keys ?? calculatorDerivationSourceFields?.[fieldKey] ?? undefined,
         },
         status: finalStatus,
         editable: workflowField?.editable ?? true,
@@ -3310,6 +3331,18 @@ Deno.serve(async (req: Request) => {
         }
       }
 
+      // Honest signal for evaluate_lease_extraction_readiness's
+      // OPENAI_EXTRACTION_NOT_ATTEMPTED gate (20260865000000). Covers every
+      // mode: openai_fact_ledger/openai_primary_legacy_fallback always call
+      // the orchestrator's runOpenAIOnce() (provenance.openai_attempt_count
+      // &gt; 0); legacy_hybrid's own internal LLM step (llm-extractor.ts) sets
+      // extractionDebug.llm_call_attempted when IT makes a real call. Only
+      // an explicit emergency override bypasses this.
+      const openaiExtractionAttempted =
+        Number((result.metadata as any)?.provenance?.openai_attempt_count ?? 0) > 0 ||
+        Boolean((result.metadata as any)?.extractionDebug?.llm_call_attempted) ||
+        envFlagEnabled("ALLOW_RULE_ONLY_EXTRACTION");
+
       const { error: validatedErr } = await setStatus(
         supabaseAdmin,
         file_id,
@@ -3324,6 +3357,7 @@ Deno.serve(async (req: Request) => {
           validation_errors: result.validationErrors ?? [],
           error_message: null,
           processing_completed_at: new Date().toISOString(),
+          openai_extraction_attempted: openaiExtractionAttempted,
         },
       );
 

@@ -925,7 +925,7 @@ Deno.serve(async (req: Request) => {
     // 3. Fetch file record (org_id isolation)
     const { data: fileRecord, error: fetchError } = await supabaseAdmin
       .from("uploaded_files")
-      .select("id, org_id, file_name, file_url, mime_type, module_type, status")
+      .select("id, org_id, file_name, file_url, storage_path, mime_type, module_type, status")
       .eq("id", file_id)
       .eq("org_id", orgId)
       .single();
@@ -972,8 +972,9 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // 4. Derive storage path from file_url
-    const storagePath = fileRecord.file_url.replace(
+    // 4. Prefer the canonical storage_path column; fall back to parsing
+    // file_url only for rows that predate that column existing.
+    const storagePath = fileRecord.storage_path || fileRecord.file_url.replace(
       /^.*\/storage\/v1\/object\/public\/financial-uploads\//,
       "",
     );

@@ -575,6 +575,10 @@ export async function runExtractionPipeline(
         source_backed_fields_count: sourceBackedFieldsCount,
         fields_without_source_count: fieldsWithoutSourceCount,
         rejected_generic_source_count: rejectedGenericSourceCount,
+        // Candidates evaluateCandidateForField() hard-rejected during the
+        // merge step, previously dropped with no record anywhere -- see
+        // merger.ts#RejectedMergeCandidate.
+        rejected_candidates: merged.rejectedCandidates,
         rule_fields_extracted: ruleFieldCount,
         table_fields_extracted: tableFieldCount,
         llm_fields_extracted: llmFieldCount,

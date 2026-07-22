@@ -107,18 +107,18 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["tenant", "lessee", "occupant", "tenant name", "lessee name"],
     tableHeaders: ["tenant", "tenant_name", "tenant name", "lessee", "company"],
     patterns: [
-      // Numbered summary: "4. Tenant: Mindful Tech Solutions, Inc."
+      // Numbered summary: "4. Tenant: Riverside Consulting, Inc."
       // Stop at newline OR before contact info (phone, email, address line).
       /\d+\s*\.\s*tenant\s*[:.]?\s*([A-Z][A-Za-z0-9.,&'\- ]{2,100}(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Bank|Holdings|Partners?))/i,
-      // Plain labeled line: "Tenant: Mindful Tech Solutions, Inc."
+      // Plain labeled line: "Tenant: Riverside Consulting, Inc."
       /(?:^|\n)\s*tenant\s*[:.]\s*([A-Z][A-Za-z0-9.,&'\- ]{2,100}(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Bank|Holdings|Partners?))/i,
       // Opening-clause format: "by and between [Landlord], and Cress Family Restaurants, LLC, (referred to as "Tenant")"
       /,\s*and\s+([A-Z][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Holdings|Partners?))\s*[,\s]+\(?referred\s+to\s+as\s+["']?Tenant["']?\)?/i,
     ],
     description:
-      "LEGAL ENTITY name of the tenant ONLY (e.g. 'Mindful Tech Solutions, Inc.'). " +
+      "LEGAL ENTITY name of the tenant ONLY (e.g. 'Riverside Consulting, Inc.'). " +
       "DO NOT use the signatory, signer, contact person, or 'By:' name. " +
-      "If the lease reads 'Tenant: Mindful Tech Solutions, Inc.  By: John Doe', return 'Mindful Tech Solutions, Inc.', NOT 'John Doe'. " +
+      "If the lease reads 'Tenant: Riverside Consulting, Inc.  By: John Doe', return 'Riverside Consulting, Inc.', NOT 'John Doe'. " +
       "Also look for opening-clause format: 'between [Landlord Entity] ... and [Tenant Entity] (referred to as \"Tenant\")'.",
     domain: "parties",
     evidencePolicy: "enforced",
@@ -171,7 +171,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
     ],
     description:
       "Marketing or trade name of the property, building, or shopping center — NOT a tenant or landlord entity name. " +
-      "Look for the name of the commercial development, shopping center, or building complex. Examples: 'Markets at Choto', '224 S Peters Professional Center', 'Knoxville Commons'. " +
+      "Look for the name of the commercial development, shopping center, or building complex. Examples: 'Markets at Choto', 'Riverside Professional Center', 'Cedar Grove Commons'. " +
       "Common patterns: 'located in the [Name] Shopping Center', 'known as [Name]', 'Property Name: [Name]'. " +
       "Return ONLY the short property name (2-6 words). Do NOT return street addresses, clause text, party names, or mailing addresses. " +
       "If no named property or shopping center is identified in the lease, return null.",
@@ -208,22 +208,22 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["landlord", "lessor", "owner", "landlord name", "lessor name"],
     tableHeaders: ["landlord", "landlord_name", "landlord name", "lessor", "owner"],
     patterns: [
-      // Numbered summary: "2. Landlord: 224 Partners, LLC"
+      // Numbered summary: "2. Landlord: Sunbelt Holdings, LLC"
       /\d+\s*\.\s*landlord\s*[:.]?\s*([^\n]{2,120})/i,
-      // Plain labeled line: "Landlord: 224 Partners, LLC"
+      // Plain labeled line: "Landlord: Sunbelt Holdings, LLC"
       /(?:^|\n)\s*landlord\s*[:.]\s*([^\n]{2,120})/i,
       /(?:^|\n)\s*lessor\s*[:.]\s*([^\n]{2,120})/i,
       // Opening-clause format: "between Markets at Choto, LLC, or its assigns (referred to as 'Landlord')"
       /\bbetween\s+([A-Z0-9][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Holdings|Partners?))\s*[,\s]+(?:or\s+its\s+assigns[,\s]+)?\(?referred\s+to\s+as\s+["']?Landlord["']?\)?/i,
-      // Simpler parenthetical: "between 224 Partners, LLC ("Landlord") and ..."
+      // Simpler parenthetical: "between Sunbelt Holdings, LLC ("Landlord") and ..."
       /\bbetween\s+([A-Z0-9][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Holdings|Partners?))\s*\(['""]?[Ll]andlord['""]?\)/i,
       // Legacy variants
       /(?:landlord\s+name|lessor\s+name|landlord|lessor|owner)\s*[:\-]\s*([^\n]{2,120})/i,
     ],
     description:
-      "LEGAL ENTITY name of the landlord/lessor ONLY (e.g. '224 Partners, LLC'). " +
+      "LEGAL ENTITY name of the landlord/lessor ONLY (e.g. 'Sunbelt Holdings, LLC'). " +
       "DO NOT use the signatory or signer. " +
-      "If the lease reads 'Landlord: 224 Partners, LLC  By: Jane Doe', return '224 Partners, LLC', NOT 'Jane Doe'. " +
+      "If the lease reads 'Landlord: Sunbelt Holdings, LLC  By: Jane Doe', return 'Sunbelt Holdings, LLC', NOT 'Jane Doe'. " +
       "Look for two opening-clause formats: (1) 'between [Entity], or its assigns (referred to as \"Landlord\")' and (2) 'between [Entity] (\"Landlord\") and ...' — in both cases extract the entity name BEFORE the parenthetical.",
     domain: "parties",
     evidencePolicy: "enforced",
@@ -1628,7 +1628,7 @@ const LEASE_GROUPS: FieldGroup[] = [
       "CRITICAL: Leases name parties in the opening paragraph in two formats: " +
       "(1) 'between [LANDLORD ENTITY], or its assigns (referred to as \"Landlord\"), and [TENANT ENTITY] (referred to as \"Tenant\")' " +
       "(2) 'between [LANDLORD ENTITY] (\"Landlord\") and [TENANT ENTITY] (\"Tenant\")' — the simpler parenthetical shorthand. " +
-      "In BOTH formats, extract the entity name BEFORE the parenthetical — e.g. '224 Partners, LLC' from 'between 224 Partners, LLC (\"Landlord\")'. " +
+      "In BOTH formats, extract the entity name BEFORE the parenthetical — e.g. 'Sunbelt Holdings, LLC' from 'between Sunbelt Holdings, LLC (\"Landlord\")'. " +
       "Do NOT return body-text phrases like 'hereby leases Premises to' — those are clause text, not entity names. " +
       "Also extract property name, premises address, unit/suite if present. " +
       "unit_number: the suite/unit identifier, typically a short number or code found in the Premises section (e.g. 'Suites 3 and 4'). " +

@@ -40,12 +40,22 @@ function dateStr(row: Row, field: string): string | null {
 
 // ── Lease calculations ───────────────────────────────────────────────────────
 
-/** Record a derivation trace so downstream workflow/UI knows how the value was computed. */
-function setDerived(row: Row, field: string, value: unknown, trace: string): void {
+/**
+ * Record a derivation trace so downstream workflow/UI knows how the value
+ * was computed. `inputFields` names the fields that fed the calculation
+ * (leaseReviewSchema.js's readFieldEvidence() already expects and reads this
+ * as `source_field_keys`/`sourceFieldKeys` for derived-field lineage, but
+ * nothing on the backend populated it until now -- only the free-text
+ * `trace` formula string existed).
+ */
+function setDerived(row: Row, field: string, value: unknown, trace: string, inputFields: string[]): void {
   row[field] = value;
   const traces = (row._derivation_traces ?? {}) as Record<string, string>;
   traces[field] = trace;
   row._derivation_traces = traces;
+  const sourceFields = (row._derivation_source_fields ?? {}) as Record<string, string[]>;
+  sourceFields[field] = inputFields;
+  row._derivation_source_fields = sourceFields;
 }
 
 function computeLeaseDerived(row: Row): void {
@@ -60,12 +70,12 @@ function computeLeaseDerived(row: Row): void {
   if (monthlyRent !== null && monthlyRent < 300 && sqft !== null && sqft > 0) {
     if (annualRent !== null && annualRent > 1000) {
       const corrected = round2(annualRent / 12);
-      setDerived(row, "monthly_rent", corrected, `reconciled from annual_rent(${annualRent}) / 12 — extracted monthly looked like PSF`);
+      setDerived(row, "monthly_rent", corrected, `reconciled from annual_rent(${annualRent}) / 12 — extracted monthly looked like PSF`, ["annual_rent"]);
       monthlyRent = corrected;
     } else if (annualRent === null) {
       const originalPsf = monthlyRent;
       const corrected = round2(originalPsf * sqft);
-      setDerived(row, "monthly_rent", corrected, `monthly_rent(${originalPsf}) × square_footage(${sqft}) — treated as PSF rate`);
+      setDerived(row, "monthly_rent", corrected, `monthly_rent(${originalPsf}) × square_footage(${sqft}) — treated as PSF rate`, ["monthly_rent", "square_footage"]);
       monthlyRent = corrected;
     }
   }
@@ -76,7 +86,7 @@ function computeLeaseDerived(row: Row): void {
     if (Math.abs(monthlyRent - expectedMonthly) > 10) {
       if (monthlyRent < 300 && annualRent > 1000) {
         const corrected = round2(expectedMonthly);
-        setDerived(row, "monthly_rent", corrected, `reconciled: annual_rent(${annualRent}) / 12 — extracted monthly(${monthlyRent}) was too small`);
+        setDerived(row, "monthly_rent", corrected, `reconciled: annual_rent(${annualRent}) / 12 — extracted monthly(${monthlyRent}) was too small`, ["annual_rent"]);
         monthlyRent = corrected;
       }
     }
@@ -85,14 +95,14 @@ function computeLeaseDerived(row: Row): void {
   // annual_rent = monthly_rent × 12
   if (monthlyRent !== null && annualRent === null) {
     const derived = round2(monthlyRent * 12);
-    setDerived(row, "annual_rent", derived, `monthly_rent(${monthlyRent}) × 12`);
+    setDerived(row, "annual_rent", derived, `monthly_rent(${monthlyRent}) × 12`, ["monthly_rent"]);
     annualRent = derived;
   }
 
   // monthly_rent = annual_rent / 12 (if annual was extracted but monthly wasn't)
   if (monthlyRent === null && annualRent !== null) {
     const derived = round2(annualRent / 12);
-    setDerived(row, "monthly_rent", derived, `annual_rent(${annualRent}) / 12`);
+    setDerived(row, "monthly_rent", derived, `annual_rent(${annualRent}) / 12`, ["annual_rent"]);
     monthlyRent = derived;
   }
 
@@ -100,7 +110,7 @@ function computeLeaseDerived(row: Row): void {
   if (rentPerSf === null && sqft !== null && sqft > 0) {
     const annual = num(row, "annual_rent");
     if (annual !== null) {
-      setDerived(row, "rent_per_sf", round2(annual / sqft), `annual_rent(${annual}) / square_footage(${sqft})`);
+      setDerived(row, "rent_per_sf", round2(annual / sqft), `annual_rent(${annual}) / square_footage(${sqft})`, ["annual_rent", "square_footage"]);
     }
   }
 
@@ -108,7 +118,7 @@ function computeLeaseDerived(row: Row): void {
   if (sqft === null && rentPerSf !== null && rentPerSf > 0) {
     const annual = num(row, "annual_rent");
     if (annual !== null) {
-      setDerived(row, "square_footage", Math.round(annual / rentPerSf), `annual_rent(${annual}) / rent_per_sf(${rentPerSf})`);
+      setDerived(row, "square_footage", Math.round(annual / rentPerSf), `annual_rent(${annual}) / rent_per_sf(${rentPerSf})`, ["annual_rent", "rent_per_sf"]);
     }
   }
 
@@ -129,12 +139,15 @@ function computeLeaseDerived(row: Row): void {
       if (months > 0) {
         const traceText = `start_date(${startDate}) to end_date(${endDate}) = ${months} months`;
         if (row.lease_term_months === null) {
-          setDerived(row, "lease_term_months", months, traceText);
+          setDerived(row, "lease_term_months", months, traceText, ["start_date", "end_date"]);
         } else {
           // Value already extracted — stamp trace to confirm it is date-consistent
           const traces = (row._derivation_traces ?? {}) as Record<string, string>;
           traces["lease_term_months"] = `confirmed: ${traceText}`;
           row._derivation_traces = traces;
+          const sourceFields = (row._derivation_source_fields ?? {}) as Record<string, string[]>;
+          sourceFields["lease_term_months"] = ["start_date", "end_date"];
+          row._derivation_source_fields = sourceFields;
         }
       }
     }

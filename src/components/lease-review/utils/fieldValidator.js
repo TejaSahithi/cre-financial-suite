@@ -127,7 +127,7 @@ export function validateFieldValue(fieldKey, value) {
   }
 
   // ── Name fields: reject signature-block artifacts ─────────────────────────────
-  // When the extractor reads a signature block like "By: Narendra Pydi  Date"
+  // When the extractor reads a signature block like "By: Morgan Reyes  Date"
   // it sometimes includes " Date" or " By:" as part of the name.
   if (fieldKey.endsWith("_name") && /\bDate\s*$/.test(str)) {
     return {
