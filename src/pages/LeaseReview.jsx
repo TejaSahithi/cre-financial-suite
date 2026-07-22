@@ -144,6 +144,7 @@ import { EnterpriseCoverageDashboard } from "@/components/lease-review/Enterpris
 import { EnterpriseFindings } from "@/components/lease-review/EnterpriseFindings";
 import SemanticPanelBoundary from "@/components/lease-review/SemanticPanelBoundary";
 import ApprovalReadinessSummary from "@/components/review/ApprovalReadinessSummary";
+import GroundedCopilotPanel from "@/components/copilot/GroundedCopilotPanel";
 import { useReviewDocument } from "@/lib/review/useReviewDocument";
 import { reviewDocumentToLegacyReviewPayload, shouldBridgeReviewDocumentToLegacyPayload } from "@/lib/review/adapters/viewModelLegacyBridge";
 
@@ -3120,6 +3121,10 @@ export default function LeaseReview() {
           DynamicFindings.jsx header comment. Renders nothing when empty. */}
       <div className="mb-4">
         <DynamicFindings dynamicFindings={normalized.dynamicFindings} />
+      </div>
+
+      <div className="mb-4">
+        <GroundedCopilotPanel scope="lease" />
       </div>
 
       <EnterpriseFindings findings={reviewDocument?.findings || []} onNavigateToField={handleNavigateToField} />

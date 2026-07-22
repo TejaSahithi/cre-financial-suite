@@ -1,6 +1,7 @@
 import React from "react";
 import { usePortfolioCriticalDates, usePortfolioIntelligence, useRentRollReconciliation } from "@/lib/portfolio-intelligence/hooks/usePortfolioIntelligence";
 import PortfolioIntelligenceDashboard from "@/components/portfolio-intelligence/PortfolioIntelligenceDashboard";
+import GroundedCopilotPanel from "@/components/copilot/GroundedCopilotPanel";
 
 function datePlus(days) {
   const date = new Date();
@@ -15,12 +16,15 @@ export default function PortfolioInsights() {
   const reconciliation = useRentRollReconciliation({ rentRoll: [] });
 
   return (
-    <PortfolioIntelligenceDashboard
-      viewModel={intelligence.data}
-      criticalDateEvents={criticalDates.data || []}
-      reconciliationFindings={reconciliation.data?.findings || []}
-      isLoading={intelligence.isLoading || criticalDates.isLoading}
-      error={intelligence.error || criticalDates.error}
-    />
+    <div className="space-y-4">
+      <GroundedCopilotPanel scope="portfolio" />
+      <PortfolioIntelligenceDashboard
+        viewModel={intelligence.data}
+        criticalDateEvents={criticalDates.data || []}
+        reconciliationFindings={reconciliation.data?.findings || []}
+        isLoading={intelligence.isLoading || criticalDates.isLoading}
+        error={intelligence.error || criticalDates.error}
+      />
+    </div>
   );
 }

@@ -228,3 +228,27 @@ export const ERROR_BUDGET_GATES_ENV_NAME = ERROR_BUDGET_GATES_FLAG_NAME;
 export const ASYNC_EXPORTS_ENV_NAME = ASYNC_EXPORTS_FLAG_NAME;
 export const LEGACY_RETIREMENT_CONTROLS_ENV_NAME = LEGACY_RETIREMENT_CONTROLS_FLAG_NAME;
 export const BROAD_GA_ENV_NAME = BROAD_GA_FLAG_NAME;
+
+const COPILOT_RELEASE11_FLAG_NAME = "ENABLE_COPILOT_RELEASE11";
+const COPILOT_LEASE_QA_FLAG_NAME = "ENABLE_COPILOT_LEASE_QA";
+const COPILOT_PORTFOLIO_QA_FLAG_NAME = "ENABLE_COPILOT_PORTFOLIO_QA";
+const COPILOT_EXECUTIVE_SUMMARIES_FLAG_NAME = "ENABLE_COPILOT_EXECUTIVE_SUMMARIES";
+const COPILOT_WORKFLOW_ASSIST_FLAG_NAME = "ENABLE_COPILOT_WORKFLOW_ASSIST";
+const COPILOT_GROUNDED_PROMPTS_FLAG_NAME = "ENABLE_COPILOT_GROUNDED_PROMPTS";
+const COPILOT_HALLUCINATION_CHECKS_FLAG_NAME = "ENABLE_COPILOT_HALLUCINATION_CHECKS";
+
+export function isCopilotRelease11Enabled(env: EnvLike = Deno.env): boolean { return readTruthyFlag(env, COPILOT_RELEASE11_FLAG_NAME); }
+export function isCopilotLeaseQaEnabled(env: EnvLike = Deno.env): boolean { return readTruthyFlag(env, COPILOT_LEASE_QA_FLAG_NAME); }
+export function isCopilotPortfolioQaEnabled(env: EnvLike = Deno.env): boolean { return readTruthyFlag(env, COPILOT_PORTFOLIO_QA_FLAG_NAME); }
+export function isCopilotExecutiveSummariesEnabled(env: EnvLike = Deno.env): boolean { return readTruthyFlag(env, COPILOT_EXECUTIVE_SUMMARIES_FLAG_NAME); }
+export function isCopilotWorkflowAssistEnabled(env: EnvLike = Deno.env): boolean { return readTruthyFlag(env, COPILOT_WORKFLOW_ASSIST_FLAG_NAME); }
+export function isCopilotGroundedPromptsEnabled(env: EnvLike = Deno.env): boolean { return readTruthyFlag(env, COPILOT_GROUNDED_PROMPTS_FLAG_NAME); }
+export function isCopilotHallucinationChecksEnabled(env: EnvLike = Deno.env): boolean { return readTruthyFlag(env, COPILOT_HALLUCINATION_CHECKS_FLAG_NAME); }
+
+export const COPILOT_RELEASE11_ENV_NAME = COPILOT_RELEASE11_FLAG_NAME;
+export const COPILOT_LEASE_QA_ENV_NAME = COPILOT_LEASE_QA_FLAG_NAME;
+export const COPILOT_PORTFOLIO_QA_ENV_NAME = COPILOT_PORTFOLIO_QA_FLAG_NAME;
+export const COPILOT_EXECUTIVE_SUMMARIES_ENV_NAME = COPILOT_EXECUTIVE_SUMMARIES_FLAG_NAME;
+export const COPILOT_WORKFLOW_ASSIST_ENV_NAME = COPILOT_WORKFLOW_ASSIST_FLAG_NAME;
+export const COPILOT_GROUNDED_PROMPTS_ENV_NAME = COPILOT_GROUNDED_PROMPTS_FLAG_NAME;
+export const COPILOT_HALLUCINATION_CHECKS_ENV_NAME = COPILOT_HALLUCINATION_CHECKS_FLAG_NAME;

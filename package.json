@@ -32,7 +32,8 @@
     "test:release10-load": "node scripts/check-release10-load-tests.mjs",
     "verify:backups": "node scripts/verify-backups.mjs",
     "verify:disaster-recovery": "node scripts/verify-disaster-recovery.mjs",
-    "verify:legacy-retirement": "node scripts/verify-legacy-retirement.mjs"
+    "verify:legacy-retirement": "node scripts/verify-legacy-retirement.mjs",
+    "check:release11-readiness": "node scripts/check-release11-readiness.mjs"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^17.0.0",
