@@ -105,7 +105,7 @@ async function runParseStageInline(
         pipeline,
       },
     };
-    await setStatus(supabaseAdmin, fileId, "failed", {
+    const { error: blockedStatusError } = await setStatus(supabaseAdmin, fileId, "failed", {
       processing_status: args.parserStatus,
       review_status: REVIEW_STATUSES.BLOCKED,
       review_required: false,
@@ -126,6 +126,16 @@ async function runParseStageInline(
       valid_count: 0,
       error_count: 1,
     });
+    // The caller (parserFailureAlreadyPersisted) assumes this write already
+    // landed and only fails the pipeline_jobs row, not uploaded_files -- an
+    // unchecked failure here previously left the file stuck showing its
+    // pre-failure status (e.g. "parsing") with no error_message while the
+    // job was correctly marked failed. Fall back to the FSM-bypassing
+    // setFailed(), same idiom already used by parkLeaseForManualReview below.
+    if (blockedStatusError) {
+      console.error(`[${WORKER_NAME}] persistBlockedParse: setStatus(failed) rejected for file_id=${fileId}:`, blockedStatusError.message ?? blockedStatusError);
+      await setFailed(supabaseAdmin, fileId, args.message, "parse", 15);
+    }
     return payload;
   };
 
@@ -142,10 +152,56 @@ async function runParseStageInline(
   });
 
   try {
-    const storagePath = fileRecord.file_url.replace(
+    // Prefer the canonical storage_path column (set directly by
+    // upload-handler from the same variable it uploaded with -- no string
+    // parsing); fall back to parsing file_url only for rows that predate
+    // that column existing. Mirrors parse-document-azure/index.ts, which
+    // this inline path duplicates rather than calls.
+    const storagePath = fileRecord.storage_path || fileRecord.file_url.replace(
       /^.*\/storage\/v1\/object\/public\/financial-uploads\//,
       "",
     );
+
+    // Confirm the source bytes actually exist in storage before asking
+    // Azure to fetch them -- otherwise a file whose upload never durably
+    // landed surfaces as a confusing "document parser returned only N
+    // readable characters" error (Azure OCR'ing a tiny storage-error
+    // response body instead of the real PDF) rather than a clear,
+    // immediate, actionable failure. Same guard as parse-document-azure/
+    // index.ts; this inline path is a separate implementation and does not
+    // inherit that fix automatically.
+    const storagePathParts = storagePath.split("/");
+    const storageFileName = storagePathParts.pop() ?? "";
+    const storageDir = storagePathParts.join("/");
+    const { data: storageListing, error: storageListError } = await supabaseAdmin
+      .storage
+      .from("financial-uploads")
+      .list(storageDir, { search: storageFileName, limit: 1 });
+    const storageObjectExists = !storageListError &&
+      Array.isArray(storageListing) &&
+      storageListing.some((entry: any) => entry?.name === storageFileName);
+    if (!storageObjectExists) {
+      const errMsg =
+        `Source file is missing from storage (path="${storagePath}"). The upload did not durably ` +
+        `complete, so there is nothing for Azure Document Intelligence to read.`;
+      console.error(`[${WORKER_NAME}] ${errMsg}`, storageListError ?? "");
+      const payload = await persistBlockedParse({
+        parserStatus: PARSER_STATUSES.FAILED,
+        errorCode: "SOURCE_FILE_MISSING_FROM_STORAGE",
+        message: errMsg,
+        fullTextChars: 0,
+        pageCount: null,
+        providerUsed: "azure_document_intelligence",
+        warnings: [errMsg],
+      });
+      if (stage) await stage.fail("SOURCE_FILE_MISSING_FROM_STORAGE", errMsg, { outcome: "terminal_failure" });
+      return {
+        ok: false,
+        error: errMsg,
+        error_code: "SOURCE_FILE_MISSING_FROM_STORAGE",
+        data: { parser_status: PARSER_STATUSES.FAILED, processing_status: "failed", ui_review_payload: payload },
+      };
+    }
 
     const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin
       .storage
@@ -1143,7 +1199,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: fileRecord, error: fileError } = await supabaseAdmin
       .from("uploaded_files")
-      .select("id, org_id, status, file_name, module_type, document_subtype, file_size, file_url, mime_type")
+      .select("id, org_id, status, file_name, module_type, document_subtype, file_size, file_url, mime_type, storage_path")
       .eq("id", fileId)
       .eq("org_id", orgId)
       .maybeSingle();
