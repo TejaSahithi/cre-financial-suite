@@ -24,7 +24,8 @@
     "benchmark:portfolio": "node scripts/run-portfolio-benchmark.mjs",
     "test:portfolio-isolation": "node scripts/check-portfolio-isolation.mjs",
     "test:portfolio-load": "node scripts/check-portfolio-load-tests.mjs",
-    "check:portfolio-readiness": "node scripts/check-portfolio-readiness.mjs"
+    "check:portfolio-readiness": "node scripts/check-portfolio-readiness.mjs",
+    "check:release9-readiness": "node scripts/check-release9-readiness.mjs"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^17.0.0",

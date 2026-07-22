@@ -165,3 +165,30 @@ export const PORTFOLIO_RISK_SCORING_ENV_NAME = PORTFOLIO_RISK_SCORING_FLAG_NAME;
 export const RENT_ROLL_RECONCILIATION_ENV_NAME = RENT_ROLL_RECONCILIATION_FLAG_NAME;
 export const PORTFOLIO_EXPORTS_ENV_NAME = PORTFOLIO_EXPORTS_FLAG_NAME;
 export const PORTFOLIO_INTEGRATION_API_ENV_NAME = PORTFOLIO_INTEGRATION_API_FLAG_NAME;
+
+const EVENT_BUS_FLAG_NAME = "ENABLE_EVENT_BUS";
+const WORKFLOW_ENGINE_FLAG_NAME = "ENABLE_WORKFLOW_ENGINE";
+const WEBHOOKS_FLAG_NAME = "ENABLE_WEBHOOKS";
+const NOTIFICATIONS_FLAG_NAME = "ENABLE_NOTIFICATIONS";
+const CONNECTORS_FLAG_NAME = "ENABLE_CONNECTORS";
+const PUBLIC_API_FLAG_NAME = "ENABLE_PUBLIC_API";
+const EXPORT_AUTOMATION_FLAG_NAME = "ENABLE_EXPORT_AUTOMATION";
+const CALENDAR_SYNC_FLAG_NAME = "ENABLE_CALENDAR_SYNC";
+
+export function isEventBusEnabled(env: EnvLike = Deno.env): boolean { return readTruthyFlag(env, EVENT_BUS_FLAG_NAME); }
+export function isWorkflowEngineEnabled(env: EnvLike = Deno.env): boolean { return readTruthyFlag(env, WORKFLOW_ENGINE_FLAG_NAME); }
+export function isWebhooksEnabled(env: EnvLike = Deno.env): boolean { return readTruthyFlag(env, WEBHOOKS_FLAG_NAME); }
+export function isNotificationsEnabled(env: EnvLike = Deno.env): boolean { return readTruthyFlag(env, NOTIFICATIONS_FLAG_NAME); }
+export function isConnectorsEnabled(env: EnvLike = Deno.env): boolean { return readTruthyFlag(env, CONNECTORS_FLAG_NAME); }
+export function isPublicApiEnabled(env: EnvLike = Deno.env): boolean { return readTruthyFlag(env, PUBLIC_API_FLAG_NAME); }
+export function isExportAutomationEnabled(env: EnvLike = Deno.env): boolean { return readTruthyFlag(env, EXPORT_AUTOMATION_FLAG_NAME); }
+export function isCalendarSyncEnabled(env: EnvLike = Deno.env): boolean { return readTruthyFlag(env, CALENDAR_SYNC_FLAG_NAME); }
+
+export const EVENT_BUS_ENV_NAME = EVENT_BUS_FLAG_NAME;
+export const WORKFLOW_ENGINE_ENV_NAME = WORKFLOW_ENGINE_FLAG_NAME;
+export const WEBHOOKS_ENV_NAME = WEBHOOKS_FLAG_NAME;
+export const NOTIFICATIONS_ENV_NAME = NOTIFICATIONS_FLAG_NAME;
+export const CONNECTORS_ENV_NAME = CONNECTORS_FLAG_NAME;
+export const PUBLIC_API_ENV_NAME = PUBLIC_API_FLAG_NAME;
+export const EXPORT_AUTOMATION_ENV_NAME = EXPORT_AUTOMATION_FLAG_NAME;
+export const CALENDAR_SYNC_ENV_NAME = CALENDAR_SYNC_FLAG_NAME;

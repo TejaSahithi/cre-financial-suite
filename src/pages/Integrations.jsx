@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Plug, Circle, Upload, Download, Loader2, RefreshCw, Database } from "lucide-react";
+import IntegrationOperationsDashboard from "@/components/integration-orchestration/IntegrationOperationsDashboard";
 
 const integrations = [
   { name: "QuickBooks Online", desc: "Sync expenses and revenue with QuickBooks", category: "accounting", icon: "📊", features: ["Expense import", "Revenue sync", "GL mapping"] },
@@ -103,6 +104,8 @@ export default function Integrations() {
           <Button variant="outline" onClick={() => setShowExport(true)}><Download className="w-4 h-4 mr-2" />Export Data</Button>
         </div>
       </div>
+
+      <IntegrationOperationsDashboard />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
