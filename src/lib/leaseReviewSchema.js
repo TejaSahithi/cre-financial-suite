@@ -68,6 +68,7 @@ export const LEASE_REVIEW_TABS = [
   { key: "clause_records", label: "Clause Records" },
   { key: "budget_preview", label: "Budget Preview" },
   { key: "extraction_debug", label: "Extraction Debug" },
+  { key: "extraction_timeline", label: "Extraction Timeline" },
 ];
 
 // Field metadata.

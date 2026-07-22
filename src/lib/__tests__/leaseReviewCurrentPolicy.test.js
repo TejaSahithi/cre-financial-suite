@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { REVIEW_STATUSES, REQUIRED_FIELD_KEYS, isResolvedReview } from "../leaseReviewSchema";
+import { LEASE_REVIEW_TABS, REVIEW_STATUSES, REQUIRED_FIELD_KEYS, isResolvedReview } from "../leaseReviewSchema";
 import { normalizeLeaseReviewData } from "../leaseReviewFieldNormalizer";
 import { detectDocumentProfile } from "../documentProfile";
 import {
@@ -153,6 +153,8 @@ describe("leaseReviewCurrentPolicy", () => {
     expect(source).not.toContain("Evidence and CAM enrichment is still running.");
     expect(source).not.toContain("LeaseReviewReadinessSummary");
     expect(source).not.toContain("ApprovalBlockersPanel");
+    expect(source).toContain("ExtractionTimelinePanel");
+    expect(LEASE_REVIEW_TABS.at(-1)).toEqual({ key: "extraction_timeline", label: "Extraction Timeline" });
   });
 });
 

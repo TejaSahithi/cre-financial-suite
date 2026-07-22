@@ -132,6 +132,7 @@ import {
   RentScheduleTable,
 } from "@/components/lease-review/SpecializedTables";
 import ExtractionDebugPanel from "@/components/lease-review/ExtractionDebugPanel";
+import ExtractionTimelinePanel from "@/components/lease-review/ExtractionTimelinePanel";
 import DynamicFindings from "@/components/lease-review/DynamicFindings";
 import LeaseReviewTabTable from "@/components/lease-review/LeaseReviewTabTable";
 import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
@@ -249,7 +250,8 @@ export default function LeaseReview() {
         .from("uploaded_files")
         .select(
           "id, status, ui_review_payload, reviewed_output, normalized_output, parsed_data, " +
-          "review_readiness, review_readiness_reasons, enrichment_status, artifact_sync_status, active_generation_id",
+          "review_readiness, review_readiness_reasons, enrichment_status, artifact_sync_status, active_generation_id, " +
+          "progress_percentage, processing_started_at, processing_completed_at",
         )
         .eq("id", resolvedSourceFileId)
         .single();
@@ -3242,7 +3244,7 @@ export default function LeaseReview() {
 
         {/* Business tabs - one spreadsheet-style table per section. */}
         {LEASE_REVIEW_TABS
-          .filter((t) => !["summary", "rent_charges", "expenses_recoveries", "cam_rules", "clause_records", "critical_dates", "documents_exhibits", "budget_preview", "extraction_debug"].includes(t.key))
+          .filter((t) => !["summary", "rent_charges", "expenses_recoveries", "cam_rules", "clause_records", "critical_dates", "documents_exhibits", "budget_preview", "extraction_debug", "extraction_timeline"].includes(t.key))
           .map((tab) => (
             <TabsContent key={tab.key} value={tab.key} className="mt-4 space-y-3">
               <div className="flex justify-end">
@@ -3305,6 +3307,10 @@ export default function LeaseReview() {
             <ExtractionDebugPanel lease={leaseFull} />
           </TabsContent>
         )}
+
+        <TabsContent value="extraction_timeline" className="mt-4 space-y-4">
+          <ExtractionTimelinePanel uploadedFile={uploadedFile} uploadedFileId={resolvedSourceFileId} lease={leaseFull} />
+        </TabsContent>
       </Tabs>
 
       {/* Side drawer for full field detail. */}
