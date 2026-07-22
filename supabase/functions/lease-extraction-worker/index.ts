@@ -1431,7 +1431,7 @@ Deno.serve(async (req: Request) => {
       // attempt already did. Without the stage predicate, two overlapping
       // attempts (e.g. a retry racing a reconciled run) would both dispatch
       // normalize-pdf-output.
-      const { data: claimedJob, error: claimError } = await supabaseAdmin
+      const { data: normalizeStageClaim, error: normalizeStageClaimError } = await supabaseAdmin
         .from("pipeline_jobs")
         .update({
           stage: "normalize",
@@ -1453,7 +1453,7 @@ Deno.serve(async (req: Request) => {
         .select("id")
         .maybeSingle();
 
-      if (claimError || !claimedJob) {
+      if (normalizeStageClaimError || !normalizeStageClaim) {
         const { data: latestJob } = await supabaseAdmin
           .from("pipeline_jobs")
           .select("id, stage, status, cancel_requested_at")
