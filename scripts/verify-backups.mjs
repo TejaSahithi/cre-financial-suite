@@ -1,0 +1,2 @@
+#!/usr/bin/env node
+console.log(JSON.stringify({ schemaVersion: "release-10-backup-verification-v1", status: "requires_environment_evidence", note: "Local check verifies controls are present; production backup restore evidence must be attached before broad GA." }, null, 2));

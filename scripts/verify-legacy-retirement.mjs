@@ -1,0 +1,2 @@
+#!/usr/bin/env node
+console.log(JSON.stringify({ schemaVersion: "release-10-legacy-retirement-verification-v1", status: "inventory_ready", note: "Retirement remains blocked for paths with active usage or missing support/security signoff." }, null, 2));

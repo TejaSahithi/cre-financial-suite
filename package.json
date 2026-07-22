@@ -25,7 +25,14 @@
     "test:portfolio-isolation": "node scripts/check-portfolio-isolation.mjs",
     "test:portfolio-load": "node scripts/check-portfolio-load-tests.mjs",
     "check:portfolio-readiness": "node scripts/check-portfolio-readiness.mjs",
-    "check:release9-readiness": "node scripts/check-release9-readiness.mjs"
+    "check:release9-readiness": "node scripts/check-release9-readiness.mjs",
+    "check:release10-readiness": "node scripts/check-release10-readiness.mjs",
+    "generate:compliance-evidence": "node scripts/generate-compliance-evidence.mjs",
+    "test:enterprise-security": "node scripts/check-release10-enterprise-security.mjs",
+    "test:release10-load": "node scripts/check-release10-load-tests.mjs",
+    "verify:backups": "node scripts/verify-backups.mjs",
+    "verify:disaster-recovery": "node scripts/verify-disaster-recovery.mjs",
+    "verify:legacy-retirement": "node scripts/verify-legacy-retirement.mjs"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^17.0.0",

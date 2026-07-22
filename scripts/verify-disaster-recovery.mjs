@@ -1,0 +1,2 @@
+#!/usr/bin/env node
+console.log(JSON.stringify({ schemaVersion: "release-10-dr-verification-v1", status: "requires_exercise_evidence", note: "DR controls are present; broad GA requires a completed exercise report with observed RPO/RTO." }, null, 2));

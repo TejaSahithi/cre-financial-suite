@@ -14,10 +14,11 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Settings, Users, GitBranch, Bell, Save, Plus, Loader2, Package } from "lucide-react";
+import { Settings, Users, GitBranch, Bell, Save, Plus, Loader2, Package, ShieldCheck } from "lucide-react";
 import { ALL_MODULE_KEYS, MODULE_DEFINITIONS } from "@/lib/moduleConfig";
 import { toast } from "sonner";
 import AdminControlSurfaces from "@/components/admin/AdminControlSurfaces";
+import EnterpriseControlPlaneDashboard from "@/components/enterprise-control/EnterpriseControlPlaneDashboard";
 
 const settingsTabs = [
   { id: "org", label: "Organization", icon: Settings },
@@ -27,6 +28,7 @@ const settingsTabs = [
   { id: "mapping_rules", label: "Field Mapping Rules", icon: GitBranch },
   { id: "approval_workflows", label: "Approval Workflows", icon: GitBranch },
   { id: "audit_surface", label: "Audit Surface", icon: Bell },
+  { id: "enterprise_control", label: "Enterprise Control", icon: ShieldCheck },
   { id: "notifications", label: "Notifications", icon: Bell },
 ];
 
@@ -364,6 +366,10 @@ export default function OrgSettings() {
                 <p className="text-sm text-slate-500">Notification templates and email preferences will be configured here. Configure stakeholder notification preferences on the Stakeholders page.</p>
               </CardContent>
             </Card>
+          )}
+
+          {activeTab === "enterprise_control" && (
+            <EnterpriseControlPlaneDashboard />
           )}
 
           {["mapping_rules", "approval_workflows", "audit_surface"].includes(activeTab) && (
