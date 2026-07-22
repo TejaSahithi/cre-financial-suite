@@ -132,10 +132,8 @@ import {
   RentScheduleTable,
 } from "@/components/lease-review/SpecializedTables";
 import ExtractionDebugPanel from "@/components/lease-review/ExtractionDebugPanel";
-import ApprovalBlockersPanel from "@/components/lease-review/ApprovalBlockersPanel";
 import DynamicFindings from "@/components/lease-review/DynamicFindings";
 import LeaseReviewTabTable from "@/components/lease-review/LeaseReviewTabTable";
-import LeaseReviewReadinessSummary from "@/components/lease-review/LeaseReviewReadinessSummary";
 import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
 import { getFieldPolicyLabel } from "@/lib/leaseReviewCurrentPolicy";
 import { isLeaseReviewEnrichmentInFlight } from "@/lib/leaseReviewUiState";
@@ -143,7 +141,6 @@ import { EnterpriseHeaderIntelligenceBar } from "@/components/lease-review/Enter
 import { EnterpriseCoverageDashboard } from "@/components/lease-review/EnterpriseCoverageDashboard";
 import { EnterpriseFindings } from "@/components/lease-review/EnterpriseFindings";
 import SemanticPanelBoundary from "@/components/lease-review/SemanticPanelBoundary";
-import ApprovalReadinessSummary from "@/components/review/ApprovalReadinessSummary";
 import GroundedCopilotPanel from "@/components/copilot/GroundedCopilotPanel";
 import { useReviewDocument } from "@/lib/review/useReviewDocument";
 import { reviewDocumentToLegacyReviewPayload, shouldBridgeReviewDocumentToLegacyPayload } from "@/lib/review/adapters/viewModelLegacyBridge";
@@ -994,7 +991,6 @@ export default function LeaseReview() {
   // used to reconstruct "has extraction succeeded" from ~10 independent
   // heuristics over lease.extraction_data/ui_review_payload shapes.
   const enrichmentStatus = uploadedFile?.enrichment_status ?? uploadedFile?.ui_review_payload?.enrichment_status ?? null;
-  const isEnrichmentInFlight = isLeaseReviewEnrichmentInFlight(enrichmentStatus);
   const isEnrichmentFailed = enrichmentStatus === "failed";
   const reviewReadiness = uploadedFile?.review_readiness ?? null;
   const reviewReadinessReasons = Array.isArray(uploadedFile?.review_readiness_reasons)
@@ -1246,9 +1242,6 @@ export default function LeaseReview() {
   const signatureRecipients = scopedStakeholders.filter((s) => s.email);
 
   // --- Approval blockers ---------------------------------------------------
-  const expenseCamUnreviewed =
-    (effectiveExpenseTermsFound + effectiveCamTermsFound) > 0 &&
-    !approvedRuleSet;
 
   const bulkEvaluation = (() => {
     const allKnownKeys = new Set();
@@ -1449,9 +1442,6 @@ export default function LeaseReview() {
   }
 
   const canApprove = approvalBlockers.length === 0;
-  const blockerMessage = canApprove
-    ? "All checks passed. You can approve the lease abstract."
-    : approvalBlockers.map((b) => b.title).join(" - ");
   const approvalDisabledTooltip = canApprove
     ? "Approve the lease abstract"
     : "Cannot approve: required fields have unresolved conflicts or require manual review. Check the Expenses/CAM tabs.";
@@ -2893,14 +2883,6 @@ export default function LeaseReview() {
         </div>
       )}
 
-      {/* Non-blocking evidence/CAM enrichment banner - fields stay visible underneath */}
-      {!reextracting && isEnrichmentInFlight && hasDisplayableExtractedFields && (
-        <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 flex items-center gap-3">
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-500" />
-          Evidence and CAM enrichment is still running.
-        </div>
-      )}
-
       {/* P0.7: failed enrichment previously showed no banner at all
           (isLeaseReviewEnrichmentInFlight only covers pending/running) -
           fixed to surface it, with the server's exact blocking_reasons,
@@ -2936,28 +2918,6 @@ export default function LeaseReview() {
               </div>
             ))}
           </dl>
-        </div>
-      )}
-
-      {/* Rule readiness banner - only for full leases */}
-      {!isAssignmentOnlyDocument && !isStalePayload && (
-        <div
-          className={`rounded-xl border px-4 py-3 text-sm ${
-            approvedRuleSet
-              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-              : "border-amber-200 bg-amber-50 text-amber-800"
-          }`}
-        >
-          {approvedRuleSet
-            ? "Lease expense rules are approved. Approving the lease abstract will refresh lease-derived charges and CAM readiness."
-            : (
-              <span>
-                Expense/CAM rule review is pending. You may approve the lease abstract now, but downstream recoveries/CAM will remain blocked until rules are approved.{" "}
-                <Link to={createPageUrl("LeaseExpenseRules") + `?lease=${lease.id}`} className="underline font-medium">
-                  Review rules on the Lease Expense Rules page
-                </Link>
-              </span>
-            )}
         </div>
       )}
 
@@ -3105,18 +3065,6 @@ export default function LeaseReview() {
         </Suspense>
       </SemanticPanelBoundary>
 
-      <div className="mb-4">
-        <LeaseReviewReadinessSummary
-          summary={normalized.readinessSummary}
-          activeTab={activeTab}
-          onSelectTab={setActiveTab}
-        />
-      </div>
-
-      <div className="mb-4">
-        <ApprovalBlockersPanel approvalBlockers={normalized.approvalBlockers} />
-      </div>
-
       {/* Release 1: read-only, informational, never blocks approval -- see
           DynamicFindings.jsx header comment. Renders nothing when empty. */}
       <div className="mb-4">
@@ -3169,7 +3117,6 @@ export default function LeaseReview() {
         {/* Summary tab */}
         <TabsContent value="summary" className="mt-4 space-y-4">
           <EnterpriseCoverageDashboard coverage={reviewDocument?.coverage} approval={reviewDocument?.approval} />
-          <ApprovalReadinessSummary approval={reviewDocument?.approval} />
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Lease Summary</CardTitle>
@@ -3241,30 +3188,6 @@ export default function LeaseReview() {
                   Expense Classification
                 </Button>
               </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Approval Blockers</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              {approvalBlockers.length === 0 ? (
-                <div className="flex items-center gap-2 rounded-lg bg-emerald-50 p-3 text-emerald-700">
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>No blockers. Ready to approve.</span>
-                </div>
-              ) : (
-                approvalBlockers.map((b) => (
-                  <div key={b.kind} className="rounded-lg border border-red-200 bg-red-50 p-3">
-                    <div className="flex items-center gap-2 text-red-700">
-                      <AlertTriangle className="h-4 w-4" />
-                      <p className="text-sm font-semibold">{b.title}</p>
-                    </div>
-                    <p className="ml-6 mt-1 text-xs text-red-600">{b.detail}</p>
-                  </div>
-                ))
-              )}
             </CardContent>
           </Card>
 
@@ -3726,23 +3649,7 @@ export default function LeaseReview() {
             </>
           ) : (
             <>
-              <div className="text-xs text-slate-500">
-                {canApprove ? (
-                  <span className="text-emerald-700">All checks passed. You can approve the lease abstract.</span>
-                ) : (
-                  <div className="space-y-0.5">
-                    {approvalBlockers.map((b) => (
-                      <div key={b.kind} className="text-amber-700">
-                        <span className="font-semibold">Approval blocked: {b.title}</span>
-                        {b.detail && (
-                          <span className="ml-1 text-amber-600"> - {b.detail}</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="ml-auto flex flex-wrap items-center gap-2">
                 <Button
                   variant="outline"
                   onClick={() => setShowReextractConfirm(true)}
@@ -4129,4 +4036,3 @@ export default function LeaseReview() {
     </div>
   );
 }
-

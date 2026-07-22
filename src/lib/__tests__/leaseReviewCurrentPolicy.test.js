@@ -142,15 +142,17 @@ describe("leaseReviewCurrentPolicy", () => {
     expect(isResolvedReview({ status: REVIEW_STATUSES.PENDING })).toBe(false);
   });
 
-  it("keeps Lease Review action handlers and enrichment banner wiring present", () => {
+  it("keeps Lease Review action handlers while hiding advisory readiness chrome", () => {
     const source = readFileSync(resolve(process.cwd(), "src/pages/LeaseReview.jsx"), "utf8");
 
     expect(source).toContain("const handleAccept = (field) =>");
     expect(source).toContain("const handleMarkNA = (field) =>");
     expect(source).toContain("const handleNeedsLegal = (field) =>");
     expect(source).toContain("const handleMarkManualRequired = (field) =>");
-    expect(source).toContain("isLeaseReviewEnrichmentInFlight(enrichmentStatus)");
-    expect(source).toContain("Evidence and CAM enrichment is still running.");
+    expect(source).toContain("isLeaseReviewEnrichmentInFlight(status)");
+    expect(source).not.toContain("Evidence and CAM enrichment is still running.");
+    expect(source).not.toContain("LeaseReviewReadinessSummary");
+    expect(source).not.toContain("ApprovalBlockersPanel");
   });
 });
 
