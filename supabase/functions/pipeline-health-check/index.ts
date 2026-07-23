@@ -15,7 +15,7 @@
 
 import { corsHeaders } from "../_shared/cors.ts";
 import { createAdminClient, verifyUser } from "../_shared/supabase.ts";
-import { callLLMText } from "../_shared/llm.ts";
+import { callLLMText, isLLMProviderConfigured } from "../_shared/llm.ts";
 import { getAzureDocumentIntelligenceConfig } from "../_shared/azure/document-intelligence.ts";
 import { resolveExtractionProvider } from "../_shared/extraction/extraction-provider.ts";
 
@@ -77,12 +77,25 @@ function checkEnvVars(): Check[] {
     });
   }
 
-  const hasOpenAI = !!Deno.env.get("OPENAI_API_KEY");
+  const usingAzureOpenAI = !!Deno.env.get("AZURE_OPENAI_ENDPOINT");
+  const hasOpenAI = isLLMProviderConfigured();
   checks.push({
     name: "env_openai_api_key",
     status: hasOpenAI ? "pass" : "fail",
-    message: hasOpenAI ? "OpenAI API key configured (OPENAI_API_KEY)" : "OpenAI API key missing (OPENAI_API_KEY)",
-    ...(hasOpenAI ? {} : { fix: "supabase secrets set OPENAI_API_KEY=<your-key>" }),
+    message: hasOpenAI
+      ? usingAzureOpenAI
+        ? "Azure OpenAI configured (AZURE_OPENAI_ENDPOINT + API key)"
+        : "OpenAI API key configured (OPENAI_API_KEY)"
+      : usingAzureOpenAI
+        ? "AZURE_OPENAI_ENDPOINT is set but no API key found"
+        : "OpenAI API key missing (OPENAI_API_KEY)",
+    ...(hasOpenAI
+      ? {}
+      : {
+        fix: usingAzureOpenAI
+          ? "supabase secrets set AZURE_OPENAI_API_KEY=<your-azure-resource-key>"
+          : "supabase secrets set OPENAI_API_KEY=<your-key>",
+      }),
   });
 
   const providerSelection = resolveExtractionProvider();
@@ -192,17 +205,25 @@ async function checkStorage(admin: any): Promise<Check> {
 }
 
 async function checkOpenAIAuth(): Promise<Check> {
-  const hasOpenAI = !!Deno.env.get("OPENAI_API_KEY");
-  if (!hasOpenAI) {
+  const usingAzureOpenAI = !!Deno.env.get("AZURE_OPENAI_ENDPOINT");
+  const providerLabel = usingAzureOpenAI ? "Azure OpenAI" : "OpenAI";
+  if (!isLLMProviderConfigured()) {
     return {
       name: "openai_auth",
       status: "fail",
-      message: "OpenAI API key not configured",
-      fix: "Set OPENAI_API_KEY in Supabase secrets",
+      message: `${providerLabel} API key not configured`,
+      fix: usingAzureOpenAI
+        ? "Set AZURE_OPENAI_API_KEY in Supabase secrets"
+        : "Set OPENAI_API_KEY in Supabase secrets",
     };
   }
 
   try {
+    // A real, live call through the exact code path extraction uses — this
+    // is what actually proves the credential works, not just that a secret
+    // is present. Catches wrong-provider mismatches (e.g. an Azure OpenAI
+    // key stored under OPENAI_API_KEY while AZURE_OPENAI_ENDPOINT is unset)
+    // that a presence-only check cannot.
     const response = await callLLMText({
       userPrompt: "Return 'OK'",
       maxOutputTokens: 10,
@@ -213,15 +234,17 @@ async function checkOpenAIAuth(): Promise<Check> {
       name: "openai_auth",
       status: content ? "pass" : "warn",
       message: content
-        ? `OpenAI connection validation succeeded via model: ${response.model}`
-        : "OpenAI responded with empty content",
+        ? `${providerLabel} connection validation succeeded via model: ${response.model}`
+        : `${providerLabel} responded with empty content`,
     };
   } catch (err: any) {
     return {
       name: "openai_auth",
       status: "fail",
-      message: `OpenAI validation failed: ${err.message}`,
-      fix: "Verify OPENAI_API_KEY is active and valid",
+      message: `${providerLabel} validation failed: ${err.message}`,
+      fix: usingAzureOpenAI
+        ? "Verify AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT, and AZURE_OPENAI_API_KEY are correct"
+        : "Verify OPENAI_API_KEY is active and valid",
     };
   }
 }

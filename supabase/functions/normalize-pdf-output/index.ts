@@ -26,6 +26,7 @@ import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { isInternalCall } from "../_shared/internal-auth.ts";
 import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
 import { runBusinessExtraction } from "../_shared/extraction/business-extraction-orchestrator.ts";
+import { isLLMProviderConfigured } from "../_shared/llm.ts";
 import { normalizeBusinessExtractionMode, type CanonicalBusinessExtractionMode } from "../_shared/extraction/business-extraction-provenance.ts";
 import { isAzureLayoutOutput } from "../_shared/extraction/extraction-provider.ts";
 import { getFieldGroups, getSchema, getEvidencePolicyCoverage } from "../_shared/extraction/schemas.ts";
@@ -2296,7 +2297,7 @@ Deno.serve(async (req: Request) => {
     // dry_run=true: validate auth and optionally run extraction on sample_text.
     // No file_id required and no DB writes — used by pipeline-health-check.
     if (dry_run === true) {
-      const hasOpenAI = !!Deno.env.get("OPENAI_API_KEY");
+      const hasOpenAI = isLLMProviderConfigured();
 
       let extraction: Record<string, unknown> | null = null;
       if (typeof sample_text === "string" && sample_text.length > 0) {
@@ -2547,7 +2548,7 @@ Deno.serve(async (req: Request) => {
     const extractionSkipped =
       (fileRecord.docling_raw as any)?._metadata?.extraction_skipped_reason ||
       (fileRecord.docling_raw as any)?.extraction_method === "none";
-    const hasLLM = !!Deno.env.get("OPENAI_API_KEY");
+    const hasLLM = isLLMProviderConfigured();
     if (extractionSkipped && !hasLLM) {
       console.warn(
         `[normalize-pdf-output] file_id=${file_id} — parse-document-azure stored empty output ` +

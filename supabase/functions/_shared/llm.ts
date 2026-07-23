@@ -2,14 +2,32 @@
 /**
  * _shared/llm.ts — Provider-agnostic LLM service.
  *
- * This is the ONLY file in the codebase that knows about OpenAI.
- * All callers import { callLLMJSON, callLLMText } from here.
- * Switching providers in the future only requires changing this file.
+ * This is the ONLY file in the codebase that knows about OpenAI / Azure
+ * OpenAI. All callers import { callLLMJSON, callLLMText } from here.
  *
- * Configuration (Supabase secrets):
- *   OPENAI_API_KEY          — required
- *   OPENAI_MODEL            — optional, default: "gpt-4o-mini"
- *   OPENAI_MAX_OUTPUT_TOKENS — optional, default: 16384
+ * Two supported backends, chosen automatically by whether
+ * AZURE_OPENAI_ENDPOINT is set:
+ *
+ *   Direct OpenAI platform (default when AZURE_OPENAI_ENDPOINT is unset):
+ *     OPENAI_API_KEY           — required. A platform key (starts "sk-").
+ *     OPENAI_MODEL             — optional, default: "gpt-4o-mini"
+ *     OPENAI_MAX_OUTPUT_TOKENS — optional, default: 16384
+ *
+ *   Azure OpenAI (used whenever AZURE_OPENAI_ENDPOINT is set — an Azure
+ *   OpenAI resource key is NOT a valid credential against api.openai.com,
+ *   and vice versa; these are two different services with different auth
+ *   schemes, so which one is active is never ambiguous):
+ *     AZURE_OPENAI_ENDPOINT    — required. e.g. https://your-resource.openai.azure.com
+ *     AZURE_OPENAI_API_KEY     — the resource's key. Falls back to
+ *                                OPENAI_API_KEY if unset, so an existing
+ *                                deployment that already stored the Azure
+ *                                key under OPENAI_API_KEY keeps working.
+ *     AZURE_OPENAI_DEPLOYMENT  — the deployment name you chose when
+ *                                deploying the model in the Azure portal
+ *                                (NOT necessarily the model name). Falls
+ *                                back to OPENAI_MODEL if unset.
+ *     AZURE_OPENAI_API_VERSION — optional, default: "2024-10-21"
+ *     OPENAI_MAX_OUTPUT_TOKENS — optional, default: 16384
  */
 
 // ---------------------------------------------------------------------------
@@ -52,7 +70,65 @@ export interface LLMProvider {
 // Configuration helpers
 // ---------------------------------------------------------------------------
 
-function getConfig() {
+const DEFAULT_AZURE_API_VERSION = "2024-10-21";
+
+type LLMConfig =
+  | { isAzure: false; apiKey: string; model: string; maxOutputTokens: number }
+  | {
+    isAzure: true;
+    apiKey: string;
+    model: string;
+    maxOutputTokens: number;
+    azureEndpoint: string;
+    deployment: string;
+    apiVersion: string;
+  };
+
+/** Whether AZURE_OPENAI_ENDPOINT selects the Azure OpenAI backend. Exported
+ * so callers that only need a yes/no "is the LLM configured" signal (health
+ * checks, UI banners) don't have to duplicate this branching — see
+ * isLLMProviderConfigured() below. */
+function resolveAzureEndpoint(): string {
+  return String(Deno.env.get("AZURE_OPENAI_ENDPOINT") ?? "").trim().replace(/\/+$/, "");
+}
+
+/** True when a usable credential is present for whichever backend
+ * (Azure OpenAI or direct OpenAI) AZURE_OPENAI_ENDPOINT currently selects.
+ * Use this instead of checking `Deno.env.get("OPENAI_API_KEY")` directly —
+ * that check alone does not distinguish "no LLM configured" from "an Azure
+ * OpenAI key is stored under OPENAI_API_KEY", which was the exact
+ * misdiagnosis this function replaces. */
+export function isLLMProviderConfigured(): boolean {
+  if (resolveAzureEndpoint()) {
+    return !!(Deno.env.get("AZURE_OPENAI_API_KEY") || Deno.env.get("OPENAI_API_KEY"));
+  }
+  return !!Deno.env.get("OPENAI_API_KEY");
+}
+
+function getConfig(): LLMConfig {
+  const azureEndpoint = resolveAzureEndpoint();
+  const model = Deno.env.get("OPENAI_MODEL") || "gpt-4o-mini";
+  const maxOutputTokens = parseInt(Deno.env.get("OPENAI_MAX_OUTPUT_TOKENS") || "16384", 10);
+
+  if (azureEndpoint) {
+    // An Azure OpenAI resource key and a direct-OpenAI platform key are
+    // different credential types issued by different services — one is
+    // never valid against the other's endpoint. AZURE_OPENAI_API_KEY is
+    // preferred; OPENAI_API_KEY is accepted as a fallback so a deployment
+    // that already stored its Azure key there keeps working unchanged.
+    const apiKey = Deno.env.get("AZURE_OPENAI_API_KEY") || Deno.env.get("OPENAI_API_KEY");
+    if (!apiKey) {
+      throw new LLMProviderError(
+        "AZURE_OPENAI_ENDPOINT is set but no API key was found. Add one via: " +
+          "supabase secrets set AZURE_OPENAI_API_KEY=...",
+        "authentication",
+      );
+    }
+    const deployment = Deno.env.get("AZURE_OPENAI_DEPLOYMENT") || model;
+    const apiVersion = Deno.env.get("AZURE_OPENAI_API_VERSION") || DEFAULT_AZURE_API_VERSION;
+    return { isAzure: true, apiKey, model, maxOutputTokens, azureEndpoint, deployment, apiVersion };
+  }
+
   const apiKey = Deno.env.get("OPENAI_API_KEY");
   if (!apiKey) {
     throw new LLMProviderError(
@@ -60,9 +136,7 @@ function getConfig() {
       "authentication",
     );
   }
-  const model = Deno.env.get("OPENAI_MODEL") || "gpt-4o-mini";
-  const maxOutputTokens = parseInt(Deno.env.get("OPENAI_MAX_OUTPUT_TOKENS") || "16384", 10);
-  return { apiKey, model, maxOutputTokens };
+  return { isAzure: false, apiKey, model, maxOutputTokens };
 }
 
 // ---------------------------------------------------------------------------
@@ -128,15 +202,34 @@ function isUnsupportedTemperatureError(status: number, body: any): boolean {
   return msg.includes("temperature") && (msg.includes("unsupported") || msg.includes("does not support") || msg.includes("only the default"));
 }
 
-async function postToOpenAI(apiKey: string, body: Record<string, unknown>): Promise<{ response: Response; responseBody: any; responseId: string }> {
+/** Builds the request target for whichever backend `config` selects.
+ * Azure OpenAI's endpoint is resource+deployment+api-version specific and
+ * authenticates via an `api-key` header, never `Authorization: Bearer` —
+ * the two backends are not interchangeable at the HTTP level. */
+function buildRequestTarget(config: LLMConfig): { url: string; headers: Record<string, string>; providerLabel: string } {
+  if (config.isAzure) {
+    const url = `${config.azureEndpoint}/openai/deployments/${encodeURIComponent(config.deployment)}` +
+      `/chat/completions?api-version=${encodeURIComponent(config.apiVersion)}`;
+    return {
+      url,
+      headers: { "api-key": config.apiKey, "Content-Type": "application/json" },
+      providerLabel: "Azure OpenAI",
+    };
+  }
+  return {
+    url: OPENAI_CHAT_ENDPOINT,
+    headers: { "Authorization": `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
+    providerLabel: "OpenAI",
+  };
+}
+
+async function postToOpenAI(config: LLMConfig, body: Record<string, unknown>): Promise<{ response: Response; responseBody: any; responseId: string }> {
+  const { url, headers, providerLabel } = buildRequestTarget(config);
   let response: Response;
   try {
-    response = await fetch(OPENAI_CHAT_ENDPOINT, {
+    response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(120_000), // 2 min hard timeout
     });
@@ -144,8 +237,8 @@ async function postToOpenAI(apiKey: string, body: Record<string, unknown>): Prom
     const isTimeout = fetchErr?.name === "TimeoutError" || fetchErr?.name === "AbortError";
     throw new LLMProviderError(
       isTimeout
-        ? `OpenAI request timed out after 120s`
-        : `Network error calling OpenAI: ${fetchErr?.message}`,
+        ? `${providerLabel} request timed out after 120s`
+        : `Network error calling ${providerLabel}: ${fetchErr?.message}`,
       isTimeout ? "timeout" : "transport",
     );
   }
@@ -156,7 +249,7 @@ async function postToOpenAI(apiKey: string, body: Record<string, unknown>): Prom
     responseBody = await response.json();
   } catch {
     throw new LLMProviderError(
-      `OpenAI returned non-JSON response (HTTP ${response.status})`,
+      `${providerLabel} returned non-JSON response (HTTP ${response.status})`,
       "invalid_response",
       response.status,
     );
@@ -173,9 +266,9 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
   finishReason: string;
   responseId: string;
 }> {
-  const { apiKey, model: defaultModel, maxOutputTokens: defaultMaxTokens } = getConfig();
-  const model = opts.model ?? defaultModel;
-  const maxTokens = opts.maxOutputTokens ?? defaultMaxTokens;
+  const config = getConfig();
+  const model = opts.model ?? config.model;
+  const maxTokens = opts.maxOutputTokens ?? config.maxOutputTokens;
   const temperature = opts.temperature ?? 0.1;
 
   const messages: any[] = [];
@@ -185,7 +278,11 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
   messages.push({ role: "user", content: opts.userPrompt });
 
   const body: any = {
-    model,
+    // Azure OpenAI selects the model via the deployment name already baked
+    // into the request URL — sending "model" in the body is unnecessary and
+    // some API versions reject an unrecognized value there. Direct OpenAI
+    // requires it in the body since its endpoint is not per-model.
+    ...(config.isAzure ? {} : { model }),
     messages,
     temperature,
     max_completion_tokens: maxTokens,
@@ -196,7 +293,7 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
     body.response_format = { type: "json_object" };
   }
 
-  let { response, responseBody, responseId } = await postToOpenAI(apiKey, body);
+  let { response, responseBody, responseId } = await postToOpenAI(config, body);
 
   // Newer reasoning-oriented models (o-series, some gpt-5.x models) reject
   // any non-default temperature outright. Retry exactly once with
@@ -210,13 +307,14 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
       `[llm] model "${model}" rejected temperature=${temperature}; retrying once without a custom temperature`,
     );
     const { temperature: _drop, ...bodyWithoutTemperature } = body;
-    ({ response, responseBody, responseId } = await postToOpenAI(apiKey, bodyWithoutTemperature));
+    ({ response, responseBody, responseId } = await postToOpenAI(config, bodyWithoutTemperature));
   }
 
   if (!response.ok) {
     const classification = classifyOpenAIError(response.status, responseBody);
+    const providerLabel = config.isAzure ? "Azure OpenAI" : "OpenAI";
     throw new LLMProviderError(
-      responseBody?.error?.message ?? `OpenAI HTTP ${response.status}`,
+      responseBody?.error?.message ?? `${providerLabel} HTTP ${response.status}`,
       classification,
       response.status,
     );
@@ -224,7 +322,10 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
 
   const choice = responseBody?.choices?.[0];
   if (!choice) {
-    throw new LLMProviderError("OpenAI returned no choices", "invalid_response");
+    throw new LLMProviderError(
+      `${config.isAzure ? "Azure OpenAI" : "OpenAI"} returned no choices`,
+      "invalid_response",
+    );
   }
 
   const content = choice?.message?.content ?? "";
@@ -233,7 +334,7 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
 
   return {
     content,
-    model: responseBody?.model ?? model,
+    model: responseBody?.model ?? (config.isAzure ? config.deployment : model),
     promptTokens: usage.prompt_tokens ?? 0,
     completionTokens: usage.completion_tokens ?? 0,
     finishReason,

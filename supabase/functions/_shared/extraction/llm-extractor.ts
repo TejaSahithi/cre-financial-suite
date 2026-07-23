@@ -25,7 +25,7 @@ import type {
 } from "./types.ts";
 import { getSchema, getFieldGroups, type FieldDef, type FieldGroup } from "./schemas.ts";
 import { buildRelevantSnippet, chunkDocument } from "./chunker.ts";
-import { callLLMJSON } from "../llm.ts";
+import { callLLMJSON, isLLMProviderConfigured } from "../llm.ts";
 import { callLLMJSONWithProvenance } from "./provenance/transport/openai.ts";
 
 // -- System prompt - short, strict, no room for hallucination -----------------
@@ -364,11 +364,17 @@ function parseLLMArrayResponse(raw: unknown, expectedFields: string[]): Array<Re
 // extractionDebug without reading edge-function logs.
 
 function makeDiag(input: ExtractionInput, _missingVars: string[]) {
+  const usingAzureOpenAI = !!Deno.env.get("AZURE_OPENAI_ENDPOINT");
+  const configured = isLLMProviderConfigured();
   return {
-    openai_config_present: !!Deno.env.get("OPENAI_API_KEY"),
-    openai_config_missing_vars: Deno.env.get("OPENAI_API_KEY") ? [] : ["OPENAI_API_KEY"],
+    openai_config_present: configured,
+    openai_config_missing_vars: configured
+      ? []
+      : [usingAzureOpenAI ? "AZURE_OPENAI_API_KEY" : "OPENAI_API_KEY"],
     // Presence of each relevant env var (values never logged).
     openai_env_keys_present: {
+      AZURE_OPENAI_ENDPOINT: usingAzureOpenAI,
+      AZURE_OPENAI_API_KEY: !!Deno.env.get("AZURE_OPENAI_API_KEY"),
       OPENAI_API_KEY: !!Deno.env.get("OPENAI_API_KEY"),
       OPENAI_MODEL: !!Deno.env.get("OPENAI_MODEL"),
       OPENAI_MAX_OUTPUT_TOKENS: !!Deno.env.get("OPENAI_MAX_OUTPUT_TOKENS"),
@@ -512,11 +518,13 @@ export async function extractWithLLM(
   const warnings: string[] = [];
   const { maxChunks = 6, temperature = 0 } = options;
 
-  const hasOpenAI = !!Deno.env.get("OPENAI_API_KEY");
+  const hasOpenAI = isLLMProviderConfigured();
   const diag = makeDiag(input, []);
 
   if (!hasOpenAI) {
-    const msg = "OPENAI_API_KEY is not set. LLM extraction skipped. " +
+    const msg = (Deno.env.get("AZURE_OPENAI_ENDPOINT")
+      ? "AZURE_OPENAI_ENDPOINT is set but no API key was found."
+      : "OPENAI_API_KEY is not set.") + " LLM extraction skipped. " +
       `Fields requiring AI: [${missingFields.join(", ")}].`;
     console.warn(`[llm-extractor] ${msg}`);
     warnings.push(msg);

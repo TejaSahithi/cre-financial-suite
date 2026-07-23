@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
-import { callLLMText } from "../_shared/llm.ts";
+import { callLLMText, isLLMProviderConfigured } from "../_shared/llm.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 
 
@@ -309,9 +309,9 @@ Deno.serve(async (req: Request) => {
 
     const deterministicBudget = estimateBudget(leases, budget_year, historical);
 
-    const hasOpenAI = !!Deno.env.get("OPENAI_API_KEY");
+    const hasOpenAI = isLLMProviderConfigured();
     if (!hasOpenAI) {
-      console.warn("[generate-budget] OPENAI_API_KEY not configured — using formula-based estimation with fallback insights");
+      console.warn("[generate-budget] No LLM provider configured — using formula-based estimation with fallback insights");
       return new Response(
         JSON.stringify(deterministicBudget),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
