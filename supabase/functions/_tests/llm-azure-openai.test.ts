@@ -2,13 +2,22 @@
 // Regression test for _shared/llm.ts's Azure OpenAI backend. An Azure OpenAI
 // resource key is a different credential type than a direct-OpenAI platform
 // key and is never valid against api.openai.com — this suite pins down the
-// request shape (URL, api-key header, no Authorization/Bearer, no body
-// "model" field) so a future change can't silently point Azure-configured
-// deployments back at the wrong endpoint.
+// request shape (v1 URL, api-key header, no Authorization/Bearer, deployment
+// name as body "model") so a future change can't silently point
+// Azure-configured deployments back at the wrong endpoint or the older
+// dated /openai/deployments/{name}/chat/completions?api-version=... route.
+//
+// Production incident this guards against: AZURE_OPENAI_API_VERSION was set
+// to a gpt-5.4-mini MODEL version ("2026-03-17"), not a REST api-version —
+// those are unrelated Azure concepts that are easy to conflate — combined
+// with an *.services.ai.azure.com (Microsoft Foundry) host, which only
+// supports the newer deployment-in-path route inconsistently. The v1 route
+// takes no api-version at all and works against both *.openai.azure.com and
+// *.services.ai.azure.com, which eliminates this whole class of error.
 //
 // Run: deno test --allow-env --no-lock llm-azure-openai.test.ts
 
-import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -40,12 +49,15 @@ function withEnv(vars: Record<string, string | undefined>, fn: () => Promise<voi
   });
 }
 
-Deno.test("callLLMJSON routes to the Azure OpenAI endpoint, with api-key header (not Bearer), when AZURE_OPENAI_ENDPOINT is set", async () => {
+Deno.test("callLLMJSON calls the Azure v1 route — exact hostname, exact path, no api-version, api-key header, deployment as body model", async () => {
   await withEnv(
     {
-      AZURE_OPENAI_ENDPOINT: "https://my-resource.openai.azure.com/",
-      AZURE_OPENAI_DEPLOYMENT: "my-gpt4o-deployment",
-      AZURE_OPENAI_API_VERSION: "2024-10-21",
+      // The exact production shape: a Microsoft Foundry services.ai.azure.com host.
+      AZURE_OPENAI_ENDPOINT: "https://aif-docproc-platform-dev-eus2-01.services.ai.azure.com",
+      AZURE_OPENAI_DEPLOYMENT: "gpt-5.4-mini-2",
+      // A leftover model-version-shaped value must be completely ignored —
+      // the v1 route never reads AZURE_OPENAI_API_VERSION at all.
+      AZURE_OPENAI_API_VERSION: "2026-03-17",
       AZURE_OPENAI_API_KEY: "azure-test-key",
       OPENAI_API_KEY: undefined,
       OPENAI_MODEL: undefined,
@@ -61,25 +73,52 @@ Deno.test("callLLMJSON routes to the Azure OpenAI endpoint, with api-key header 
         capturedUrl = String(url);
         capturedHeaders = init.headers;
         capturedBody = JSON.parse(init.body as string);
-        return jsonResponse(successBody("my-gpt4o-deployment"));
+        return jsonResponse(successBody("gpt-5.4-mini-2"));
       }) as typeof fetch;
 
       try {
         const result = await callLLMJSON({ systemPrompt: "sys", userPrompt: "user", temperature: 0 });
         assertEquals(result.data, { ok: true });
 
-        // Trailing slash on the configured endpoint must not produce a
-        // double slash before /openai/deployments/...
-        assertStringIncludes(capturedUrl, "https://my-resource.openai.azure.com/openai/deployments/my-gpt4o-deployment/chat/completions");
-        assertStringIncludes(capturedUrl, "api-version=2024-10-21");
+        const parsed = new URL(capturedUrl);
+        assertEquals(parsed.hostname, "aif-docproc-platform-dev-eus2-01.services.ai.azure.com");
+        assertEquals(parsed.pathname, "/openai/v1/chat/completions");
+        assertEquals(parsed.search, "", "the v1 route must never carry an api-version query string");
+        assertEquals(capturedUrl, "https://aif-docproc-platform-dev-eus2-01.services.ai.azure.com/openai/v1/chat/completions");
 
         assertEquals(capturedHeaders["api-key"], "azure-test-key");
         assertEquals("Authorization" in capturedHeaders, false, "Azure OpenAI must never send an OpenAI-style Bearer token");
 
-        // The deployment name in the URL already selects the model — the
-        // body must not also carry a "model" field.
-        assertEquals("model" in capturedBody, false);
+        assertEquals(capturedBody.model, "gpt-5.4-mini-2", "the deployment name must be sent as the body's model field under the v1 route");
         assertEquals(capturedBody.messages[1], { role: "user", content: "user" });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+});
+
+Deno.test("callLLMJSON works identically against a classic *.openai.azure.com host — same v1 path, still no deployment segment", async () => {
+  await withEnv(
+    {
+      AZURE_OPENAI_ENDPOINT: "https://my-resource.openai.azure.com",
+      AZURE_OPENAI_DEPLOYMENT: "my-gpt4o-deployment",
+      AZURE_OPENAI_API_KEY: "azure-test-key",
+    },
+    async () => {
+      const { callLLMJSON } = await import("../_shared/llm.ts");
+
+      let capturedUrl = "";
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (url: string, init: any) => {
+        capturedUrl = String(url);
+        return jsonResponse(successBody("my-gpt4o-deployment"));
+      }) as typeof fetch;
+
+      try {
+        await callLLMJSON({ systemPrompt: "sys", userPrompt: "user", temperature: 0 });
+        assertEquals(capturedUrl, "https://my-resource.openai.azure.com/openai/v1/chat/completions");
+        assertEquals(capturedUrl.includes("/openai/deployments/"), false, "deployment must never appear as a URL path segment under the v1 route");
       } finally {
         globalThis.fetch = originalFetch;
       }
@@ -118,10 +157,9 @@ Deno.test("callLLMJSON falls back to OPENAI_API_KEY for Azure auth when AZURE_OP
 Deno.test("callLLMJSON self-heals when AZURE_OPENAI_ENDPOINT is accidentally set to the full sample request URL instead of the resource base URL", async () => {
   await withEnv(
     {
-      // The exact shape someone copying Azure's "view code" sample would paste.
+      // The exact shape someone copying an Azure "view code" sample would paste.
       AZURE_OPENAI_ENDPOINT: "https://my-resource.openai.azure.com/openai/deployments/wrong-deployment/chat/completions?api-version=2023-05-15",
       AZURE_OPENAI_DEPLOYMENT: "my-real-deployment",
-      AZURE_OPENAI_API_VERSION: "2024-10-21",
       AZURE_OPENAI_API_KEY: "azure-test-key",
     },
     async () => {
@@ -136,12 +174,11 @@ Deno.test("callLLMJSON self-heals when AZURE_OPENAI_ENDPOINT is accidentally set
 
       try {
         await callLLMJSON({ systemPrompt: "sys", userPrompt: "user", temperature: 0 });
-        // Must use the configured deployment/api-version exactly once, not
-        // whatever was embedded in the accidentally-pasted full URL, and
-        // must never end up with a doubled "/openai/.../openai/..." path.
+        // Must self-heal to the bare resource URL, then build the v1 path
+        // from that — never keep the accidentally-pasted deployment/api-version.
         assertEquals(
           capturedUrl,
-          "https://my-resource.openai.azure.com/openai/deployments/my-real-deployment/chat/completions?api-version=2024-10-21",
+          "https://my-resource.openai.azure.com/openai/v1/chat/completions",
         );
       } finally {
         globalThis.fetch = originalFetch;

@@ -13,21 +13,36 @@
  *     OPENAI_MODEL             — optional, default: "gpt-4o-mini"
  *     OPENAI_MAX_OUTPUT_TOKENS — optional, default: 16384
  *
- *   Azure OpenAI (used whenever AZURE_OPENAI_ENDPOINT is set — an Azure
- *   OpenAI resource key is NOT a valid credential against api.openai.com,
- *   and vice versa; these are two different services with different auth
- *   schemes, so which one is active is never ambiguous):
- *     AZURE_OPENAI_ENDPOINT    — required. e.g. https://your-resource.openai.azure.com
+ *   Azure OpenAI / Microsoft Foundry (used whenever AZURE_OPENAI_ENDPOINT is
+ *   set — an Azure OpenAI resource key is NOT a valid credential against
+ *   api.openai.com, and vice versa; these are two different services with
+ *   different auth schemes, so which one is active is never ambiguous).
+ *   Uses the Azure OpenAI v1 API (POST {endpoint}/openai/v1/chat/completions,
+ *   deployment name passed as the body's "model" field) — NOT the older
+ *   dated /openai/deployments/{name}/chat/completions?api-version=... route.
+ *   The v1 route works against both *.openai.azure.com and
+ *   *.services.ai.azure.com hosts and needs no api-version at all, which
+ *   avoids the single most error-prone part of the legacy route (a
+ *   model-version string like "2026-03-17" is easy to mistake for the
+ *   REST api-version and paste into the wrong place — they are unrelated
+ *   values from unrelated Azure concepts):
+ *     AZURE_OPENAI_ENDPOINT    — required. Base resource URL only, e.g.
+ *                                https://your-resource.openai.azure.com or
+ *                                https://your-resource.services.ai.azure.com
+ *                                — no /openai/... path, no query string.
  *     AZURE_OPENAI_API_KEY     — the resource's key. Falls back to
  *                                OPENAI_API_KEY if unset, so an existing
  *                                deployment that already stored the Azure
  *                                key under OPENAI_API_KEY keeps working.
  *     AZURE_OPENAI_DEPLOYMENT  — the deployment name you chose when
  *                                deploying the model in the Azure portal
- *                                (NOT necessarily the model name). Falls
- *                                back to OPENAI_MODEL if unset.
- *     AZURE_OPENAI_API_VERSION — optional, default: "2024-10-21"
+ *                                (NOT necessarily the model name, and NOT a
+ *                                model version). Falls back to OPENAI_MODEL
+ *                                if unset. Sent as the body's "model" field.
  *     OPENAI_MAX_OUTPUT_TOKENS — optional, default: 16384
+ *
+ *   AZURE_OPENAI_API_VERSION is not used by this module — the v1 route takes
+ *   no api-version parameter. Any value left in that secret is ignored.
  */
 
 // ---------------------------------------------------------------------------
@@ -70,8 +85,6 @@ export interface LLMProvider {
 // Configuration helpers
 // ---------------------------------------------------------------------------
 
-const DEFAULT_AZURE_API_VERSION = "2024-10-21";
-
 type LLMConfig =
   | { isAzure: false; apiKey: string; model: string; maxOutputTokens: number }
   | {
@@ -81,7 +94,6 @@ type LLMConfig =
     maxOutputTokens: number;
     azureEndpoint: string;
     deployment: string;
-    apiVersion: string;
   };
 
 /** Whether AZURE_OPENAI_ENDPOINT selects the Azure OpenAI backend. Exported
@@ -148,8 +160,7 @@ function getConfig(): LLMConfig {
       );
     }
     const deployment = Deno.env.get("AZURE_OPENAI_DEPLOYMENT") || model;
-    const apiVersion = Deno.env.get("AZURE_OPENAI_API_VERSION") || DEFAULT_AZURE_API_VERSION;
-    return { isAzure: true, apiKey, model, maxOutputTokens, azureEndpoint, deployment, apiVersion };
+    return { isAzure: true, apiKey, model, maxOutputTokens, azureEndpoint, deployment };
   }
 
   const apiKey = Deno.env.get("OPENAI_API_KEY");
@@ -247,15 +258,25 @@ function isUnsupportedTemperatureError(status: number, body: any): boolean {
 }
 
 /** Builds the request target for whichever backend `config` selects.
- * Azure OpenAI's endpoint is resource+deployment+api-version specific and
- * authenticates via an `api-key` header, never `Authorization: Bearer` —
- * the two backends are not interchangeable at the HTTP level. */
+ *
+ * Azure uses the v1 API: POST {endpoint}/openai/v1/chat/completions, with
+ * no api-version query param and no deployment segment in the path — the
+ * deployment name goes in the request BODY's "model" field instead (see
+ * openAICall). This is deliberate, not an oversight: the older
+ * /openai/deployments/{name}/chat/completions?api-version=YYYY-MM-DD route
+ * requires a REST api-version that is trivially confused with a model
+ * version (e.g. gpt-5.4-mini's model version "2026-03-17" is NOT a valid
+ * api-version — pasting one in place of the other is exactly the mistake
+ * that produced a 404 in production here). The v1 route sidesteps that
+ * whole class of error and works against both *.openai.azure.com and
+ * *.services.ai.azure.com hosts.
+ *
+ * Azure authenticates via an `api-key` header, never `Authorization: Bearer`
+ * — the two backends are not interchangeable at the HTTP level. */
 function buildRequestTarget(config: LLMConfig): { url: string; headers: Record<string, string>; providerLabel: string } {
   if (config.isAzure) {
-    const url = `${config.azureEndpoint}/openai/deployments/${encodeURIComponent(config.deployment)}` +
-      `/chat/completions?api-version=${encodeURIComponent(config.apiVersion)}`;
     return {
-      url,
+      url: `${config.azureEndpoint}/openai/v1/chat/completions`,
       headers: { "api-key": config.apiKey, "Content-Type": "application/json" },
       providerLabel: "Azure OpenAI",
     };
@@ -322,6 +343,11 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
 }> {
   const config = getConfig();
   const model = opts.model ?? config.model;
+  // What actually goes in the request body's "model" field: Azure's v1
+  // route takes the deployment name there (not a model name, and not baked
+  // into the URL, unlike the older deployment-in-path route); direct
+  // OpenAI takes its actual model name.
+  const effectiveModel = config.isAzure ? config.deployment : model;
   const maxTokens = opts.maxOutputTokens ?? config.maxOutputTokens;
   const temperature = opts.temperature ?? 0.1;
 
@@ -332,11 +358,7 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
   messages.push({ role: "user", content: opts.userPrompt });
 
   const body: any = {
-    // Azure OpenAI selects the model via the deployment name already baked
-    // into the request URL — sending "model" in the body is unnecessary and
-    // some API versions reject an unrecognized value there. Direct OpenAI
-    // requires it in the body since its endpoint is not per-model.
-    ...(config.isAzure ? {} : { model }),
+    model: effectiveModel,
     messages,
     temperature,
     max_completion_tokens: maxTokens,
@@ -358,7 +380,7 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
   // every single call fail, for every document, with no per-document cause.
   if (!response.ok && isUnsupportedTemperatureError(response.status, responseBody)) {
     console.warn(
-      `[llm] model "${model}" rejected temperature=${temperature}; retrying once without a custom temperature`,
+      `[llm] model "${effectiveModel}" rejected temperature=${temperature}; retrying once without a custom temperature`,
     );
     const { temperature: _drop, ...bodyWithoutTemperature } = body;
     ({ response, responseBody, responseId, requestUrl } = await postToOpenAI(config, bodyWithoutTemperature));
@@ -403,7 +425,7 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
 
   return {
     content,
-    model: responseBody?.model ?? (config.isAzure ? config.deployment : model),
+    model: responseBody?.model ?? effectiveModel,
     promptTokens: usage.prompt_tokens ?? 0,
     completionTokens: usage.completion_tokens ?? 0,
     finishReason,
