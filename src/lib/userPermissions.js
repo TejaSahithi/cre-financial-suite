@@ -1,7 +1,7 @@
 // User Management v2 — Permission System Constants & Helpers
 // Role = default template, Access = override layer
 
-import { canAccess, getAllowedPagesForRole, getPermissions, resolveRoleForAccess, isSuperAdmin, getActiveMembership, getActiveRole } from "@/lib/rbac";
+import { canAccess, getAllowedPagesForRole, getPermissions, resolveRoleForAccess, isSuperAdmin, getActiveMembership, getActiveRole, isOrgAdmin } from "@/lib/rbac";
 import { MODULE_DEFINITIONS, getModuleForPage } from "@/lib/moduleConfig";
 
 // ── 6 core roles (v1 lightweight) ────────────────────────────────────────────
@@ -290,6 +290,7 @@ export function getPageAccessLevel(user, pageName) {
   if (!user || !pageName) return "none";
 
   if (isSuperAdmin(user)) return "admin";
+  if (isOrgAdmin(user)) return "admin";
 
   const rawRole = getActiveRole(user);
   const resolvedRole = resolveRoleForAccess(rawRole);
