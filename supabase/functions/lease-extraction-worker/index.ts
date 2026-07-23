@@ -682,6 +682,35 @@ async function parkLeaseForManualReview(
   // with the existing fallback-write behavior below.
   await failJob(supabaseAdmin, job, errorCode, reason);
 
+  // normalize-pdf-output may have already written rich provider-failure
+  // diagnostics (failure_classification / failure_http_status /
+  // failure_provider_error_code / failure_request_id / failure_request_url —
+  // see business-extraction-acceptance's evaluateExtractionAcceptance and
+  // openai-fact-ledger/orchestrator.ts) into normalized_output BEFORE
+  // returning its error response to this worker. The generic fallback
+  // payload built below replaces normalized_output wholesale, which would
+  // silently discard that diagnostic data at the exact moment it's most
+  // needed (a genuinely failed extraction). Read it back and carry it
+  // forward — a targeted JSON-path select, not the whole (potentially
+  // multi-MB) normalized_output blob.
+  let preservedOpenAIDiagnostics: Record<string, unknown> | null = null;
+  try {
+    const { data: diagRow } = await supabaseAdmin
+      .from("uploaded_files")
+      .select("diag:normalized_output->metadata->extractionDebug->openai_fact_ledger")
+      .eq("id", fileId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (diagRow?.diag && typeof diagRow.diag === "object") {
+      preservedOpenAIDiagnostics = diagRow.diag as Record<string, unknown>;
+    }
+  } catch (diagReadError: any) {
+    console.warn(
+      `[${WORKER_NAME}] could not read prior openai_fact_ledger diagnostics before parking file_id=${fileId}:`,
+      diagReadError?.message ?? diagReadError,
+    );
+  }
+
   const standardFields = LEASE_MANUAL_REVIEW_FIELDS.map((fieldKey) => ({
     id: `0:standard:${fieldKey}`,
     field_key: fieldKey,
@@ -747,6 +776,7 @@ async function parkLeaseForManualReview(
       normalize_failed: failedStage === "normalize",
       error_code: errorCode,
       error_message: reason,
+      ...(preservedOpenAIDiagnostics ? { openai_fact_ledger_diagnostics: preservedOpenAIDiagnostics } : {}),
     },
     built_at: new Date().toISOString(),
   };
@@ -762,7 +792,18 @@ async function parkLeaseForManualReview(
       rows: [{}],
       warnings: payload.global_warnings,
       validationErrors: [],
-      metadata: payload.metadata,
+      metadata: {
+        ...payload.metadata,
+        // Preserved verbatim, nested under metadata (matching the path
+        // normalize-pdf-output itself writes to —
+        // normalized_output.metadata.extractionDebug.openai_fact_ledger —
+        // not a sibling of metadata) so a caller reading the normal path
+        // finds these even though this fallback overwrote the row. See the
+        // read above for why this can be non-null here.
+        ...(preservedOpenAIDiagnostics
+          ? { extractionDebug: { openai_fact_ledger: preservedOpenAIDiagnostics } }
+          : {}),
+      },
     },
     parsed_data: [{}],
     row_count: 1,

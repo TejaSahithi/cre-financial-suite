@@ -467,6 +467,46 @@ Deno.test({
   },
 });
 
+Deno.test({
+  name: "parkLeaseForManualReview: normalize-pdf-output's own provider-failure diagnostics (failure_provider_error_code/request_id/request_url) survive the fallback overwrite instead of being silently discarded",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  async fn() {
+    // normalize-pdf-output already wrote these into normalized_output before
+    // returning its error response to the worker — simulating that prior
+    // write is exactly what a real Postgres JSON-path select of
+    // normalized_output->metadata->extractionDebug->openai_fact_ledger would
+    // hand back (the mock's select() ignores column projections and returns
+    // the row wholesale, so `diag` is set directly here to stand in for it).
+    const priorDiagnostics = {
+      failure_classification: "unknown",
+      failure_http_status: 404,
+      failure_provider_error_code: "DeploymentNotFound",
+      failure_request_id: "req-abc-123",
+      failure_request_url: "https://my-resource.openai.azure.com/openai/deployments/wrong-name/chat/completions?api-version=2024-10-21",
+    };
+    const supabaseAdmin = makeMockSupabase({
+      rows: {
+        uploaded_files: {
+          id: FILE_ID,
+          status: "validating",
+          processing_status: "validating",
+          extraction_method: "azure_layout", // parse succeeded — only normalize/AI failed
+          diag: priorDiagnostics,
+        },
+        pipeline_jobs: { id: JOB.id, status: "running" },
+      },
+    });
+    const result = await parkLeaseForManualReview(
+      supabaseAdmin, JOB, FILE_ID, ORG_ID, "lease.pdf", "leases", "base_lease",
+      "AI_EMPTY_EXTRACTION", "Extraction produced no usable lease values.", "normalize",
+    );
+    assertEquals(result.outcome, "parked");
+    const preserved = supabaseAdmin.__rows.uploaded_files.normalized_output?.metadata?.extractionDebug?.openai_fact_ledger;
+    assertEquals(preserved, priorDiagnostics, "the exact diagnostics normalize-pdf-output wrote must survive the worker's fallback overwrite, at the same metadata.extractionDebug.openai_fact_ledger path a caller would already look for them");
+  },
+});
+
 // ---------------------------------------------------------------------------
 // 11: tenant scoping
 // ---------------------------------------------------------------------------
