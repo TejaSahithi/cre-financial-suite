@@ -158,7 +158,12 @@ export default function AddExpense() {
   const createVendorMutation = useMutation({
     mutationFn: (data) => vendorService.create(data),
     onSuccess: (newVendor) => {
-      queryClient.invalidateQueries({ queryKey: ["vendors-add"] });
+      queryClient.setQueriesData({ queryKey: ["Vendor"] }, (current = []) =>
+        current.some((vendor) => vendor.id === newVendor.id)
+          ? current
+          : [...current, newVendor]
+      );
+      queryClient.invalidateQueries({ queryKey: ["Vendor"] });
       setForm((current) => ({ ...current, vendor: newVendorForm.name, vendor_id: newVendor.id }));
       setShowNewVendor(false);
       setNewVendorForm({ name: "", company: "", contact_email: "", category: "other", payment_terms: "net_30" });
@@ -318,8 +323,10 @@ export default function AddExpense() {
     const writableOrgId = await resolveWritableOrgId(orgId);
     createVendorMutation.mutate({
       name: newVendorForm.name,
+      company: newVendorForm.company || null,
       email: newVendorForm.contact_email || null,
       category: newVendorForm.category,
+      payment_terms: newVendorForm.payment_terms,
       org_id: writableOrgId || "",
       status: "active",
     });

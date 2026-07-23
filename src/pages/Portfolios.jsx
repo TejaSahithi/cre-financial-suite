@@ -48,7 +48,7 @@ import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { assertCanWritePage, describePermissionError } from "@/lib/userPermissions";
 
 async function ensureCreatorPortfolioAccess({ portfolioId, orgId, user }) {
-  if (!portfolioId || !orgId || !user || user._raw_role === "super_admin") return;
+  if (!portfolioId || !orgId || !user || ["super_admin", "org_admin"].includes(user._raw_role)) return;
 
   const { data: existingGrant, error: existingGrantError } = await supabase
     .from("user_access")

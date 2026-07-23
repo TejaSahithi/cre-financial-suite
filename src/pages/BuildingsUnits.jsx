@@ -653,7 +653,7 @@ export default function BuildingsUnits({ mode = "combined" }) {
                             <span className="text-xs font-medium text-slate-700">
                               {unit.unit_number || unit.unit_id_code || unit.id?.substring(0, 8)}
                             </span>
-                            <span className="text-[10px] text-slate-400">{unit.square_footage?.toLocaleString()} SF</span>
+                            <span className="text-[10px] text-slate-400">{(unit.square_footage || unit.square_feet || unit.total_sf || 0).toLocaleString()} SF</span>
                           </div>
                           <div className="flex items-center gap-1">
                             <Badge

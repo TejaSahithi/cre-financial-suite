@@ -17,6 +17,7 @@ import MetricCard from "@/components/MetricCard";
 import ScopeSelector from "@/components/ScopeSelector";
 import { downloadCSV } from "@/utils/index";
 import BulkImportModal from "@/components/property/BulkImportModal";
+import { toast } from "sonner";
 
 const CATEGORIES = ["maintenance","utilities","insurance","janitorial","landscaping","security","legal","accounting","construction","technology","other"];
 const statusColors = { active: "bg-emerald-100 text-emerald-700", inactive: "bg-slate-100 text-slate-600", pending: "bg-amber-100 text-amber-700" };
@@ -39,9 +40,39 @@ export default function Vendors() {
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
 
-  const createMutation = useMutation({ mutationFn: (d) => vendorService.create(d), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['vendors'] }); setShowDialog(false); } });
-  const updateMutation = useMutation({ mutationFn: ({ id, d }) => vendorService.update(id, d), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['vendors'] }); setShowDialog(false); } });
-  const deleteMutation = useMutation({ mutationFn: (id) => vendorService.delete(id), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['vendors'] }) });
+  const createMutation = useMutation({
+    mutationFn: (d) => vendorService.create(d),
+    onSuccess: (created) => {
+      queryClient.setQueriesData({ queryKey: ["Vendor"] }, (current = []) => [...current, created]);
+      queryClient.invalidateQueries({ queryKey: ["Vendor"] });
+      setShowDialog(false);
+      toast.success("Vendor created");
+    },
+    onError: (error) => toast.error(`Failed to create vendor: ${error?.message || "Unknown error"}`),
+  });
+  const updateMutation = useMutation({
+    mutationFn: ({ id, d }) => vendorService.update(id, d),
+    onSuccess: (updated) => {
+      queryClient.setQueriesData({ queryKey: ["Vendor"] }, (current = []) =>
+        current.map((vendor) => vendor.id === updated.id ? updated : vendor)
+      );
+      queryClient.invalidateQueries({ queryKey: ["Vendor"] });
+      setShowDialog(false);
+      toast.success("Vendor updated");
+    },
+    onError: (error) => toast.error(`Failed to update vendor: ${error?.message || "Unknown error"}`),
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (id) => vendorService.delete(id),
+    onSuccess: (_, deletedId) => {
+      queryClient.setQueriesData({ queryKey: ["Vendor"] }, (current = []) =>
+        current.filter((vendor) => vendor.id !== deletedId)
+      );
+      queryClient.invalidateQueries({ queryKey: ["Vendor"] });
+      toast.success("Vendor deleted");
+    },
+    onError: (error) => toast.error(`Failed to delete vendor: ${error?.message || "Unknown error"}`),
+  });
 
   const enriched = vendors.map(v => {
     const vExpenses = expenses.filter(e => e.vendor?.toLowerCase() === v.name?.toLowerCase() || e.vendor_id === v.id);

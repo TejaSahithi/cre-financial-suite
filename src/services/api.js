@@ -382,7 +382,10 @@ function assertDevFallbackAllowed(operation) {
 }
 
 function isTableNotFound(err) {
-  if (!IS_DEV_BUILD) return false;
+  // Demo fallback is only valid when no backend is configured. If a real
+  // Supabase project is connected, surface schema drift instead of showing
+  // fake records that look like tenant data.
+  if (!IS_DEV_BUILD || supabase) return false;
   return (
     err?.code === 'PGRST205' ||
     err?.code === '42P01' ||
@@ -650,6 +653,11 @@ const ALLOWED_COLUMNS = {
     'name', 'email', 'phone', 'company', 'status',
     // Bulk-import enrichment columns
     'contact_name', 'industry', 'credit_rating', 'notes',
+  ]),
+  Vendor: new Set([
+    ...COMMON_BASE_COLUMNS,
+    'name', 'company', 'contact_name', 'email', 'phone',
+    'category', 'payment_terms', 'tax_id', 'status', 'rating', 'notes',
   ]),
   Expense: new Set([
     ...COMMON_BASE_COLUMNS,
@@ -1657,8 +1665,7 @@ export async function submitPublicAccessRequest(payload) {
   // which RLS blocks for anon users when existing rows have non-pending statuses.
   const { data, error } = await supabase
     .from('access_requests')
-    .insert(requestPayload)
-    .select();
+    .insert(requestPayload);
 
   if (error) {
     // 23505 = unique_violation (duplicate email) — treat as success so user isn't stuck
