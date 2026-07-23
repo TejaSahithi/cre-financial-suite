@@ -466,7 +466,14 @@ export default function LeaseUpload() {
     // of closing over fileRecord?.status (stale). This also avoids recreating the
     // interval on every status update, preventing the polling cascade memory leak.
     const interval = window.setInterval(() => {
-      if (!ACTIVE_STATUSES.has(fileRecordStatusRef.current)) {
+      // status alone is not enough: normalize-pdf-output can flip
+      // uploaded_files.status to 'review_required' (core fields already
+      // saved) WHILE the separate, deferred enrich job is still running in
+      // the background. Stopping polling on status alone freezes the UI on
+      // that snapshot forever -- it never learns enrich later completed or
+      // failed. fileRecordActiveJobRef tracks latest_job independently of
+      // status for exactly this gap.
+      if (!ACTIVE_STATUSES.has(fileRecordStatusRef.current) && !fileRecordActiveJobRef.current) {
         return;
       }
       poll();
