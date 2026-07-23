@@ -2007,6 +2007,21 @@ const AMENDMENT_PROFILE_SIGNALS = [
   { key: "all_other_terms_remain_unchanged", pattern: /\ball\s+other\s+terms[^.\n]{0,180}(?:remain|continue|shall\s+remain)[^.\n]{0,120}(?:unchanged|same|full\s+force\s+and\s+effect)\b/i },
 ];
 
+// Signal detection below runs ~80 regex tests (AMENDMENT_PROFILE_SIGNALS +
+// ASSIGNMENT_PROFILE_SIGNALS + AMENDMENT_TITLE_SIGNALS + full-lease signals)
+// against this context string on every document. It exists to classify
+// title/recital-level amendment vs. assignment vs. full-lease signals, not
+// to extract field values, so (unlike the rest of this file's extraction
+// logic) it does not need the complete, unbounded document text -- every
+// sibling text-window in this file already caps itself (e.g. the `head`
+// summary a few lines below uses fullText.slice(0, 1500)). Left unbounded,
+// fullText + every non-blank field's value + every extracted item's source
+// text can exceed 150K characters for a real multi-page lease, multiplying
+// the cost of every one of those ~80 regex tests for no classification
+// benefit. Capped generously (far more than any title/recital needs) rather
+// than tightly, so this only trims pathological cases.
+const PROFILE_SIGNAL_CONTEXT_MAX_CHARS = 60_000;
+
 function profileSignalContext(
   fullText: string,
   documentSubtype?: string | null,
@@ -2020,7 +2035,10 @@ function profileSignalContext(
   const itemContext = asArray(extractedItems)
     .map((item) => `${item?.item_type || ""} ${item?.field_key || ""} ${item?.business_area || ""} ${item?.value || ""} ${item?.source_text || ""}`)
     .join(" ");
-  return cleanText(`${documentSubtype || ""} ${fullText || ""} ${fieldContext} ${itemContext}`);
+  const combined = cleanText(`${documentSubtype || ""} ${fullText || ""} ${fieldContext} ${itemContext}`);
+  return combined.length > PROFILE_SIGNAL_CONTEXT_MAX_CHARS
+    ? combined.slice(0, PROFILE_SIGNAL_CONTEXT_MAX_CHARS)
+    : combined;
 }
 
 // Patterns that mark a document as an amendment at the TITLE/HEADING level
@@ -4721,4 +4739,6 @@ export const __test__ = {
   deriveCamProfile,
   deriveBudgetPreview,
   buildBudgetHandoffReadiness,
+  profileSignalContext,
+  PROFILE_SIGNAL_CONTEXT_MAX_CHARS,
 };

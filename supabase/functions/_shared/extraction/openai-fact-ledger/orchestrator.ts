@@ -157,6 +157,7 @@ export async function runOpenAIFactLedgerPipeline(
       fileMimeType: input.fileMimeType ?? null,
       fileModeOverride: options.fileMode,
       deadlineAt: options.deadlineAt,
+      provenance: options.provenance,
     });
 
     // Phase 6 Task E: when the canonical layout index was actually used,

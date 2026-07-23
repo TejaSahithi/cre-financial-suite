@@ -223,6 +223,17 @@ function formatFileRecord(record: Record<string, any>, extras: Record<string, an
     (record.docling_raw as any)?.raw_response_summary ??
     (record.azure_raw_response as any)?.raw_response_summary ??
     null;
+  // Diagnostic: the OpenAI fact-ledger orchestrator's own internal debug
+  // counts (how many facts it extracted vs. how many actually mapped to a
+  // standard field, and why) -- persisted in metadata.extractionDebug but
+  // never otherwise surfaced. This is the only way to distinguish "OpenAI
+  // was never called", "OpenAI returned facts but none mapped", and "OpenAI
+  // call itself failed" without direct DB/log access.
+  const extractionDebug =
+    (record.ui_review_payload as any)?.metadata?.extractionDebug ??
+    (record.normalized_output as any)?.metadata?.extractionDebug ??
+    null;
+  const openaiFactLedgerDebug = extractionDebug?.openai_fact_ledger ?? null;
   return {
     ok: true,
     error: false,
@@ -271,6 +282,17 @@ function formatFileRecord(record: Record<string, any>, extras: Record<string, an
     },
     pipeline,
     docling_summary: doclingSummary,
+    openai_fact_ledger_debug: openaiFactLedgerDebug
+      ? {
+        document_profile: openaiFactLedgerDebug.document_profile ?? null,
+        facts_extracted_count: openaiFactLedgerDebug.facts_extracted_count ?? null,
+        facts_mapped_count: openaiFactLedgerDebug.facts_mapped_count ?? null,
+        facts_unmapped_count: openaiFactLedgerDebug.facts_unmapped_count ?? null,
+        failure_classification: openaiFactLedgerDebug.failure_classification ?? null,
+        failure_http_status: openaiFactLedgerDebug.failure_http_status ?? null,
+        document_index_source: openaiFactLedgerDebug.document_index_source ?? null,
+      }
+      : null,
     ui_review_payload: record.ui_review_payload ?? null,
     reviewed_output: record.reviewed_output ?? null,
     normalized_output_summary: summarizeNormalizedOutput(record.normalized_output),

@@ -141,6 +141,16 @@ export interface OpenAIFactLedgerOptions {
   /** Absolute epoch-ms deadline forwarded to every OpenAI call
    *  this pipeline run makes. See OpenAI request deadline handling. */
   deadlineAt?: number;
+  /** P1.4-style extraction-provenance identity, forwarded to every OpenAI
+   *  call this pipeline run makes so provider_invocations rows get recorded
+   *  for the openai_fact_ledger path exactly as they already do for
+   *  legacy_hybrid's llm-extractor.ts calls. Undefined for callers without
+   *  stage/run provenance -- extraction behavior is identical either way,
+   *  callLLMJSONWithProvenance falls back to a plain call. */
+  provenance?: {
+    supabaseAdmin: any;
+    context: import("../provenance/types.ts").ProvenanceContext;
+  };
 }
 
 export type VertexFactLedgerOptions = OpenAIFactLedgerOptions;

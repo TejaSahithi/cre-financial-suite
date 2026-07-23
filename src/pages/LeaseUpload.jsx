@@ -174,6 +174,7 @@ function normalizePipelineStatusRecord(data, id) {
     review_readiness: data?.review_readiness ?? null,
     review_readiness_reasons: Array.isArray(data?.review_readiness_reasons) ? data.review_readiness_reasons : [],
     docling_summary: data?.docling_summary ?? null,
+    openai_fact_ledger_debug: data?.openai_fact_ledger_debug ?? null,
     updated_at: data?.updated_at || fileMetadata.updated_at || null,
     created_at: data?.created_at || fileMetadata.created_at || null,
     display_state: data?.display_state || null,
@@ -984,6 +985,15 @@ export default function LeaseUpload() {
                 </p>
                 <p>extraction_method: {fileRecord?.extraction_method ?? "—"}</p>
                 <p>openai_extraction_attempted: {String(fileRecord?.openai_extraction_attempted ?? "—")}</p>
+                {fileRecord?.openai_fact_ledger_debug && (
+                  <>
+                    <p>openai_document_profile: {fileRecord.openai_fact_ledger_debug.document_profile ?? "—"}</p>
+                    <p>openai_facts_extracted_count: {fileRecord.openai_fact_ledger_debug.facts_extracted_count ?? "—"}</p>
+                    <p>openai_facts_mapped_count: {fileRecord.openai_fact_ledger_debug.facts_mapped_count ?? "—"}</p>
+                    <p>openai_failure_classification: {fileRecord.openai_fact_ledger_debug.failure_classification ?? "—"}</p>
+                    <p>openai_failure_http_status: {fileRecord.openai_fact_ledger_debug.failure_http_status ?? "—"}</p>
+                  </>
+                )}
                 <p>review_readiness: {fileRecord?.review_readiness ?? "—"}</p>
                 {fileRecord?.review_readiness_reasons?.length > 0 && (
                   <p>review_readiness_reasons: {fileRecord.review_readiness_reasons.join(", ")}</p>

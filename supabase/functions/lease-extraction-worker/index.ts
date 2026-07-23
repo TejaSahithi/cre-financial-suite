@@ -511,12 +511,23 @@ async function callInternalFunction(functionName: string, body: Record<string, u
       classified.error_code === "DOWNSTREAM_AUTH_FAILED"
         ? `${functionName} returned ${response.status}`
         : data?.message || data?.error_details || data?.error_code || text.slice(0, 500) || `HTTP ${response.status}`;
+    // The downstream function (normalize-pdf-output, parse-document-azure,
+    // etc.) already returns its own specific error_code in the JSON body
+    // (e.g. NO_NORMALIZED_OUTPUT, INVALID_STATUS_FOR_ENRICH, FILE_NOT_FOUND).
+    // Previously this was always discarded in favor of the coarse
+    // HTTP-status-based classification below, so every real failure surfaced
+    // to pipeline_jobs/uploaded_files/the UI as an undifferentiated
+    // DOWNSTREAM_FUNCTION_FAILED regardless of cause. Prefer the specific
+    // code when the downstream function supplied one; the coarse
+    // classification remains the fallback for transport-level failures
+    // (auth, timeouts, unparseable responses) that have no such code.
+    const downstreamErrorCode = typeof data?.error_code === "string" && data.error_code ? data.error_code : null;
 
     return {
       ok: false,
       status: response.status,
       data,
-      error_code: classified.error_code,
+      error_code: downstreamErrorCode ?? classified.error_code,
       retryable: classified.retryable,
       error: safeError,
     };

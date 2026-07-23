@@ -245,7 +245,10 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
         canonicalLayout: opts.canonicalLayout ?? null,
         ...(opts.fileBase64 ? { fileBase64: opts.fileBase64, fileMimeType: opts.fileMimeType || "application/pdf" } : {}),
       },
-      { deadlineAt: startTime + OPENAI_TOTAL_BUDGET_MS },
+      {
+        deadlineAt: startTime + OPENAI_TOTAL_BUDGET_MS,
+        ...(opts.provenance ? { provenance: opts.provenance } : {}),
+      },
     );
   }
 

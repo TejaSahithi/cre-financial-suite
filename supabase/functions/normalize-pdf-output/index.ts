@@ -367,57 +367,6 @@ function toExtractionModuleType(moduleType: string): ExtractionModuleType {
   }
 }
 
-function buildFallbackReviewRow(moduleType: string): Record<string, unknown> {
-  switch (moduleType) {
-    case "lease":
-    case "leases":
-      return {
-        tenant_name: null,
-        landlord_name: null,
-        property_name: null,
-        property_address: null,
-        assignor_name: null,
-        assignee_name: null,
-        assignment_effective_date: null,
-        landlord_consent: null,
-        assumption_scope: null,
-        assignee_notice_address: null,
-        unit_number: null,
-        start_date: null,
-        end_date: null,
-        monthly_rent: null,
-        annual_rent: null,
-        lease_term_months: null,
-        rent_per_sf: null,
-        square_footage: null,
-        lease_type: null,
-        security_deposit: null,
-        cam_amount: null,
-        escalation_rate: null,
-        renewal_options: null,
-        ti_allowance: null,
-        free_rent_months: null,
-        status: null,
-        notes: null,
-      };
-    case "expenses":
-    case "invoices":
-      return {
-        vendor: null,
-        invoice_number: null,
-        date: null,
-        amount: null,
-        category: null,
-        classification: null,
-        description: null,
-      };
-    case "properties":
-      return { name: null, address: null, city: null, state: null, zip: null, total_sqft: null };
-    default:
-      return { notes: null };
-  }
-}
-
 // Cache for buildEvidenceSearchBlocks() below — unrelated to EvidenceIndex's
 // own internal cache in evidence-index.ts (different candidate shape: this
 // one is used by the fallback needle-in-haystack search, not page scoring).
@@ -2864,11 +2813,48 @@ Deno.serve(async (req: Request) => {
       }
 
       const meaningfulValueCount = countMeaningfulRowValues(result.rows as Array<Record<string, unknown>>);
+
+      // Verification (persisted into extractionDebug, not just logged, so it
+      // survives past the function's log retention and is inspectable from
+      // the DB/UI): exactly what runBusinessExtraction() returned, before
+      // any fallback/failure branching below decides what to do about it.
+      // This is what distinguishes "OpenAI returned nothing" from "OpenAI
+      // returned facts, but mapping dropped them" -- both looked identical
+      // (silently degrade to an empty manual-review row) before this check.
+      const openaiDebugForVerification =
+        ((result.metadata as any)?.extractionDebug?.openai_fact_ledger) ??
+        ((result.metadata as any)?.extractionDebug?.vertex_fact_ledger) ??
+        null;
+      const factsExtractedCount = Number(openaiDebugForVerification?.facts_extracted_count ?? 0);
+      const factsMappedCount = Number(openaiDebugForVerification?.facts_mapped_count ?? 0);
+      const row0Keys = Object.keys(result.rows?.[0] ?? {}).filter((k) => !k.startsWith("_"));
+      console.log(
+        `[normalize-pdf-output] STAGE extraction_verification file_id=${file_id} provider=${businessExtractionProvider} ` +
+        `method=${result.method} rows_length=${result.rows?.length ?? 0} row0_keys=${JSON.stringify(row0Keys)} ` +
+        `meaningful_value_count=${meaningfulValueCount} openai_facts_extracted=${factsExtractedCount} ` +
+        `openai_facts_mapped=${factsMappedCount} openai_failure_classification=${openaiDebugForVerification?.failure_classification ?? "n/a"}`,
+      );
+      if (result.metadata && typeof result.metadata === "object") {
+        (result.metadata as any).extractionDebug = {
+          ...((result.metadata as any).extractionDebug || {}),
+          extraction_verification: {
+            provider: businessExtractionProvider,
+            method: result.method,
+            rows_length: result.rows?.length ?? 0,
+            row0_keys: row0Keys,
+            meaningful_value_count: meaningfulValueCount,
+            openai_facts_extracted_count: factsExtractedCount,
+            openai_facts_mapped_count: factsMappedCount,
+            openai_failure_classification: openaiDebugForVerification?.failure_classification ?? null,
+          },
+        };
+      }
+
       if (!result.rows || result.rows.length === 0 || meaningfulValueCount === 0) {
         // P0.3 guarantee: this attempt produced nothing usable, but a prior
         // successful run may already have persisted real values for this
         // file (e.g. a re-extraction that regressed). Re-read before
-        // injecting an empty fallback row over them.
+        // overwriting them with a failure state.
         const { data: existingRow } = await supabaseAdmin
           .from("uploaded_files")
           .select("ui_review_payload, parsed_data, normalized_output")
@@ -2891,94 +2877,90 @@ Deno.serve(async (req: Request) => {
           });
         }
 
-        // For review-required files (all leases), inject a fallback empty row instead of
-        // failing. This lets the reviewer manually fill in fields rather than hitting a
-        // dead-end "failed" status. Without an LLM backend, rule/table extraction often
-        // finds nothing, but the document is still parseable and reviewable.
-        if (fileRecord.review_required) {
-          console.warn(
-            `[normalize-pdf-output] file_id=${file_id} — extraction produced no usable values ` +
-            `(LLM likely not configured). Injecting fallback empty row for manual review.`,
-          );
-          (result as any).rows = [buildFallbackReviewRow(moduleType)];
-          if (!Array.isArray((result as any).warnings)) (result as any).warnings = [];
-          (result as any).warnings.push(
-            "No fields were auto-extracted (AI backend not configured or document could not be read). " +
-            "Please fill in the required fields manually.",
-          );
-          if (!(result as any).method) (result as any).method = "manual_review_fallback";
-          if (!(result as any).metadata) (result as any).metadata = {};
-          (result as any).metadata.avgConfidence = 0;
-          // fall through to the normal review_required path below
-        } else {
-          const reason =
-            `Extraction produced no usable lease values. Warnings: ${(result.warnings ?? []).join("; ")}`;
-          const pipeline = buildPipelineMetadata({
-            parser_status: parserStatus ?? PARSER_STATUSES.COMPLETED,
-            normalize_status: NORMALIZE_STATUSES.FAILED,
-            ai_status: "ai_empty_output",
-            review_status: REVIEW_STATUSES.BLOCKED,
-            error_code: "FAILED_EMPTY_EXTRACTION",
-            error_message: reason,
-            full_text_chars: doclingTextLength,
-            page_count: (fileRecord.docling_raw as any)?.page_count ?? parserPipeline?.page_count ?? null,
-            mapped_fields_count: 0,
-            dynamic_terms_count: 0,
-            source_backed_count: 0,
-            lease_clauses_count: 0,
-            expense_terms_count: 0,
-            cam_terms_count: 0,
-            stage: "normalize",
-          });
-          const payload = buildBlockedReviewPayload({
-            fileId: file_id,
-            fileName,
-            moduleType,
-            documentSubtype: fileRecord.document_subtype ?? null,
-            extractionMethod: fileRecord.extraction_method ?? result.method ?? null,
-            message: "No usable lease values were extracted from the parsed document.",
-            pipeline,
-          });
-          await setStatus(supabaseAdmin, file_id, "failed", {
-            review_required: false,
-            review_status: REVIEW_STATUSES.BLOCKED,
-            processing_status: "failed_empty_extraction",
-            extraction_method: fileRecord.extraction_method ?? result.method ?? "none",
-            ui_review_payload: payload,
-            normalized_output: mergePipelineIntoNormalizedOutput(result as Record<string, unknown>, pipeline, {
-              method: "blocked_pipeline_failure",
-              rows: [],
-              warnings: payload.global_warnings,
-              validationErrors: result.validationErrors ?? [],
-            }),
-            parsed_data: [],
-            row_count: 0,
-            valid_count: 0,
-            error_count: 1,
-            error_message: reason,
-            failed_step: "normalize",
-            processing_completed_at: new Date().toISOString(),
-          });
-          await logger.event("normalize", "blocked", {
-            normalize_status: NORMALIZE_STATUSES.FAILED,
-            ai_status: "ai_empty_output",
-            error_code: "FAILED_EMPTY_EXTRACTION",
-            full_text_chars: doclingTextLength,
-            page_count: pipeline.page_count,
-            mapped_fields_count: 0,
-            dynamic_terms_count: 0,
-            lease_clauses_count: 0,
-          });
-          return jsonResponse({
-            error: true,
-            file_id,
-            processing_status: "failed",
-            normalize_status: NORMALIZE_STATUSES.FAILED,
-            error_code: "FAILED_EMPTY_EXTRACTION",
-            message: reason,
-            ui_review_payload: payload,
-          }, 422);
-        } // end else (non-review-required modules)
+        // Azure parsed the document and extraction actually ran, but
+        // produced nothing usable. This used to inject a synthetic empty
+        // row and still mark review_required for lease documents ("let the
+        // reviewer fill it in manually") -- which silently hid every real
+        // extraction bug this session found (miscounted text, a missing
+        // migration column, a rejected temperature parameter) behind an
+        // identical-looking "no fields, please fill in manually" state.
+        // Fail loudly and specifically instead, for every module type: a
+        // reviewer can still see exactly what failed and why via
+        // error_code/error_message, rather than a payload that looks like a
+        // normal, genuinely-empty document.
+        const errorCode = factsExtractedCount > 0 && factsMappedCount === 0
+          ? "FIELD_MAPPING_FAILED"
+          : "AI_EMPTY_EXTRACTION";
+        const reason = errorCode === "FIELD_MAPPING_FAILED"
+          ? `OpenAI extracted ${factsExtractedCount} fact(s) from the document, but none mapped to a standard lease field.`
+          : `Extraction produced no usable lease values. Warnings: ${(result.warnings ?? []).join("; ")}`;
+        const pipeline = buildPipelineMetadata({
+          parser_status: parserStatus ?? PARSER_STATUSES.COMPLETED,
+          normalize_status: NORMALIZE_STATUSES.FAILED,
+          ai_status: "ai_empty_output",
+          review_status: REVIEW_STATUSES.BLOCKED,
+          error_code: errorCode,
+          error_message: reason,
+          full_text_chars: doclingTextLength,
+          page_count: (fileRecord.docling_raw as any)?.page_count ?? parserPipeline?.page_count ?? null,
+          mapped_fields_count: 0,
+          dynamic_terms_count: 0,
+          source_backed_count: 0,
+          lease_clauses_count: 0,
+          expense_terms_count: 0,
+          cam_terms_count: 0,
+          stage: "normalize",
+        });
+        const payload = buildBlockedReviewPayload({
+          fileId: file_id,
+          fileName,
+          moduleType,
+          documentSubtype: fileRecord.document_subtype ?? null,
+          extractionMethod: fileRecord.extraction_method ?? result.method ?? null,
+          message: errorCode === "FIELD_MAPPING_FAILED"
+            ? "The AI extraction found information in this document but could not map it to any lease field."
+            : "No usable lease values were extracted from the parsed document.",
+          pipeline,
+        });
+        await setStatus(supabaseAdmin, file_id, "failed", {
+          review_required: false,
+          review_status: REVIEW_STATUSES.BLOCKED,
+          processing_status: "failed_empty_extraction",
+          extraction_method: fileRecord.extraction_method ?? result.method ?? "none",
+          ui_review_payload: payload,
+          normalized_output: mergePipelineIntoNormalizedOutput(result as Record<string, unknown>, pipeline, {
+            method: "blocked_pipeline_failure",
+            rows: [],
+            warnings: payload.global_warnings,
+            validationErrors: result.validationErrors ?? [],
+          }),
+          parsed_data: [],
+          row_count: 0,
+          valid_count: 0,
+          error_count: 1,
+          error_message: reason,
+          failed_step: "normalize",
+          processing_completed_at: new Date().toISOString(),
+        });
+        await logger.event("normalize", "blocked", {
+          normalize_status: NORMALIZE_STATUSES.FAILED,
+          ai_status: "ai_empty_output",
+          error_code: errorCode,
+          full_text_chars: doclingTextLength,
+          page_count: pipeline.page_count,
+          mapped_fields_count: 0,
+          dynamic_terms_count: 0,
+          lease_clauses_count: 0,
+        });
+        return jsonResponse({
+          error: true,
+          file_id,
+          processing_status: "failed",
+          normalize_status: NORMALIZE_STATUSES.FAILED,
+          error_code: errorCode,
+          message: reason,
+          ui_review_payload: payload,
+        }, 422);
       }
 
       // ── Fast core-field persist ─────────────────────────────────────────
@@ -3042,18 +3024,34 @@ Deno.serve(async (req: Request) => {
       const afterMinimalPersistDelayMs = resolveLocalDebugDelayMs(req, body as Record<string, unknown>, "debug_after_minimal_persist_delay_ms");
       if (afterMinimalPersistDelayMs > 0) await delayMs(afterMinimalPersistDelayMs);
       if (minimalPersistError) {
-        // Non-fatal — log and continue to the full enrichment pass below.
-        // Worst case this run loses the early-persist safety net; extraction
-        // still proceeds normally.
-        console.warn(
-          `[normalize-pdf-output] Could not persist minimal core payload for file_id=${file_id}: ${minimalPersistError.message}`,
-        );
-      } else {
-        console.log(
-          `[normalize-pdf-output] minimal_payload_persisted file_id=${file_id} ` +
-          `values=${minimalValueCount} source_backed=${minimalSourceBackedCount} core_ready=${minimalPayload.core_ready}`,
-        );
+        // Fatal, not logged-and-continued: this write is the ONLY thing that
+        // makes extracted values visible in the UI (records[0].standard_fields).
+        // Continuing past a failed write here used to let normalize report
+        // "completed" while ui_review_payload silently kept whatever it held
+        // before this run -- a completed stage with no UI fields, exactly the
+        // failure mode this check exists to prevent. setFailed() (not
+        // setStatus()) because the FSM-checked write above already failed
+        // once for this row; this is the forceful, always-lands fallback.
+        const persistErrorMessage = `Could not persist extraction results: ${minimalPersistError.message}`;
+        console.error(`[normalize-pdf-output] ${persistErrorMessage} file_id=${file_id}`);
+        await setFailed(supabaseAdmin, file_id, persistErrorMessage, "normalize", 55);
+        await logger.event("normalize", "failed", {
+          error_code: "REVIEW_PAYLOAD_PERSIST_FAILED",
+          error_message: persistErrorMessage,
+        });
+        return jsonResponse({
+          error: true,
+          file_id,
+          processing_status: "failed",
+          normalize_status: NORMALIZE_STATUSES.FAILED,
+          error_code: "REVIEW_PAYLOAD_PERSIST_FAILED",
+          message: persistErrorMessage,
+        }, 500);
       }
+      console.log(
+        `[normalize-pdf-output] minimal_payload_persisted file_id=${file_id} ` +
+        `values=${minimalValueCount} source_backed=${minimalSourceBackedCount} core_ready=${minimalPayload.core_ready}`,
+      );
 
       // ── Document Intelligence v3 side-write (Phase 2, opt-in) ────────────
       // Runs only when ENABLE_DOCUMENT_INTELLIGENCE_V3=true (checked first

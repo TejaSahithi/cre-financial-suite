@@ -18,6 +18,7 @@
  */
 
 import { callLLMJSON, LLMProviderError } from "../../llm.ts";
+import { callLLMJSONWithProvenance } from "../provenance/transport/openai.ts";
 
 import { chunkDocument } from "../chunker.ts";
 import { normalizeForPageMatch, resolveVerifiedSourcePage } from "../evidence-index.ts";
@@ -120,13 +121,22 @@ async function extractFromChunk(
   chunkText: string,
   moduleType: ModuleType,
   _deadlineAt?: number,
+  provenance?: { supabaseAdmin: any; context: import("../provenance/types.ts").ProvenanceContext },
+  chunkIndex?: number,
 ): Promise<ChunkExtractionResult> {
   try {
-    const response = await callLLMJSON({
+    const callOpts = {
       systemPrompt: buildSystemPrompt(moduleType),
       userPrompt: chunkText,
       temperature: 0,
-    });
+    };
+    const response = provenance
+      ? await callLLMJSONWithProvenance(
+        provenance.supabaseAdmin,
+        { ...provenance.context, operation: "openai_fact_ledger_chunk", chunkIndex },
+        callOpts,
+      )
+      : await callLLMJSON(callOpts);
     if (response.data == null) {
       return {
         facts: [],
@@ -211,8 +221,10 @@ export async function extractFactLedger(args: {
   /** Absolute epoch-ms deadline forwarded to every OpenAI call this
    *  extraction makes. See OpenAI request deadline handling. */
   deadlineAt?: number;
+  /** See OpenAIFactLedgerOptions.provenance. */
+  provenance?: { supabaseAdmin: any; context: import("../provenance/types.ts").ProvenanceContext };
 }): Promise<FactLedgerResult> {
-  const { docIndex, moduleType, fileBase64, fileMimeType, fileModeOverride, deadlineAt } = args;
+  const { docIndex, moduleType, fileBase64, fileMimeType, fileModeOverride, deadlineAt, provenance } = args;
   const warnings: string[] = [];
 
   const fileModeEnabled = fileModeOverride ?? (envFlagEnabled("OPENAI_FACT_LEDGER_FILE_MODE") || envFlagEnabled("VERTEX_FACT_LEDGER_FILE_MODE"));
@@ -245,8 +257,10 @@ export async function extractFactLedger(args: {
   const chunkClassifications: Array<OpenAIFailureClassification | undefined> = [];
   let lastHttpStatus: number | undefined;
 
+  let chunkIndex = 0;
   for (const chunk of chunks) {
-    const result = await extractFromChunk(chunk.text, moduleType, deadlineAt);
+    const result = await extractFromChunk(chunk.text, moduleType, deadlineAt, provenance, chunkIndex);
+    chunkIndex += 1;
     if (result.warning) warnings.push(result.warning);
     chunksProcessed += 1;
     if (result.facts.length > 0) {

@@ -111,6 +111,60 @@ function classifyOpenAIError(status: number, body: any): LLMFailureClassificatio
   return "unknown";
 }
 
+// Newer reasoning-oriented OpenAI models (o-series, and some gpt-5.x models)
+// reject any non-default `temperature` outright -- a 400 whose param is
+// "temperature" (OpenAI's `unsupported_value` error code), rather than a
+// real extraction failure. Every caller in this codebase sends an explicit
+// temperature (usually 0, for deterministic extraction); without this check
+// switching OPENAI_MODEL to such a model makes every single call fail,
+// system-wide, with no document-specific cause -- exactly the "OpenAI never
+// returns anything" symptom this was added to catch and recover from.
+function isUnsupportedTemperatureError(status: number, body: any): boolean {
+  if (status !== 400) return false;
+  const param = String(body?.error?.param ?? "").toLowerCase();
+  const code = String(body?.error?.code ?? "").toLowerCase();
+  const msg = String(body?.error?.message ?? "").toLowerCase();
+  if (param === "temperature" || code === "unsupported_value") return true;
+  return msg.includes("temperature") && (msg.includes("unsupported") || msg.includes("does not support") || msg.includes("only the default"));
+}
+
+async function postToOpenAI(apiKey: string, body: Record<string, unknown>): Promise<{ response: Response; responseBody: any; responseId: string }> {
+  let response: Response;
+  try {
+    response = await fetch(OPENAI_CHAT_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120_000), // 2 min hard timeout
+    });
+  } catch (fetchErr: any) {
+    const isTimeout = fetchErr?.name === "TimeoutError" || fetchErr?.name === "AbortError";
+    throw new LLMProviderError(
+      isTimeout
+        ? `OpenAI request timed out after 120s`
+        : `Network error calling OpenAI: ${fetchErr?.message}`,
+      isTimeout ? "timeout" : "transport",
+    );
+  }
+
+  const responseId = response.headers.get("x-request-id") ?? "unknown";
+  let responseBody: any;
+  try {
+    responseBody = await response.json();
+  } catch {
+    throw new LLMProviderError(
+      `OpenAI returned non-JSON response (HTTP ${response.status})`,
+      "invalid_response",
+      response.status,
+    );
+  }
+
+  return { response, responseBody, responseId };
+}
+
 async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
   content: string;
   model: string;
@@ -142,37 +196,21 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
     body.response_format = { type: "json_object" };
   }
 
-  let response: Response;
-  try {
-    response = await fetch(OPENAI_CHAT_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120_000), // 2 min hard timeout
-    });
-  } catch (fetchErr: any) {
-    const isTimeout = fetchErr?.name === "TimeoutError" || fetchErr?.name === "AbortError";
-    throw new LLMProviderError(
-      isTimeout
-        ? `OpenAI request timed out after 120s`
-        : `Network error calling OpenAI: ${fetchErr?.message}`,
-      isTimeout ? "timeout" : "transport",
-    );
-  }
+  let { response, responseBody, responseId } = await postToOpenAI(apiKey, body);
 
-  let responseBody: any;
-  const responseId = response.headers.get("x-request-id") ?? "unknown";
-  try {
-    responseBody = await response.json();
-  } catch {
-    throw new LLMProviderError(
-      `OpenAI returned non-JSON response (HTTP ${response.status})`,
-      "invalid_response",
-      response.status,
+  // Newer reasoning-oriented models (o-series, some gpt-5.x models) reject
+  // any non-default temperature outright. Retry exactly once with
+  // `temperature` omitted (the model's own default applies) rather than
+  // surfacing this as an extraction failure -- every caller in this
+  // codebase sends an explicit temperature for deterministic extraction,
+  // so without this, switching OPENAI_MODEL to such a model would make
+  // every single call fail, for every document, with no per-document cause.
+  if (!response.ok && isUnsupportedTemperatureError(response.status, responseBody)) {
+    console.warn(
+      `[llm] model "${model}" rejected temperature=${temperature}; retrying once without a custom temperature`,
     );
+    const { temperature: _drop, ...bodyWithoutTemperature } = body;
+    ({ response, responseBody, responseId } = await postToOpenAI(apiKey, bodyWithoutTemperature));
   }
 
   if (!response.ok) {
