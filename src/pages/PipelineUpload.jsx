@@ -1,25 +1,17 @@
 import React, { useState } from "react";
 import { useLocation } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/services/supabaseClient";
 import EnhancedFileUploader from "@/components/EnhancedFileUploader";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-
-async function fetchProperties() {
-  if (!supabase) return [];
-  const { data } = await supabase.from("properties").select("id, name").order("name");
-  return data ?? [];
-}
+import useOrgQuery from "@/hooks/useOrgQuery";
 
 export default function PipelineUpload() {
   const location = useLocation();
   const urlParams = new URLSearchParams(location.search);
   const [selectedPropertyId, setSelectedPropertyId] = useState(urlParams.get("property") || "");
 
-  const { data: properties = [] } = useQuery({
+  const { data: properties = [] } = useOrgQuery("Property", {}, {
     queryKey: ["properties-pipeline-upload"],
-    queryFn: fetchProperties,
   });
 
   return (

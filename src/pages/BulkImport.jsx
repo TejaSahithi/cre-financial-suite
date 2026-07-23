@@ -105,10 +105,10 @@ export default function BulkImport() {
   const { data: glAccounts = [] } = useQuery({
     queryKey: ['gl-accounts', orgId],
     queryFn: async () => {
-      const { data } = await supabase.from('gl_accounts').select('code, category, is_recoverable').eq('is_active', true);
+      const { data } = await supabase.from('gl_accounts').select('code, category, is_recoverable').eq('org_id', orgId).eq('is_active', true);
       return data ?? [];
     },
-    enabled: !!orgId,
+    enabled: !!orgId && orgId !== '__none__',
     staleTime: 5 * 60 * 1000,
   });
   const glMappingLookup = React.useMemo(() => {

@@ -23,10 +23,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { createPageUrl } from "@/utils";
 import { supabase } from "@/services/supabaseClient";
+import useOrgId from "@/hooks/useOrgId";
 
 export default function ApprovalWorkflows() {
+  const { orgId } = useOrgId();
+
   const { data: counts = {} } = useQuery({
-    queryKey: ["approval-workflow-counts"],
+    queryKey: ["approval-workflow-counts", orgId],
+    enabled: !!orgId && orgId !== "__none__",
     queryFn: async () => {
       const result = { drafts: 0, pendingReview: 0, approvedAbstracts: 0, ruleSetsPending: 0, ruleSetsApproved: 0, camPending: 0, camApproved: 0 };
       const [
@@ -37,12 +41,12 @@ export default function ApprovalWorkflows() {
         camDraft,
         camApproved,
       ] = await Promise.all([
-        supabase.from("leases").select("id", { count: "exact", head: true }).in("abstract_status", ["draft", "pending_review"]),
-        supabase.from("leases").select("id", { count: "exact", head: true }).eq("abstract_status", "approved"),
-        supabase.from("lease_expense_rule_sets").select("id", { count: "exact", head: true }).neq("status", "approved"),
-        supabase.from("lease_expense_rule_sets").select("id", { count: "exact", head: true }).eq("status", "approved"),
-        supabase.from("cam_profiles").select("id", { count: "exact", head: true }).neq("status", "approved"),
-        supabase.from("cam_profiles").select("id", { count: "exact", head: true }).eq("status", "approved"),
+        supabase.from("leases").select("id", { count: "exact", head: true }).eq("org_id", orgId).in("abstract_status", ["draft", "pending_review"]),
+        supabase.from("leases").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("abstract_status", "approved"),
+        supabase.from("lease_expense_rule_sets").select("id", { count: "exact", head: true }).eq("org_id", orgId).neq("status", "approved"),
+        supabase.from("lease_expense_rule_sets").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("status", "approved"),
+        supabase.from("cam_profiles").select("id", { count: "exact", head: true }).eq("org_id", orgId).neq("status", "approved"),
+        supabase.from("cam_profiles").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("status", "approved"),
       ]);
       result.drafts = leasesAbstractDrafts?.count ?? 0;
       result.approvedAbstracts = leasesAbstractApproved?.count ?? 0;
