@@ -72,6 +72,13 @@ export interface FactLedgerResult {
    *  provider call failed. See LLMFailureClassification in llm.ts. */
   failureClassification?: import("../../llm.ts").LLMFailureClassification;
   failureHttpStatus?: number;
+  /** Provider's own error code (e.g. Azure's "DeploymentNotFound" /
+   *  "ResourceNotFound"), the exact request URL (no secrets), and the
+   *  provider's request ID — captured alongside failureClassification for
+   *  the same last-failing call. See LLMProviderError in llm.ts. */
+  failureProviderErrorCode?: string;
+  failureRequestId?: string;
+  failureRequestUrl?: string;
 }
 
 // ── Field mapping ─────────────────────────────────────────────────────────────

@@ -177,15 +177,36 @@ export type LLMFailureClassification =
   | "content_filter"
   | "unknown";
 
+export interface LLMProviderErrorExtra {
+  /** The provider's own error code from its JSON error body (e.g. Azure's
+   * "DeploymentNotFound" / "ResourceNotFound", distinct from the HTTP
+   * status). Never a secret — safe to log and persist. */
+  providerErrorCode?: string;
+  /** x-request-id / x-ms-request-id response header — the ID to hand to
+   * OpenAI/Azure support for this exact call. Never a secret. */
+  requestId?: string;
+  /** The exact URL called, with no query secrets (Azure's API key travels
+   * only in the api-key header, never the URL) — safe to log and persist,
+   * and is the single fastest way to catch a malformed
+   * endpoint/deployment/api-version combination. */
+  requestUrl?: string;
+}
+
 export class LLMProviderError extends Error {
   public readonly classification: LLMFailureClassification;
   public readonly httpStatus?: number;
+  public readonly providerErrorCode?: string;
+  public readonly requestId?: string;
+  public readonly requestUrl?: string;
 
-  constructor(message: string, classification: LLMFailureClassification, httpStatus?: number) {
+  constructor(message: string, classification: LLMFailureClassification, httpStatus?: number, extra?: LLMProviderErrorExtra) {
     super(message);
     this.name = "LLMProviderError";
     this.classification = classification;
     this.httpStatus = httpStatus;
+    this.providerErrorCode = extra?.providerErrorCode;
+    this.requestId = extra?.requestId;
+    this.requestUrl = extra?.requestUrl;
   }
 }
 
@@ -246,7 +267,7 @@ function buildRequestTarget(config: LLMConfig): { url: string; headers: Record<s
   };
 }
 
-async function postToOpenAI(config: LLMConfig, body: Record<string, unknown>): Promise<{ response: Response; responseBody: any; responseId: string }> {
+async function postToOpenAI(config: LLMConfig, body: Record<string, unknown>): Promise<{ response: Response; responseBody: any; responseId: string; requestUrl: string }> {
   const { url, headers, providerLabel } = buildRequestTarget(config);
   let response: Response;
   try {
@@ -263,10 +284,19 @@ async function postToOpenAI(config: LLMConfig, body: Record<string, unknown>): P
         ? `${providerLabel} request timed out after 120s`
         : `Network error calling ${providerLabel}: ${fetchErr?.message}`,
       isTimeout ? "timeout" : "transport",
+      undefined,
+      { requestUrl: url },
     );
   }
 
-  const responseId = response.headers.get("x-request-id") ?? "unknown";
+  // Direct OpenAI sends x-request-id; Azure's API Management gateway in
+  // front of Azure OpenAI sends apim-request-id (and sometimes
+  // x-ms-request-id) instead — check all three rather than assuming one.
+  const responseId =
+    response.headers.get("x-request-id") ??
+    response.headers.get("apim-request-id") ??
+    response.headers.get("x-ms-request-id") ??
+    "unknown";
   let responseBody: any;
   try {
     responseBody = await response.json();
@@ -275,10 +305,11 @@ async function postToOpenAI(config: LLMConfig, body: Record<string, unknown>): P
       `${providerLabel} returned non-JSON response (HTTP ${response.status})`,
       "invalid_response",
       response.status,
+      { requestId: responseId, requestUrl: url },
     );
   }
 
-  return { response, responseBody, responseId };
+  return { response, responseBody, responseId, requestUrl: url };
 }
 
 async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
@@ -316,7 +347,7 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
     body.response_format = { type: "json_object" };
   }
 
-  let { response, responseBody, responseId } = await postToOpenAI(config, body);
+  let { response, responseBody, responseId, requestUrl } = await postToOpenAI(config, body);
 
   // Newer reasoning-oriented models (o-series, some gpt-5.x models) reject
   // any non-default temperature outright. Retry exactly once with
@@ -330,16 +361,29 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
       `[llm] model "${model}" rejected temperature=${temperature}; retrying once without a custom temperature`,
     );
     const { temperature: _drop, ...bodyWithoutTemperature } = body;
-    ({ response, responseBody, responseId } = await postToOpenAI(config, bodyWithoutTemperature));
+    ({ response, responseBody, responseId, requestUrl } = await postToOpenAI(config, bodyWithoutTemperature));
   }
 
   if (!response.ok) {
     const classification = classifyOpenAIError(response.status, responseBody);
     const providerLabel = config.isAzure ? "Azure OpenAI" : "OpenAI";
+    // Azure/OpenAI's own error code (e.g. "DeploymentNotFound",
+    // "ResourceNotFound", "401") — distinct from and more specific than the
+    // HTTP status, and the single fastest signal for telling "wrong
+    // deployment name" apart from "wrong endpoint/resource" apart from
+    // "wrong key", none of which otherwise look different from each other.
+    const providerErrorCode =
+      typeof responseBody?.error?.code === "string" ? responseBody.error.code : undefined;
+    console.error(
+      `[llm] ${providerLabel} call failed: http_status=${response.status} ` +
+      `provider_error_code=${providerErrorCode ?? "n/a"} request_id=${responseId} ` +
+      `url=${requestUrl}`,
+    );
     throw new LLMProviderError(
       responseBody?.error?.message ?? `${providerLabel} HTTP ${response.status}`,
       classification,
       response.status,
+      { providerErrorCode, requestId: responseId, requestUrl },
     );
   }
 
@@ -348,6 +392,8 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
     throw new LLMProviderError(
       `${config.isAzure ? "Azure OpenAI" : "OpenAI"} returned no choices`,
       "invalid_response",
+      undefined,
+      { requestId: responseId, requestUrl },
     );
   }
 

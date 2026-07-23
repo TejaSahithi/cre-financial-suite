@@ -114,6 +114,9 @@ interface ChunkExtractionResult {
   warning: string | null;
   classification?: string;
   httpStatus?: number;
+  providerErrorCode?: string;
+  requestId?: string;
+  requestUrl?: string;
 }
 
 
@@ -152,11 +155,17 @@ async function extractFromChunk(
   } catch (error) {
     const classification = error instanceof LLMProviderError ? error.classification : "unknown";
     const httpStatus = error instanceof LLMProviderError ? error.httpStatus : undefined;
+    const providerErrorCode = error instanceof LLMProviderError ? error.providerErrorCode : undefined;
+    const requestId = error instanceof LLMProviderError ? error.requestId : undefined;
+    const requestUrl = error instanceof LLMProviderError ? error.requestUrl : undefined;
     return {
       facts: [],
       warning: `Fact ledger extraction failed for one chunk: ${(error as Error)?.message ?? error}`,
       classification,
       httpStatus,
+      providerErrorCode,
+      requestId,
+      requestUrl,
     };
   }
 }
@@ -251,7 +260,15 @@ export async function extractFactLedger(args: {
       facts: grounded,
       warnings,
       chunksProcessed: 1,
-      ...(grounded.length === 0 ? { failureClassification: result.classification, failureHttpStatus: result.httpStatus } : {}),
+      ...(grounded.length === 0
+        ? {
+          failureClassification: result.classification,
+          failureHttpStatus: result.httpStatus,
+          failureProviderErrorCode: result.providerErrorCode,
+          failureRequestId: result.requestId,
+          failureRequestUrl: result.requestUrl,
+        }
+        : {}),
     };
   }
 
@@ -266,6 +283,9 @@ export async function extractFactLedger(args: {
   let failedChunkCount = 0;
   const chunkClassifications: Array<OpenAIFailureClassification | undefined> = [];
   let lastHttpStatus: number | undefined;
+  let lastProviderErrorCode: string | undefined;
+  let lastRequestId: string | undefined;
+  let lastRequestUrl: string | undefined;
 
   let chunkIndex = 0;
   for (const chunk of chunks) {
@@ -279,6 +299,9 @@ export async function extractFactLedger(args: {
       failedChunkCount += 1;
       chunkClassifications.push(result.classification);
       if (result.httpStatus != null) lastHttpStatus = result.httpStatus;
+      if (result.providerErrorCode != null) lastProviderErrorCode = result.providerErrorCode;
+      if (result.requestId != null) lastRequestId = result.requestId;
+      if (result.requestUrl != null) lastRequestUrl = result.requestUrl;
     }
     for (const fact of result.facts) {
       allFacts.push({
@@ -305,7 +328,13 @@ export async function extractFactLedger(args: {
     warnings,
     chunksProcessed,
     ...(overallFailed
-      ? { failureClassification: dominantClassification(chunkClassifications), failureHttpStatus: lastHttpStatus }
+      ? {
+        failureClassification: dominantClassification(chunkClassifications),
+        failureHttpStatus: lastHttpStatus,
+        failureProviderErrorCode: lastProviderErrorCode,
+        failureRequestId: lastRequestId,
+        failureRequestUrl: lastRequestUrl,
+      }
       : {}),
   };
 }

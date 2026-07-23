@@ -71,6 +71,9 @@ function fallbackResult(
   failureHttpStatus?: number,
   indexSource?: string,
   fallbackReason?: string | null,
+  failureProviderErrorCode?: string,
+  failureRequestId?: string,
+  failureRequestUrl?: string,
 ): ExtractionPipelineResult {
   return withOpenAIFactLedgerDebug({
     rows: [],
@@ -85,6 +88,13 @@ function fallbackResult(
         openai_fact_ledger: {
           failure_classification: failureClassification ?? "unknown",
           failure_http_status: failureHttpStatus ?? null,
+          // Provider's own error code, request ID, and the exact request URL
+          // (no secrets) — see the same fields on fact-ledger-extractor.ts's
+          // FactLedgerResult for why these matter more than the HTTP status
+          // alone when diagnosing a wrong endpoint/deployment/api-version.
+          failure_provider_error_code: failureProviderErrorCode ?? null,
+          failure_request_id: failureRequestId ?? null,
+          failure_request_url: failureRequestUrl ?? null,
           document_index_source: indexSource,
           document_index_fallback_reason: fallbackReason,
           evidence_anchors: [],
@@ -250,7 +260,17 @@ export async function runOpenAIFactLedgerPipeline(
             // the document produced nothing usable overall (never set merely
             // because some individual chunks failed while others succeeded).
             ...(factLedger.failureClassification
-              ? { failure_classification: factLedger.failureClassification, failure_http_status: factLedger.failureHttpStatus ?? null }
+              ? {
+                failure_classification: factLedger.failureClassification,
+                failure_http_status: factLedger.failureHttpStatus ?? null,
+                // Provider's own error code (e.g. Azure's "DeploymentNotFound"),
+                // the exact request URL (no secrets — the key travels only in
+                // headers), and the provider's request ID for this failure.
+                // None of these are secrets; all are safe to persist/query.
+                failure_provider_error_code: factLedger.failureProviderErrorCode ?? null,
+                failure_request_id: factLedger.failureRequestId ?? null,
+                failure_request_url: factLedger.failureRequestUrl ?? null,
+              }
               : {}),
             // Phase 6 Task E: available whenever the canonical layout index
             // ran, so a future phase can persist block-level evidence into
@@ -274,6 +294,9 @@ export async function runOpenAIFactLedgerPipeline(
   } catch (error) {
     const classification = error instanceof LLMProviderError ? error.classification : undefined;
     const httpStatus = error instanceof LLMProviderError ? error.httpStatus : undefined;
+    const providerErrorCode = error instanceof LLMProviderError ? error.providerErrorCode : undefined;
+    const requestId = error instanceof LLMProviderError ? error.requestId : undefined;
+    const requestUrl = error instanceof LLMProviderError ? error.requestUrl : undefined;
     return fallbackResult(
       `OpenAI fact ledger pipeline failed: ${(error as Error)?.message ?? error}`,
       startTime,
@@ -281,6 +304,9 @@ export async function runOpenAIFactLedgerPipeline(
       httpStatus,
       indexResolution?.indexSource,
       indexResolution?.fallbackReason,
+      providerErrorCode,
+      requestId,
+      requestUrl,
     );
   }
 }
