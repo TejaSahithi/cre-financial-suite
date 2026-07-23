@@ -372,11 +372,23 @@ async function runParseStageInline(
 }
 
 const PARSE_TIMEOUT_MS = 140_000;
-const NORMALIZE_TIMEOUT_MS = 240_000;
-// Dedicated, separate budget for the deferred evidence/clause pass (§3) —
-// distinct from NORMALIZE_TIMEOUT_MS so the now-fast normalize stage and the
-// still-potentially-slow enrich stage can be tuned independently.
-const ENRICH_TIMEOUT_MS = 240_000;
+// Supabase Edge Functions have a 150s hard wall (see ingest-file/index.ts's
+// callEdgeFunction doc comment) -- this worker runs parse (inline, typically
+// 20-35s) and then normalize sequentially in the SAME invocation, so
+// NORMALIZE_TIMEOUT_MS must leave enough of that 150s budget for parse +
+// response overhead that this client-side AbortSignal always fires BEFORE
+// the platform's hard kill. A value close to or above 150s (as this was
+// previously set: 240_000) meant the platform silently killed the whole
+// invocation mid-await on any normalize call slow enough to matter -- before
+// any of this file's own timeout/reconciliation code ever ran, leaving the
+// job orphaned in "running" forever with no error, no log line, nothing.
+// 90s leaves ~35-40s of margin for parse + overhead to stay under 150s.
+const NORMALIZE_TIMEOUT_MS = 90_000;
+// The enrich stage is dispatched as its own separate pipeline job / worker
+// invocation (not chained after parse+normalize in the same request), so it
+// gets its own fresh ~150s budget -- but must still leave headroom under
+// that same hard wall for its own overhead.
+const ENRICH_TIMEOUT_MS = 130_000;
 
 // Azure staging P0: durable-state reconciliation must distinguish "confirmed
 // absent" from "couldn't determine" — a reconciliation read failing under the

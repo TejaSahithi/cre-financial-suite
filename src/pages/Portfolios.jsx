@@ -248,24 +248,26 @@ export default function Portfolios() {
     },
   });
 
+  const userOrgId = orgId && orgId !== "__none__" ? orgId : null;
+
   const visiblePortfolios = selectedOrgId === "all"
-    ? portfolios
+    ? (isAdmin ? portfolios : portfolios.filter((portfolio) => portfolio.org_id === userOrgId))
     : portfolios.filter((portfolio) => portfolio.org_id === selectedOrgId);
 
   const orgProperties = selectedOrgId === "all"
-    ? properties
+    ? (isAdmin ? properties : properties.filter((property) => property.org_id === userOrgId))
     : properties.filter((property) => property.org_id === selectedOrgId);
 
   const orgBuildings = selectedOrgId === "all"
-    ? buildings
+    ? (isAdmin ? buildings : buildings.filter((building) => building.org_id === userOrgId))
     : buildings.filter((building) => building.org_id === selectedOrgId);
 
   const orgUnits = selectedOrgId === "all"
-    ? units
+    ? (isAdmin ? units : units.filter((unit) => unit.org_id === userOrgId))
     : units.filter((unit) => unit.org_id === selectedOrgId);
 
   const orgLeases = selectedOrgId === "all"
-    ? leases
+    ? (isAdmin ? leases : leases.filter((lease) => lease.org_id === userOrgId))
     : leases.filter((lease) => lease.org_id === selectedOrgId);
 
   const visiblePortfolioIds = new Set(visiblePortfolios.map((portfolio) => portfolio.id));

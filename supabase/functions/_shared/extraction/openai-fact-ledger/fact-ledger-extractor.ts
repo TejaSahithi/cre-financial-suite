@@ -287,10 +287,21 @@ export async function extractFactLedger(args: {
   let lastRequestId: string | undefined;
   let lastRequestUrl: string | undefined;
 
-  let chunkIndex = 0;
-  for (const chunk of chunks) {
-    const result = await extractFromChunk(chunk.text, moduleType, deadlineAt, provenance, chunkIndex);
-    chunkIndex += 1;
+  // Chunks are independent OpenAI calls -- run them concurrently, not one
+  // after another. Serial execution made this stage's wall-clock time grow
+  // with MAX_CHUNKS (up to 4 x up to 120s each = up to 480s), which routinely
+  // exceeded both this worker's own NORMALIZE_TIMEOUT_MS and the platform's
+  // 150s Edge Function hard wall (see ingest-file/index.ts's callEdgeFunction
+  // doc comment) -- the invocation got hard-killed by the platform mid-await,
+  // silently, before any of this module's own timeout/error handling ever
+  // ran. Concurrent execution bounds normalize's realistic wall-clock time by
+  // the SLOWEST single chunk instead of their sum.
+  const chunkResults = await Promise.all(
+    chunks.map((chunk, index) => extractFromChunk(chunk.text, moduleType, deadlineAt, provenance, index)),
+  );
+
+  chunks.forEach((chunk, index) => {
+    const result = chunkResults[index];
     if (result.warning) warnings.push(result.warning);
     chunksProcessed += 1;
     if (result.facts.length > 0) {
@@ -313,7 +324,7 @@ export async function extractFactLedger(args: {
         ),
       });
     }
-  }
+  });
 
   const dedupedFacts = dedupeFacts(allFacts);
   // Round-3 correction (item 1): some chunks failing while meaningful facts

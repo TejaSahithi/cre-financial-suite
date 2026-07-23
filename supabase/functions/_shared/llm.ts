@@ -296,13 +296,19 @@ async function postToOpenAI(config: LLMConfig, body: Record<string, unknown>): P
       method: "POST",
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120_000), // 2 min hard timeout
+      // Bounded well under lease-extraction-worker's NORMALIZE_TIMEOUT_MS
+      // (90s): fact-ledger extraction runs up to MAX_CHUNKS calls like this
+      // one CONCURRENTLY, so the slowest single call determines normalize's
+      // real wall-clock time. A 120s per-call ceiling here could singlehandedly
+      // blow the 90s normalize budget (and, upstream of that, the platform's
+      // 150s Edge Function hard wall) on one slow call.
+      signal: AbortSignal.timeout(60_000),
     });
   } catch (fetchErr: any) {
     const isTimeout = fetchErr?.name === "TimeoutError" || fetchErr?.name === "AbortError";
     throw new LLMProviderError(
       isTimeout
-        ? `${providerLabel} request timed out after 120s`
+        ? `${providerLabel} request timed out after 60s`
         : `Network error calling ${providerLabel}: ${fetchErr?.message}`,
       isTimeout ? "timeout" : "transport",
       undefined,
