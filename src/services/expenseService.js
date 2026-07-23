@@ -32,7 +32,7 @@ import {
   ClassificationEligibilityError,
 } from "./utils/expenseWorkflowErrors";
 
-import { createEntityService, getCurrentOrgId } from "@/services/api";
+import { clearCache, createEntityService, getCurrentOrgId } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
@@ -1167,6 +1167,7 @@ async function upsertExpenseClassification(payload, { expensePatch = null } = {}
         ...(expensePatch && Object.keys(expensePatch).length > 0 ? { expense_patch: expensePatch } : {}),
         ...patch,
       });
+      clearCache();
       return result?.row ?? null;
     }
 
@@ -1445,6 +1446,7 @@ export const expenseService = {
         service_period_start, service_period_end,
       },
     });
+    clearCache();
     return result?.expense ?? null;
   },
 

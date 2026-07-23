@@ -82,7 +82,7 @@ Deno.serve(async (req: Request) => {
     const body = await req.json().catch(() => ({}));
     const payload = validatePayload(body);
 
-    const { data, error } = await supabaseAdmin.rpc("persist_expense_classification", {
+    let { data, error } = await supabaseAdmin.rpc("persist_expense_classification", {
       p_org_id: orgId,
       p_expense_id: payload.expenseId,
       p_actor_user_id: user.id,
@@ -96,6 +96,28 @@ Deno.serve(async (req: Request) => {
       p_classification_patch: payload.patch,
       p_expense_patch: payload.expensePatch,
     });
+
+    const missingClassificationBackend =
+      error &&
+      (["42P01", "42883", "PGRST202", "PGRST205"].includes(String(error.code || "").toUpperCase()) ||
+        /persist_expense_classification|expense_classifications/i.test(error.message || ""));
+    const isManualRecoveryUpdate =
+      payload.expensePatch &&
+      String(payload.patch?.rule_source || "").toLowerCase() === "manual";
+
+    if (missingClassificationBackend && isManualRecoveryUpdate) {
+      ({ data, error } = await supabaseAdmin.rpc("set_expense_recovery", {
+        p_org_id: orgId,
+        p_expense_id: payload.expenseId,
+        p_actor_user_id: user.id,
+        p_actor_email: user.email || null,
+        p_recovery_status: payload.recoveryStatus,
+        p_classification: payload.expensePatch?.classification || payload.recoveryStatus,
+        p_approved_status: payload.patch?.approved_status || null,
+        p_rule_source: payload.patch?.rule_source || "manual",
+        p_recovery_reason: payload.patch?.recovery_reason || null,
+      }));
+    }
 
     if (error) {
       const message = error.message || "persist_expense_classification failed";
