@@ -321,10 +321,14 @@ export function canReadPage(user, pageName) {
 }
 
 export function canWritePage(user, pageName) {
+  // Org admins and super admins always have full write access.
+  if (isSuperAdmin(user) || isOrgAdmin(user)) return true;
   return hasAccessAtLeast(getPageAccessLevel(user, pageName), "write");
 }
 
 export function assertCanWritePage(user, pageName, action = "modify this page") {
+  // Org admins and super admins can always write — skip page-level check.
+  if (isSuperAdmin(user) || isOrgAdmin(user)) return;
   if (canWritePage(user, pageName)) return;
   throw new PagePermissionError(`You have read-only access to ${pageName}. Ask an admin for full access to ${action}.`);
 }
