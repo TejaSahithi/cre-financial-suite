@@ -47,8 +47,11 @@ A fact is one atomic assertion — a party name, a date, a dollar amount, a perc
 a defined term, an obligation, or a clause provision — grounded in EXACT verbatim
 source text from the document.
 
-Output ONLY a valid JSON array. Each element must have this exact shape:
-  { "category": "<clause category>", "value": <extracted value>, "source_text": "<exact verbatim phrase>", "source_page": <page number or null>, "confidence": <0.0-1.0> }
+Output ONLY a valid JSON object of this exact shape (this call is made with the
+API's json_object response mode, which requires a top-level object, never a
+bare array):
+  { "facts": [ { "category": "<clause category>", "value": <extracted value>, "source_text": "<exact verbatim phrase>", "source_page": <page number or null>, "confidence": <0.0-1.0> } ] }
+If there are no facts to report, return { "facts": [] } — never omit the "facts" key.
 
 The "category" MUST be one of these clause categories, prefixed with "clause:":
 ${CLAUSE_CATEGORY_VOCAB.map((c) => `clause:${c}`).join(", ")}
