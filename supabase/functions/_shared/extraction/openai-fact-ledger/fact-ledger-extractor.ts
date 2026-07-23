@@ -179,15 +179,25 @@ async function extractFromFile(
 
 
 // Round-3 correction: fixed priority order for picking the DOMINANT failure
-// classification across multiple chunks -- auth_error always wins (a bad
+// classification across multiple chunks -- authentication always wins (a bad
 // credential must never be masked by an unrelated chunk's timeout), then
 // roughly most-to-least "this run is unlikely to succeed on retry".
+//
+// These values must match the LLMFailureClassification strings llm.ts's
+// classifyOpenAIError() actually emits ("authentication", "rate_limit",
+// "provider_server_error", "transport", "timeout", "unknown") plus the two
+// classifications this module sets itself ("malformed_response",
+// "empty_extraction"). A prior version of this list used "auth_error" /
+// "rate_limited" / "server_error" / "network_error", which never matched any
+// real classification llm.ts produces -- every LLM-provider failure fell
+// through to the "unknown"-shaped branch in business-extraction-acceptance.ts
+// instead of being recognized as an auth failure or a fallback-eligible one.
 const CLASSIFICATION_PRIORITY: OpenAIFailureClassification[] = [
-  "auth_error",
-  "rate_limited",
-  "server_error",
+  "authentication",
+  "rate_limit",
+  "provider_server_error",
   "model_unavailable" as OpenAIFailureClassification,
-  "network_error",
+  "transport",
   "budget_exhausted",
   "malformed_response",
   "empty_extraction" as OpenAIFailureClassification,

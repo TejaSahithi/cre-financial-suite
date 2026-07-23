@@ -88,8 +88,8 @@ Deno.test("evaluateExtractionAcceptance: a fallback-eligible structured classifi
   assertEquals(acceptance.reason, "timeout");
 });
 
-Deno.test("evaluateExtractionAcceptance: 429/5xx/network_error/budget_exhausted/model_unavailable/malformed_response/empty_extraction are all fallback_eligible", () => {
-  for (const classification of ["rate_limited", "server_error", "network_error", "budget_exhausted", "model_unavailable", "malformed_response", "empty_extraction"]) {
+Deno.test("evaluateExtractionAcceptance: 429/5xx/transport/budget_exhausted/model_unavailable/malformed_response/empty_extraction are all fallback_eligible", () => {
+  for (const classification of ["rate_limit", "provider_server_error", "transport", "budget_exhausted", "model_unavailable", "malformed_response", "empty_extraction"]) {
     const result = baseResult({
       rows: [],
       method: "fallback",
@@ -100,15 +100,15 @@ Deno.test("evaluateExtractionAcceptance: 429/5xx/network_error/budget_exhausted/
   }
 });
 
-Deno.test("evaluateExtractionAcceptance: auth_error is rejected, never fallback_eligible — a bad credential must not be masked", () => {
+Deno.test("evaluateExtractionAcceptance: authentication failure is rejected, never fallback_eligible — a bad credential must not be masked", () => {
   const result = baseResult({
     rows: [],
     method: "fallback",
-    metadata: { ...baseResult().metadata, extractionDebug: { vertex_fact_ledger: { failure_classification: "auth_error" } } },
+    metadata: { ...baseResult().metadata, extractionDebug: { vertex_fact_ledger: { failure_classification: "authentication" } } },
   });
   const acceptance = evaluateExtractionAcceptance(result, { provider: "vertex_fact_ledger" });
   assertEquals(acceptance.state, "rejected");
-  assertEquals(acceptance.reason, "auth_error");
+  assertEquals(acceptance.reason, "authentication");
 });
 
 Deno.test("evaluateExtractionAcceptance: missing optional fields alone never triggers fallback — only tested implicitly by the accepted case above having fewer than all schema fields", () => {

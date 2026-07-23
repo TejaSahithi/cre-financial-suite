@@ -250,11 +250,11 @@ Deno.test({
       const expectations = [
         { scenario: "success", effective: "vertex_fact_ledger", fallback: false, acceptance: "accepted", reason: null },
         { scenario: "timeout", effective: "legacy_hybrid", fallback: true, acceptance: null, reason: "timeout" },
-        { scenario: "rate_limited", effective: "legacy_hybrid", fallback: true, acceptance: null, reason: "rate_limited" },
-        { scenario: "server_error", effective: "legacy_hybrid", fallback: true, acceptance: null, reason: "server_error" },
+        { scenario: "rate_limited", effective: "legacy_hybrid", fallback: true, acceptance: null, reason: "rate_limit" },
+        { scenario: "server_error", effective: "legacy_hybrid", fallback: true, acceptance: null, reason: "provider_server_error" },
         { scenario: "malformed_response", effective: "legacy_hybrid", fallback: true, acceptance: null, reason: "malformed_response" },
         { scenario: "empty_extraction", effective: "legacy_hybrid", fallback: true, acceptance: null, reason: "empty_extraction" },
-        { scenario: "auth_error", effective: "vertex_fact_ledger", fallback: false, acceptance: "extraction_failed_manual_review", reason: "auth_error" },
+        { scenario: "auth_error", effective: "vertex_fact_ledger", fallback: false, acceptance: "extraction_failed_manual_review", reason: "authentication" },
         { scenario: "conflicting_facts", effective: "vertex_fact_ledger", fallback: false, acceptance: "accepted_needs_review", reason: null },
       ];
 

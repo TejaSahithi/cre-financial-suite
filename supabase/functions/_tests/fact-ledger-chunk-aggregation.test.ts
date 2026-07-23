@@ -10,16 +10,16 @@ import { __test__ } from "../_shared/extraction/openai-fact-ledger/fact-ledger-e
 
 const { dominantClassification } = __test__;
 
-Deno.test("dominantClassification: auth_error always wins the priority, even when other eligible errors are also present", () => {
-  assertEquals(dominantClassification(["timeout", "auth_error", "rate_limited"]), "auth_error");
+Deno.test("dominantClassification: authentication always wins the priority, even when other eligible errors are also present", () => {
+  assertEquals(dominantClassification(["timeout", "authentication", "rate_limit"]), "authentication");
 });
 
-Deno.test("dominantClassification: rate_limited outranks server_error/network_error/timeout", () => {
-  assertEquals(dominantClassification(["timeout", "network_error", "rate_limited", "server_error"]), "rate_limited");
+Deno.test("dominantClassification: rate_limit outranks provider_server_error/transport/timeout", () => {
+  assertEquals(dominantClassification(["timeout", "transport", "rate_limit", "provider_server_error"]), "rate_limit");
 });
 
-Deno.test("dominantClassification: server_error outranks network_error/budget_exhausted/malformed/empty/timeout", () => {
-  assertEquals(dominantClassification(["timeout", "empty_extraction", "server_error", "malformed_response"]), "server_error");
+Deno.test("dominantClassification: provider_server_error outranks transport/budget_exhausted/malformed/empty/timeout", () => {
+  assertEquals(dominantClassification(["timeout", "empty_extraction", "provider_server_error", "malformed_response"]), "provider_server_error");
 });
 
 Deno.test("dominantClassification: malformed_response outranks empty_extraction and timeout", () => {

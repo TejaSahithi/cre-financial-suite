@@ -146,7 +146,19 @@ function buildMockOpenAIResult(scenario: MockOpenAIScenario["scenario"], startTi
     case "empty_extraction":
     case "auth_error":
     default: {
-      const classification = scenario === "auth_error" ? "auth_error" : scenario;
+      // Mock scenario NAMES are a stable external debug API
+      // (debug_openai_mock_scenario) and are deliberately left unrenamed.
+      // The failure_classification VALUE emitted here must match what
+      // llm.ts's classifyOpenAIError() actually produces in production
+      // ("authentication", "rate_limit", "provider_server_error") — a mock
+      // using the old, never-emitted "auth_error"/"rate_limited"/
+      // "server_error" strings would exercise a path real traffic never hits.
+      const CLASSIFICATION_BY_SCENARIO: Record<string, string> = {
+        auth_error: "authentication",
+        rate_limited: "rate_limit",
+        server_error: "provider_server_error",
+      };
+      const classification = CLASSIFICATION_BY_SCENARIO[scenario] ?? scenario;
       const failureHttpStatus =
         scenario === "rate_limited" ? 429
           : scenario === "server_error" ? 500

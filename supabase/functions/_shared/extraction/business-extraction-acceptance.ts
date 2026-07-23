@@ -51,13 +51,24 @@ const REDUCED_COVERAGE_PROFILES = new Set(["assignment", "amendment", "consent",
 
 // Structured classifications that make a result eligible for legacy
 // fallback (mirrors the fallback-eligibility matrix in the Phase 4E design,
-// re-verified against current OpenAI provider wrapper this session). auth_error is
-// deliberately absent — a bad/missing credential is never fallback-eligible.
+// re-verified against current OpenAI provider wrapper this session).
+// "authentication" is deliberately absent — a bad/missing credential is
+// never fallback-eligible.
+//
+// These values must match the LLMFailureClassification strings llm.ts's
+// classifyOpenAIError() actually emits ("authentication", "rate_limit",
+// "provider_server_error", "transport", "timeout") plus the two
+// classifications fact-ledger-extractor.ts sets itself
+// ("malformed_response", "empty_extraction"). This set previously used
+// "rate_limited"/"server_error"/"network_error", which never matched
+// anything llm.ts produces, so a rate-limited or 5xx OpenAI failure fell
+// through to the unclassified branch below instead of being recognized as
+// fallback-eligible.
 const FALLBACK_ELIGIBLE_CLASSIFICATIONS = new Set<string>([
   "timeout",
-  "rate_limited",
-  "server_error",
-  "network_error",
+  "rate_limit",
+  "provider_server_error",
+  "transport",
   "budget_exhausted",
   "model_unavailable",
   "malformed_response",
@@ -144,10 +155,10 @@ export function evaluateExtractionAcceptance(
         warnings,
       };
     }
-    if (classification === "auth_error") {
+    if (classification === "authentication") {
       return {
         state: "rejected",
-        reason: "auth_error",
+        reason: "authentication",
         meaningfulFieldCount,
         validFieldKeyCount,
         evidenceBackedCount,

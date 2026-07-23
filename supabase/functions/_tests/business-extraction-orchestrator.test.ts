@@ -64,7 +64,7 @@ Deno.test("runBusinessExtraction: existing direct vertex_fact_ledger mode preser
   let legacyCalls = 0;
   const result = await runBusinessExtraction(baseOpts({
     requestedProvider: "vertex_fact_ledger",
-    vertexRunner: async () => emptyResult("auth_error"),
+    vertexRunner: async () => emptyResult("authentication"),
     legacyRunner: async () => { legacyCalls++; return acceptedResult(); },
   }));
   assertEquals(legacyCalls, 0, "direct vertex_fact_ledger mode must never trigger legacy fallback");
@@ -112,7 +112,7 @@ Deno.test("runBusinessExtraction: vertex_primary_legacy_fallback — timeout tri
   assertEquals(result.metadata.provenance.fallback_reason, "timeout");
 });
 
-for (const classification of ["rate_limited", "server_error", "network_error", "malformed_response", "empty_extraction", "model_unavailable", "budget_exhausted"]) {
+for (const classification of ["rate_limit", "provider_server_error", "transport", "malformed_response", "empty_extraction", "model_unavailable", "budget_exhausted"]) {
   Deno.test(`runBusinessExtraction: vertex_primary_legacy_fallback — ${classification} triggers eligible fallback`, async () => {
     let legacyCalls = 0;
     const result = await runBusinessExtraction(baseOpts({
@@ -125,11 +125,11 @@ for (const classification of ["rate_limited", "server_error", "network_error", "
   });
 }
 
-Deno.test("runBusinessExtraction: vertex_primary_legacy_fallback — auth_error does NOT trigger fallback, explicit failure instead", async () => {
+Deno.test("runBusinessExtraction: vertex_primary_legacy_fallback — authentication failure does NOT trigger fallback, explicit failure instead", async () => {
   let legacyCalls = 0;
   const result = await runBusinessExtraction(baseOpts({
     requestedProvider: "vertex_primary_legacy_fallback",
-    vertexRunner: async () => emptyResult("auth_error"),
+    vertexRunner: async () => emptyResult("authentication"),
     legacyRunner: async () => { legacyCalls++; return acceptedResult(); },
   }));
   assertEquals(legacyCalls, 0, "auth/config failures must never trigger legacy fallback");
@@ -185,12 +185,12 @@ Deno.test("runBusinessExtraction: provider fields are never blended — the retu
 Deno.test("runBusinessExtraction: requested/effective provider and fallback reason are accurate in provenance", async () => {
   const result = await runBusinessExtraction(baseOpts({
     requestedProvider: "vertex_primary_legacy_fallback",
-    vertexRunner: async () => emptyResult("rate_limited"),
+    vertexRunner: async () => emptyResult("rate_limit"),
     legacyRunner: async () => acceptedResult(),
   }));
   assertEquals(result.metadata.provenance.requested_provider, "openai_primary_legacy_fallback");
   assertEquals(result.metadata.provenance.effective_provider, "legacy_hybrid");
-  assertEquals(result.metadata.provenance.fallback_reason, "rate_limited");
+  assertEquals(result.metadata.provenance.fallback_reason, "rate_limit");
   assertEquals(result.metadata.provenance.openai_attempt_count, 1);
 });
 
