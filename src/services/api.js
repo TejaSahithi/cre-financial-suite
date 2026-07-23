@@ -187,7 +187,7 @@ async function getCurrentAccessScope(orgId) {
       return emptyScope;
     }
 
-    if (activeMembership.role === 'org_admin') {
+    if (['org_admin', 'owner'].includes(activeMembership.role)) {
       return { unrestricted: true, userId: user.id, orgId };
     }
 

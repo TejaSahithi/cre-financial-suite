@@ -115,6 +115,8 @@ const ROLE_PAGES = {
 };
 
 const ROLE_ALIASES = {
+  owner: "org_admin",
+  admin: "org_admin",
   asset_manager: "manager",
   portfolio_manager: "manager",
   operations_director: "manager",
@@ -312,7 +314,7 @@ export function getActiveRole(user) {
 }
 
 export function isOrgAdmin(user) {
-  const role = getActiveRole(user);
+  const role = resolveRoleForAccess(getActiveRole(user));
   return role === "org_admin" || role === "admin";
 }
 
