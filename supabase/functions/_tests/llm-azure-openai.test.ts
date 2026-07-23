@@ -115,6 +115,41 @@ Deno.test("callLLMJSON falls back to OPENAI_API_KEY for Azure auth when AZURE_OP
   );
 });
 
+Deno.test("callLLMJSON self-heals when AZURE_OPENAI_ENDPOINT is accidentally set to the full sample request URL instead of the resource base URL", async () => {
+  await withEnv(
+    {
+      // The exact shape someone copying Azure's "view code" sample would paste.
+      AZURE_OPENAI_ENDPOINT: "https://my-resource.openai.azure.com/openai/deployments/wrong-deployment/chat/completions?api-version=2023-05-15",
+      AZURE_OPENAI_DEPLOYMENT: "my-real-deployment",
+      AZURE_OPENAI_API_VERSION: "2024-10-21",
+      AZURE_OPENAI_API_KEY: "azure-test-key",
+    },
+    async () => {
+      const { callLLMJSON } = await import("../_shared/llm.ts");
+
+      let capturedUrl = "";
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (url: string, init: any) => {
+        capturedUrl = String(url);
+        return jsonResponse(successBody("my-real-deployment"));
+      }) as typeof fetch;
+
+      try {
+        await callLLMJSON({ systemPrompt: "sys", userPrompt: "user", temperature: 0 });
+        // Must use the configured deployment/api-version exactly once, not
+        // whatever was embedded in the accidentally-pasted full URL, and
+        // must never end up with a doubled "/openai/.../openai/..." path.
+        assertEquals(
+          capturedUrl,
+          "https://my-resource.openai.azure.com/openai/deployments/my-real-deployment/chat/completions?api-version=2024-10-21",
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+});
+
 Deno.test("isLLMProviderConfigured reflects the active backend's actual credential, not just OPENAI_API_KEY presence", async () => {
   await withEnv(
     { AZURE_OPENAI_ENDPOINT: undefined, OPENAI_API_KEY: undefined, AZURE_OPENAI_API_KEY: undefined },

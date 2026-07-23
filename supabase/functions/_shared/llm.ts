@@ -87,9 +87,32 @@ type LLMConfig =
 /** Whether AZURE_OPENAI_ENDPOINT selects the Azure OpenAI backend. Exported
  * so callers that only need a yes/no "is the LLM configured" signal (health
  * checks, UI banners) don't have to duplicate this branching — see
- * isLLMProviderConfigured() below. */
+ * isLLMProviderConfigured() below.
+ *
+ * Defensive against the single most common Azure setup mistake: copying the
+ * FULL sample request URL from the Azure portal's "view code" panel (which
+ * already includes /openai/deployments/{name}/chat/completions?api-version=...)
+ * into AZURE_OPENAI_ENDPOINT instead of just the resource's base URL. Left
+ * uncorrected, buildRequestTarget() would append a second
+ * /openai/deployments/... segment onto that path, producing a URL nothing on
+ * Azure's side matches — which surfaces as an opaque "Resource not found"
+ * (404) with no indication the endpoint itself was the problem. Stripping
+ * any /openai/... suffix here (and logging once) means an accidental
+ * full-URL paste self-heals instead of silently breaking every call. */
 function resolveAzureEndpoint(): string {
-  return String(Deno.env.get("AZURE_OPENAI_ENDPOINT") ?? "").trim().replace(/\/+$/, "");
+  const raw = String(Deno.env.get("AZURE_OPENAI_ENDPOINT") ?? "").trim();
+  if (!raw) return "";
+  const openaiPathIndex = raw.indexOf("/openai/");
+  if (openaiPathIndex === -1) {
+    return raw.replace(/\/+$/, "");
+  }
+  const base = raw.slice(0, openaiPathIndex).replace(/\/+$/, "");
+  console.warn(
+    `[llm] AZURE_OPENAI_ENDPOINT looks like a full request URL (contains "/openai/...") ` +
+      `rather than just the resource base URL; using "${base}" instead of the full value. ` +
+      `Set AZURE_OPENAI_ENDPOINT to just "https://<resource>.openai.azure.com" to avoid this warning.`,
+  );
+  return base;
 }
 
 /** True when a usable credential is present for whichever backend
