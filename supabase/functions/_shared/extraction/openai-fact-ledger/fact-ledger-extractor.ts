@@ -3,7 +3,7 @@
  * OpenAI Fact Ledger — Fact Extraction
  *
  * Default path is TEXT-MODE: chunked via chunker.ts's existing chunkDocument()
- * (capped at 4 chunks/calls) against docIndex.doclingRaw, using callLLMJSON().
+ * against docIndex.doclingRaw, using callLLMJSON().
  *
  * File-mode inline-PDF is deprecated; Azure Document Intelligence handles parsing. The old file-mode flag is still accepted as an alias
  * for OPENAI_FACT_LEDGER_FILE_MODE (default false/unset) — mirrors the
@@ -28,7 +28,6 @@ import type { CanonicalDocumentIndex, DocumentProfileClassification, Fact, FactL
 
 type OpenAIFailureClassification = string;
 
-const MAX_CHUNKS = 4;
 const CLAUSE_CATEGORY_VOCAB: string[] = CLAUSE_DEFINITIONS.map((def: any) => def.type);
 
 function envFlagEnabled(name: string): boolean {
@@ -36,6 +35,15 @@ function envFlagEnabled(name: string): boolean {
     return String(Deno.env.get(name) || "").toLowerCase() === "true";
   } catch {
     return false;
+  }
+}
+
+function envOptionalPositiveInt(name: string): number | null {
+  try {
+    const parsed = Number(Deno.env.get(name));
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -145,15 +153,34 @@ function parseFactsResponse(raw: unknown): Fact[] {
   return facts;
 }
 
+function stableFactKey(fact: Fact): string {
+  return [
+    Number.isFinite(Number(fact.chunkIndex)) ? Number(fact.chunkIndex) : Number.MAX_SAFE_INTEGER,
+    Number.isFinite(Number(fact.sourcePage)) ? Number(fact.sourcePage) : Number.MAX_SAFE_INTEGER,
+    normalizeForPageMatch(fact.sourceText),
+    fact.category,
+  ].join("|");
+}
+
+function sortFactsDeterministically(facts: Fact[]): Fact[] {
+  return [...facts].sort((a, b) => stableFactKey(a).localeCompare(stableFactKey(b)));
+}
+
 function dedupeFacts(facts: Fact[]): Fact[] {
   const seen = new Set<string>();
   const result: Fact[] = [];
-  for (const fact of facts) {
+  for (const fact of sortFactsDeterministically(facts)) {
     // A single source sentence can prove multiple atomic facts. Lease term
     // dates are the important example: "from March 1, 2019 through December
     // 31, 2023" must survive as two same-category, same-source facts whose
-    // only distinguishing feature is the value.
-    const key = `${fact.category}|${normalizeForPageMatch(fact.sourceText)}|${normalizeForPageMatch(fact.value)}`;
+    // only distinguishing feature is the value. Include page and source text
+    // so overlapping chunks cannot inflate candidate scores with duplicates.
+    const key = [
+      fact.category,
+      Number.isFinite(Number(fact.sourcePage)) ? Number(fact.sourcePage) : "unknown_page",
+      normalizeForPageMatch(fact.sourceText),
+      normalizeForPageMatch(String(fact.value ?? "")),
+    ].join("|");
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(fact);
@@ -172,6 +199,44 @@ interface ChunkExtractionResult {
 }
 
 
+type SettledResult<R> =
+  | { status: "fulfilled"; value: R }
+  | { status: "rejected"; reason: unknown };
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<Array<SettledResult<R>>> {
+  const results: Array<SettledResult<R>> = new Array(items.length);
+  let cursor = 0;
+
+  async function runLane(): Promise<void> {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= items.length) return;
+      try {
+        results[idx] = { status: "fulfilled", value: await worker(items[idx], idx) };
+      } catch (err) {
+        results[idx] = { status: "rejected", reason: err };
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(Math.max(1, limit), items.length) }, () => runLane()),
+  );
+  return results;
+}
+
+function envPositiveInt(name: string, fallback: number): number {
+  try {
+    const parsed = Number(Deno.env.get(name));
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+  } catch {
+    return fallback;
+  }
+}
 async function extractFromChunk(
   chunkText: string,
   moduleType: ModuleType,
@@ -294,6 +359,8 @@ export async function extractFactLedger(args: {
   deadlineAt?: number;
   /** See OpenAIFactLedgerOptions.provenance. */
   provenance?: { supabaseAdmin: any; context: import("../provenance/types.ts").ProvenanceContext };
+  maxChunks?: number;
+  onProgress?: (progress: Record<string, unknown>) => Promise<void> | void;
 }): Promise<FactLedgerResult> {
   const { docIndex, moduleType, fileBase64, fileMimeType, fileModeOverride, deadlineAt, provenance } = args;
   const warnings: string[] = [];
@@ -328,7 +395,15 @@ export async function extractFactLedger(args: {
     return { facts: [], warnings: ["Document text is too short for fact ledger extraction"], chunksProcessed: 0 };
   }
 
-  const chunks = chunkDocument(docIndex.doclingRaw as any).slice(0, MAX_CHUNKS);
+  const allChunks = chunkDocument(docIndex.doclingRaw as any);
+  const configuredMaxChunks = args.maxChunks ?? envOptionalPositiveInt("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS");
+  const chunks = configuredMaxChunks == null ? allChunks : allChunks.slice(0, configuredMaxChunks);
+  const chunksTruncated = configuredMaxChunks != null && allChunks.length > chunks.length;
+  if (chunksTruncated) {
+    warnings.push(
+      `OpenAI fact ledger processed ${chunks.length} of ${allChunks.length} chunks because OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS is set; unset or increase it to cover the full document.`,
+    );
+  }
   const allFacts: Fact[] = [];
   let chunksProcessed = 0;
   let successfulChunkCount = 0;
@@ -339,44 +414,103 @@ export async function extractFactLedger(args: {
   let lastRequestId: string | undefined;
   let lastRequestUrl: string | undefined;
 
-  // Chunks are independent OpenAI calls -- run them concurrently, not one
-  // after another. Serial execution made this stage's wall-clock time grow
-  // with MAX_CHUNKS (up to 4 x up to 120s each = up to 480s), which routinely
-  // exceeded both this worker's own NORMALIZE_TIMEOUT_MS and the platform's
-  // 150s Edge Function hard wall (see ingest-file/index.ts's callEdgeFunction
-  // doc comment) -- the invocation got hard-killed by the platform mid-await,
-  // silently, before any of this module's own timeout/error handling ever
-  // ran. Concurrent execution bounds normalize's realistic wall-clock time by
-  // the SLOWEST single chunk instead of their sum.
-  const chunkResults = await Promise.all(
-    chunks.map((chunk, index) => extractFromChunk(chunk.text, moduleType, deadlineAt, provenance, index)),
-  );
+  // Chunks are independent OpenAI calls. Process every chunk, but pace the
+  // fan-out so long leases don't overwhelm Edge compute or provider limits.
+  // OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY controls throughput; it never reduces
+  // document coverage.
+  const chunkConcurrency = envPositiveInt("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", 2);
+  const deadlineReserveMs = envPositiveInt("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS", 15_000);
+  let peakConcurrency = 0;
+  let partialResult = false;
+  let continuationRequired = false;
+  let continuationReason: string | null = null;
+  let nextChunkIndex: number | null = null;
+  const failedChunkIndexes: number[] = [];
 
-  chunks.forEach((chunk, index) => {
-    const result = chunkResults[index];
-    if (result.warning) warnings.push(result.warning);
-    chunksProcessed += 1;
-    if (result.facts.length > 0) {
-      successfulChunkCount += 1;
-    } else {
-      failedChunkCount += 1;
-      chunkClassifications.push(result.classification);
-      if (result.httpStatus != null) lastHttpStatus = result.httpStatus;
-      if (result.providerErrorCode != null) lastProviderErrorCode = result.providerErrorCode;
-      if (result.requestId != null) lastRequestId = result.requestId;
-      if (result.requestUrl != null) lastRequestUrl = result.requestUrl;
+  async function emitProgress() {
+    await args.onProgress?.({
+      chunksTotal: allChunks.length,
+      chunksScheduled: chunks.length,
+      chunksProcessed,
+      chunksSucceeded: successfulChunkCount,
+      chunksFailed: failedChunkCount,
+      chunksTruncated,
+      failedChunkIndexes: [...failedChunkIndexes],
+      partialResult,
+      continuationRequired,
+      continuationReason,
+      nextChunkIndex,
+      peakConcurrency,
+    });
+  }
+
+  for (let batchStart = 0; batchStart < chunks.length; batchStart += chunkConcurrency) {
+    if (deadlineAt && chunksProcessed > 0 && Date.now() + deadlineReserveMs >= deadlineAt) {
+      partialResult = true;
+      continuationRequired = true;
+      continuationReason = "execution_budget";
+      nextChunkIndex = batchStart;
+      warnings.push(
+        `OpenAI fact ledger paused after ${chunksProcessed} of ${chunks.length} scheduled chunks to avoid the Edge execution deadline; continuation is required from chunk ${batchStart}.`,
+      );
+      await emitProgress();
+      break;
     }
-    for (const fact of result.facts) {
-      allFacts.push({
-        ...fact,
-        sourcePage: fact.sourcePage ?? resolveVerifiedSourcePage(
-          docIndex.doclingRaw as Record<string, unknown>,
-          fact.sourceText,
-          chunk.startPage ?? null,
-        ),
-      });
-    }
-  });
+
+    const batch = chunks.slice(batchStart, batchStart + chunkConcurrency);
+    peakConcurrency = Math.max(peakConcurrency, batch.length);
+    const settledChunkResults = await runWithConcurrency(
+      batch,
+      batch.length,
+      (chunk, batchIndex) => extractFromChunk(chunk.text, moduleType, deadlineAt, provenance, batchStart + batchIndex),
+    );
+
+    settledChunkResults.forEach((settled, batchIndex) => {
+      const index = batchStart + batchIndex;
+      const chunk = chunks[index];
+      const result: ChunkExtractionResult = settled.status === "fulfilled"
+        ? settled.value
+        : {
+          facts: [],
+          warning: `Fact ledger extraction failed for one chunk: ${(settled.reason as Error)?.message ?? settled.reason}`,
+          classification: "unknown",
+        };
+      if (result.warning) warnings.push(result.warning);
+      chunksProcessed += 1;
+
+      const providerFailed = Boolean(result.warning);
+      if (providerFailed) {
+        failedChunkCount += 1;
+        failedChunkIndexes.push(index);
+        partialResult = true;
+        continuationReason = continuationReason ?? "chunk_failure";
+      } else {
+        successfulChunkCount += 1;
+      }
+      if (result.facts.length === 0) {
+        chunkClassifications.push(result.classification);
+        if (result.httpStatus != null) lastHttpStatus = result.httpStatus;
+        if (result.providerErrorCode != null) lastProviderErrorCode = result.providerErrorCode;
+        if (result.requestId != null) lastRequestId = result.requestId;
+        if (result.requestUrl != null) lastRequestUrl = result.requestUrl;
+      }
+      for (const fact of result.facts) {
+        const sourceOffset = chunk.text.indexOf(fact.sourceText);
+        allFacts.push({
+          ...fact,
+          chunkIndex: index,
+          sourceOffset: sourceOffset >= 0 ? sourceOffset : null,
+          sourcePage: fact.sourcePage ?? resolveVerifiedSourcePage(
+            docIndex.doclingRaw as Record<string, unknown>,
+            fact.sourceText,
+            chunk.startPage ?? null,
+          ),
+        });
+      }
+    });
+
+    await emitProgress();
+  }
 
   const dedupedFacts = dedupeFacts(allFacts);
   // Round-3 correction (item 1): some chunks failing while meaningful facts
@@ -390,6 +524,16 @@ export async function extractFactLedger(args: {
     facts: dedupedFacts,
     warnings,
     chunksProcessed,
+    chunksTotal: allChunks.length,
+    chunksSucceeded: successfulChunkCount,
+    chunksFailed: failedChunkCount,
+    chunksTruncated,
+    failedChunkIndexes,
+    partialResult,
+    peakConcurrency,
+    continuationRequired,
+    continuationReason,
+    nextChunkIndex,
     ...(overallFailed
       ? {
         failureClassification: dominantClassification(chunkClassifications),

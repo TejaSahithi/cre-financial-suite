@@ -60,12 +60,24 @@ export interface Fact {
   sourceText: string;
   sourcePage: number | null;
   confidence: number;
+  chunkIndex?: number;
+  sourceOffset?: number | null;
 }
 
 export interface FactLedgerResult {
   facts: Fact[];
   warnings: string[];
   chunksProcessed: number;
+  chunksTotal?: number;
+  chunksSucceeded?: number;
+  chunksFailed?: number;
+  chunksTruncated?: boolean;
+  failedChunkIndexes?: number[];
+  partialResult?: boolean;
+  peakConcurrency?: number;
+  continuationRequired?: boolean;
+  continuationReason?: string | null;
+  nextChunkIndex?: number | null;
   /** Structured classification of the LAST provider failure encountered
    *  (if any) across all chunks/file-mode calls — set alongside `warnings`,
    *  never inferred later by parsing the warning text. Undefined when no
@@ -145,6 +157,7 @@ export interface OpenAIFactLedgerOptions {
    *  against docIndex.fullText (built from the Azure-parsed docling_raw). */
   fileMode?: boolean;
   maxChunks?: number;
+  onProgress?: (progress: Record<string, unknown>) => Promise<void> | void;
   /** Absolute epoch-ms deadline forwarded to every OpenAI call
    *  this pipeline run makes. See OpenAI request deadline handling. */
   deadlineAt?: number;

@@ -5,6 +5,12 @@ import { computeProfileApprovalBlockers } from "../_shared/extraction/openai-fac
 import { runOpenAIFactLedgerPipeline } from "../_shared/extraction/openai-fact-ledger/orchestrator.ts";
 import { __test__ as factLedgerExtractorTest } from "../_shared/extraction/openai-fact-ledger/fact-ledger-extractor.ts";
 import type { Fact } from "../_shared/extraction/openai-fact-ledger/types.ts";
+import { chunkDocument } from "../_shared/extraction/chunker.ts";
+
+const realServeForNormalizeImport = Deno.serve;
+(Deno as any).serve = (..._args: unknown[]) => ({ finished: Promise.resolve(), shutdown: () => {} });
+const { __test__: normalizeTest } = await import("../normalize-pdf-output/index.ts");
+(Deno as any).serve = realServeForNormalizeImport;
 
 function makeFact(overrides: Partial<Fact>): Fact {
   return {
@@ -224,5 +230,356 @@ Deno.test("runOpenAIFactLedgerPipeline: mocked same-source lease term facts beco
     else Deno.env.set("OPENAI_API_KEY", previousOpenAIKey);
     if (previousAzureEndpoint == null) Deno.env.delete("AZURE_OPENAI_ENDPOINT");
     else Deno.env.set("AZURE_OPENAI_ENDPOINT", previousAzureEndpoint);
+  }
+});
+
+Deno.test("runOpenAIFactLedgerPipeline: processes every generated text chunk by default", async () => {
+  const previousOpenAIKey = Deno.env.get("OPENAI_API_KEY");
+  const previousAzureEndpoint = Deno.env.get("AZURE_OPENAI_ENDPOINT");
+  const previousMaxChunks = Deno.env.get("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS");
+  Deno.env.set("OPENAI_API_KEY", "sk-fake-openai-key-for-testing");
+  Deno.env.delete("AZURE_OPENAI_ENDPOINT");
+  Deno.env.delete("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS");
+
+  const textBlocks = Array.from({ length: 9 }, (_, index) => {
+    const n = index + 1;
+    return {
+      block_index: index,
+      type: "paragraph",
+      page: n,
+      text: `Section ${n}. Permitted Use chunk ${n}: Tenant may use the premises for office services. ${"Lease text. ".repeat(250)}`,
+    };
+  });
+  const docling = {
+    full_text: textBlocks.map((block) => block.text).join("\n\n"),
+    page_count: textBlocks.length,
+    pages: textBlocks.map((block) => ({ number: block.page, text: block.text, dimensions: { width: 612, height: 792 } })),
+    text_blocks: textBlocks,
+    tables: [],
+    fields: [],
+  };
+  const expectedChunks = chunkDocument(docling).length;
+  if (expectedChunks <= 4) throw new Error(`fixture must produce more than 4 chunks; got ${expectedChunks}`);
+
+  const realFetch = globalThis.fetch;
+  let profileCalls = 0;
+  let factCalls = 0;
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = input.toString();
+    if (url.includes("api.openai.com/v1/chat/completions")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const userPrompt = String((body.messages || []).find((m: any) => m.role === "user")?.content ?? "");
+      if (/document_profile/i.test(userPrompt) || profileCalls === 0) {
+        profileCalls++;
+        return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: JSON.stringify({ document_profile: "full_lease", confidence: 0.9, reasoning: "test fixture" }) }, finish_reason: "stop" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      factCalls++;
+      const sourceText = userPrompt.match(/Section\s+\d+\.\s+Permitted Use[^\n]+/)?.[0] ?? userPrompt.slice(0, 120);
+      return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: JSON.stringify({ facts: [{ category: "clause:permitted_use", value: `office services chunk ${factCalls}`, source_text: sourceText, source_page: factCalls, confidence: 0.9 }] }) }, finish_reason: "stop" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return realFetch(input, init);
+  }) as typeof fetch;
+
+  try {
+    const result = await runOpenAIFactLedgerPipeline({
+      moduleType: "lease",
+      fileName: "long-full-lease.txt",
+      docling,
+      documentSubtype: "full_lease",
+    });
+
+    assertIsExtractionPipelineResultShape(result);
+    assertEquals(factCalls, expectedChunks);
+    assertEquals((result.metadata as any).chunksProcessed, expectedChunks);
+    assertEquals((result.metadata as any).chunksTotal, expectedChunks);
+    assertEquals((result.metadata as any).extractionDebug.openai_fact_ledger.chunks_truncated, false);
+    assertEquals((result.metadata as any).extractionDebug.openai_fact_ledger.facts_extracted_count, expectedChunks);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (previousOpenAIKey == null) Deno.env.delete("OPENAI_API_KEY");
+    else Deno.env.set("OPENAI_API_KEY", previousOpenAIKey);
+    if (previousAzureEndpoint == null) Deno.env.delete("AZURE_OPENAI_ENDPOINT");
+    else Deno.env.set("AZURE_OPENAI_ENDPOINT", previousAzureEndpoint);
+    if (previousMaxChunks == null) Deno.env.delete("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS");
+    else Deno.env.set("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS", previousMaxChunks);
+  }
+});
+Deno.test("runOpenAIFactLedgerPipeline: final chunk fact maps through canonical fields into ui_review_payload", async () => {
+  const previousOpenAIKey = Deno.env.get("OPENAI_API_KEY");
+  const previousAzureEndpoint = Deno.env.get("AZURE_OPENAI_ENDPOINT");
+  const previousMaxChunks = Deno.env.get("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS");
+  const previousConcurrency = Deno.env.get("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY");
+  Deno.env.set("OPENAI_API_KEY", "sk-fake-openai-key-for-testing");
+  Deno.env.delete("AZURE_OPENAI_ENDPOINT");
+  Deno.env.delete("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS");
+  Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", "2");
+
+  const finalSourceText = "Final economic terms. Base Rent: $2,100 per month for the Premises.";
+  const textBlocks = Array.from({ length: 10 }, (_, index) => ({
+    block_index: index,
+    type: "paragraph",
+    page: index + 1,
+    text: index === 9
+      ? finalSourceText
+      : `Background section ${index + 1}. ${"Lease recital text. ".repeat(260)}`,
+  }));
+  const docling = {
+    full_text: textBlocks.map((block) => block.text).join("\n\n"),
+    page_count: textBlocks.length,
+    pages: textBlocks.map((block) => ({ number: block.page, text: block.text, dimensions: { width: 612, height: 792 } })),
+    text_blocks: textBlocks,
+    tables: [],
+    fields: [],
+  };
+  const expectedChunks = chunkDocument(docling).length;
+  assert(expectedChunks > 1, `fixture must produce multiple chunks; got ${expectedChunks}`);
+
+  const realFetch = globalThis.fetch;
+  let profileCalls = 0;
+  let factCalls = 0;
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = input.toString();
+    if (!url.includes("api.openai.com/v1/chat/completions")) return realFetch(input, init);
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    const userPrompt = String((body.messages || []).find((m: any) => m.role === "user")?.content ?? "");
+    if (profileCalls === 0) {
+      profileCalls++;
+      return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: JSON.stringify({ document_profile: "full_lease", confidence: 0.9, reasoning: "test fixture" }) }, finish_reason: "stop" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    factCalls++;
+    const facts = userPrompt.includes(finalSourceText)
+      ? [{ category: "clause:rent_escalation", value: 2100, source_text: finalSourceText, source_page: 10, confidence: 0.96 }]
+      : [];
+    return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: JSON.stringify({ facts }) }, finish_reason: "stop" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+
+  try {
+    const result = await runOpenAIFactLedgerPipeline({
+      moduleType: "lease",
+      fileName: "final-chunk-rent.txt",
+      docling,
+      documentSubtype: "full_lease",
+    });
+
+    assertEquals(factCalls, expectedChunks);
+    const debug = (result.metadata as any).extractionDebug.openai_fact_ledger;
+    assertEquals(debug.facts_extracted_count, 1);
+    assertEquals(debug.facts_mapped_count >= 1, true);
+    assertEquals(debug.chunks_processed_count, expectedChunks);
+    assertEquals(debug.chunks_succeeded_count, expectedChunks);
+
+    const fields = (result.metadata as any).extractionDebug.merged_field_sources;
+    assertEquals(fields.monthly_rent?.value, 2100);
+    assertEquals(fields.monthly_rent?.source_page, 10);
+    assertEquals(result.rows[0]?.monthly_rent, 2100);
+
+    const payload = normalizeTest.buildMinimalReviewPayload({
+      fileId: "file-final-chunk",
+      fileName: "final-chunk-rent.txt",
+      moduleType: "leases",
+      documentSubtype: "full_lease",
+      extractionMethod: "openai_fact_ledger",
+      reviewRequired: true,
+      result,
+    });
+    const standardFields = payload.records?.[0]?.standard_fields ?? [];
+    const monthlyRent = standardFields.find((field: any) => field.field_key === "monthly_rent");
+    assertEquals(monthlyRent?.value, 2100);
+    assertEquals(monthlyRent?.evidence?.source_page, 10);
+    assertEquals(monthlyRent?.evidence?.source_text, finalSourceText);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (previousOpenAIKey == null) Deno.env.delete("OPENAI_API_KEY"); else Deno.env.set("OPENAI_API_KEY", previousOpenAIKey);
+    if (previousAzureEndpoint == null) Deno.env.delete("AZURE_OPENAI_ENDPOINT"); else Deno.env.set("AZURE_OPENAI_ENDPOINT", previousAzureEndpoint);
+    if (previousMaxChunks == null) Deno.env.delete("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS"); else Deno.env.set("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS", previousMaxChunks);
+    if (previousConcurrency == null) Deno.env.delete("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY"); else Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", previousConcurrency);
+  }
+});
+
+Deno.test("runOpenAIFactLedgerPipeline: concurrent chunk extraction is deterministic across repeated runs", async () => {
+  const previousOpenAIKey = Deno.env.get("OPENAI_API_KEY");
+  const previousAzureEndpoint = Deno.env.get("AZURE_OPENAI_ENDPOINT");
+  const previousConcurrency = Deno.env.get("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY");
+  Deno.env.set("OPENAI_API_KEY", "sk-fake-openai-key-for-testing");
+  Deno.env.delete("AZURE_OPENAI_ENDPOINT");
+  Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", "2");
+
+  const sources = [
+    "Tenant Name: Alpha Retail LLC.",
+    "Landlord Name: Beta Owner LLC.",
+    "Premises contain 1,875 rentable square feet.",
+    "Base Rent shall be $2,100 per month.",
+  ];
+  const textBlocks = sources.map((source, index) => ({
+    block_index: index,
+    type: "paragraph",
+    page: index + 1,
+    text: `${source} ${"Supporting lease text. ".repeat(260)}`,
+  }));
+  const docling = {
+    full_text: textBlocks.map((block) => block.text).join("\n\n"),
+    page_count: textBlocks.length,
+    pages: textBlocks.map((block) => ({ number: block.page, text: block.text, dimensions: { width: 612, height: 792 } })),
+    text_blocks: textBlocks,
+    tables: [],
+    fields: [],
+  };
+
+  async function runOnce() {
+    const realFetch = globalThis.fetch;
+    let profileCalls = 0;
+    globalThis.fetch = (async (input: any, init?: any) => {
+      const url = input.toString();
+      if (!url.includes("api.openai.com/v1/chat/completions")) return realFetch(input, init);
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const userPrompt = String((body.messages || []).find((m: any) => m.role === "user")?.content ?? "");
+      if (profileCalls === 0) {
+        profileCalls++;
+        return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: JSON.stringify({ document_profile: "full_lease", confidence: 0.9, reasoning: "test fixture" }) }, finish_reason: "stop" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const slowEarlyChunk = userPrompt.includes("Tenant Name") ? 5 : 0;
+      if (slowEarlyChunk) await new Promise((resolve) => setTimeout(resolve, slowEarlyChunk));
+      const facts = [];
+      if (userPrompt.includes("Tenant Name")) facts.push({ category: "clause:party_identification", value: "Alpha Retail LLC", source_text: sources[0], source_page: 1, confidence: 0.97 });
+      if (userPrompt.includes("Landlord Name")) facts.push({ category: "clause:party_identification", value: "Beta Owner LLC", source_text: sources[1], source_page: 2, confidence: 0.97 });
+      if (userPrompt.includes("1,875 rentable square feet")) facts.push({ category: "clause:premises_description", value: 1875, source_text: sources[2], source_page: 3, confidence: 0.98 });
+      if (userPrompt.includes("$2,100 per month")) facts.push({ category: "clause:rent_escalation", value: 2100, source_text: sources[3], source_page: 4, confidence: 0.98 });
+      return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: JSON.stringify({ facts }) }, finish_reason: "stop" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const result = await runOpenAIFactLedgerPipeline({ moduleType: "lease", fileName: "deterministic.txt", docling, documentSubtype: "full_lease" });
+      return JSON.stringify((result.metadata as any).extractionDebug.merged_field_sources);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  }
+
+  try {
+    const outputs = [];
+    for (let i = 0; i < 5; i++) outputs.push(await runOnce());
+    assertEquals(new Set(outputs).size, 1);
+  } finally {
+    if (previousOpenAIKey == null) Deno.env.delete("OPENAI_API_KEY"); else Deno.env.set("OPENAI_API_KEY", previousOpenAIKey);
+    if (previousAzureEndpoint == null) Deno.env.delete("AZURE_OPENAI_ENDPOINT"); else Deno.env.set("AZURE_OPENAI_ENDPOINT", previousAzureEndpoint);
+    if (previousConcurrency == null) Deno.env.delete("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY"); else Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", previousConcurrency);
+  }
+});
+
+Deno.test("runOpenAIFactLedgerPipeline: one failed chunk preserves successful facts and reports partial diagnostics", async () => {
+  const previousOpenAIKey = Deno.env.get("OPENAI_API_KEY");
+  const previousAzureEndpoint = Deno.env.get("AZURE_OPENAI_ENDPOINT");
+  const previousConcurrency = Deno.env.get("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY");
+  Deno.env.set("OPENAI_API_KEY", "sk-fake-openai-key-for-testing");
+  Deno.env.delete("AZURE_OPENAI_ENDPOINT");
+  Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", "2");
+
+  const rentSourceText = "Base Rent shall be $2,100 per month.";
+  const textBlocks = [
+    { block_index: 0, type: "paragraph", page: 1, text: `Problem chunk. ${"Lease text. ".repeat(700)}` },
+    { block_index: 1, type: "paragraph", page: 2, text: `${rentSourceText} ${"Lease text. ".repeat(700)}` },
+  ];
+  const docling = {
+    full_text: textBlocks.map((block) => block.text).join("\n\n"),
+    page_count: textBlocks.length,
+    pages: textBlocks.map((block) => ({ number: block.page, text: block.text, dimensions: { width: 612, height: 792 } })),
+    text_blocks: textBlocks,
+    tables: [],
+    fields: [],
+  };
+
+  const realFetch = globalThis.fetch;
+  let profileCalls = 0;
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = input.toString();
+    if (!url.includes("api.openai.com/v1/chat/completions")) return realFetch(input, init);
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    const userPrompt = String((body.messages || []).find((m: any) => m.role === "user")?.content ?? "");
+    if (profileCalls === 0) {
+      profileCalls++;
+      return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: JSON.stringify({ document_profile: "full_lease", confidence: 0.9, reasoning: "test fixture" }) }, finish_reason: "stop" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (userPrompt.includes("Problem chunk")) {
+      return new Response(JSON.stringify({ error: { message: "synthetic chunk failure", code: "test_failure" } }), { status: 500, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: JSON.stringify({ facts: [{ category: "clause:rent_escalation", value: 2100, source_text: rentSourceText, source_page: 2, confidence: 0.97 }] }) }, finish_reason: "stop" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+
+  try {
+    const result = await runOpenAIFactLedgerPipeline({ moduleType: "lease", fileName: "partial-success.txt", docling, documentSubtype: "full_lease" });
+    const debug = (result.metadata as any).extractionDebug.openai_fact_ledger;
+    assertEquals(result.rows[0]?.monthly_rent, 2100);
+    assertEquals(debug.chunks_failed_count, 1);
+    assertEquals(debug.failed_chunk_indexes, [0]);
+    assertEquals(debug.partial_result, true);
+    assertEquals(debug.facts_extracted_count, 1);
+    assertEquals(debug.failure_classification, undefined);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (previousOpenAIKey == null) Deno.env.delete("OPENAI_API_KEY"); else Deno.env.set("OPENAI_API_KEY", previousOpenAIKey);
+    if (previousAzureEndpoint == null) Deno.env.delete("AZURE_OPENAI_ENDPOINT"); else Deno.env.set("AZURE_OPENAI_ENDPOINT", previousAzureEndpoint);
+    if (previousConcurrency == null) Deno.env.delete("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY"); else Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", previousConcurrency);
+  }
+});
+Deno.test("runOpenAIFactLedgerPipeline: execution budget guard pauses with continuation diagnostics after a completed batch", async () => {
+  const previousOpenAIKey = Deno.env.get("OPENAI_API_KEY");
+  const previousAzureEndpoint = Deno.env.get("AZURE_OPENAI_ENDPOINT");
+  const previousConcurrency = Deno.env.get("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY");
+  const previousReserve = Deno.env.get("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS");
+  Deno.env.set("OPENAI_API_KEY", "sk-fake-openai-key-for-testing");
+  Deno.env.delete("AZURE_OPENAI_ENDPOINT");
+  Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", "1");
+  Deno.env.set("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS", "60000");
+
+  const firstSourceText = "Base Rent: $2,100 per month.";
+  const textBlocks = [
+    { block_index: 0, type: "paragraph", page: 1, text: `${firstSourceText} ${"Lease text. ".repeat(700)}` },
+    { block_index: 1, type: "paragraph", page: 2, text: `Later chunk. ${"Lease text. ".repeat(700)}` },
+  ];
+  const docling = {
+    full_text: textBlocks.map((block) => block.text).join("\n\n"),
+    page_count: textBlocks.length,
+    pages: textBlocks.map((block) => ({ number: block.page, text: block.text, dimensions: { width: 612, height: 792 } })),
+    text_blocks: textBlocks,
+    tables: [],
+    fields: [],
+  };
+
+  const realFetch = globalThis.fetch;
+  let profileCalls = 0;
+  let progressEvents: any[] = [];
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = input.toString();
+    if (!url.includes("api.openai.com/v1/chat/completions")) return realFetch(input, init);
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    const userPrompt = String((body.messages || []).find((m: any) => m.role === "user")?.content ?? "");
+    if (profileCalls === 0) {
+      profileCalls++;
+      return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: JSON.stringify({ document_profile: "full_lease", confidence: 0.9, reasoning: "test fixture" }) }, finish_reason: "stop" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    const facts = userPrompt.includes(firstSourceText)
+      ? [{ category: "clause:rent_escalation", value: 2100, source_text: firstSourceText, source_page: 1, confidence: 0.96 }]
+      : [];
+    return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: JSON.stringify({ facts }) }, finish_reason: "stop" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+
+  try {
+    const result = await runOpenAIFactLedgerPipeline(
+      { moduleType: "lease", fileName: "deadline-guard.txt", docling, documentSubtype: "full_lease" },
+      { deadlineAt: Date.now() + 1, onProgress: (progress) => progressEvents.push(progress) },
+    );
+    const debug = (result.metadata as any).extractionDebug.openai_fact_ledger;
+    assertEquals(result.rows[0]?.monthly_rent, 2100);
+    assertEquals(debug.chunks_processed_count, 1);
+    assertEquals(debug.continuation_required, true);
+    assertEquals(debug.continuation_reason, "execution_budget");
+    assertEquals(debug.next_chunk_index, 1);
+    assertEquals(debug.partial_result, true);
+    assert(progressEvents.some((event) => event.continuationRequired === true && event.nextChunkIndex === 1));
+  } finally {
+    globalThis.fetch = realFetch;
+    if (previousOpenAIKey == null) Deno.env.delete("OPENAI_API_KEY"); else Deno.env.set("OPENAI_API_KEY", previousOpenAIKey);
+    if (previousAzureEndpoint == null) Deno.env.delete("AZURE_OPENAI_ENDPOINT"); else Deno.env.set("AZURE_OPENAI_ENDPOINT", previousAzureEndpoint);
+    if (previousConcurrency == null) Deno.env.delete("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY"); else Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", previousConcurrency);
+    if (previousReserve == null) Deno.env.delete("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS"); else Deno.env.set("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS", previousReserve);
   }
 });

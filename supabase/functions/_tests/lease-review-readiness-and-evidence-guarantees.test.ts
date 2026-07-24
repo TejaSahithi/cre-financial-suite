@@ -204,6 +204,36 @@ Deno.test("field with a value but no source evidence becomes needs_review, not a
   assertEquals(sqftField.accepted, false);
 });
 
+
+Deno.test("minimal payload carries fact-ledger dynamic items so failed enrichment does not hide dynamic rows", () => {
+  const dynamicItem = {
+    item_id: "openai_fact:clause:insurance:tenant-shall-insure",
+    item_type: "clause:insurance_requirements",
+    business_area: "clause_records",
+    label: "Insurance Requirements",
+    value: "Tenant shall maintain insurance",
+    source_text: "Tenant shall maintain insurance throughout the Term.",
+    source_page: 12,
+    confidence: 0.91,
+    maps_to_existing_field: false,
+    creates_dynamic_row: true,
+  };
+  const result = makeResult({
+    metadata: {
+      ...makeResult().metadata,
+      extractionDebug: {
+        ...makeResult().metadata.extractionDebug,
+        openai_fact_ledger: { dynamic_items: [dynamicItem] },
+      },
+    },
+  });
+  const payload = normalizeTest.buildMinimalReviewPayload({
+    fileId: "f1", fileName: "lease.pdf", moduleType: "leases", documentSubtype: "base_lease",
+    extractionMethod: "azure_layout", reviewRequired: true, result,
+  });
+  assertEquals(payload.records[0].workflow_output.extracted_document_items[0], dynamicItem);
+  assertEquals(payload.metadata.workflow_output.records[0].extracted_document_items[0], dynamicItem);
+});
 // ── §5: validator fixes ──────────────────────────────────────────────────────
 
 Deno.test("§5: landlord_consent='required' survives validation as boolean true", () => {

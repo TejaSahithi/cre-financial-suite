@@ -76,6 +76,25 @@ Deno.test("evaluateExtractionAcceptance: reduced-coverage profile (assignment) w
   assertEquals(acceptance.state, "accepted");
 });
 
+
+Deno.test("evaluateExtractionAcceptance: full-lease OpenAI result with truncated chunks is fallback_eligible, not accepted", () => {
+  const result = baseResult({
+    rows: [{ tenant_name: "Acme Corp", monthly_rent: 5000 }],
+    method: "llm_only",
+    metadata: {
+      ...baseResult().metadata,
+      extractionDebug: {
+        openai_fact_ledger: {
+          chunks_truncated: true,
+          evidence_anchors: [{ category: "tenant_name", source_text: "Tenant: Acme Corp", source_page: 1 }],
+        },
+      },
+    },
+  });
+  const acceptance = evaluateExtractionAcceptance(result, { provider: "openai_fact_ledger", documentProfile: "full_lease" });
+  assertEquals(acceptance.state, "fallback_eligible");
+  assertEquals(acceptance.reason, "fact_ledger_chunks_truncated");
+});
 Deno.test("evaluateExtractionAcceptance: a fallback-eligible structured classification (timeout) on an empty result is fallback_eligible", () => {
   const result = baseResult({
     rows: [],

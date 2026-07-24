@@ -123,6 +123,15 @@ function countEvidenceBacked(result: ExtractionPipelineResult): number {
 function readFailureClassification(result: ExtractionPipelineResult): string | undefined {
   return (result.metadata as any)?.extractionDebug?.openai_fact_ledger?.failure_classification ?? (result.metadata as any)?.extractionDebug?.vertex_fact_ledger?.failure_classification;
 }
+function readFactLedgerChunksTruncated(result: ExtractionPipelineResult): boolean {
+  const debug = (result.metadata as any)?.extractionDebug;
+  return Boolean(
+    debug?.openai_fact_ledger?.chunks_truncated
+      ?? debug?.vertex_fact_ledger?.chunks_truncated
+      ?? (result.metadata as any)?.chunksTruncated
+      ?? false,
+  );
+}
 
 export function evaluateExtractionAcceptance(
   result: ExtractionPipelineResult,
@@ -138,6 +147,21 @@ export function evaluateExtractionAcceptance(
     : false;
 
   const classification = readFailureClassification(result);
+  const isFullLeaseProfile = !context.documentProfile || context.documentProfile === "full_lease" || context.documentProfile === "base_lease";
+  if (
+    isFullLeaseProfile &&
+    (context.provider === "openai_fact_ledger" || context.provider === "vertex_fact_ledger") &&
+    readFactLedgerChunksTruncated(result)
+  ) {
+    return {
+      state: "fallback_eligible",
+      reason: "fact_ledger_chunks_truncated",
+      meaningfulFieldCount,
+      validFieldKeyCount,
+      evidenceBackedCount,
+      warnings,
+    };
+  }
 
   // 1. Structurally unusable / explicitly failed method, with zero
   //    meaningful content -- the clearest rejection/fallback signal.
@@ -217,6 +241,7 @@ export const __test__ = {
   countValidFieldKeys,
   countEvidenceBacked,
   readFailureClassification,
+  readFactLedgerChunksTruncated,
   FALLBACK_ELIGIBLE_CLASSIFICATIONS,
   REDUCED_COVERAGE_PROFILES,
 };

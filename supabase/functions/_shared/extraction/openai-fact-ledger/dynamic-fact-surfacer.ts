@@ -12,6 +12,7 @@
 
 import { createDocumentItem } from "../lease-workflow.ts";
 import { LEASE_FIELD_CONTRACT } from "../field-contract.ts";
+import { normalizeForPageMatch } from "../evidence-index.ts";
 import type { CanonicalDocumentIndex, DocumentProfile, Fact } from "./types.ts";
 
 function titleizeCategory(category: string): string {
@@ -55,7 +56,12 @@ export function surfaceDynamicFacts(args: {
   const items: any[] = [];
 
   for (const fact of unmappedFacts) {
-    const dedupeKey = `${fact.category}|${fact.sourceText.toLowerCase().slice(0, 140)}`;
+    const dedupeKey = [
+      fact.category,
+      Number.isFinite(Number(fact.sourcePage)) ? Number(fact.sourcePage) : "unknown_page",
+      normalizeForPageMatch(String(fact.value ?? "")),
+      normalizeForPageMatch(fact.sourceText),
+    ].join("|");
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
 

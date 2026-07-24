@@ -83,6 +83,7 @@ export interface RunBusinessExtractionOptions {
     supabaseAdmin: any;
     context: import("./provenance/types.ts").ProvenanceContext;
   };
+  factLedgerProgress?: (progress: Record<string, unknown>) => Promise<void> | void;
 }
 
 function factLedgerDebug(debug: Record<string, unknown>): Record<string, unknown> {
@@ -260,6 +261,7 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
       {
         deadlineAt: startTime + OPENAI_TOTAL_BUDGET_MS,
         ...(opts.provenance ? { provenance: opts.provenance } : {}),
+        ...(opts.factLedgerProgress ? { onProgress: opts.factLedgerProgress } : {}),
       },
     );
   }

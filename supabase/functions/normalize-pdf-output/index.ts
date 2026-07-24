@@ -62,10 +62,18 @@ import {
 
 // Base64 expands PDFs by about 33%, and the intermediate binary string can
 // double memory again. Keep inline file fallback below Edge compute limits.
-// 20 MB matches the parser inline byte limit used before Azure parsing became canonical;
-// any file small enough for parse to have processed inline
-// can also be processed inline here if a fallback needs file bytes.
-const MAX_INLINE_FILE_BYTES = 20 * 1024 * 1024;
+// Default remains conservative, but deployments with larger Edge capacity can
+// raise NORMALIZE_MAX_INLINE_FILE_BYTES without changing extraction code.
+function envPositiveInt(name: string, fallback: number): number {
+  try {
+    const parsed = Number(Deno.env.get(name));
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+const DEFAULT_MAX_INLINE_FILE_BYTES = 20 * 1024 * 1024;
+const MAX_INLINE_FILE_BYTES = envPositiveInt("NORMALIZE_MAX_INLINE_FILE_BYTES", DEFAULT_MAX_INLINE_FILE_BYTES);
 
 const AZURE_PAGE_MARKER_RE = /\[\[\s*PAGE\s+\d+\s*\]\]/i;
 
@@ -1038,6 +1046,24 @@ function buildMinimalReviewPayload(opts: {
   const extractionDebug = (result.metadata as any)?.extractionDebug ?? {};
   const mergedFieldSources = (extractionDebug.merged_field_sources ?? {}) as Record<string, any>;
   const llmReturnedFieldDetails = (extractionDebug.llm_returned_field_details ?? {}) as Record<string, any>;
+  const openaiFactLedgerDebug = (extractionDebug as any)?.openai_fact_ledger ?? (extractionDebug as any)?.vertex_fact_ledger ?? null;
+  const factLedgerDynamicItems = Array.isArray(openaiFactLedgerDebug?.dynamic_items)
+    ? openaiFactLedgerDebug.dynamic_items
+    : [];
+  const minimalWorkflowOutput = extractionModuleType === "lease" && factLedgerDynamicItems.length > 0
+    ? {
+      lease_fields: {},
+      lease_clauses: [],
+      clause_records: factLedgerDynamicItems,
+      extracted_document_items: factLedgerDynamicItems,
+      summary: {
+        extracted_document_item_count: factLedgerDynamicItems.length,
+        clause_count: 0,
+        dynamic_fact_ledger_item_count: factLedgerDynamicItems.length,
+        enrichment_status: "pending",
+      },
+    }
+    : null;
 
   const rows = result.rows.map((r, index) => {
     const values = stripInternalKeys(r);
@@ -1110,7 +1136,7 @@ function buildMinimalReviewPayload(opts: {
         : [],
       confidence: rowConfidence,
       notes: (r.extraction_notes as string | undefined) ?? null,
-      workflow_output: null,
+      workflow_output: minimalWorkflowOutput,
     };
   });
 
@@ -1142,6 +1168,12 @@ function buildMinimalReviewPayload(opts: {
     validation_errors: result.validationErrors,
     metadata: {
       ...(result.metadata ?? {}),
+      ...(minimalWorkflowOutput ? {
+        workflow_output: {
+          records: [minimalWorkflowOutput],
+          summary: minimalWorkflowOutput.summary,
+        },
+      } : {}),
       extraction_contract_version: EXTRACTION_CONTRACT_VERSION,
     },
     built_at: new Date().toISOString(),
@@ -1881,6 +1913,49 @@ function countMeaningfulRowValues(rows: Array<Record<string, unknown>> | undefin
     }
   }
   return count;
+}
+
+async function persistFactLedgerProgress(args: {
+  supabaseAdmin: any;
+  logger: any;
+  pipelineJobId?: string | null;
+  fileId: string;
+  progress: Record<string, unknown>;
+}): Promise<void> {
+  const progress = {
+    ...args.progress,
+    updated_at: new Date().toISOString(),
+    continuation_enqueue_supported: false,
+  };
+
+  await args.logger.event("normalize", "progress", {
+    kind: "openai_fact_ledger_progress",
+    openai_fact_ledger_progress: progress,
+  });
+
+  if (!args.pipelineJobId) return;
+
+  try {
+    const { data: existing } = await args.supabaseAdmin
+      .from("pipeline_jobs")
+      .select("metadata")
+      .eq("id", args.pipelineJobId)
+      .maybeSingle();
+
+    const metadata = existing?.metadata && typeof existing.metadata === "object" ? existing.metadata : {};
+    await args.supabaseAdmin
+      .from("pipeline_jobs")
+      .update({
+        metadata: {
+          ...metadata,
+          openai_fact_ledger_progress: progress,
+        },
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", args.pipelineJobId);
+  } catch (error) {
+    console.warn(`[normalize-pdf-output] fact ledger progress persist failed file_id=${args.fileId}`, error);
+  }
 }
 
 const ENRICH_READY_STATUSES = new Set(["review_required", "validated", "approved"]);
@@ -2774,6 +2849,13 @@ Deno.serve(async (req: Request) => {
         canonicalLayoutSchemaVersion: (fileRecord.docling_raw as any)?.layout_contract_version ?? null,
         canonicalLayout: (fileRecord as any).canonical_layout_v3 ?? null,
         ...(mockOpenAIScenario ? { mockOpenAIScenario } : {}),
+        factLedgerProgress: (progress: Record<string, unknown>) => persistFactLedgerProgress({
+          supabaseAdmin,
+          logger,
+          pipelineJobId: finalPipelineJobId,
+          fileId: file_id,
+          progress,
+        }),
         ...(stage?.stageRunId
           ? {
             provenance: {
