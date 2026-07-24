@@ -100,6 +100,8 @@ function isGenericSummaryPreambleSource(sourceText) {
 
 function shouldSuppressDynamicReviewItem(key, item, value, sourceText, staticKeys) {
   const normalizedKey = key.startsWith("clause_") ? key.slice(7) : key;
+  if (item?.possible_canonical_match) return true;
+  if (/^(?:default|definition|party_identification|premises_description|lease_term|rent_escalation)$/i.test(normalizedKey)) return true;
   // A dynamic/clause row whose normalized key collides with a static field
   // (or the fixed suppression allowlist) always loses to the static field,
   // regardless of how "good" the dynamic row's value/source looks - showing

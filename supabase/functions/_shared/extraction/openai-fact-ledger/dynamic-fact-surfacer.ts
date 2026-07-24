@@ -31,6 +31,56 @@ function titleizeCategory(category: string): string {
  * alias substring, no score threshold) for a future extraction-tuning pass
  * to have real data to work from instead of guessing why facts go unmapped.
  */
+function categoryKey(category: string): string {
+  return String(category || "").replace(/^clause:/i, "").toLowerCase();
+}
+
+const SUPPRESSED_DYNAMIC_CATEGORIES = new Set([
+  "default",
+  "definition",
+  "party_identification",
+  "premises_description",
+  "lease_term",
+  "rent_escalation",
+]);
+
+const BUSINESS_AREA_BY_FACT_CATEGORY: Record<string, string> = {
+  operating_expense_recovery: "expenses_recoveries",
+  cam_recoveries: "cam_rules",
+  cam_rules: "cam_rules",
+  taxes: "taxes",
+  insurance: "insurance",
+  utilities: "utilities",
+  repairs_maintenance: "repairs_maintenance",
+  maintenance: "repairs_maintenance",
+  renewal_option: "legal_options",
+  assignment_subletting: "legal_options",
+  assignment: "legal_options",
+  subletting: "legal_options",
+  notices: "notices",
+  signage: "legal_options",
+  permitted_use: "parties_premises",
+  use_clause: "parties_premises",
+};
+
+function businessAreaForFact(category: string): string {
+  return BUSINESS_AREA_BY_FACT_CATEGORY[categoryKey(category)] || "clause_records";
+}
+
+function isDefinitionLikeFact(fact: Fact): boolean {
+  const source = normalizeForPageMatch(fact.sourceText);
+  const value = normalizeForPageMatch(String(fact.value ?? ""));
+  return /\b(?:shall mean|means|defined as|is defined)\b/.test(source) ||
+    (/^[a-z_ ]{2,40}$/.test(value) && /\b(?:control|affiliate|business days|environmental laws|hazardous materials)\b/.test(source));
+}
+
+function shouldSuppressDynamicFact(fact: Fact, possibleCanonicalMatch: string | null): boolean {
+  const key = categoryKey(fact.category);
+  if (SUPPRESSED_DYNAMIC_CATEGORIES.has(key)) return true;
+  if (possibleCanonicalMatch) return true;
+  if (isDefinitionLikeFact(fact)) return true;
+  return false;
+}
 function findPossibleCanonicalMatch(fact: Fact): string | null {
   const haystack = `${fact.sourceText} ${String(fact.value ?? "")}`.toLowerCase();
   for (const entry of LEASE_FIELD_CONTRACT) {
@@ -72,6 +122,7 @@ export function surfaceDynamicFacts(args: {
         `— fact-field-mapper.ts's label score didn't clear the threshold for this field`,
       );
     }
+    if (shouldSuppressDynamicFact(fact, possibleCanonicalMatch)) continue;
 
     // createDocumentItem() returns a fixed-shape object (only reads specific
     // named args keys) — the diagnostic tag below is added onto its RETURN
@@ -80,7 +131,7 @@ export function surfaceDynamicFacts(args: {
       item_id: `openai_fact:${fact.category}:${dedupeKey.slice(0, 60)}`,
       document_profile: documentProfile,
       item_type: fact.category,
-      business_area: "clause_records",
+      business_area: businessAreaForFact(fact.category),
       label: titleizeCategory(fact.category),
       value: fact.value,
       normalized_value: fact.value,

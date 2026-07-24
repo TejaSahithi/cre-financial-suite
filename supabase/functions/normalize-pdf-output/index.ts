@@ -437,7 +437,7 @@ function usableSourceText(value: unknown): string | null {
 
 function capSourceText(text: string | null | undefined, maxChars = 350): string | null {
   if (!text) return null;
-  const cleaned = text.replace(/\s+/g, " ").trim();
+  const cleaned = cleanEvidenceSnippet(text);
   if (!cleaned) return null;
   if (cleaned.length <= maxChars) return cleaned;
   const slice = cleaned.slice(0, maxChars);
@@ -767,6 +767,11 @@ function sourceTextSupportsValue(sourceText: unknown, value: unknown, fieldKey: 
   );
 }
 
+function sourceEvidenceMustContainValue(fieldKey: string, fieldType?: string) {
+  return fieldType === "number" || fieldType === "date" ||
+    /(?:rent|amount|deposit|fee|percent|pct|rate|cap|share|rsf|sqft|sf|months|days|date)$/i.test(fieldKey) ||
+    /^(?:monthly_rent|annual_rent|rent_per_sf|security_deposit|square_footage|building_rsf|lease_term_months|renewal_notice_months|termination_notice_months|escalation_rate|cam_amount|cam_cap_pct|admin_fee_pct|gross_up_threshold)$/.test(fieldKey);
+}
 function expandEvidenceSnippet(text: string, matchStart: number, matchLength: number) {
   const snippet = boundedSourceSnippet(text, matchStart, matchLength);
   if (snippet) return { snippet, quality: "exact" as const };
@@ -1347,6 +1352,9 @@ function buildReviewPayload(opts: {
         ? findSourceEvidenceForField(doclingRaw, fieldKey, value, def)
         : null;
       const fallbackSourceText = usableSourceText(fallbackEvidence?.source_clause);
+      const fieldType = def.type ?? "string";
+      const strictSourceValueSupport = sourceEvidenceMustContainValue(fieldKey, fieldType);
+      const supportsSelectedValue = (sourceText: unknown) => !strictSourceValueSupport || sourceTextSupportsValue(sourceText, value, fieldKey, fieldType);
       // Workflow and LLM source texts are already selected from the actual lease
       // document (clause extraction / LLM verbatim quote), so trust them directly.
       // The fallback path uses strict needle-in-haystack search, so it already
@@ -1354,9 +1362,9 @@ function buildReviewPayload(opts: {
       // discarding valid source snippets whenever the extracted value appeared in
       // a slightly different form (e.g. "Triple Net" vs "NNN", "five percent" vs "5").
       const evidenceCandidates = [
-        { source: "fallback", sourceText: fallbackSourceText, sourcePage: fallbackEvidence?.source_page, supportsValue: !!fallbackSourceText },
-        { source: "workflow", sourceText: workflowSourceText, sourcePage: workflowField?.source_page, supportsValue: !!workflowSourceText },
-        { source: "llm", sourceText: llmSourceText, sourcePage: llmEvidence?.source_page, supportsValue: !!llmSourceText },
+        { source: "fallback", sourceText: fallbackSourceText, sourcePage: fallbackEvidence?.source_page, supportsValue: !!fallbackSourceText && supportsSelectedValue(fallbackSourceText) },
+        { source: "workflow", sourceText: workflowSourceText, sourcePage: workflowField?.source_page, supportsValue: !!workflowSourceText && supportsSelectedValue(workflowSourceText) },
+        { source: "llm", sourceText: llmSourceText, sourcePage: llmEvidence?.source_page, supportsValue: !!llmSourceText && supportsSelectedValue(llmSourceText) },
       ]
         .filter((candidate) => candidate.sourceText && candidate.supportsValue)
         .map((candidate) => ({
@@ -1417,7 +1425,7 @@ function buildReviewPayload(opts: {
         source: fieldSources[fieldKey] ?? source,
         isStandard: true,
         required: !!def.required,
-        fieldType: def.type ?? "string",
+        fieldType,
         description: def.description,
         evidence: {
           page_number: mergedSourcePage,

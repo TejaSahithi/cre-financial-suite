@@ -372,7 +372,21 @@ const FIELD_SPECS = [
 ];
 
 function cleanText(value: unknown) {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
+  return String(value ?? "")
+    .replace(/\[\[\s*PAGE\s+\d+\s*\]\]/gi, " ")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<\/(?:td|th|tr|p|div|li|h[1-6])>/gi, " ")
+    .replace(/<(?:td|th|tr|table|tbody|thead|p|div|span|li|ul|ol|h[1-6])\b[^>]*>/gi, " ")
+    .replace(/<\/?[^>]+>/g, " ")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:])/g, "$1")
+    .trim();
 }
 
 function isBlank(value: unknown) {

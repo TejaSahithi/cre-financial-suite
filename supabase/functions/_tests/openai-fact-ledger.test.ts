@@ -1,6 +1,8 @@
 // @ts-nocheck
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { mapFactsToStandardFields } from "../_shared/extraction/openai-fact-ledger/fact-field-mapper.ts";
+import { surfaceDynamicFacts } from "../_shared/extraction/openai-fact-ledger/dynamic-fact-surfacer.ts";
+import { cleanEvidenceSnippet } from "../_shared/extraction/evidence-index.ts";
 import { computeProfileApprovalBlockers } from "../_shared/extraction/openai-fact-ledger/approval-blockers.ts";
 import { runOpenAIFactLedgerPipeline } from "../_shared/extraction/openai-fact-ledger/orchestrator.ts";
 import { __test__ as factLedgerExtractorTest } from "../_shared/extraction/openai-fact-ledger/fact-ledger-extractor.ts";
@@ -665,4 +667,65 @@ Deno.test("runOpenAIFactLedgerPipeline: large document resumes from checkpoint a
     if (previousConcurrency == null) Deno.env.delete("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY"); else Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", previousConcurrency);
     if (previousReserve == null) Deno.env.delete("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS"); else Deno.env.set("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS", previousReserve);
   }
+});
+
+Deno.test("fact mapper rejects incompatible value/source pairs from Mindful-style extraction", () => {
+  const facts = [
+    makeFact({ category: "clause:premises_description", value: "as is, where is", sourceText: "Tenant acknowledges that Tenant is leasing the Premises on an \"as is, where is\" basis.", sourcePage: 1, confidence: 0.99 }),
+    makeFact({ category: "clause:premises_description", value: "224 S Peters Road, Suite 212 Knoxville, TN 37923", sourceText: "3. Address of Landlord: 224 S Peters Road, Suite 212 Knoxville, TN 37923", sourcePage: 1, confidence: 0.99 }),
+    makeFact({ category: "clause:rent_escalation", value: 13875, sourceText: "In either event, the monthly installments of Base Rent shall be increased to one hundred fifty percent (150%) of the monthly installments of Base Rent in effect at the expiration of the Term.", sourcePage: 12, confidence: 0.98 }),
+    makeFact({ category: "clause:default", value: 51, sourceText: "\"Control\" shall mean the ownership, directly or indirectly, of at least fifty-one percent (51%) of the voting securities.", sourcePage: 2, confidence: 0.98 }),
+    makeFact({ category: "clause:use_clause", value: "Permitted Use", sourceText: "6 Tenant shall use the Premises solely for the Permitted Use, and for no other purpose without Landlord's consent.", sourcePage: 5, confidence: 0.96 }),
+    makeFact({ category: "clause:indemnification", value: "all risk of damage", sourceText: "Tenant hereby assumes all risk of damage or injury to any person or property in, on, or about the Premises.", sourcePage: 8, confidence: 0.97 }),
+  ];
+
+  const mapped = mapFactsToStandardFields({ facts, moduleType: "lease" });
+  const fields = mapped.records[0]?.fields ?? {};
+  assertEquals(fields.property_address, undefined);
+  assertEquals(fields.unit_number, undefined);
+  assertEquals(fields.monthly_rent, undefined);
+  assertEquals(fields.annual_rent, undefined);
+  assertEquals(fields.escalation_rate, undefined);
+  assertEquals(fields.landlord_consent_for_transfer, undefined);
+  assertEquals(fields.assumption_scope, undefined);
+});
+
+Deno.test("fact mapper keeps compatible source-backed rent and premises facts", () => {
+  const facts = [
+    makeFact({ category: "clause:premises_description", value: "224 S Peters Road Knoxville, TN 37923", sourceText: "Premises containing approximately 1,110 rentable square feet, in the Building located at 224 S Peters Road Knoxville, TN 37923.", sourcePage: 1, confidence: 0.98 }),
+    makeFact({ category: "clause:premises_description", value: "Suite 212", sourceText: "Premises: Suite 212 in the Building located at 224 S Peters Road Knoxville, TN 37923.", sourcePage: 1, confidence: 0.98 }),
+    makeFact({ category: "clause:rent_escalation", value: 1400, sourceText: "Rent: $1,400 per month.", sourcePage: 1, confidence: 0.98 }),
+    makeFact({ category: "clause:rent_escalation", value: 5, sourceText: "The Rent will increase 5% each year of renewal.", sourcePage: 1, confidence: 0.98 }),
+    makeFact({ category: "clause:assignment_subletting", value: "Landlord consent required", sourceText: "Tenant shall not assign this Lease or sublet the Premises without Landlord's prior written consent.", sourcePage: 6, confidence: 0.98 }),
+  ];
+
+  const mapped = mapFactsToStandardFields({ facts, moduleType: "lease" });
+  const fields = mapped.records[0]?.fields ?? {};
+  assertEquals(fields.property_address?.value, "224 S Peters Road Knoxville, TN 37923");
+  assertEquals(fields.unit_number?.value, "Suite 212");
+  assertEquals(fields.monthly_rent?.value, 1400);
+  assertEquals(fields.escalation_rate?.value, 5);
+  assertEquals(fields.landlord_consent_for_transfer?.value, "Landlord consent required");
+});
+
+Deno.test("dynamic fact surfacer suppresses canonical near-misses and definition/default noise while routing expense facts", () => {
+  const items = surfaceDynamicFacts({
+    documentProfile: "full_lease",
+    docIndex: {} as any,
+    unmappedFacts: [
+      makeFact({ category: "clause:default", value: "Control", sourceText: "\"Control\" shall mean ownership of at least fifty-one percent (51%).", sourcePage: 2, confidence: 0.96 }),
+      makeFact({ category: "clause:party_identification", value: "Tenant: Example LLC", sourceText: "Tenant: Example LLC", sourcePage: 1, confidence: 0.96 }),
+      makeFact({ category: "clause:operating_expense_recovery", value: "Tenant pays operating expenses", sourceText: "Tenant shall pay all operating expenses as Additional Rent.", sourcePage: 5, confidence: 0.92 }),
+      makeFact({ category: "clause:cam_recoveries", value: "CAM included in gross rent", sourceText: "Monthly Rent includes all CAM charges.", sourcePage: 5, confidence: 0.91 }),
+    ],
+  });
+
+  assertEquals(items.length, 2);
+  assertEquals(items.map((item) => item.business_area), ["expenses_recoveries", "cam_rules"]);
+  assertEquals(items.map((item) => item.display_tab), ["expenses_recoveries", "cam_rules"]);
+});
+
+Deno.test("evidence cleaner strips Azure table markup without losing lease text", () => {
+  const cleaned = cleanEvidenceSnippet('</td> <td>Date:</td> <td>January 9, 2024</td> </tr> <tr> <td colspan="2">Premises containing approximately 1,110 rentable square feet.</td>');
+  assertEquals(cleaned, "Date: January 9, 2024 Premises containing approximately 1,110 rentable square feet.");
 });

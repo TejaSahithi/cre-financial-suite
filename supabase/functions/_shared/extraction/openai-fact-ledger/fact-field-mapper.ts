@@ -23,6 +23,7 @@ import { getSchema, type FieldDef } from "../schemas.ts";
 import { validateRecords } from "../validator.ts";
 import { getFieldContract } from "../field-contract.ts";
 import { evaluateCandidateForField } from "../candidate-decision.ts";
+import { cleanEvidenceSnippet } from "../evidence-index.ts";
 import type { ExtractedField, ExtractedRecord, ModuleType } from "../types.ts";
 import type { Fact, FactFieldMappingResult } from "./types.ts";
 
@@ -46,6 +47,7 @@ function sourceMonthlyInstallmentAmount(sourceText: string): number | null {
   return (
     moneyNearLabel(clean, /monthly\s+installments?\s+of\s*(?:[$#]\s*)?([\d,]+(?:\s+\d{3})?(?:\.\d{2})?)/i) ??
     moneyNearLabel(clean, /installments?\s+of\s*(?:[$#]\s*)?([\d,]+(?:\s+\d{3})?(?:\.\d{2})?)\s*(?:per\s+month|monthly)/i) ??
+    moneyNearLabel(clean, /(?:rent|base\s+rent|minimum\s+rent)\s*[:;-]?\s*(?:[$#]\s*)?([\d,]+(?:\s+\d{3})?(?:\.\d{2})?)\s*(?:per\s+month|monthly|\/month|\/mo)/i) ??
     moneyNearLabel(clean, /(?:per\s+month|monthly)\s*(?:installments?|rent)?\s*(?:of|in)?\s*(?:[$#]\s*)?([\d,]+(?:\s+\d{3})?(?:\.\d{2})?)/i)
   );
 }
@@ -73,10 +75,85 @@ function valueIsLabeledAsRole(valueText: string, sourceText: string, rolePattern
     new RegExp(`(?:${rolePattern})\\s+name\\s*[:.]\\s*${escapedValue}`, "i").test(sourceText) ||
     new RegExp(`(?:^|\\n)\\s*(?:${rolePattern})\\s*[:.]\\s*${escapedValue}`, "i").test(sourceText);
 }
+
+function looksLikeStreetAddress(value: unknown): boolean {
+  const text = cleanEvidenceSnippet(value);
+  return /\b\d{1,6}\s+[A-Za-z0-9.'#& -]{2,80}\s+(?:street|st\.?|road|rd\.?|avenue|ave\.?|boulevard|blvd\.?|drive|dr\.?|lane|ln\.?|highway|hwy|parkway|pkwy|way|court|ct\.?|place|pl\.?|circle|cir\.?|trail|trl\.?)\b/i.test(text) ||
+    /\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/.test(text);
+}
+
+function looksLikeFullAddress(value: unknown): boolean {
+  const text = cleanEvidenceSnippet(value);
+  return looksLikeStreetAddress(text) || /\b(?:knoxville|seymour|county|tennessee|tn\s*\d{5})\b/i.test(text);
+}
+
+function looksLikeShortUnitIdentifier(value: unknown): boolean {
+  const text = cleanEvidenceSnippet(value);
+  if (!text || text.length > 40 || looksLikeFullAddress(text)) return false;
+  return /^(?:suite|ste\.?|unit|space|#)\s*[A-Za-z0-9-]+(?:\s*(?:and|&)\s*[A-Za-z0-9-]+)?$/i.test(text) ||
+    /^[A-Za-z0-9-]{1,12}$/.test(text);
+}
+
+function sourceIsLandlordOrTenantAddress(sourceText: string): boolean {
+  return /\b(?:address\s+of\s+(?:landlord|tenant)|(?:landlord|tenant)(?:'s)?\s+(?:mailing\s+|notice\s+)?address)\b/i.test(sourceText);
+}
+
+function sourceIsPremisesLocation(sourceText: string): boolean {
+  return /\b(?:premises|property|building|shopping\s+center|demised\s+premises|located\s+at|address\s+of\s+(?:premises|property|building))\b/i.test(sourceText);
+}
+
+function sourceHasMoneyOrNumberNearValue(sourceText: string, value: number | null): boolean {
+  if (value === null) return true;
+  const clean = cleanEvidenceSnippet(sourceText).replace(/\s+/g, " ");
+  const normalizedValue = Math.round(value * 100) / 100;
+  const tokens = clean.match(/(?:[$#]\s*)?\d[\d,]*(?:\.\d{1,2})?(?:\s+\d{3})?/g) ?? [];
+  return tokens.some((token) => {
+    const parsed = normalizeMoneyValue(token.replace(/#/g, "$"));
+    return parsed !== null && roughlyEqualMoney(parsed, normalizedValue);
+  });
+}
+
+function sourceIsHoldoverOrPenaltyRent(sourceText: string): boolean {
+  return /\b(?:hold[-\s]?over|holding\s+over|expiration\s+of\s+(?:the\s+)?term|150%|one\s+hundred\s+fifty\s+percent|sufferance|damages\s+sustained)\b/i.test(sourceText);
+}
+
+function valueLooksLikePartyResponsibility(valueText: string): boolean {
+  return /\b(?:tenant|landlord|shared|both|included|gross|full\s+service|landlord\s+with\s+cap)\b/i.test(valueText) &&
+    !/,.*(?:cam|insurance|maintenance|janitorial|utility|utilities)/i.test(valueText);
+}
 function looksLikeFieldCompatibleFact(fact: Fact, fieldName: string): boolean {
-  const valueText = String(fact.value ?? "").trim();
-  const sourceText = String(fact.sourceText ?? "");
+  const valueText = cleanEvidenceSnippet(fact.value).trim();
+  const sourceText = cleanEvidenceSnippet(fact.sourceText);
   const sourceLower = sourceText.toLowerCase();
+
+  if (fieldName === "property_address") {
+    if (!valueText || valueText.length < 8) return false;
+    if (/\b(?:as\s+is|where\s+is|condition|delivery\s+of\s+possession|tenant\s+acknowledges)\b/i.test(valueText)) return false;
+    if (/\b(?:as\s+is|where\s+is|delivery\s+of\s+possession)\b/i.test(sourceText)) return false;
+    if (sourceIsLandlordOrTenantAddress(sourceText) && !/\b(?:premises|property|building)\b/i.test(sourceText)) return false;
+    if (!looksLikeStreetAddress(valueText) && !(sourceIsPremisesLocation(sourceText) && looksLikeStreetAddress(sourceText))) return false;
+  }
+
+  if (fieldName === "unit_number") {
+    if (!looksLikeShortUnitIdentifier(valueText)) return false;
+    if (sourceIsLandlordOrTenantAddress(sourceText)) return false;
+    if (/\b(?:rent|square\s+feet|sf|rsf|address\s+of\s+landlord|address\s+of\s+tenant)\b/i.test(valueText)) return false;
+  }
+
+  if (fieldName === "square_footage" || fieldName === "rentable_area_sqft" || fieldName === "tenant_rsf" || fieldName === "building_rsf") {
+    const value = normalizeMoneyValue(fact.value);
+    if (value === null || value < 100 || value > 5_000_000) return false;
+    if (!/\b(?:square\s+feet|sq\.?\s*ft\.?|rentable\s+square\s+feet|rsf|\bsf\b|floor\s+area)\b/i.test(sourceText)) return false;
+    if (!sourceHasMoneyOrNumberNearValue(sourceText, value)) return false;
+  }
+
+  if (fieldName === "lease_term_months") {
+    const value = normalizeMoneyValue(fact.value);
+    if (value === null || value < 1 || value > 1200) return false;
+    if (sourceIsHoldoverOrPenaltyRent(sourceText)) return false;
+    if (!/\b(?:term|months?|years?|commencement|expiration|expire|through)\b/i.test(sourceText)) return false;
+    if (!sourceHasMoneyOrNumberNearValue(sourceText, value) && !/\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:month|year)/i.test(sourceText)) return false;
+  }
 
   if (fieldName === "monthly_rent") {
     const value = normalizeMoneyValue(fact.value);
@@ -84,14 +161,18 @@ function looksLikeFieldCompatibleFact(fact: Fact, fieldName: string): boolean {
     if (monthlyInstallment !== null && value !== null && !roughlyEqualMoney(value, monthlyInstallment)) return false;
     const annualAmount = sourceAnnualRentAmount(sourceText);
     if (annualAmount !== null && value !== null && roughlyEqualMoney(value, annualAmount)) return false;
+    if (sourceIsHoldoverOrPenaltyRent(sourceText)) return false;
+    if (value !== null && !sourceHasMoneyOrNumberNearValue(sourceText, value) && !roughlyEqualMoney(value, monthlyInstallment)) return false;
   }
 
   if (fieldName === "annual_rent") {
     const value = normalizeMoneyValue(fact.value);
     const annualAmount = sourceAnnualRentAmount(sourceText);
+    if (sourceIsHoldoverOrPenaltyRent(sourceText)) return false;
     if (annualAmount !== null && value !== null && roughlyEqualMoney(value, annualAmount)) return true;
     const monthlyInstallment = sourceMonthlyInstallmentAmount(sourceText);
     if (monthlyInstallment !== null && value !== null && roughlyEqualMoney(value, monthlyInstallment)) return false;
+    if (value !== null && !sourceHasMoneyOrNumberNearValue(sourceText, value)) return false;
   }
 
   if (fieldName === "tenant_name" || fieldName === "landlord_name") {
@@ -132,6 +213,33 @@ function looksLikeFieldCompatibleFact(fact: Fact, fieldName: string): boolean {
   if (fieldName === "assignment_provisions") {
     if (!/\b(?:assign|assignment|sublet|sublease|transfer)\b/i.test(sourceText)) return false;
     if (/\b(?:default|failure\s+by\s+tenant|cure\s+period|remed(?:y|ies))\b/i.test(sourceText) && !/\b(?:assign|assignment|sublet|sublease|transfer)\b/i.test(valueText)) return false;
+  }
+
+  if (fieldName === "landlord_consent_for_transfer") {
+    if (!/\b(?:assign|assignment|sublet|sublease|transfer)\b/i.test(sourceText)) return false;
+    if (/\bpermitted\s+use\b/i.test(sourceText) && !/\b(?:assign|assignment|sublet|sublease|transfer)\b/i.test(valueText)) return false;
+  }
+
+  if (fieldName === "assumption_scope") {
+    if (!/\b(?:assignee|assignment|assigned|transfer|assumes?\s+(?:the\s+)?(?:obligations|duties|liabilities|lease))\b/i.test(sourceText)) return false;
+    if (/\b(?:assumes?\s+all\s+risk|risk\s+of\s+damage|injury\s+or\s+damage|gross\s+negligence)\b/i.test(sourceText) && !/\bassignee\b/i.test(sourceText)) return false;
+  }
+
+  if (fieldName === "assignment_consideration") {
+    const value = normalizeMoneyValue(fact.value);
+    if (value !== null && value <= 0) return false;
+    if (!/\b(?:assignment|assignor|assignee|transfer|consideration)\b/i.test(sourceText)) return false;
+    if (value !== null && !sourceHasMoneyOrNumberNearValue(sourceText, value)) return false;
+  }
+
+  if (fieldName === "escalation_rate") {
+    if (!/\b(?:rent|base\s+rent|minimum\s+rent|escalat|increase|renewal)\b/i.test(sourceText)) return false;
+    if (!/\b(?:%|percent|increase|escalat)\b/i.test(sourceText)) return false;
+    if (/^\s*["']?control["']?\s+(?:shall\s+)?mean/i.test(sourceText)) return false;
+  }
+
+  if (/^(?:responsibility_taxes|tax_responsibility|responsibility_insurance|insurance_responsibility|responsibility_utilities|responsibility_repairs|hvac_responsibility)$/.test(fieldName)) {
+    if (!valueLooksLikePartyResponsibility(valueText)) return false;
   }
 
   return true;

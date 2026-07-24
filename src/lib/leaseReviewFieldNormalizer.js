@@ -652,8 +652,26 @@ export function normalizeDynamicFindings(lease) {
 
 // ── Clause records ────────────────────────────────────────────────────────
 
+function stripDocumentSourceMarkup(value) {
+  return String(value ?? "")
+    .replace(/\[\[\s*PAGE\s+\d+\s*\]\]/gi, " ")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<\/(?:td|th|tr|p|div|li|h[1-6])>/gi, " ")
+    .replace(/<(?:td|th|tr|table|tbody|thead|p|div|span|li|ul|ol|h[1-6])\b[^>]*>/gi, " ")
+    .replace(/<\/?[^>]+>/g, " ")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:])/g, "$1")
+    .trim();
+}
+
 function cleanDocumentItemSource(value) {
-  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  const text = stripDocumentSourceMarkup(value);
   if (!text) return null;
   if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return null;
   if (text.toLowerCase().includes("derived from")) return null;
