@@ -2704,8 +2704,44 @@ function buildLeaseFieldMap(
     .filter((value, index, arr) => arr.indexOf(value) === index)
     .join("\n");
 
-  const monthlyRentForDerived = asNumber(fieldMap.base_rent_monthly?.value);
+  let monthlyRentForDerived = asNumber(fieldMap.base_rent_monthly?.value);
   const squareFeetForDerived = asNumber(fieldMap.tenant_rsf?.value) ?? asNumber(fieldMap.rentable_area_sqft?.value);
+
+  // Last-resort safety net, ported from calculator.ts's identical guard (NOT
+  // the primary fix — see fact-ledger-extractor.ts's "RENT FIGURES"
+  // instruction and monthly_rent/annual_rent's allowedClauseCategories in
+  // schemas.ts). Only when base_rent_monthly was extracted, annual_rent
+  // wasn't, and square footage is available: if treating the extracted value
+  // as truly monthly implies an absurd annual $/SF rate, but treating it as
+  // an ALREADY-annual figure mislabeled as monthly implies a plausible rate,
+  // swap it and flag for review — this file reimplements the × 12
+  // derivation independently of calculator.ts (a known duplication, not
+  // unified in this pass), so it needs the same guard to reach the same
+  // answer given the same inputs.
+  if (
+    monthlyRentForDerived != null && monthlyRentForDerived > 0 &&
+    squareFeetForDerived != null && squareFeetForDerived > 0 &&
+    fieldHasValidEvidence(fieldMap.base_rent_monthly) &&
+    !fieldHasValidEvidence(fieldMap.annual_rent)
+  ) {
+    const asExtractedAnnualPsf = (monthlyRentForDerived * 12) / squareFeetForDerived;
+    const swappedAnnualPsf = monthlyRentForDerived / squareFeetForDerived;
+    if (asExtractedAnnualPsf > 500 && swappedAnnualPsf >= 2 && swappedAnnualPsf <= 500) {
+      const originalValue = monthlyRentForDerived;
+      const swappedMonthly = round2(originalValue / 12);
+      fieldMap.base_rent_monthly = {
+        ...fieldMap.base_rent_monthly,
+        value: swappedMonthly,
+        raw_value: swappedMonthly,
+        normalized_value: swappedMonthly,
+        derivation_trace: `needs_review: base_rent_monthly(${originalValue}) looked like an annual figure mislabeled as monthly (implied ${round2(asExtractedAnnualPsf)} $/SF/yr as-extracted vs. ${round2(swappedAnnualPsf)} $/SF/yr swapped) — swapped to ${swappedMonthly}`,
+        requires_review: true,
+        review_reason: "monthly_rent/annual_rent swap auto-corrected — verify against source document",
+      };
+      monthlyRentForDerived = swappedMonthly;
+    }
+  }
+
   if (monthlyRentForDerived != null && monthlyRentForDerived > 0 && fieldHasValidEvidence(fieldMap.base_rent_monthly)) {
     const annualRentDerived = round2(monthlyRentForDerived * 12);
     if (!fieldHasValidEvidence(fieldMap.annual_rent) || Math.abs((asNumber(fieldMap.annual_rent?.value) ?? annualRentDerived) - annualRentDerived) < 1) {

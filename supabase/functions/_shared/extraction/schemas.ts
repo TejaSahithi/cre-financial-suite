@@ -404,6 +404,14 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "and the calculator will derive it. " +
       "IMPORTANT: Do NOT extract monthly_rent from the Security Deposit Addendum — dollar amounts there " +
       "(e.g. 'third month rent plus 86th month rent = $12,908.60') describe the deposit calculation, NOT the rent.",
+    // Stops an unrelated clause's dollar figure (security deposit, late fee,
+    // CAM) from winning this field purely on keyword length -- does NOT by
+    // itself disambiguate monthly vs. annual within a correctly-categorized
+    // rent sentence (that's the fact-ledger prompt's job, see
+    // fact-ledger-extractor.ts's "RENT FIGURES" instruction).
+    domain: "rent",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["rent_escalation"],
   },
   annual_rent: {
     type: "number",
@@ -420,6 +428,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "ONLY use the number explicitly described as 'per year', 'annual', or 'yearly'. " +
       "NEVER pull a roll-up or total of multiple lines as annual_rent. " +
       "If only monthly rent is shown, leave annual_rent NULL — the calculator computes monthly × 12.",
+    domain: "rent",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["rent_escalation"],
   },
   rent_per_sf: {
     type: "number",

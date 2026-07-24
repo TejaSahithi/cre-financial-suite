@@ -92,6 +92,46 @@ function computeLeaseDerived(row: Row): void {
     }
   }
 
+  // Last-resort safety net (NOT the primary fix — see the fact-ledger
+  // prompt's "RENT FIGURES" instruction and monthly_rent/annual_rent's
+  // allowedClauseCategories in schemas.ts for the real disambiguation):
+  // only monthly_rent was extracted, annual_rent wasn't, and square_footage
+  // is available. If treating monthlyRent as truly monthly produces an
+  // absurd implied annual $/SF rate, but treating it as an ALREADY-annual
+  // figure (i.e. it was mislabeled monthly when it's really the annual
+  // amount) produces a plausible rate, swap it — this is exactly the
+  // "annual amount recorded as monthly_rent" failure mode. Deliberately
+  // conservative thresholds (500 $/SF/yr is rarely legitimate; 2-500 is a
+  // wide normal band) to avoid misfiring on genuinely high-PSF leases.
+  if (monthlyRent !== null && annualRent === null && sqft !== null && sqft > 0) {
+    const asExtractedAnnualPsf = (monthlyRent * 12) / sqft;
+    const swappedAnnualPsf = monthlyRent / sqft;
+    if (asExtractedAnnualPsf > 500 && swappedAnnualPsf >= 2 && swappedAnnualPsf <= 500) {
+      const originalValue = monthlyRent;
+      const swappedMonthly = round2(originalValue / 12);
+      setDerived(
+        row,
+        "annual_rent",
+        originalValue,
+        `needs_review: monthly_rent(${originalValue}) looked like an annual figure mislabeled as monthly (implied ${round2(asExtractedAnnualPsf)} $/SF/yr as-extracted vs. ${round2(swappedAnnualPsf)} $/SF/yr swapped) — swapped`,
+        ["monthly_rent", "square_footage"],
+      );
+      setDerived(
+        row,
+        "monthly_rent",
+        swappedMonthly,
+        `needs_review: derived from swapped annual_rent(${originalValue}) / 12`,
+        ["monthly_rent", "square_footage"],
+      );
+      const needsReview = (row._derivation_needs_review ?? {}) as Record<string, boolean>;
+      needsReview.monthly_rent = true;
+      needsReview.annual_rent = true;
+      row._derivation_needs_review = needsReview;
+      monthlyRent = swappedMonthly;
+      annualRent = originalValue;
+    }
+  }
+
   // annual_rent = monthly_rent × 12
   if (monthlyRent !== null && annualRent === null) {
     const derived = round2(monthlyRent * 12);

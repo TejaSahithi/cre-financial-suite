@@ -47,6 +47,50 @@ A fact is one atomic assertion — a party name, a date, a dollar amount, a perc
 a defined term, an obligation, or a clause provision — grounded in EXACT verbatim
 source text from the document.
 
+"value" and "source_text" serve DIFFERENT purposes and must NOT be the same run-on
+sentence:
+  - "value" is the SHORT, ATOMIC answer only — just the entity name, just the date,
+    just the dollar figure, just the defined term. Never a full sentence. Never a
+    clause fragment. Never boilerplate surrounding the answer.
+    Good: "224 Partners, LLC"   Bad: "is made January 9, 2024 by and between 224 Partners, LLC"
+    Good: "February 1, 2024"    Bad: "commencing with the Commencement Date, without regard to calendar years"
+  - "source_text" is the grounding quote proving where "value" came from — a
+    COMPLETE sentence or complete table row, copied verbatim, start to end. Never
+    start or end mid-sentence/mid-clause; if the fact comes from a row in a
+    label/value summary table, quote the full row ("Landlord: 224 Partners, LLC"),
+    not an unrelated adjacent sentence.
+
+PRIORITIZE structured label/value sections (e.g. a "Summary of Basic Lease
+Information" block, a defined-terms table, an exhibit summary) as the single most
+reliable source for core facts — party names, addresses, dates, rent, square
+footage, security deposit, permitted use. When the same fact also appears restated
+in body-text prose elsewhere in the document, still extract it from the summary
+table first; only fall back to prose when no summary/table entry exists for it.
+
+RENT FIGURES — MONTHLY vs. ANNUAL: leases frequently state both together in one
+sentence (e.g. "the annual amount of $25,200, payable in monthly installments of
+$2,100"). When this happens, extract this as TWO separate facts (both may cite the
+same source_text sentence, since it proves both values): one fact with value = the
+per-month figure only, one fact with value = the per-year figure only. Never let
+the annual figure be recorded as a monthly value or vice versa — "per month" /
+"monthly" / "per year" / "annually" / "annual" is often the only word that
+distinguishes them; read it carefully. If a stepped rent schedule table is shown,
+extract the FIRST NON-ZERO Monthly Base Rent row (skip $0/free-rent rows) as the
+monthly fact. If only ONE of monthly/annual is stated anywhere in the document,
+extract only that one fact — never calculate or infer the other; the pipeline
+derives it deterministically downstream.
+
+LEASE TERM DATES — START vs. END: leases frequently state the term as one compound
+sentence (e.g. "The lease term shall be from March 1, 2019 through December 31,
+2023" or "...for an initial period from [DATE] to [DATE]"). Extract this as TWO
+separate facts (both may cite the same source_text sentence): one fact with value =
+the earlier/start/commencement date only, one fact with value = the later/end/
+expiration date only. Do not merge them into one fact and do not omit either one
+merely because the sentence doesn't use the words "commencement" or "expiration" —
+"from X through Y" / "from X to Y" / "beginning X and ending Y" all describe a
+start date and an end date just as much as an explicitly labeled "Commencement
+Date:" / "Expiration Date:" line does.
+
 Output ONLY a valid JSON object of this exact shape (this call is made with the
 API's json_object response mode, which requires a top-level object, never a
 bare array):
@@ -58,7 +102,8 @@ ${CLAUSE_CATEGORY_VOCAB.map((c) => `clause:${c}`).join(", ")}
 Pick the closest matching category for each fact. If nothing fits, use "clause:default".
 
 RULES:
-1. source_text MUST be the exact verbatim text from the document — never paraphrase.
+1. source_text MUST be the exact verbatim text from the document, a complete
+   sentence or table row (never truncated mid-sentence) — never paraphrase.
 2. If you cannot provide exact source_text for a fact, DO NOT include it.
 3. NEVER guess, infer, or calculate values not explicitly stated.
 4. Extract as many distinct facts as the text supports, not just a summary.`;
