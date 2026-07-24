@@ -108,6 +108,15 @@ describe("getCurrentGenerationFailureNotice", () => {
     });
     expect(notice.show).toBe(false);
   });
+  it("does not show the notice for a failed non-blocking enrich job when review is ready", () => {
+    const notice = getCurrentGenerationFailureNotice({
+      status: "review_required",
+      lease_id: "lease-123",
+      active_generation_id: "gen-2",
+      latest_job: { status: "failed", stage: "enrich", generation_id: "gen-2" },
+    });
+    expect(notice.show).toBe(false);
+  });
 
   it("does not show the notice when the current generation's latest job succeeded", () => {
     const notice = getCurrentGenerationFailureNotice({

@@ -564,6 +564,80 @@ async function failJob(supabaseAdmin: any, job: any, errorCode: string, errorMes
     .eq("id", job.id);
 }
 
+function isReviewReadyEnrichmentTransportFailure(errorCode: string, message: string, status?: number | null): boolean {
+  const code = String(errorCode || "").toUpperCase();
+  const text = String(message || "").toLowerCase();
+  return (
+    code === "STAGE_TIMEOUT" ||
+    code === "DOWNSTREAM_FUNCTION_FAILED" ||
+    Number(status) === 504 ||
+    text.includes("not enough compute resources") ||
+    text.includes("timed out")
+  );
+}
+
+async function completeEnrichmentWithWarning(
+  supabaseAdmin: any,
+  job: any,
+  fileId: string,
+  orgId: string,
+  errorCode: string,
+  message: string,
+  status?: number | null,
+) {
+  await supabaseAdmin
+    .from("pipeline_jobs")
+    .update({
+      status: "completed",
+      error_code: null,
+      error_message: null,
+      completed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      metadata: {
+        ...(job.metadata || {}),
+        enrich_completed_with_warning: true,
+        enrich_warning_code: errorCode,
+        enrich_warning_message: String(message || "Evidence enrichment did not complete").slice(0, 1000),
+        enrich_warning_status: status ?? null,
+      },
+    })
+    .eq("id", job.id);
+
+  const { data: currentFile } = await supabaseAdmin
+    .from("uploaded_files")
+    .select("ui_review_payload, active_generation_id")
+    .eq("id", fileId)
+    .maybeSingle();
+
+  if (currentFile?.active_generation_id === job.generation_id) {
+    const currentPayload = currentFile.ui_review_payload || {};
+    await supabaseAdmin
+      .from("uploaded_files")
+      .update({
+        ui_review_payload: {
+          ...currentPayload,
+          enrichment_status: "completed_with_warnings",
+          enrichment_warning: String(message || "Evidence enrichment did not complete").slice(0, 1000),
+          enrichment_warning_code: errorCode,
+        },
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", fileId);
+
+    try {
+      await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
+        p_org_id: orgId,
+        p_uploaded_file_id: fileId,
+        p_generation_id: job.generation_id,
+        p_package_mode: getLeaseDocumentPackageMode(),
+        p_financial_mode: getLeaseFinancialScheduleMode(),
+      });
+    } catch (finalizeError: any) {
+      console.warn(`[${WORKER_NAME}] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
+    }
+  }
+}
+
 const LEASE_MANUAL_REVIEW_FIELDS = [
   "tenant_name", "landlord_name", "property_name", "property_address", "unit_number",
   "start_date", "end_date", "monthly_rent", "annual_rent", "lease_term_months",
@@ -1339,6 +1413,8 @@ export const __test__ = {
   selectWithRetry,
   isCancelRequested,
   stopForCancellation,
+  isReviewReadyEnrichmentTransportFailure,
+  completeEnrichmentWithWarning,
 };
 
 function parserFailureAlreadyPersisted(parseResult: any): boolean {
@@ -2104,6 +2180,25 @@ Deno.serve(async (req: Request) => {
       if (!enrichResult.ok) {
         const message = enrichResult.error || "Evidence enrichment failed";
         const errorCode = enrichResult.error_code || enrichResult.data?.error_code || "ENRICHMENT_FAILED";
+
+        if (isReviewReadyEnrichmentTransportFailure(errorCode, message, enrichResult.status)) {
+          await completeEnrichmentWithWarning(supabaseAdmin, job, fileId, orgId, errorCode, message, enrichResult.status);
+          console.log(`[${WORKER_NAME}] enrichment_completed_with_warning file_id=${fileId}: ${message}`);
+          await logger.event("enrich", "completed_with_warnings", {
+            error_code: errorCode,
+            error_message: message,
+            metadata: { job_id: job.id, status: enrichResult.status },
+          });
+          return jsonResponse({
+            error: false,
+            warning: true,
+            warning_code: errorCode,
+            job_id: job.id,
+            stage: "enrich",
+            status: "completed_with_warnings",
+            message,
+          }, 200);
+        }
 
         // Guarantee 7: never call parkLeaseForManualReview/failJobAndUpload
         // for an enrich failure — only fail the job row and mark

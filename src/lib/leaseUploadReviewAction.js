@@ -86,6 +86,13 @@ export function getCurrentGenerationFailureNotice(fileRecord) {
     return { show: false };
   }
 
+  if (String(latestJob?.stage || "") === "enrich") {
+    // Enrichment is a non-blocking evidence/sidecar pass after the core review
+    // payload exists. Do not present an optional enrich resource failure as a
+    // failed extraction attempt on the upload card.
+    return { show: false };
+  }
+
   return {
     show: true,
     message: "The latest extraction attempt failed. The review below reflects a previous, already-completed extraction and is unaffected.",

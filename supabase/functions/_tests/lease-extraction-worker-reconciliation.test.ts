@@ -27,6 +27,8 @@ const {
   readNormalizeActivity,
   resolvePendingNormalizeBeforeRun,
   selectWithRetry,
+  isReviewReadyEnrichmentTransportFailure,
+  completeEnrichmentWithWarning,
 } = __test__;
 
 const ORG_ID = "org-1";
@@ -114,7 +116,13 @@ function makeMockSupabase({ rows, selectQueue = {}, alwaysErrorTables = [], upda
     return builder;
   }
 
-  return { from, __rows: rows, __updates: updates };
+  const rpcCalls: Array<{ name: string; args: any }> = [];
+  async function rpc(name: string, args: any) {
+    rpcCalls.push({ name, args });
+    return { data: null, error: null };
+  }
+
+  return { from, rpc, __rows: rows, __updates: updates, __rpcCalls: rpcCalls };
 }
 
 function baseUploadedFilesRow(overrides: Record<string, any> = {}) {
@@ -822,5 +830,55 @@ Deno.test({
       supabaseAdmin.__rows.uploaded_files.normalized_output.metadata.extractionDebug.openai_fact_ledger,
       priorDiagnostics,
     );
+  },
+});
+
+Deno.test({
+  name: "enrich transport/resource failures are classified as non-blocking for review-ready payloads",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn() {
+    assertEquals(isReviewReadyEnrichmentTransportFailure("DOWNSTREAM_FUNCTION_FAILED", "Function failed due to not having enough compute resources", 546), true);
+    assertEquals(isReviewReadyEnrichmentTransportFailure("STAGE_TIMEOUT", "normalize-pdf-output timed out after 130s", 504), true);
+    assertEquals(isReviewReadyEnrichmentTransportFailure("INVALID_STATUS_FOR_ENRICH", "bad status", 422), false);
+  },
+});
+
+Deno.test({
+  name: "completeEnrichmentWithWarning completes the enrich job and preserves review payload values",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  async fn() {
+    const job = { id: "job-enrich-1", generation_id: "gen-1", metadata: { existing: true } };
+    const supabaseAdmin = makeMockSupabase({
+      rows: {
+        uploaded_files: {
+          id: FILE_ID,
+          org_id: ORG_ID,
+          active_generation_id: "gen-1",
+          ui_review_payload: {
+            enrichment_status: "running",
+            records: [{ fields: { tenant_name: { value: "Tenant Co" } } }],
+          },
+        },
+        pipeline_jobs: { ...job, status: "running" },
+      },
+    });
+
+    await completeEnrichmentWithWarning(
+      supabaseAdmin,
+      job,
+      FILE_ID,
+      ORG_ID,
+      "DOWNSTREAM_FUNCTION_FAILED",
+      "Function failed due to not having enough compute resources",
+      546,
+    );
+
+    assertEquals(supabaseAdmin.__rows.pipeline_jobs.status, "completed");
+    assertEquals(supabaseAdmin.__rows.pipeline_jobs.metadata.enrich_completed_with_warning, true);
+    assertEquals(supabaseAdmin.__rows.uploaded_files.ui_review_payload.enrichment_status, "completed_with_warnings");
+    assertEquals(supabaseAdmin.__rows.uploaded_files.ui_review_payload.records[0].fields.tenant_name.value, "Tenant Co");
+    assertEquals(supabaseAdmin.__rpcCalls.at(-1)?.name, "finalize_lease_extraction_for_review");
   },
 });
