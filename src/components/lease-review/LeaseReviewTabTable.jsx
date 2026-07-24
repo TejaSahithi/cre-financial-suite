@@ -27,21 +27,11 @@ const STATUS_META = {
   rejected: { label: "Rejected", className: "bg-red-50 text-red-700 border-red-100" },
   approved: { label: "Approved", className: "bg-emerald-50 text-emerald-700 border-emerald-100" },
   pending: { label: "Pending", className: "bg-slate-100 text-slate-700 border-slate-200" },
-  // Release 1: distinct badges for states computeFieldStatus() (in
-  // leaseReviewFieldNormalizer.js) previously collapsed into a flat
-  // "missing" before a reviewer ever saw the row.
   not_found: { label: "Not Stated", className: "bg-slate-100 text-slate-600 border-slate-200" },
   not_applicable: { label: "N/A", className: "bg-slate-50 text-slate-500 border-slate-200" },
-  // Pre-existing gap: computeFieldStatus() could already return this, but
-  // with no matching entry here it silently fell back to the generic
-  // "Pending" badge (see the `|| STATUS_META.pending` fallback below).
   manually_edited: { label: "Edited", className: "bg-blue-50 text-blue-700 border-blue-100" },
 };
 
-// Phase 40: "how did this value come to exist" â€” distinct from STATUS_META
-// ("is this row usable right now"). Values are resolved by
-// resolveLeaseReviewExtractionMode() (leaseReviewFieldNormalizer.js), never
-// guessed here â€” this map is presentation-only.
 const EXTRACTION_MODE_META = {
   explicit: { label: "Explicit", className: "bg-emerald-50 text-emerald-700 border-emerald-100" },
   normalized: { label: "Normalized", className: "bg-blue-50 text-blue-700 border-blue-100" },
@@ -57,29 +47,56 @@ function cleanDisplayText(value) {
   return cleaned || String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
-export function formatValue(value) {
+export function formatValue(value, row = null) {
   if (value === null || value === undefined || value === "") return "-";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (Array.isArray(value)) return value.length ? cleanDisplayText(value.join(", ")) : "-";
   if (typeof value === "object") return "-";
+
+  const dataType = row?.dataType || row?.type;
+  if (dataType === "currency" || dataType === "money") {
+    const num = typeof value === "number" ? value : Number(String(value).replace(/[$,\s]/g, ""));
+    if (!Number.isNaN(num) && num !== null && num !== undefined && String(value).trim() !== "") {
+      return "$" + num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+  }
+
+  if (dataType === "percent") {
+    const num = typeof value === "number" ? value : Number(String(value).replace(/[%\s]/g, ""));
+    if (!Number.isNaN(num) && num !== null && num !== undefined && String(value).trim() !== "") {
+      return num + "%";
+    }
+  }
+
   return cleanDisplayText(value) || "-";
 }
 
-export function valuePreview(value) {
-  const formatted = formatValue(value);
+export function valuePreview(value, row = null) {
+  const formatted = formatValue(value, row);
   if (formatted === "-") return formatted;
   return formatted.length > 160 ? `${formatted.slice(0, 159).trimEnd()}...` : formatted;
+}
+
+function simpleStripMarkup(value) {
+  return String(value ?? "")
+    .replace(/<\/?[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function sourcePreview(text) {
+  const cleaned = cleanSourceEvidenceText(text, { truncate: false });
+  if (cleaned) {
+    return cleaned.length > 240 ? `${cleaned.slice(0, 239).trimEnd()}...` : cleaned;
+  }
+  const fallback = simpleStripMarkup(text);
+  if (!fallback || fallback === "-" || fallback === "null") return "-";
+  return fallback.length > 240 ? `${fallback.slice(0, 239).trimEnd()}...` : fallback;
 }
 
 function normalizeConfidence(value) {
   if (typeof value !== "number" || Number.isNaN(value)) return null;
   return Math.round(value <= 1 ? value * 100 : value);
-}
-
-export function sourcePreview(text) {
-  const cleaned = cleanSourceEvidenceText(text, { truncate: false });
-  if (!cleaned) return "-";
-  return cleaned.length > 240 ? `${cleaned.slice(0, 239).trimEnd()}...` : cleaned;
 }
 
 function rowSearchText(row) {
@@ -212,9 +229,9 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
               const fKey = row.key || row.fieldKey;
               const reviewField = reviewFields?.[fKey] ?? null;
               const rawRowValue = row.value ?? row.normalized_value ?? row.normalizedValue;
-              const fullRowValue = formatValue(rawRowValue);
-              const rowValue = valuePreview(rawRowValue);
-              const reviewValue = reviewField ? formatValue(reviewField.displayValue ?? reviewField.value) : "-";
+              const fullRowValue = formatValue(rawRowValue, row);
+              const rowValue = valuePreview(rawRowValue, row); // valuePreview(rawRowValue)
+              const reviewValue = reviewField ? formatValue(reviewField.displayValue ?? reviewField.value, row) : "-";
               const isMismatch = reviewField && fullRowValue !== "-" && reviewValue !== "-" && fullRowValue.trim().toLowerCase() !== reviewValue.trim().toLowerCase();
 
               return (
