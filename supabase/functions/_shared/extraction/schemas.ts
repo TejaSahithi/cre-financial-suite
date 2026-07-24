@@ -386,9 +386,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
   amended_base_rent_for_additional_year: {
     type: "number",
     min: 0,
-    labels: ["amended base rent", "additional year base rent", "base rent for additional year", "extended term rent"],
-    tableHeaders: ["amended_base_rent", "additional year base rent", "extended term rent"],
-    patterns: [/(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+year|additional\s+year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i],
+    labels: ["amended base rent", "additional year base rent", "additional one year base rent", "base rent for additional year", "base rent for additional one year", "extended term rent"],
+    tableHeaders: ["amended_base_rent", "additional year base rent", "additional one year base rent", "extended term rent"],
+    patterns: [/(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+(?:one\s+)?year|additional\s+(?:one\s+)?year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i],
     description: "Explicit base rent stated for an amendment/extension period. Do not calculate monthly rent from it.",
   },
   all_other_terms_remain_same: {
@@ -485,11 +485,11 @@ export const LEASE_SCHEMA: ModuleSchema = {
   annual_rent: {
     type: "number",
     min: 1,   // same reason as monthly_rent — reject $0 annualized rows from free-rent periods
-    labels: ["annual rent", "yearly rent", "annual base rent", "base annual rent", "rent per year", "base rent additional year", "additional year base rent"],
+    labels: ["annual rent", "yearly rent", "annual base rent", "base annual rent", "rent per year", "base rent additional year", "base rent additional one year", "additional year base rent", "additional one year base rent"],
     tableHeaders: ["annual_rent", "annual rent", "yearly rent", "annual base rent"],
     patterns: [
       /(?:annual|yearly|base\s+annual)\s+rent[:\s]+\$?\s*([\d,]+(?:\.\d{2})?)/i,
-      /(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+year|additional\s+year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i,
+      /(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+(?:one\s+)?year|additional\s+(?:one\s+)?year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i,
       /\$\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*year|\/year|\/yr|annually)/i,
     ],
     description:

@@ -134,7 +134,7 @@ import {
 } from "@/components/lease-review/SpecializedTables";
 import ExtractionDebugPanel from "@/components/lease-review/ExtractionDebugPanel";
 import ExtractionTimelinePanel from "@/components/lease-review/ExtractionTimelinePanel";
-import DynamicFindings from "@/components/lease-review/DynamicFindings";
+
 import LeaseReviewTabTable from "@/components/lease-review/LeaseReviewTabTable";
 import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
 import { getFieldPolicyLabel } from "@/lib/leaseReviewCurrentPolicy";
@@ -3077,11 +3077,6 @@ export default function LeaseReview() {
         </Suspense>
       </SemanticPanelBoundary>
 
-      {/* Release 1: read-only, informational, never blocks approval -- see
-          DynamicFindings.jsx header comment. Renders nothing when empty. */}
-      <div className="mb-4">
-        <DynamicFindings dynamicFindings={normalized.dynamicFindings} />
-      </div>
 
       <div className="mb-4">
         <GroundedCopilotPanel scope="lease" />

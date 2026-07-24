@@ -1907,10 +1907,19 @@ async function handleEnrichMode(args: {
   const logger = createLogger(supabaseAdmin, fileId, orgId);
   let stage: StageHandle | null = null;
 
+  // docling_raw and azure_raw_response are always written as identical
+  // duplicates of each other (lease-extraction-worker/index.ts:115-116,
+  // 311-312; parse-document-azure/index.ts:275-276, 680-681 -- every
+  // production write site sets both columns to the same value). Fetching
+  // both here doubles an already-large OCR blob for no reason, on top of
+  // normalized_output + ui_review_payload (each can be 1-3 MB -- see the
+  // trimmed-SELECT comment at the other selectUploadedFileWithV3Fallback
+  // call below) -- a combination that has previously pushed this function
+  // past its memory ceiling (546, "not enough compute resources").
   const { data: fileRecord, error: fetchError } = await selectUploadedFileWithV3Fallback(
     supabaseAdmin,
     "id, org_id, file_name, module_type, status, review_required, document_subtype, " +
-      "extraction_method, docling_raw, azure_raw_response, normalized_output, ui_review_payload, active_generation_id",
+      "extraction_method, docling_raw, normalized_output, ui_review_payload, active_generation_id",
     fileId,
     orgId,
   );
@@ -1921,7 +1930,6 @@ async function handleEnrichMode(args: {
       404,
     );
   }
-  fileRecord.docling_raw = fileRecord.azure_raw_response ?? fileRecord.docling_raw ?? null;
 
   // P0.3: generation fencing. This job may have been superseded by a newer
   // explicit re-extraction generation while it was queued/running — a stale
@@ -2387,10 +2395,13 @@ Deno.serve(async (req: Request) => {
     // SELECT * would also load ui_review_payload, normalized_output, parsed_data,
     // and reviewed_output from previous runs — each can be 1–3 MB — pushing the
     // Edge Function over the memory limit (546) before extraction even starts.
+    // docling_raw and azure_raw_response are always written as identical
+    // duplicates (see the same note on the enrich-mode select above) --
+    // fetching only one halves this blob's transfer/memory cost.
     const { data: fileRecord, error: fetchError } = await selectUploadedFileWithV3Fallback(
       supabaseAdmin,
       "id, org_id, file_name, file_url, file_size, mime_type, module_type, " +
-        "status, review_required, document_subtype, extraction_method, docling_raw, azure_raw_response",
+        "status, review_required, document_subtype, extraction_method, docling_raw",
       file_id,
       orgId,
     );
@@ -2405,7 +2416,7 @@ Deno.serve(async (req: Request) => {
         404,
       );
     }
-    fileRecord.docling_raw = fileRecord.azure_raw_response ?? fileRecord.docling_raw ?? null;
+    fileRecord.docling_raw = fileRecord.docling_raw ?? null;
     const logger = createLogger(supabaseAdmin, file_id, orgId);
 
     let finalPipelineJobId = pipeline_job_id || job_id;

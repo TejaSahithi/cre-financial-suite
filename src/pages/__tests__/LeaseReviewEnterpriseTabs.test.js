@@ -12,4 +12,10 @@ describe("LeaseReview normalized tab wiring", () => {
     expect(definitionIndex).toBeGreaterThan(-1);
     expect(firstUsageIndex).toBeGreaterThan(definitionIndex);
   });
+
+  it("does not render a duplicate top-level Dynamic Findings panel above business tabs", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/pages/LeaseReview.jsx"), "utf8");
+    expect(source).not.toContain("components/lease-review/DynamicFindings");
+    expect(source).not.toContain("<DynamicFindings");
+  });
 });

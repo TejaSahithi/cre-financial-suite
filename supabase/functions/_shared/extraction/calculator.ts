@@ -23,6 +23,10 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+function nearlyEqual(a: number, b: number, tolerance = 0.01): boolean {
+  return Math.abs(a - b) <= tolerance;
+}
+
 /** Safely get a number from a row field */
 function num(row: Row, field: string): number | null {
   const v = row[field];
@@ -65,6 +69,38 @@ function computeLeaseDerived(row: Row): void {
   let rentPerSf = num(row, "rent_per_sf");
   const startDate = dateStr(row, "start_date");
   const endDate = dateStr(row, "end_date");
+  const amendedAdditionalYearRent = num(row, "amended_base_rent_for_additional_year");
+
+  if (
+    amendedAdditionalYearRent !== null &&
+    amendedAdditionalYearRent > 0 &&
+    monthlyRent !== null &&
+    nearlyEqual(monthlyRent, amendedAdditionalYearRent) &&
+    (annualRent === null || nearlyEqual(annualRent, monthlyRent * 12))
+  ) {
+    const derivedMonthly = round2(amendedAdditionalYearRent / 12);
+    setDerived(
+      row,
+      "annual_rent",
+      amendedAdditionalYearRent,
+      `amended_base_rent_for_additional_year(${amendedAdditionalYearRent}) treated as annual rent for the additional year`,
+      ["amended_base_rent_for_additional_year"],
+    );
+    setDerived(
+      row,
+      "monthly_rent",
+      derivedMonthly,
+      `amended_base_rent_for_additional_year(${amendedAdditionalYearRent}) / 12`,
+      ["amended_base_rent_for_additional_year"],
+    );
+    const needsReview = (row._derivation_needs_review ?? {}) as Record<string, boolean>;
+    needsReview.monthly_rent = true;
+    needsReview.annual_rent = true;
+    row._derivation_needs_review = needsReview;
+    monthlyRent = derivedMonthly;
+    annualRent = amendedAdditionalYearRent;
+  }
+
 
   // Reconcile conflicts if monthly_rent was extracted as a PSF value (suspiciously small)
   if (monthlyRent !== null && monthlyRent < 300 && sqft !== null && sqft > 0) {

@@ -27,6 +27,10 @@ describe("leaseFieldContract", () => {
     expect(resolveCanonicalFieldKey("totally_made_up_key")).toBe("totally_made_up_key");
   });
 
+  it("effective_date resolves to assignment_effective_date, not lease_date", () => {
+    expect(resolveCanonicalFieldKey("effective_date")).toBe("assignment_effective_date");
+  });
+
   it("does not conflate alternateFieldKeys with aliases", () => {
     // start_date and commencement_date are two distinct, independently
     // extracted LEASE_SCHEMA fields (OR-alternates for core readiness),

@@ -207,13 +207,13 @@ export const CLAUSE_DEFINITIONS = [
 ];
 
 const FIELD_SPECS = [
-  { key: "lease_date", group: "lease_header", aliases: ["lease_date", "effective_date", "date_of_lease"], patterns: [/\b(?:dated|lease date|effective date)\b[^\n]{0,30}?([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i, /\bentered\s+into\s+as\s+of\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})/i] },
+  { key: "lease_date", group: "lease_header", aliases: ["lease_date", "date_of_lease"], patterns: [/\b(?:lease date)\b[^\n]{0,30}?([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i, /\bentered\s+into\s+as\s+of\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})/i] },
   { key: "landlord_name", group: "lease_header", aliases: ["landlord_name", "landlord", "lessor", "owner_landlord", "owner_name"], patterns: [/\bLANDLORD[:\s-]+([A-Z0-9][^\n]{2,160}?)(?=\s+(?:By|TENANT|LESSEE|Address|whose|having)|\s*\n|$)/, /\bLessor[:\s-]+([A-Z0-9][^\n]{2,160})/, /\bbetween\s+([A-Z0-9][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP|Trust|Holdings|Partners?))\s*\(['""]?[Ll]andlord['""]?\)/i] },
   { key: "landlord_address", group: "lease_header", aliases: ["landlord_address", "landlord_notice_address", "lessor_address"], patterns: [/\blandlord(?:'s)?\s+address\b[:\s-]+([^\n]{6,180})/i, /\baddress\s+of\s+landlord\b[:\s-]+([^\n]{6,180})/i] },
   { key: "tenant_name", group: "lease_header", aliases: ["tenant_name", "tenant", "lessee", "occupant"], patterns: [/\bTENANT[:\s-]+([A-Z][^\n]{2,160}?)(?=\s+(?:By|LANDLORD|LESSOR|Address|whose|having)|\s*\n|$)/, /\bLessee[:\s-]+([A-Z][^\n]{2,160})/] },
   { key: "assignor_name", group: "assignment_amendment", aliases: ["assignor_name", "assignor", "original_tenant", "transferor"], patterns: [/\b(?:assignor|original tenant|transferor)\b[:\s-]+([^\n]{2,160})/i] },
   { key: "assignee_name", group: "assignment_amendment", aliases: ["assignee_name", "assignee", "new_tenant", "transferee"], patterns: [/\b(?:assignee|new tenant|transferee)\b[:\s-]+([^\n]{2,160})/i] },
-  { key: "assignment_effective_date", group: "assignment_amendment", aliases: ["assignment_effective_date", "assignment_date"], patterns: [/\b(?:assignment effective date|assignment date|effective date)\b[:\s-]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
+  { key: "assignment_effective_date", group: "assignment_amendment", aliases: ["assignment_effective_date", "assignment_date", "effective_date"], patterns: [/\b(?:assignment effective date|assignment date|effective date)\b[:\s-]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i, /\bentered\s+into\s+as\s+of\s+(?:the\s+)?(\d{1,2}(?:st|nd|rd|th)?\s+day\s+of\s+[A-Za-z]+,?\s+\d{4})\b[^\n]{0,120}\bEffective\s+Date\b/i] },
   { key: "landlord_consent", group: "assignment_amendment", aliases: ["landlord_consent"], patterns: [/\b(landlord[^.\n]{0,120}(?:consents?|approves?)[^.\n]{0,120}(?:assignment|transfer)|consent\s+to\s+assignment[^.\n]{0,160}(?:granted|approved|given))/i] },
   // Distinct from landlord_consent (boolean — was consent actually GIVEN for
   // this specific assignment) — this is the lease's general rule about
@@ -258,8 +258,8 @@ const FIELD_SPECS = [
   { key: "renewal_options", group: "lease_term", aliases: ["renewal_options", "renewal_option", "renewal_terms", "option_to_renew"], clauseType: "renewal_option", patterns: [/\b(?:two|three|one|four|five|\d+)\s*\(?\d*\)?\s*additional\s+(?:five|three|two|one|\d+)\s*(?:\(\s*\d+\s*\))?\s*-?\s*year\s+period/i, /\b(?:option\s+to\s+(?:renew|lease|extend)|renewal\s+option)\b[^\n.]{0,120}/i] },
   { key: "holdover_rent_multiplier", group: "lease_term", aliases: ["holdover_rent_multiplier"], clauseType: "holdover", patterns: [/\bholdover\b[^\n]{0,80}?(\d(?:\.\d+)?)\s*x/i, /\bholdover\b[^\n]{0,80}?(\d{2,3})\s*%/i] },
   { key: "base_rent_monthly", group: "rent_terms", aliases: ["base_rent_monthly", "monthly_rent", "base_rent", "monthly_base_rent", "current_monthly_rent"], patterns: [/\b(?:base rent|monthly rent|rent)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)\s*(?:per month|\/month|\/mo|monthly)/i] },
-  { key: "annual_rent", group: "rent_terms", aliases: ["annual_rent"], patterns: [/\b(?:annual|yearly|base\s+annual)\s+rent[:\s]+\$?\s*([\d,]+(?:\.\d{2})?)/i, /\b(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+year|additional\s+year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)\b[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i, /\$\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*year|\/year|\/yr|annually)/i] },
-  { key: "amended_base_rent_for_additional_year", group: "assignment_amendment", aliases: ["amended_base_rent_for_additional_year"], patterns: [/\b(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+year|additional\s+year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)\b[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
+  { key: "annual_rent", group: "rent_terms", aliases: ["annual_rent"], patterns: [/\b(?:annual|yearly|base\s+annual)\s+rent[:\s]+\$?\s*([\d,]+(?:\.\d{2})?)/i, /\b(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+(?:one\s+)?year|additional\s+(?:one\s+)?year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)\b[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i, /\$\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*year|\/year|\/yr|annually)/i] },
+  { key: "amended_base_rent_for_additional_year", group: "assignment_amendment", aliases: ["amended_base_rent_for_additional_year"], patterns: [/\b(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+(?:one\s+)?year|additional\s+(?:one\s+)?year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)\b[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
   { key: "rent_due_day", group: "rent_terms", aliases: ["rent_due_day"], patterns: [/\brent\s+.*due[^\n]{0,20}?day\s+(\d{1,2})/i, /\bon\s+the\s+(\d{1,2})(?:st|nd|rd|th)?\s+day\s+of\s+each\s+month/i] },
   { key: "rent_frequency", group: "rent_terms", aliases: ["rent_frequency"], patterns: [/\b(monthly|quarterly|annually|annual)\b/i] },
   { key: "rent_payment_timing", group: "rent_terms", aliases: ["rent_payment_timing"], patterns: [/\b(monthly\s+in\s+advance|payable\s+monthly\s+in\s+advance|in\s+advance)\b/i] },
@@ -561,7 +561,11 @@ function toIsoDate(value: unknown): string | null {
   if (isBlank(value)) return null;
   const text = cleanText(value);
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
-  const parsed = new Date(text);
+  const ordinalDayOfMonth = text.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+day\s+of\s+([A-Za-z]+),?\s+(\d{4})\b/i);
+  const normalizedText = ordinalDayOfMonth
+    ? `${ordinalDayOfMonth[2]} ${ordinalDayOfMonth[1]}, ${ordinalDayOfMonth[3]}`
+    : text;
+  const parsed = new Date(normalizedText);
   if (Number.isNaN(parsed.getTime())) return null;
   return parsed.toISOString().slice(0, 10);
 }
@@ -1437,6 +1441,13 @@ function fieldValueLooksInvalid(fieldKey: string, value: unknown, sourceText: st
     if (fieldKey === "base_rent_monthly" && !/\b(?:rent|monthly|per\s+month|base\s+rent)\b/.test(combined)) {
       return "monthly_rent_without_rent_context";
     }
+    if (
+      fieldKey === "base_rent_monthly" &&
+      /\b(?:additional\s+(?:one\s+)?year|additional\s+(?:one\s+)?year|extended\s+term|amended\s+base\s+rent)\b/.test(combined) &&
+      !/\b(?:monthly|per\s+month|\/month|\/mo)\b/.test(combined)
+    ) {
+      return "monthly_rent_is_additional_year_amount";
+    }
     if (fieldKey === "security_deposit_amount") {
       if (!/\bsecurity\s+deposit\b/.test(combined)) {
         return "security_deposit_without_deposit_context";
@@ -1902,6 +1913,7 @@ const FIXED_REVIEW_FIELD_KEYS = new Set([
   "premises_use",
   "permitted_use",
   "lease_date",
+  "assignment_effective_date",
   "commencement_date",
   "rent_commencement_date",
   "expiration_date",
@@ -1911,6 +1923,7 @@ const FIXED_REVIEW_FIELD_KEYS = new Set([
   "monthly_rent",
   "base_rent_monthly",
   "annual_rent",
+  "amended_base_rent_for_additional_year",
   "rent_frequency",
   "billing_frequency",
   "escalation_type",
@@ -1983,20 +1996,20 @@ function displayTabForItem(itemType: unknown, businessArea: unknown, fieldKey?: 
 }
 
 const UNIVERSAL_ITEM_DEFS = [
-  { item_type: "lease_date", business_area: "dates_term", field_key: "lease_date", maps: true, patterns: [/\b(?:lease\s+date|dated)\b[^\n]{0,40}?([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i] },
-  { item_type: "original_lease_date", business_area: "dates_term", field_key: "lease_date", maps: true, patterns: [/\bLease\s+dated\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i] },
+  { item_type: "lease_date", business_area: "dates_term", field_key: "lease_date", maps: true, patterns: [/\b(?:lease\s+date)\b[^\n]{0,40}?([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i] },
+  { item_type: "original_lease_date", business_area: "dates_term", field_key: "original_lease_date", maps: false, patterns: [/\bLease\s+dated\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i] },
   { item_type: "premises_square_footage", business_area: "parties_premises", field_key: "rentable_area_sqft", maps: true, patterns: [/\bapproximately\s+([\d,]+)\s+rentable\s+square\s+feet/i, /\b(?:premises|leased premises|demised premises)[^.\n]{0,120}?([\d,]+)\s+rentable\s+square\s+feet/i, /\b([\d,]+)\s+rentable\s+square\s+feet[^.\n]{0,120}?(?:premises|leased premises|demised premises)/i] },
   { item_type: "premises_address", business_area: "parties_premises", field_key: "property_address", maps: true, patterns: [/\bfor\s+the\s+lease\s+of\s+approximately\s+[\d,]+\s+rentable\s+square\s+feet\s+of\s+space\s+\(?(?:the\s+['"]?premises['"]?)\)?\s+located\s+at\s+([^\n.]{10,220})/i, /\bpremises\s+located\s+at\s+([0-9]{2,6}[^.\n]{8,220})/i, /\b(?:premises|leased premises|demised premises)[^.\n]{0,120}?(?:located|address|known)\s+(?:at|as)?\s*([0-9]{2,6}[^.\n]{8,220})/i] },
   { item_type: "landlord", business_area: "parties_premises", field_key: "landlord_name", maps: true, patterns: [/\b(?:landlord|lessor)\b[:\s-]+([A-Z][^\n]{2,140}?)(?=\s+(?:and|,?\s*a\s|By:|Assignor|Assignee|Tenant|Lessee)|\n|$)/i] },
   { item_type: "assignor", business_area: "assignment_amendment", field_key: "assignor_name", maps: true, patterns: [/\b(?:assignor|original tenant|transferor)\b[:\s-]+([^\n]{2,160})/i] },
   { item_type: "assignee_current_tenant", business_area: "assignment_amendment", field_key: "tenant_name", maps: true, patterns: [/\b(?:assignee|new tenant|transferee)\s*[:\-]\s*([A-Z][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP|Trust|Holdings|Partners?))/i] },
   { item_type: "assignee_name", business_area: "assignment_amendment", field_key: "assignee_name", maps: true, patterns: [/\b(?:assignee|new tenant|transferee)\s*[:\-]\s*([A-Z][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP|Trust|Holdings|Partners?))/i] },
-  { item_type: "assignment_effective_date", business_area: "assignment_amendment", field_key: "assignment_effective_date", maps: true, patterns: [/\b(?:assignment effective date|assignment date|effective date)\b[:\s-]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
+  { item_type: "assignment_effective_date", business_area: "assignment_amendment", field_key: "assignment_effective_date", maps: true, patterns: [/\b(?:assignment effective date|assignment date|effective date)\b[:\s-]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i, /\bentered\s+into\s+as\s+of\s+(?:the\s+)?(\d{1,2}(?:st|nd|rd|th)?\s+day\s+of\s+[A-Za-z]+,?\s+\d{4})\b[^\n]{0,120}\bEffective\s+Date\b/i] },
   { item_type: "assignment_consideration", business_area: "assignment_amendment", field_key: "assignment_consideration", maps: false, patterns: [/\b(?:assignment\s+consideration|consideration)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
   { item_type: "assumption_of_obligations", business_area: "assignment_amendment", field_key: "assumption_scope", maps: true, booleanValue: "yes", patterns: [/\b(assignee[^.\n]{0,220}\b(?:assumes?|agrees\s+to\s+perform|shall\s+perform)[^.\n]{0,220}(?:obligations|liabilities|lease))/i] },
   { item_type: "landlord_consent", business_area: "assignment_amendment", field_key: "landlord_consent", maps: true, booleanValue: "yes", patterns: [/\b(landlord[^.\n]{0,120}(?:consents?|approves?)[^.\n]{0,120}(?:assignment|transfer)|consent\s+to\s+assignment[^.\n]{0,160}(?:granted|approved|given))/i] },
   { item_type: "amended_expiration_date", business_area: "dates_term", field_key: "expiration_date", maps: true, patterns: [/\binitial\s+Term\s+shall\s+now\s+expire\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i, /\b(?:amended\s+expiration\s+date|expiration\s+date\s+is\s+amended\s+to|term\s+is\s+extended\s+to|extended\s+through|expiring|expires?\s+on)\b[:\s-]*([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
-  { item_type: "amended_base_rent_for_additional_year", business_area: "rent_charges", field_key: "annual_rent", maps: true, patterns: [/\b(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+year|additional\s+year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)\b[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
+  { item_type: "amended_base_rent_for_additional_year", business_area: "rent_charges", field_key: "amended_base_rent_for_additional_year", maps: true, patterns: [/\b(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+(?:one\s+)?year|additional\s+(?:one\s+)?year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)\b[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
   { item_type: "assignee_notice_address", business_area: "assignment_amendment", field_key: "assignee_notice_address", maps: true, patterns: [/\b(?:assignee(?:'s)?\s+notice\s+address|address\s+for\s+notices\s+to\s+assignee|assignee\s+address)\b[:\s-]+([^\n]{8,220})/i] },
   { item_type: "all_other_terms_remain_same", business_area: "assignment_amendment", field_key: "all_other_terms_remain_same", maps: false, booleanValue: "yes", patterns: [/\b(all\s+other\s+terms[^.\n]{0,160}(?:remain|shall\s+remain|continue)[^.\n]{0,120}(?:unchanged|same|full\s+force\s+and\s+effect))/i] },
 ];
@@ -2019,7 +2032,7 @@ const AMENDMENT_PROFILE_SIGNALS = [
   { key: "modification", pattern: /\bmodification\b|\bmodified\b/i },
   { key: "initial_term_now_expire", pattern: /\binitial\s+term\s+shall\s+now\s+expire\b/i },
   { key: "term_extension", pattern: /\b(?:term\s+is\s+extended|extended\s+term|extension\s+term|extended\s+through)\b/i },
-  { key: "amended_base_rent", pattern: /\b(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+year|amended\s+base\s+rent|additional\s+year\s+base\s+rent)\b/i },
+  { key: "amended_base_rent", pattern: /\b(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+(?:one\s+)?year|amended\s+base\s+rent|additional\s+(?:one\s+)?year\s+base\s+rent)\b/i },
   { key: "all_other_terms_remain_unchanged", pattern: /\ball\s+other\s+terms[^.\n]{0,180}(?:remain|continue|shall\s+remain)[^.\n]{0,120}(?:unchanged|same|full\s+force\s+and\s+effect)\b/i },
 ];
 
@@ -3292,8 +3305,8 @@ function countClauseBackedExpenseTerms(fieldMap: Record<string, LeaseWorkflowFie
 function normalizeWorkflowFieldValue(fieldKey: string, value: unknown) {
   if (isBlank(value)) return null;
   if (/(date)$/.test(fieldKey)) return toIsoDate(value) || cleanText(value);
-  if (/(amount|percent|multiplier|sqft|rsf|share|day)$/.test(fieldKey) || ["rentable_area_sqft", "building_rsf", "tenant_rsf", "base_rent_monthly", "annual_rent", "monthly_rent", "base_rent"].includes(fieldKey)) {
-    const numeric = ["base_rent_monthly", "monthly_rent", "base_rent", "annual_rent", "security_deposit_amount", "fixed_cam_amount", "general_liability_min"].includes(fieldKey)
+  if (/(amount|percent|multiplier|sqft|rsf|share|day)$/.test(fieldKey) || ["rentable_area_sqft", "building_rsf", "tenant_rsf", "base_rent_monthly", "annual_rent", "monthly_rent", "base_rent", "amended_base_rent_for_additional_year"].includes(fieldKey)) {
+    const numeric = ["base_rent_monthly", "monthly_rent", "base_rent", "annual_rent", "amended_base_rent_for_additional_year", "security_deposit_amount", "fixed_cam_amount", "general_liability_min"].includes(fieldKey)
       ? extractFirstMoneyValue(value)
       : asNumber(value);
     return numeric != null ? numeric : cleanText(value);

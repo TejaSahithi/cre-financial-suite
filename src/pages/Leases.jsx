@@ -696,7 +696,7 @@ export default function Leases() {
         open={!!deleteTarget}
         onOpenChange={(open) => !open && setDeleteTarget(null)}
         title={`Delete lease "${deleteTarget?.tenant_name || ""}"?`}
-        description="This will permanently remove the selected lease record."
+        description="This permanently removes the lease and related extraction, review, rent, expense, CAM, budget, document/package, and source upload data. Audit logs are retained."
         loading={deleteMutation.isPending}
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
       />
@@ -705,7 +705,7 @@ export default function Leases() {
         open={showBulkDelete}
         onOpenChange={setShowBulkDelete}
         title={`Delete ${selectedLeaseIds.length} selected lease${selectedLeaseIds.length === 1 ? "" : "s"}?`}
-        description="This will permanently remove all selected lease records."
+        description="This permanently removes each lease and its related extraction, review, rent, expense, CAM, budget, document/package, and source upload data. Audit logs are retained."
         confirmLabel="Delete Selected"
         loading={bulkDeleteMutation.isPending}
         onConfirm={() => bulkDeleteMutation.mutate(selectedLeaseIds)}

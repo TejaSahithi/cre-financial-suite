@@ -78,7 +78,7 @@ export interface FieldContractEntry {
 
 export const LEASE_FIELD_CONTRACT: FieldContractEntry[] = [
   // ── document_identity ──────────────────────────────────────────────────
-  { canonicalKey: "lease_date", aliases: ["effective_date", "date_of_lease"], group: "document_identity", requiredForApproval: false, requiredForCam: false, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: true, inLeaseSchema: true },
+  { canonicalKey: "lease_date", aliases: ["date_of_lease"], group: "document_identity", requiredForApproval: false, requiredForCam: false, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: true, inLeaseSchema: true },
   { canonicalKey: "lease_type", aliases: [], group: "document_identity", requiredForApproval: false, requiredForCam: true, requiredForBudget: true, requiredByDocumentProfile: [], evidenceRequired: true, inLeaseSchema: true },
   { canonicalKey: "status", aliases: [], group: "document_identity", requiredForApproval: false, requiredForCam: false, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: false, inLeaseSchema: true },
   { canonicalKey: "notes", aliases: [], group: "document_identity", requiredForApproval: false, requiredForCam: false, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: false, inLeaseSchema: true },
@@ -106,7 +106,7 @@ export const LEASE_FIELD_CONTRACT: FieldContractEntry[] = [
   { canonicalKey: "expiration_date", aliases: [], group: "term_dates", requiredForApproval: true, requiredForCam: true, requiredForBudget: true, requiredByDocumentProfile: ["full_lease"], evidenceRequired: true, inLeaseSchema: true, alternateFieldKeys: ["end_date"] },
   { canonicalKey: "rent_commencement_date", aliases: [], group: "term_dates", requiredForApproval: false, requiredForCam: false, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: true, inLeaseSchema: true },
   { canonicalKey: "lease_term_months", aliases: [], group: "term_dates", requiredForApproval: false, requiredForCam: false, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: false, inLeaseSchema: true },
-  { canonicalKey: "assignment_effective_date", aliases: ["assignment_date"], group: "term_dates", requiredForApproval: false, requiredForCam: false, requiredForBudget: false, requiredByDocumentProfile: ["assignment", "assignment_amendment"], evidenceRequired: true, inLeaseSchema: true },
+  { canonicalKey: "assignment_effective_date", aliases: ["assignment_date", "effective_date"], group: "term_dates", requiredForApproval: false, requiredForCam: false, requiredForBudget: false, requiredByDocumentProfile: ["assignment", "assignment_amendment"], evidenceRequired: true, inLeaseSchema: true },
 
   // ── rent_charges ────────────────────────────────────────────────────────
   { canonicalKey: "monthly_rent", aliases: ["base_rent_monthly", "base_rent"], group: "rent_charges", requiredForApproval: true, requiredForCam: false, requiredForBudget: true, requiredByDocumentProfile: [], evidenceRequired: true, inLeaseSchema: true, alternateFieldKeys: ["annual_rent"] },

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeDynamicFindings } from "@/lib/leaseReviewFieldNormalizer";
+import { normalizeDynamicFindings, normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
 
 describe("normalizeDynamicFindings", () => {
   it("collects findings from workflow_output.extracted_document_items", () => {
@@ -96,5 +96,34 @@ describe("dynamic row tab routing", () => {
     const rows = normalizeDynamicFindings(lease);
     expect(rows.some((row) => row.label === "Reserved Parking" && row.tabKey === "parties_premises")).toBe(true);
     expect(rows.some((row) => row.fieldKey === "monthly_rent" || row.category === "monthly_rent")).toBe(false);
+  });
+
+  it("places unmapped dynamic findings inside their routed business tabs", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          extracted_document_items: [
+            {
+              item_id: "expense-gap",
+              item_type: "original_lease_required_for_expense_rules",
+              label: "Original Lease Required For Expense Rules",
+              business_area: "expenses_recoveries",
+              value: "yes",
+              source_text: "Original lease required to determine expense recoveries.",
+              maps_to_existing_field: false,
+              creates_dynamic_row: true,
+            },
+          ],
+        },
+      },
+    };
+
+    const normalized = normalizeLeaseReviewData(lease);
+    expect(normalized.dynamicFindings).toHaveLength(1);
+    expect(
+      normalized.tabs.expenses_recoveries.some(
+        (row) => row.rowType === "dynamic" && row.key === "expense-gap",
+      ),
+    ).toBe(true);
   });
 });

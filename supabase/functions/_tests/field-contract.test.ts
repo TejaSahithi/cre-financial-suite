@@ -37,6 +37,10 @@ Deno.test("resolveCanonicalKey: an unknown key is returned unchanged, not thrown
   assertEquals(resolveCanonicalKey("not_a_real_field"), "not_a_real_field");
 });
 
+Deno.test("resolveCanonicalKey: effective_date resolves to assignment_effective_date, not lease_date", () => {
+  assertEquals(resolveCanonicalKey("effective_date"), "assignment_effective_date");
+});
+
 Deno.test("resolveCanonicalKey: start_date and commencement_date are NOT aliases of each other — they are distinct canonical fields (alternateFieldKeys, not aliases)", () => {
   assertEquals(resolveCanonicalKey("commencement_date"), "commencement_date");
   assertEquals(resolveCanonicalKey("start_date"), "start_date");
