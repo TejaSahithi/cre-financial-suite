@@ -92,6 +92,12 @@ const FIXED_FIELD_DYNAMIC_SUPPRESSION_KEYS = new Set([
   "tenant_insurance_required", "general_liability_min", "property_insurance_responsibility", "additional_insureds_required",
 ]);
 
+const CLAUSE_RECORD_ONLY_DYNAMIC_KEYS = new Set([
+  "tax", "taxes", "insurance", "utilities", "utility", "repairs", "maintenance", "repairs_maintenance",
+  "parking", "security", "percentage_rent", "notices", "notice", "condemnation", "signage",
+  "alterations", "compliance_laws", "subordination_estoppel", "use_prohibited", "uses_prohibited",
+]);
+
 function isGenericSummaryPreambleSource(sourceText) {
   const text = String(sourceText || "");
   return /\bsummary of basic lease information\b/i.test(text)
@@ -101,6 +107,12 @@ function isGenericSummaryPreambleSource(sourceText) {
 function shouldSuppressDynamicReviewItem(key, item, value, sourceText, staticKeys) {
   const normalizedKey = key.startsWith("clause_") ? key.slice(7) : key;
   if (item?.possible_canonical_match) return true;
+  if (CLAUSE_RECORD_ONLY_DYNAMIC_KEYS.has(normalizedKey)) {
+    const operativeClauseOnly = key.startsWith("clause_")
+      && (value === null || value === undefined || value === "")
+      && /\b(?:tenant|landlord)\s+(?:shall|must|will|agrees?|is\s+responsible)\b/i.test(String(sourceText || ""));
+    if (!operativeClauseOnly) return true;
+  }
   if (/^(?:default|definition|party_identification|premises_description|lease_term|rent_escalation)$/i.test(normalizedKey)) return true;
   // A dynamic/clause row whose normalized key collides with a static field
   // (or the fixed suppression allowlist) always loses to the static field,

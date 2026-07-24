@@ -629,6 +629,24 @@ export function readFieldValue(lease, key) {
 
 const SOURCE_TEXT_MAX_CHARS = 320;
 
+function isHeadingOnlyEvidenceText(value) {
+  const text = stripSourceMarkup(value);
+  if (!text) return false;
+  if (text.includes(":") || text.includes(";")) return false;
+  if (/\b(?:shall|must|may|will|agrees?|covenants?|represents?|warrants?|located|pay|paid|provide|maintain|repair|insure|assign|sublet|terminate|renew|commence|expire|deposit|due)\b/i.test(text)) {
+    return false;
+  }
+  const hasSectionPrefix = /^\s*(?:section|article|paragraph)?\s*\d{1,3}[A-Z]?\s*[\).:-]/i.test(text);
+  const withoutNumber = text.replace(/^\s*(?:section|article|paragraph)?\s*\d{1,3}[A-Z]?\s*[\).:-]?\s*/i, "").trim();
+  if (!withoutNumber || withoutNumber.length > 80) return false;
+  const words = withoutNumber.replace(/[.]+$/g, "").split(/\s+/).filter(Boolean);
+  if (words.length === 1 && !hasSectionPrefix) return false;
+  if (words.length === 0 || words.length > 8) return false;
+  const titleWords = words.filter((word) => !/^(?:and|or|of|the|a|an|to|for|in|on|with)$/i.test(word));
+  if (!titleWords.every((word) => /^[A-Z0-9]/.test(word))) return false;
+  return /^[A-Z][A-Za-z0-9 &'\/().-]+\.?$/.test(withoutNumber);
+}
+
 function stripSourceMarkup(value) {
   return String(value ?? "")
     .replace(/\[\[\s*PAGE\s+\d+\s*\]\]/gi, " ")
@@ -650,6 +668,8 @@ function stripSourceMarkup(value) {
 export function cleanSourceEvidenceText(value, { truncate = true } = {}) {
   const text = stripSourceMarkup(value);
   if (!text) return null;
+  if (/^(?:consent\w*|waiv\w*|renew\w*|terminat\w*|requir\w*)$/i.test(text)) return text;
+  if (isHeadingOnlyEvidenceText(text)) return null;
   if (/^(llm extracted|extracted|manual_review|manual review|workflow placeholder|not found|unknown|n\/a|na|null|none|missing)$/i.test(text)) return null;
   if (/(^|\b)(derived from|calculated from|reassigned from|workflow placeholder|fallback|internal)(\b|$)/i.test(text)) return null;
   if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(text)) return null;

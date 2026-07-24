@@ -1,6 +1,6 @@
 # Lease Extraction Evaluation Report
 
-Generated: 2026-07-24T19:55:22.166Z
+Generated: 2026-07-24T20:56:29.100Z
 Run mode: scorer_smoke
 Fixtures: 1
 Corpus sufficiency: insufficient_for_level_2_target_gate

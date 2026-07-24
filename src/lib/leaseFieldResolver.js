@@ -499,6 +499,13 @@ function invalidResolvedField(fieldKey, output) {
     if (!/\b(?:\$\s*0|zero|no separate cam|included in (?:base )?rent|full service|gross lease)\b/i.test(String(sourceText))) return true;
   }
 
+  if (["landlord_consent", "landlord_consent_for_transfer", "assignment_provisions"].includes(key)) {
+    const source = String(sourceText || "");
+    if (/\b(?:in\s+the\s+event|if|when)\s+the\s+landlord\s+shall\s+consent\b|\bif\s+landlord\s+consents?\b|\bsubject\s+to\s+landlord'?s\s+consent\b/i.test(source)
+      && /\b(?:shall|must)\s+consent\b/i.test(valueText)) {
+      return true;
+    }
+  }
   if (["annual_rent", "monthly_rent", "base_rent_monthly", "security_deposit_amount"].includes(key)) {
     const source = String(sourceText || "");
     if (valueText && source && !sourceSupportsValue(valueText, source) && !output?.derivationTrace) return true;

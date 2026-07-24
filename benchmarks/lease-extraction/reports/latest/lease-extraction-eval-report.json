@@ -1,6 +1,6 @@
 {
   "schemaVersion": "lease-extraction-eval-report/1.0",
-  "generatedAt": "2026-07-24T19:55:22.166Z",
+  "generatedAt": "2026-07-24T20:56:29.100Z",
   "runMode": "scorer_smoke",
   "selectedFixtureCount": 1,
   "corpusSufficiency": "insufficient_for_level_2_target_gate",

@@ -60,6 +60,35 @@ function normalizeConfidencePercent(score) {
 
 const NO_PROVIDER_FALLBACK_SOURCE = "no_provider_payload_fallback";
 
+const CLAUSE_RECORD_ONLY_DYNAMIC_KEYS = new Set([
+  "tax", "taxes", "insurance", "utilities", "utility", "repairs", "maintenance", "repairs_maintenance",
+  "parking", "security", "percentage_rent", "notices", "notice", "condemnation", "signage",
+  "alterations", "compliance_laws", "subordination_estoppel", "use_prohibited", "uses_prohibited",
+]);
+
+function normalizeDynamicReviewKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function isClauseRecordOnlyDynamicItem(item) {
+  const rawKey = item?.field_key || item?.key || item?.item_type || item?.clause_type || item?.business_area || "";
+  const key = normalizeDynamicReviewKey(rawKey);
+  const strippedKey = key.replace(/^clause_/, "");
+  const sourceName = String(item?.extraction_method || item?.item_id || item?.id || "").toLowerCase();
+  if (sourceName.startsWith("clause:")) return true;
+  if (!CLAUSE_RECORD_ONLY_DYNAMIC_KEYS.has(strippedKey)) return false;
+  const value = item?.normalized_value ?? item?.normalizedValue ?? item?.value ?? item?.raw_value ?? item?.rawValue ?? null;
+  const sourceText = item?.source_text ?? item?.exact_source_text ?? item?.source_clause ?? item?.clause_text ?? "";
+  const operativeClauseOnly = key.startsWith("clause_")
+    && (value === null || value === undefined || value === "")
+    && /\b(?:tenant|landlord)\s+(?:shall|must|will|agrees?|is\s+responsible)\b/i.test(String(sourceText || ""));
+  return !operativeClauseOnly;
+}
+
 function compactText(value) {
   const text = String(value ?? "").replace(/\s+/g, " ").trim();
   return text || null;
@@ -288,6 +317,23 @@ const LEASE_REFERENCE_DATE_PATTERN =
 const SIGNATURE_EXECUTION_CONTEXT_PATTERN =
   /\b(?:in\s+witness\s+whereof|executed[\s\S]{0,20}as\s+of|signed\s+as\s+of|\/s\/|date\s+of\s+signature|signature\s+date)\b/i;
 
+const STRICT_SOURCE_BACKED_VALUE_KEYS = new Set([
+  "tenant_name", "landlord_name", "property_name", "property_address", "suite_number",
+  "permitted_use", "square_footage", "landlord_consent", "landlord_consent_for_transfer",
+  "electric_responsibility",
+  "responsibility_utilities", "responsibility_taxes", "responsibility_insurance",
+  "maintenance_responsibility",
+]);
+
+function shouldBlankUnsupportedStandardValue(canonicalKey, value, evidence, review) {
+  if (!STRICT_SOURCE_BACKED_VALUE_KEYS.has(canonicalKey)) return false;
+  if (!isMeaningfulValue(value)) return false;
+  if (review?.status === REVIEW_STATUSES.EDITED) return false;
+  const quality = resolveSourceTextQuality({ ...(evidence || {}), value });
+  if (quality === SOURCE_TEXT_QUALITIES.INCONSISTENT || quality === SOURCE_TEXT_QUALITIES.MISSING) return true;
+  return !hasValidSourceEvidence({ ...(evidence || {}), value });
+}
+
 export function isSignatureDateSourcedFromLeaseReference(sourceText) {
   if (!sourceText) return false;
   const text = String(sourceText);
@@ -493,6 +539,16 @@ export function normalizeStandardFields(lease, { fieldReviews } = {}) {
       value = null;
     }
 
+    if (!evidenceOverrideReason && shouldBlankUnsupportedStandardValue(canonicalKey, value, evidence, review)) {
+      evidenceOverrideReason =
+        "Extracted value was rejected because the cited source text does not support this field/value. Needs re-extraction or manual review.";
+      value = null;
+      evidence = {
+        ...(evidence || {}),
+        requiresReview: true,
+        reviewReason: evidenceOverrideReason,
+      };
+    }
     const extractionStatus = resolveExtractionStatus(lease, canonicalKey, { value, confidence, evidence });
     let evidenceVerified = invalidValueRejected ? false : hasValidSourceEvidence(evidence);
 
@@ -605,10 +661,12 @@ export function normalizeDynamicFindings(lease) {
   for (const item of merged) {
     if (!item || typeof item !== "object") continue;
     if (item.maps_to_existing_field) continue;
+    if (item.creates_dynamic_row === false) continue;
+    if (isClauseRecordOnlyDynamicItem(item)) continue;
     const candidateKey = item.field_key || item.item_type || item.key;
     const canonicalCandidate = resolveCanonicalFieldKey(candidateKey);
     if (getFieldContract(canonicalCandidate)) continue;
-    const sourceText = item.source_text ?? item.exact_source_text ?? null;
+    const sourceText = cleanDocumentItemSource(item.source_text ?? item.exact_source_text ?? item.source_clause ?? null);
     const dedupeKey = `${item.item_type || item.field_key || ""}|${String(sourceText || item.value || "").toLowerCase().slice(0, 140)}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
@@ -642,7 +700,7 @@ export function normalizeDynamicFindings(lease) {
       extractionMode: EXTRACTION_MODES.UNKNOWN,
       extraction_mode: EXTRACTION_MODES.UNKNOWN,
       mapsToExistingField: Boolean(item.maps_to_existing_field),
-      createsDynamicRow: item.creates_dynamic_row !== false,
+      createsDynamicRow: true,
       defaultVisible: true,
       advanced: false,
     });
@@ -1239,8 +1297,11 @@ function normalizeExpenseRuleShape(rule) {
   const needsReview = (rule?.review_status ?? rule?.row_status ?? "").toLowerCase() === "needs_review"
     || Boolean(rule?.requires_review);
   const recoverable = rule?.recoverable_from_tenant ?? rule?.recoverable_flag ?? rule?.is_recoverable ?? null;
-  const calculationIncomplete = needsReview && recoverable == null;
   const rowValue = rule?.display_value ?? rule?.value ?? rule?.normalized_value ?? rule?.amount ?? null;
+  const fallbackRuleValue = rowValue
+    ?? rule?.normalized_rule
+    ?? rule?.responsible_party
+    ?? (recoverable == null ? null : (recoverable ? "Recoverable from tenant" : "Not recoverable from tenant"));
   return {
     rowType: camRule ? "cam_rule" : "expense_rule",
     typeLabel: camRule ? "CAM Rule" : "Expense Rule",
@@ -1249,9 +1310,9 @@ function normalizeExpenseRuleShape(rule) {
     label: rule?.normalized_rule || rule?.subcategory_name || rule?.category_name || rule?.expense_category || rule?.category || (camRule ? "CAM rule" : "Expense rule"),
     tabKey: camRule ? "cam_rules" : "expenses_recoveries",
     editable: false,
-    value: calculationIncomplete ? "Clause found - calculation needs review" : rowValue,
-    normalizedValue: calculationIncomplete ? "Clause found - calculation needs review" : rowValue,
-    normalized_value: calculationIncomplete ? "Clause found - calculation needs review" : rowValue,
+    value: fallbackRuleValue,
+    normalizedValue: fallbackRuleValue,
+    normalized_value: fallbackRuleValue,
     amount: rule?.amount ?? null,
     basis: rule?.basis ?? null,
     recoverable,

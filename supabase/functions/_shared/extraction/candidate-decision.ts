@@ -77,6 +77,20 @@ function compactText(value: unknown): string {
   return String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+function isHeadingOnlySourceText(value: unknown): boolean {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text || text.includes(":") || text.includes(";")) return false;
+  if (/\b(?:shall|must|may|will|agrees?|covenants?|represents?|warrants?|located|pay|paid|provide|maintain|repair|insure|assign|sublet|terminate|renew|commence|expire|deposit|due)\b/i.test(text)) return false;
+  const hasSectionPrefix = /^\s*(?:section|article|paragraph)?\s*\d{1,3}[A-Z]?\s*[\).:-]/i.test(text);
+  const withoutNumber = text.replace(/^\s*(?:section|article|paragraph)?\s*\d{1,3}[A-Z]?\s*[\).:-]?\s*/i, "").trim();
+  const words = withoutNumber.replace(/[.]+$/g, "").split(/\s+/).filter(Boolean);
+  if (!withoutNumber || withoutNumber.length > 80) return false;
+  if (words.length === 1 && !hasSectionPrefix) return false;
+  if (words.length === 0 || words.length > 8) return false;
+  const titleWords = words.filter((word) => !/^(?:and|or|of|the|a|an|to|for|in|on|with)$/i.test(word));
+  if (!titleWords.every((word) => /^[A-Z0-9]/.test(word))) return false;
+  return /^[A-Z][A-Za-z0-9 &'\/().-]+\.?$/.test(withoutNumber);
+}
 function valueFoundInEvidence(value: unknown, sourceText: string): boolean {
   const valueText = compactText(value);
   if (!valueText || !sourceText) return false;
@@ -91,6 +105,19 @@ function semanticPolicyFindings(fieldKey: string, value: unknown, sourceText: st
   const hasUtilityPaymentAnchor = /\b(?:electric(?:ity|al)?\s+(?:service|charges?|costs?|utilities|meter|submeter|payment|bills?)|power\s+(?:service|charges?|costs?|meter|payment)|utilities?|metered|submetered|direct\s+payment|pay\s+(?:for\s+)?electric)\b/i.test(sourceText);
   const hasRepairOnlyElectricAnchor = /\b(?:electrical\s+(?:wiring|systems?|fixtures?|equipment)|repair|maintain|maintenance|replace|damage)\b/i.test(sourceText) && !hasUtilityPaymentAnchor;
 
+  if (isHeadingOnlySourceText(sourceText)) {
+    findings.push({ decision: "reject", reason: `${fieldKey} evidence is only a section heading, not an operative lease statement`, code: "HEADING_ONLY" });
+  }
+
+  if ((fieldKey === "tenant_name" || fieldKey === "landlord_name") && valueText) {
+    const signatureOnly = /\b(?:signed|signature|printed\s+name|by:)\b/i.test(sourceText)
+      && !/\b(?:between|by\s+and\s+between|herein\s+called|called\s+["']?(?:tenant|landlord)|landlord\s*\)|tenant\s*\))\b/i.test(sourceText);
+    const weakNameShape = /^[a-z]+(?:\s+[a-z]+){0,2}$/.test(String(value ?? "").trim())
+      && !/\b(?:llc|inc|corp|company|co\.?|lp|llp|realty|crossing|holdings|properties|restaurant|wings)\b/i.test(String(value ?? ""));
+    if (signatureOnly || weakNameShape) {
+      findings.push({ decision: "reject", reason: `${fieldKey} requires party-identification evidence; signature block/OCR fragments are insufficient`, code: signatureOnly ? "WRONG_CLAUSE_CATEGORY" : "VALUE_SHAPE_INVALID" });
+    }
+  }
   if ((fieldKey === "unit_number" || fieldKey === "suite_number" || fieldKey === "floor") && valueText) {
     const first = valueText.split(/\s+/)[0];
     if (/^(?:in|at|of|the|and|to|from|for|with|on|by|as|is|be|not|no|per|premises|tenant|landlord)$/.test(first)) {
@@ -121,8 +148,8 @@ function semanticPolicyFindings(fieldKey: string, value: unknown, sourceText: st
     }
   }
 
-  if (fieldKey === "landlord_consent_for_transfer" || fieldKey === "assignment_provisions") {
-    const conditionalConsent = /\bif\s+landlord\s+consents?\b|\bsubject\s+to\s+landlord'?s\s+consent\b/i.test(sourceText);
+  if (fieldKey === "landlord_consent" || fieldKey === "landlord_consent_for_transfer" || fieldKey === "assignment_provisions") {
+    const conditionalConsent = /\b(?:in\s+the\s+event|if|when)\s+the\s+landlord\s+shall\s+consent\b|\bif\s+landlord\s+consents?\b|\bsubject\s+to\s+landlord'?s\s+consent\b/i.test(sourceText);
     const soleDiscretion = /\bsole\s+(?:and\s+)?absolute\s+discretion\b|\bwithhold\s+consent\s+for\s+any\s+reason\b/i.test(sourceText);
     if ((conditionalConsent || soleDiscretion) && /\b(?:shall|must)\s+consent\b/i.test(String(value ?? ""))) {
       findings.push({ decision: "reject", reason: "conditional or discretionary assignment consent was converted into a mandatory consent obligation", code: conditionalConsent ? "CONDITIONAL_LANGUAGE" : "SCOPE_MATCH" });
