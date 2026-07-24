@@ -211,8 +211,6 @@ export function approvedFieldValue(
     APPROVED_FIELD_ALIASES[key] ?? [key]
   ));
   const snapshot = snapshotFields(lease);
-  const extraction = extractionFields(lease);
-  const extracted = extractedFields(lease);
 
   for (const key of candidates) {
     const snapshotField = safeObject(snapshot[key]);
@@ -222,16 +220,6 @@ export function approvedFieldValue(
     if (lease?.[key] != null && lease[key] !== "") {
       return lease[key];
     }
-    const extractedField = extracted[key];
-    if (extractedField && typeof extractedField === "object" && "value" in extractedField) {
-      if (extractedField.value != null && extractedField.value !== "") return extractedField.value;
-    }
-    if (extractedField != null && extractedField !== "") return extractedField;
-    const extractionField = extraction[key];
-    if (extractionField && typeof extractionField === "object" && "value" in extractionField) {
-      if (extractionField.value != null && extractionField.value !== "") return extractionField.value;
-    }
-    if (extractionField != null && extractionField !== "") return extractionField;
   }
   return null;
 }

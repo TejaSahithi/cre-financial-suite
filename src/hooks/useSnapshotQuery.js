@@ -37,7 +37,16 @@ function projectionModeMatches(snapshot, projectionMode) {
   return mode === projectionMode;
 }
 
-async function fetchSnapshot({ engineType, propertyId, fiscalYear, scopeLevel, scopeId, projectionMode }) {
+function extraInputsMatch(snapshot, approvalStatus, leaseStatus) {
+  const snapshotApproval = snapshot?.inputs?.approval_status ?? "approved";
+  const snapshotLeaseStatus = snapshot?.inputs?.status ?? snapshot?.inputs?.lease_status ?? "active";
+  return (
+    String(snapshotApproval).toLowerCase() === String(approvalStatus ?? "approved").toLowerCase() &&
+    String(snapshotLeaseStatus).toLowerCase() === String(leaseStatus ?? "active").toLowerCase()
+  );
+}
+
+async function fetchSnapshot({ engineType, propertyId, fiscalYear, scopeLevel, scopeId, projectionMode, approvalStatus, leaseStatus }) {
   if (!supabase) return null;
 
   let query = supabase
@@ -63,7 +72,11 @@ async function fetchSnapshot({ engineType, propertyId, fiscalYear, scopeLevel, s
   const rows = data ?? [];
   if (!rows.length) return null;
 
-  return rows.find((row) => scopeMatches(row, scopeLevel, scopeId) && projectionModeMatches(row, projectionMode)) ?? null;
+  return rows.find((row) => 
+    scopeMatches(row, scopeLevel, scopeId) && 
+    projectionModeMatches(row, projectionMode) &&
+    extraInputsMatch(row, approvalStatus, leaseStatus)
+  ) ?? null;
 }
 
 export function useSnapshotQuery({
@@ -73,6 +86,8 @@ export function useSnapshotQuery({
   scopeLevel,
   scopeId,
   projectionMode,
+  approvalStatus,
+  leaseStatus,
   autoRefreshMs = 0,
 }) {
   const queryKey = [
@@ -83,11 +98,13 @@ export function useSnapshotQuery({
     scopeLevel ?? "property",
     scopeId ?? "all",
     projectionMode ?? "contracted_only",
+    approvalStatus ?? "approved",
+    leaseStatus ?? "active",
   ];
 
   const { data: snapshot, isLoading, isFetching, refetch } = useQuery({
     queryKey,
-    queryFn: () => fetchSnapshot({ engineType, propertyId, fiscalYear, scopeLevel, scopeId, projectionMode }),
+    queryFn: () => fetchSnapshot({ engineType, propertyId, fiscalYear, scopeLevel, scopeId, projectionMode, approvalStatus, leaseStatus }),
     // Auto-refresh if no snapshot yet (compute may still be running)
     refetchInterval: (data) => {
       if (autoRefreshMs > 0) return autoRefreshMs;

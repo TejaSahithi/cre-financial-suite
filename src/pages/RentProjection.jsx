@@ -154,6 +154,8 @@ export default function RentProjection() {
   const currentYear = new Date().getFullYear();
   const [fiscalYear, setFiscalYear] = useState(currentYear);
   const [projectionMode, setProjectionMode] = useState("contracted_only");
+  const [approvalStatus, setApprovalStatus] = useState("approved");
+  const [leaseStatus, setLeaseStatus] = useState("active");
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
   const [scopeUnit, setScopeUnit] = useState("all");
@@ -190,18 +192,26 @@ export default function RentProjection() {
     scopeLevel: selectedScope.scopeLevel,
     scopeId: selectedScope.scopeId,
     projectionMode,
+    approvalStatus,
+    leaseStatus,
   });
 
   const scopedApprovedLeases = useMemo(() => {
     return leases
-      .filter(isApprovedLease)
+      .filter((lease) => {
+        const matchApproval = approvalStatus === "all" ||
+          String(lease.abstract_status || "").toLowerCase() === approvalStatus.toLowerCase();
+        const matchStatus = leaseStatus === "all" ||
+          String(lease.status || "").toLowerCase() === leaseStatus.toLowerCase();
+        return matchApproval && matchStatus;
+      })
       .filter((lease) =>
         matchesHierarchyScope(lease, hierarchy, {
           propertyKey: "property_id",
           unitKey: "unit_id",
         }),
       );
-  }, [leases, hierarchy]);
+  }, [leases, hierarchy, approvalStatus, leaseStatus]);
 
   const filteredApprovedLeases = useMemo(() => {
     return scopedApprovedLeases.filter((lease) => {
@@ -299,6 +309,8 @@ export default function RentProjection() {
           unit_id: selectedUnitId,
           fiscal_year: fiscalYear,
           projection_mode: projectionMode,
+          approval_status: approvalStatus,
+          status: leaseStatus,
           scope_level: selectedScope.scopeLevel,
           scope_id: selectedScope.scopeId,
         },
@@ -325,6 +337,8 @@ export default function RentProjection() {
           rsf: row.rsf || 0,
           fy_scheduled_rent: Math.round(Number(row.fy_scheduled_rent || 0)),
           annualized_rent: Math.round(Number(row.annualized_rent || 0)),
+          rent_source: row.rent_source || "Derived",
+          rent_provenance: row.rent_provenance || "",
           rent_psf: row.rent_psf == null ? "" : Number(row.rent_psf).toFixed(2),
           next_fy_scheduled_rent: Math.round(Number(row.next_fy_scheduled_rent || 0)),
           next_fy_note: row.next_fy_zero_explanation || "",
@@ -389,6 +403,30 @@ export default function RentProjection() {
                   {mode.label}
                 </SelectItem>
               ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={approvalStatus} onValueChange={setApprovalStatus}>
+            <SelectTrigger className="w-40">
+              <SelectValue placeholder="Approval Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="approved">Approved</SelectItem>
+              <SelectItem value="draft">Draft</SelectItem>
+              <SelectItem value="needs_review">Needs Review</SelectItem>
+              <SelectItem value="all">All Approvals</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select value={leaseStatus} onValueChange={setLeaseStatus}>
+            <SelectTrigger className="w-36">
+              <SelectValue placeholder="Lease Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="draft">Draft</SelectItem>
+              <SelectItem value="terminated">Terminated</SelectItem>
+              <SelectItem value="all">All Statuses</SelectItem>
             </SelectContent>
           </Select>
 
@@ -607,7 +645,14 @@ export default function RentProjection() {
                       <TableCell className="text-xs text-slate-500">{row.lease_end || "—"}</TableCell>
                       <TableCell className="text-sm font-mono text-right">{Number(row.rsf || 0).toLocaleString()}</TableCell>
                       <TableCell className="text-sm font-mono text-right">{fmtMoney(row.fy_scheduled_rent)}</TableCell>
-                      <TableCell className="text-sm font-mono text-right font-semibold">{fmtMoney(row.annualized_rent)}</TableCell>
+                      <TableCell className="text-sm font-mono text-right font-semibold">
+                        <div>{fmtMoney(row.annualized_rent)}</div>
+                        {row.rent_provenance && (
+                          <div className="text-[9px] text-slate-400 font-sans font-normal uppercase">
+                            {row.rent_provenance}
+                          </div>
+                        )}
+                      </TableCell>
                       <TableCell className="text-sm font-mono text-right">{row.rent_psf == null ? "—" : `$${Number(row.rent_psf).toFixed(2)}`}</TableCell>
                       <TableCell className="text-sm font-mono text-right">{fmtMoney(row.next_fy_scheduled_rent)}</TableCell>
                       <TableCell className="text-xs text-slate-500 max-w-[320px]">{row.next_fy_zero_explanation || "—"}</TableCell>

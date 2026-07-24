@@ -79,6 +79,73 @@ function leaseAnnualizedRent(months: RentScheduleEntry[], nextMonths: RentSchedu
   return latest ? round2(latest.scheduled_rent * 12) : 0;
 }
 
+function computeNextFyNote(
+  lease: Record<string, any>,
+  currentMonths: RentScheduleEntry[],
+  nextMonths: RentScheduleEntry[],
+  projectionMode: string,
+): string | null {
+  const dates = normalizedLeaseDates(lease);
+  const leaseEnd = dates.leaseEnd;
+
+  // 1. Expires
+  if (leaseEnd) {
+    const expiryStr = formatDateUtc(leaseEnd);
+    if (nextMonths.every(m => m.scheduled_rent === 0)) {
+      return `Expires on ${expiryStr}`;
+    }
+  }
+
+  // 2. Month-to-Month
+  const leaseType = String(approvedFieldValue(lease, ["lease_type"]) || "").toLowerCase();
+  if (leaseType === "month_to_month" || leaseType === "mtm") {
+    return "Month-to-Month";
+  }
+
+  // 3. Free Rent
+  const hasFreeRentNextFy = nextMonths.some((m) => {
+    return m.scheduled_rent === 0 && currentMonths.some(cm => cm.scheduled_rent > 0);
+  });
+  if (hasFreeRentNextFy) {
+    return "Free Rent";
+  }
+
+  // 4. Escalation (CPI or Fixed)
+  const escalationType = String(approvedFieldValue(lease, ["escalation_type"]) || "").toLowerCase();
+  const hasEscalationNextFy = nextMonths.some((m, idx) => {
+    const prevMonthVal = idx === 0 ? currentMonths[11].scheduled_rent : nextMonths[idx - 1].scheduled_rent;
+    return m.scheduled_rent > prevMonthVal && prevMonthVal > 0;
+  });
+  if (hasEscalationNextFy) {
+    if (escalationType === "cpi") {
+      return "CPI";
+    }
+    return "Escalation";
+  }
+
+  // 5. Renewal
+  if (projectionMode === "include_approved_renewals" || projectionMode === "include_assumed_renewals") {
+    if (leaseEnd) {
+      const hasRenewalNextFy = nextMonths.some((m, idx) => {
+        // Compare with next FY month start
+        const nextFyStart = m.month_index ? monthStartUtc(new Date().getUTCFullYear() + 1, m.month_index - 1) : null;
+        return nextFyStart && nextFyStart > leaseEnd && m.scheduled_rent > 0;
+      });
+      if (hasRenewalNextFy) {
+        return "Renewal";
+      }
+    }
+  }
+
+  // Fallback to expiry check
+  if (leaseEnd) {
+    const expiryStr = formatDateUtc(leaseEnd);
+    return `Expires on ${expiryStr}`;
+  }
+
+  return null;
+}
+
 function computeLeaseProjection(
   lease: Record<string, any>,
   approvedRows: Record<string, any>[],
@@ -109,9 +176,32 @@ function computeLeaseProjection(
 
   const fyScheduledRent = round2(currentMonths.reduce((sum, row) => sum + row.scheduled_rent, 0));
   const nextFyScheduledRent = round2(nextMonths.reduce((sum, row) => sum + row.scheduled_rent, 0));
-  const annualizedRent = leaseAnnualizedRent(currentMonths, nextMonths);
+
+  const explicitAnnual = asNumber(approvedFieldValue(lease, ["annual_rent"]));
+  const explicitMonthly = asNumber(approvedFieldValue(lease, ["monthly_rent", "base_rent_monthly"]));
+
+  let annualizedRent = 0;
+  let rentSource = "Derived";
+  let rentProvenance = "";
+
+  if (explicitAnnual && explicitAnnual > 0) {
+    annualizedRent = explicitAnnual;
+    rentSource = "Explicit";
+    rentProvenance = "Explicit (Lease Table)";
+  } else if (explicitMonthly && explicitMonthly > 0) {
+    annualizedRent = explicitMonthly * 12;
+    rentSource = "Derived";
+    rentProvenance = "Derived: Monthly Rent × 12";
+  } else {
+    annualizedRent = leaseAnnualizedRent(currentMonths, nextMonths);
+    rentSource = "Derived";
+    rentProvenance = "Derived: Rent Schedule";
+  }
+
   const rsf = leaseRsf(lease);
   const rentPsf = rsf > 0 && annualizedRent > 0 ? round2(annualizedRent / rsf) : null;
+  const nextFyNote = computeNextFyNote(lease, currentMonths, nextMonths, projectionMode) || 
+    nextFiscalYearExplanation(lease, nextFyScheduledRent, projectionMode as any);
 
   return {
     error: false,
@@ -126,7 +216,9 @@ function computeLeaseProjection(
       next_fy_scheduled_rent: nextFyScheduledRent,
       annualized_rent: annualizedRent,
       rent_psf: rentPsf,
-      next_fy_zero_explanation: nextFiscalYearExplanation(lease, nextFyScheduledRent, projectionMode as any),
+      next_fy_zero_explanation: nextFyNote,
+      rent_source: rentSource,
+      rent_provenance: rentProvenance,
     },
   };
 }
@@ -270,6 +362,8 @@ function aggregateOutputs(
       annualized_rent: result.summary?.annualized_rent ?? 0,
       rent_psf: result.summary?.rent_psf ?? null,
       next_fy_zero_explanation: result.summary?.next_fy_zero_explanation ?? null,
+      rent_source: result.summary?.rent_source ?? "Derived",
+      rent_provenance: result.summary?.rent_provenance ?? "",
       projection_mode: projectionMode,
       ...dates,
     };
@@ -352,7 +446,16 @@ Deno.serve(async (req: Request) => {
     if (!propertyId && sourceLeases.length === 1 && sourceLeases[0]?.property_id) {
       await assertPropertyAccess(req, sourceLeases[0].property_id);
     }
-    const approvedLeases = sourceLeases.filter((lease) => isApprovedLease(lease));
+    const approvalStatusFilter = body?.approval_status ?? "approved";
+    const leaseStatusFilter = body?.status ?? body?.lease_status ?? "active";
+
+    const approvedLeases = sourceLeases.filter((lease) => {
+      const matchApproval = approvalStatusFilter === "all" ||
+        String(lease.abstract_status || "").toLowerCase() === String(approvalStatusFilter).toLowerCase();
+      const matchStatus = leaseStatusFilter === "all" ||
+        String(lease.status || "").toLowerCase() === String(leaseStatusFilter).toLowerCase();
+      return matchApproval && matchStatus;
+    });
 
     const approvedRows = await ensureApprovedRentSchedules(supabaseAdmin, approvedLeases, orgId);
     const rowsByLeaseId = new Map<string, Record<string, any>[]>();
