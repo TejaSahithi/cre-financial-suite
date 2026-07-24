@@ -2182,11 +2182,12 @@ Deno.serve(async (req: Request) => {
         const errorCode = enrichResult.error_code || enrichResult.data?.error_code || "ENRICHMENT_FAILED";
 
         if (isReviewReadyEnrichmentTransportFailure(errorCode, message, enrichResult.status)) {
-          await completeEnrichmentWithWarning(supabaseAdmin, job, fileId, orgId, errorCode, message, enrichResult.status);
-          console.log(`[${WORKER_NAME}] enrichment_completed_with_warning file_id=${fileId}: ${message}`);
+          const friendlyMessage = "Optional enrichment warning: some source page references could not be linked, but all core lease terms were successfully extracted and are ready for review.";
+          await completeEnrichmentWithWarning(supabaseAdmin, job, fileId, orgId, errorCode, friendlyMessage, enrichResult.status);
+          console.log(`[${WORKER_NAME}] enrichment_completed_with_warning file_id=${fileId}: ${friendlyMessage}`);
           await logger.event("enrich", "completed_with_warnings", {
             error_code: errorCode,
-            error_message: message,
+            error_message: friendlyMessage,
             metadata: { job_id: job.id, status: enrichResult.status },
           });
           return jsonResponse({
@@ -2196,7 +2197,7 @@ Deno.serve(async (req: Request) => {
             job_id: job.id,
             stage: "enrich",
             status: "completed_with_warnings",
-            message,
+            message: friendlyMessage,
           }, 200);
         }
 
