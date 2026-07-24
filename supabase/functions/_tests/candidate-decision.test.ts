@@ -11,6 +11,7 @@ import { evaluateCandidateForField } from "../_shared/extraction/candidate-decis
 import { getSchema, getEvidencePolicyCoverage } from "../_shared/extraction/schemas.ts";
 import { mapFactsToStandardFields } from "../_shared/extraction/openai-fact-ledger/fact-field-mapper.ts";
 import { mergeResults } from "../_shared/extraction/merger.ts";
+import { coerceValue } from "../_shared/extraction/rule-extractor.ts";
 
 const leaseSchema = getSchema("lease");
 
@@ -582,4 +583,102 @@ Deno.test("mergeResults: a hard-rejected candidate is retained in rejectedCandid
   assertEquals(rejected.decision, "reject");
   assert(rejected.reason.length > 0);
   assertEquals(rejected.source_text, "the closely held voting shares held by the permitted transfer assignee");
+});
+
+Deno.test("mergeResults: high-risk competing candidates surface conflict metadata instead of silently selecting one", () => {
+  const rule = stepResult({
+    admin_fee_pct: { value: 5, source: "rule", confidence: 0.92, sourceText: "Administrative fee shall be five percent (5%) of recoverable expenses." },
+  });
+  const llm = stepResult({
+    admin_fee_pct: { value: 7, source: "llm", confidence: 0.88, sourceText: "Administrative fee shall be seven percent (7%) of recoverable expenses." },
+  });
+  const merged = mergeResults(rule, empty, llm, "lease");
+  const field = merged.records[0].fields.admin_fee_pct as any;
+  assertEquals(field.extractionStatus, "conflict");
+  assertEquals(field.canonicalStatus, "conflict");
+  assertEquals(field.resolutionState, "provisional");
+  assertEquals(field.requiresReview, true);
+  assertEquals(field.evidenceDecision, "needs_review");
+  assertEquals(field.conflictCandidateIds.length, 2);
+  assertEquals(field.conflictCandidates.length, 2);
+  assertEquals(new Set(field.candidates.map((candidate: any) => candidate.normalizedValue)).size, 2);
+  assertEquals(field.decision.status, "conflict");
+});
+
+Deno.test("coerceValue: boolean polarity keeps explicit negatives false", () => {
+  const boolDef = { type: "boolean", labels: [], description: "test" } as any;
+  assertEquals(coerceValue("does not consent", boolDef), false);
+  assertEquals(coerceValue("shall not be grossed up", boolDef), false);
+  assertEquals(coerceValue("no waiver of subrogation is required", boolDef), false);
+  assertEquals(coerceValue("must maintain insurance", boolDef), true);
+  assertEquals(coerceValue("Additional Insured", boolDef), null);
+});
+Deno.test("evaluateCandidateForField: property_name rejects timing fragments from parking/common-area clauses", () => {
+  const result = evaluateCandidateForField({
+    field: leaseSchema.property_name,
+    fieldKey: "property_name",
+    moduleType: "lease",
+    value: "one (1) day in each calendar year",
+    sourceText: "Tenant shall have the right to use the Shopping Center parking area for one (1) day in each calendar year.",
+    confidence: 0.99,
+    sourceType: "llm",
+  });
+  assertEquals(result.decision, "reject");
+  assert(result.reasonCodes.includes("VALUE_SHAPE_INVALID") || result.reasonCodes.includes("WRONG_CLAUSE_CATEGORY"));
+});
+
+Deno.test("evaluateCandidateForField: unit_number rejects common word fragments", () => {
+  const result = evaluateCandidateForField({
+    field: leaseSchema.unit_number,
+    fieldKey: "unit_number",
+    moduleType: "lease",
+    value: "in",
+    sourceText: "Tenant leases space in the Building known as Suite #21.",
+    confidence: 0.95,
+    sourceType: "llm",
+  });
+  assertEquals(result.decision, "reject");
+  assert(result.reasonCodes.includes("VALUE_SHAPE_INVALID"));
+});
+
+Deno.test("evaluateCandidateForField: insurance responsibility cannot be derived from waiver of subrogation", () => {
+  const result = evaluateCandidateForField({
+    field: leaseSchema.responsibility_insurance,
+    fieldKey: "responsibility_insurance",
+    moduleType: "lease",
+    value: "landlord",
+    sourceText: "Landlord and Tenant waive all rights of recovery by way of subrogation against each other.",
+    confidence: 0.98,
+    sourceType: "llm",
+  });
+  assertEquals(result.decision, "reject");
+  assert(result.reasonCodes.includes("WRONG_CLAUSE_CATEGORY"));
+});
+
+Deno.test("evaluateCandidateForField: electric responsibility rejects repair-only electrical wording", () => {
+  const result = evaluateCandidateForField({
+    field: leaseSchema.electric_responsibility,
+    fieldKey: "electric_responsibility",
+    moduleType: "lease",
+    value: "tenant",
+    sourceText: "Tenant shall repair and maintain the electrical wiring and fixtures within the Premises.",
+    confidence: 0.96,
+    sourceType: "llm",
+  });
+  assertEquals(result.decision, "reject");
+  assert(result.reasonCodes.includes("WRONG_CLAUSE_CATEGORY"));
+});
+
+Deno.test("evaluateCandidateForField: conditional assignment consent does not become mandatory consent", () => {
+  const result = evaluateCandidateForField({
+    field: leaseSchema.landlord_consent_for_transfer,
+    fieldKey: "landlord_consent_for_transfer",
+    moduleType: "lease",
+    value: "Landlord shall consent to assignment",
+    sourceText: "If Landlord consents to any assignment, Landlord may impose conditions and may withhold consent in its sole and absolute discretion.",
+    confidence: 0.99,
+    sourceType: "llm",
+  });
+  assertEquals(result.decision, "reject");
+  assert(result.reasonCodes.includes("CONDITIONAL_LANGUAGE"));
 });

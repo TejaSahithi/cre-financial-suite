@@ -196,10 +196,10 @@ export function coerceValue(raw: string, fieldDef: FieldDef): unknown {
     }
     case "boolean": {
       const b = trimmed.toLowerCase();
-      if (["true", "yes", "y", "1", "granted", "received", "approved"].includes(b)) return true;
-      if (["false", "no", "n", "0", "denied", "not granted", "not approved"].includes(b)) return false;
-      if (/\b(consents?|consented|approval|approved|grants?|granted)\b/i.test(trimmed)) return true;
-      if (/\b(does not consent|not approved|denied|withheld)\b/i.test(trimmed)) return false;
+      if (["false", "no", "n", "0", "denied", "not granted", "not approved", "not required"].includes(b)) return false;
+      if (/\b(?:does\s+not\s+consent|not\s+approved|denied|withheld|shall\s+not|may\s+not|must\s+not|is\s+not\s+required|are\s+not\s+required|not\s+be\s+required|no\s+waiver\s+of\s+subrogation|no\s+additional\s+insured)\b/i.test(trimmed)) return false;
+      if (["true", "yes", "y", "1", "granted", "received", "approved", "required"].includes(b)) return true;
+      if (/\b(?:shall|must|is|required\s+to|agrees\s+to|consents?|consented|approval|approved|grants?|granted)\b/i.test(trimmed)) return true;
       return null;
     }
     case "enum":

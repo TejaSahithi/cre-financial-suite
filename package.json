@@ -17,6 +17,8 @@
     "check:review-schema": "node scripts/check-review-schema-boundaries.mjs",
     "benchmark:lease-intelligence": "node scripts/run-lease-intelligence-benchmark.mjs",
     "benchmark:regression": "node scripts/run-lease-intelligence-benchmark.mjs --corpus ci --fail-on-threshold",
+    "lease-eval": "node scripts/run-lease-extraction-eval.mjs",
+    "lease-eval:ci": "node scripts/run-lease-extraction-eval.mjs --corpus ci --smoke --fail-on-threshold",
     "test:release7": "vitest run src/lib/release7",
     "test:load": "node scripts/check-release7-load-tests.mjs",
     "test:tenant-isolation": "node scripts/check-release7-tenant-isolation.mjs",

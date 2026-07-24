@@ -1069,7 +1069,7 @@ export const EXTRACTION_STATUSES = {
   CALCULATED: "calculated",
   DERIVED: "derived",
   INFERRED: "inferred",
-  CONFLICT: "conflict_detected",
+  CONFLICT: "conflict",
 };
 
 export const EVIDENCE_TYPES = {
@@ -1136,6 +1136,11 @@ export const EXTRACTION_STATUS_LABELS = {
   derived: "Derived",
   inferred: "Inferred",
   conflict_detected: "Conflict Detected",
+  conflict: "Conflict",
+  not_stated: "Not Stated",
+  not_applicable: "Not Applicable",
+  insufficient_evidence: "Insufficient Evidence",
+  invalid: "Invalid",
 };
 
 export const EXTRACTION_STATUS_STYLES = {
@@ -1150,6 +1155,11 @@ export const EXTRACTION_STATUS_STYLES = {
   derived: "bg-blue-50 text-blue-700",
   inferred: "bg-purple-50 text-purple-700",
   conflict_detected: "bg-red-100 text-red-700",
+  conflict: "bg-red-100 text-red-700",
+  not_stated: "bg-slate-100 text-slate-600",
+  not_applicable: "bg-slate-100 text-slate-600",
+  insufficient_evidence: "bg-amber-100 text-amber-800",
+  invalid: "bg-red-100 text-red-700",
 };
 
 export function normalizeEvidenceType(input, context = {}) {
@@ -1249,7 +1259,7 @@ export function resolveSourceTextQuality(evidence = {}) {
  * never infer it client-side because it implies a policy decision.
  */
 export function resolveExtractionStatus(lease, key, { value, confidence, evidence } = {}) {
-  const explicit = String(evidence?.extractionStatus || "").trim().toLowerCase();
+  const explicit = String(evidence?.canonicalStatus ?? evidence?.canonical_status ?? evidence?.extractionStatus ?? evidence?.extraction_status ?? "").trim().toLowerCase();
   const present = isMeaningfulValue(value);
   const hasEvidence = hasValidSourceEvidence(evidence);
   const debug = lease?.extraction_data?.extraction_debug || {};
@@ -1277,6 +1287,12 @@ export function resolveExtractionStatus(lease, key, { value, confidence, evidenc
       return present ? EXTRACTION_STATUSES.MISSING_SOURCE_EVIDENCE : EXTRACTION_STATUSES.NOT_FOUND;
     }
     if (explicit === EXTRACTION_STATUSES.NEEDS_REVIEW) return explicit;
+    if (explicit === "manual_review") return EXTRACTION_STATUSES.NEEDS_REVIEW;
+    if (explicit === "insufficient_evidence") return EXTRACTION_STATUSES.MISSING_SOURCE_EVIDENCE;
+    if (explicit === "not_stated") return EXTRACTION_STATUSES.NOT_FOUND;
+    if (explicit === "not_applicable") return "not_applicable";
+    if (explicit === "invalid") return EXTRACTION_STATUSES.NEEDS_REVIEW;
+    if (explicit === "conflict") return EXTRACTION_STATUSES.CONFLICT;
     if (explicit === EXTRACTION_STATUSES.NOT_FOUND || explicit === EXTRACTION_STATUSES.MISSING) {
       return extractionIncomplete && !present ? EXTRACTION_STATUSES.NEEDS_REVIEW : explicit;
     }

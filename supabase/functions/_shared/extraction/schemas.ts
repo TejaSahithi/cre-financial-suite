@@ -227,7 +227,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
     // structural fix: a name field's value should never itself BE a bare
     // measurement, regardless of which (legitimately on-topic) clause it
     // came from.
-    rejectedValuePatterns: [/^\s*[\d,]+\.?\d*\s*(rentable\s+|leasable\s+)?(square\s+feet|square\s+footage|sq\.?\s*ft\.?|\bsf\b|\brsf\b)\s*$/i],
+    rejectedValuePatterns: [/^\s*[\d,]+\.?\d*\s*(rentable\s+|leasable\s+)?(square\s+feet|square\s+footage|sq\.?\s*ft\.?|\bsf\b|\brsf\b)\s*$/i, /\b(?:one\s*\(1\)\s+day|calendar\s+year|shall|must|may)\b/i],
   },
   property_address: {
     type: "string",
@@ -420,6 +420,11 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "Unit, suite, or space identifier — a short alphanumeric code (e.g. '3', '3 and 4', '101', '2B'). " +
       "Look in the Premises section (e.g. 'Building 9, Suites 3 and 4'). " +
       "NEVER return rent-rate language like 'per leasable square foot' or CAM descriptions.",
+    domain: "premises",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["premises_description"],
+    rejectedValuePatterns: [/^\s*(?:in|at|of|the|and|to|from|for|with|on|by|as|is|be|not|no|per|premises|tenant|landlord)\s*$/i],
+    requiredEvidencePatterns: [/\b(?:suite|unit|space|store|#)\b/i],
   },
   lease_date: {
     type: "date",
@@ -750,6 +755,11 @@ export const LEASE_SCHEMA: ModuleSchema = {
     tableHeaders: ["insurance_responsibility", "insurance", "ins resp"],
     patterns: [/(?:insurance|property insurance)\b[^.\n]{0,80}\b(?:landlord|lessor|tenant|lessee)\b/i],
     description: "Who is responsible for providing/paying for property insurance (e.g. 'tenant', 'landlord', 'shared').",
+    domain: "insurance",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["insurance"],
+    rejectedClauseCategories: ["indemnification", "casualty"],
+    rejectedEvidencePatterns: [/\b(?:waiver\s+of\s+subrogation|subrogat(?:e|ion)|indemnif|casualty\s+proceeds|limitation\s+of\s+liability)\b/i],
   },
   electric_responsibility: {
     type: "string",
@@ -757,6 +767,12 @@ export const LEASE_SCHEMA: ModuleSchema = {
     tableHeaders: ["electric_responsibility", "electric responsibility"],
     patterns: [/((?:tenant|landlord)\s+must\s+pay\s+electric[^.\n]{0,120})/i],
     description: "Clause describing who is responsible for electric service",
+    domain: "utilities",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["utilities"],
+    rejectedClauseCategories: ["repairs_maintenance"],
+    requiredEvidencePatterns: [/\b(?:electric(?:ity|al)?\s+(?:service|charges?|costs?|utilities|meter|submeter|payment|bills?)|power\s+(?:service|charges?|costs?|meter|payment)|utilities?|metered|submetered|direct\s+payment|pay\s+(?:for\s+)?electric)\b/i],
+    rejectedEvidencePatterns: [/\b(?:electrical\s+(?:wiring|systems?|fixtures?|equipment)|repair|maintain|maintenance|replace|damage)\b/i],
   },
   water_sewer_responsibility: {
     type: "string",
@@ -980,7 +996,12 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["insurance responsibility", "property insurance responsibility"],
     tableHeaders: ["responsibility_insurance", "insurance responsibility"],
     patterns: [/\binsurance\b[^\n]{0,120}\b(tenant|landlord|shared)\b/i],
-    description: "Party responsible for property insurance",
+    description: "Party responsible for insurance premium/cost responsibility; distinct from tenant policy procurement and waiver-of-subrogation requirements.",
+    domain: "insurance",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["insurance", "operating_expense_recovery"],
+    rejectedClauseCategories: ["indemnification", "casualty"],
+    rejectedEvidencePatterns: [/\b(?:waiver\s+of\s+subrogation|subrogat(?:e|ion)|indemnif|casualty\s+proceeds|limitation\s+of\s+liability)\b/i],
   },
   responsibility_utilities: {
     type: "enum",
@@ -1118,6 +1139,11 @@ export const LEASE_SCHEMA: ModuleSchema = {
     tableHeaders: ["property_insurance_responsibility"],
     patterns: [/\bproperty\s+insurance\b[^\n]{0,120}\b(tenant|landlord|shared)\b/i],
     description: "Party responsible for property insurance on the building",
+    domain: "insurance",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["insurance"],
+    rejectedClauseCategories: ["indemnification", "casualty"],
+    rejectedEvidencePatterns: [/\b(?:waiver\s+of\s+subrogation|subrogat(?:e|ion)|indemnif|casualty\s+proceeds|limitation\s+of\s+liability)\b/i],
   },
   waiver_of_subrogation: {
     type: "boolean",
@@ -1136,6 +1162,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "Look for phrases like 'name the Landlord... as additional insureds', 'Landlord shall be named as an additional insured', or 'policies shall name Landlord as additional insured on all policies'. " +
       "A clause requiring the landlord to be an additional insured = true. " +
       "Return false ONLY if the lease explicitly says additional insureds are not required, or if no insurance section exists.",
+    domain: "insurance",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["insurance"],
+    requiredEvidencePatterns: [/\b(?:name|named|add|include)[^.\n]{0,80}\badditional\s+insured\b|\badditional\s+insured\b[^.\n]{0,80}\b(?:required|named|policy|policies|endorsement)\b/i],
   },
 
   // ─── Legal / Options ────────────────────────────────────────────────
@@ -1199,6 +1229,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "or 'Required but not unreasonably withheld'. Distinct from landlord_consent (boolean — whether consent " +
       "was actually GIVEN for a specific assignment already in progress); this field describes the LEASE'S " +
       "general rule about future assignments/transfers.",
+    domain: "assignment",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["assignment_subletting"],
+    requiredEvidencePatterns: [/\b(?:assign|assignment|transfer|sublet|sublease|consent)\b/i],
   },
 };
 

@@ -1,0 +1,559 @@
+{
+    "schemaVersion":  "lease-review-replay-payload/1.0",
+    "runMode":  "replay",
+    "measuredFromLiveExtraction":  false,
+    "metadata":  {
+                     "replaySource":  "bootstrap-adjudication-shadow",
+                     "warning":  "This fixture validates scorer wiring only. It is not a live extraction run and must not be used to claim production accuracy.",
+                     "promptVersion":  "stage-b-bootstrap",
+                     "model":  null
+                 },
+    "records":  [
+                    {
+                        "row_index":  0,
+                        "standard_fields":  [
+                                                {
+                                                    "field_key":  "landlord_name",
+                                                    "canonical_field_key":  "landlord_name",
+                                                    "scope_key":  "lease",
+                                                    "value":  "Macon Crossing",
+                                                    "authoritative_value":  "Macon Crossing",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "Macon Crossing Landlord",
+                                                                         "clause_category":  "party_identification"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "tenant_name",
+                                                    "canonical_field_key":  "tenant_name",
+                                                    "scope_key":  "lease",
+                                                    "value":  "Justin Cress",
+                                                    "authoritative_value":  "Justin Cress",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "Justin Cress Tenant",
+                                                                         "clause_category":  "party_identification"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "property_name",
+                                                    "canonical_field_key":  "property_name",
+                                                    "scope_key":  "lease",
+                                                    "value":  "Macon Crossing Shopping Center",
+                                                    "authoritative_value":  "Macon Crossing Shopping Center",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "Macon Crossing Shopping Center",
+                                                                         "clause_category":  "premises_description"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "property_address",
+                                                    "canonical_field_key":  "property_address",
+                                                    "scope_key":  "lease",
+                                                    "value":  "10721 Chapman Highway #21, Seymour, Sevier County, Tennessee",
+                                                    "authoritative_value":  "10721 Chapman Highway #21, Seymour, Sevier County, Tennessee",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "10721 Chapman #21 Seymour Tennessee",
+                                                                         "clause_category":  "premises_description"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "unit_number",
+                                                    "canonical_field_key":  "unit_number",
+                                                    "scope_key":  "lease",
+                                                    "value":  "#21",
+                                                    "authoritative_value":  "#21",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "#21",
+                                                                         "clause_category":  "premises_description"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "square_footage",
+                                                    "canonical_field_key":  "square_footage",
+                                                    "scope_key":  "lease",
+                                                    "value":  1875,
+                                                    "authoritative_value":  1875,
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "square feet 1,875",
+                                                                         "clause_category":  "premises_description"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "permitted_use",
+                                                    "canonical_field_key":  "permitted_use",
+                                                    "scope_key":  "lease",
+                                                    "value":  "restaurant and related sales",
+                                                    "authoritative_value":  "restaurant and related sales",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "restaurant related sales",
+                                                                         "clause_category":  "use"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "annual_rent",
+                                                    "canonical_field_key":  "annual_rent",
+                                                    "scope_key":  "lease",
+                                                    "value":  25200,
+                                                    "authoritative_value":  25200,
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "25,200",
+                                                                         "clause_category":  "rent"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "monthly_rent",
+                                                    "canonical_field_key":  "monthly_rent",
+                                                    "scope_key":  "lease",
+                                                    "value":  2100,
+                                                    "authoritative_value":  2100,
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "2,100 month",
+                                                                         "clause_category":  "rent"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "rent_commencement_date",
+                                                    "canonical_field_key":  "rent_commencement_date",
+                                                    "scope_key":  "lease",
+                                                    "value":  "2019-03-01",
+                                                    "authoritative_value":  "2019-03-01",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "March 1, 2019",
+                                                                         "clause_category":  "term"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "expiration_date",
+                                                    "canonical_field_key":  "expiration_date",
+                                                    "scope_key":  "lease",
+                                                    "value":  "2023-12-31",
+                                                    "authoritative_value":  "2023-12-31",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "December 31, 2023",
+                                                                         "clause_category":  "term"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "security_deposit",
+                                                    "canonical_field_key":  "security_deposit",
+                                                    "scope_key":  "lease",
+                                                    "value":  0,
+                                                    "authoritative_value":  0,
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "security deposit",
+                                                                         "clause_category":  "rent"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "billing_frequency",
+                                                    "canonical_field_key":  "billing_frequency",
+                                                    "scope_key":  "lease",
+                                                    "value":  "monthly in advance on or before the first day of each month",
+                                                    "authoritative_value":  "monthly in advance on or before the first day of each month",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "in advance first day of each month",
+                                                                         "clause_category":  "rent"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "lease_term_months",
+                                                    "canonical_field_key":  "lease_term_months",
+                                                    "scope_key":  "lease",
+                                                    "value":  "stated five-year period with explicit March 1, 2019 to December 31, 2023 dates",
+                                                    "authoritative_value":  "stated five-year period with explicit March 1, 2019 to December 31, 2023 dates",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "March 1, 2019 December 31, 2023 five-year",
+                                                                         "clause_category":  "term"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "responsibility_taxes",
+                                                    "canonical_field_key":  "responsibility_taxes",
+                                                    "scope_key":  "lease",
+                                                    "value":  "tenant reimburses real estate taxes through annual adjustments; tenant separately bears personal property taxes",
+                                                    "authoritative_value":  "tenant reimburses real estate taxes through annual adjustments; tenant separately bears personal property taxes",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "real estate taxes",
+                                                                         "clause_category":  "taxes"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "responsibility_insurance",
+                                                    "canonical_field_key":  "responsibility_insurance",
+                                                    "scope_key":  "lease",
+                                                    "value":  "tenant obtains liability insurance; tenant bears landlord insurance premiums through adjustments",
+                                                    "authoritative_value":  "tenant obtains liability insurance; tenant bears landlord insurance premiums through adjustments",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "liability insurance",
+                                                                         "clause_category":  "insurance"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "tenant_insurance_required",
+                                                    "canonical_field_key":  "tenant_insurance_required",
+                                                    "scope_key":  "lease",
+                                                    "value":  true,
+                                                    "authoritative_value":  true,
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "obtain liability insurance",
+                                                                         "clause_category":  "insurance"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "general_liability_min",
+                                                    "canonical_field_key":  "general_liability_min",
+                                                    "scope_key":  "lease",
+                                                    "value":  "$1,000,000 one person / $2,000,000 more than one person",
+                                                    "authoritative_value":  "$1,000,000 one person / $2,000,000 more than one person",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "1,000,000 2,000,000",
+                                                                         "clause_category":  "insurance"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "waiver_of_subrogation",
+                                                    "canonical_field_key":  "waiver_of_subrogation",
+                                                    "scope_key":  "lease",
+                                                    "value":  true,
+                                                    "authoritative_value":  true,
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "waiver subrogation",
+                                                                         "clause_category":  "insurance"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "responsibility_utilities",
+                                                    "canonical_field_key":  "responsibility_utilities",
+                                                    "scope_key":  "lease",
+                                                    "value":  "tenant responsible for water, gas, heat, light or power, sewer, telephone and other supplied utilities; joint meters allocated reasonably by landlord",
+                                                    "authoritative_value":  "tenant responsible for water, gas, heat, light or power, sewer, telephone and other supplied utilities; joint meters allocated reasonably by landlord",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "water",
+                                                                         "clause_category":  "utilities"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "electric_responsibility",
+                                                    "canonical_field_key":  "electric_responsibility",
+                                                    "scope_key":  "lease",
+                                                    "value":  "tenant",
+                                                    "authoritative_value":  "tenant",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "light",
+                                                                         "clause_category":  "utilities"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "water_sewer_responsibility",
+                                                    "canonical_field_key":  "water_sewer_responsibility",
+                                                    "scope_key":  "lease",
+                                                    "value":  "tenant",
+                                                    "authoritative_value":  "tenant",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "water",
+                                                                         "clause_category":  "utilities"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "responsibility_repairs",
+                                                    "canonical_field_key":  "responsibility_repairs",
+                                                    "scope_key":  "lease",
+                                                    "value":  "split_by_component",
+                                                    "authoritative_value":  "split_by_component",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "storefront",
+                                                                         "clause_category":  "repairs"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "hvac_responsibility",
+                                                    "canonical_field_key":  "hvac_responsibility",
+                                                    "scope_key":  "lease",
+                                                    "value":  "tenant maintains HVAC and HVAC service contract",
+                                                    "authoritative_value":  "tenant maintains HVAC and HVAC service contract",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "HVAC service contract",
+                                                                         "clause_category":  "repairs"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "landlord_consent_for_transfer",
+                                                    "canonical_field_key":  "landlord_consent_for_transfer",
+                                                    "scope_key":  "lease",
+                                                    "value":  "prior written consent required; consent need not be given and is in landlord sole and absolute discretion",
+                                                    "authoritative_value":  "prior written consent required; consent need not be given and is in landlord sole and absolute discretion",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "prior written consent sole and absolute discretion",
+                                                                         "clause_category":  "assignment"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "assignment_provisions",
+                                                    "canonical_field_key":  "assignment_provisions",
+                                                    "scope_key":  "lease",
+                                                    "value":  "unauthorized transfer can be void or default; tenant pays reasonable review costs if landlord consents",
+                                                    "authoritative_value":  "unauthorized transfer can be void or default; tenant pays reasonable review costs if landlord consents",
+                                                    "canonical_status":  "extracted",
+                                                    "extraction_status":  "extracted",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  1,
+                                                                         "source_text":  "void",
+                                                                         "clause_category":  "assignment"
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "early_termination_option",
+                                                    "canonical_field_key":  "early_termination_option",
+                                                    "scope_key":  "lease",
+                                                    "value":  null,
+                                                    "authoritative_value":  null,
+                                                    "canonical_status":  "not_stated",
+                                                    "extraction_status":  "not_stated",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  null,
+                                                                         "source_text":  null,
+                                                                         "clause_category":  null
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "cam_cap_pct",
+                                                    "canonical_field_key":  "cam_cap_pct",
+                                                    "scope_key":  "lease",
+                                                    "value":  null,
+                                                    "authoritative_value":  null,
+                                                    "canonical_status":  "not_stated",
+                                                    "extraction_status":  "not_stated",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  null,
+                                                                         "source_text":  null,
+                                                                         "clause_category":  null
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "base_year",
+                                                    "canonical_field_key":  "base_year",
+                                                    "scope_key":  "lease",
+                                                    "value":  null,
+                                                    "authoritative_value":  null,
+                                                    "canonical_status":  "not_stated",
+                                                    "extraction_status":  "not_stated",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  null,
+                                                                         "source_text":  null,
+                                                                         "clause_category":  null
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "expense_stop",
+                                                    "canonical_field_key":  "expense_stop",
+                                                    "scope_key":  "lease",
+                                                    "value":  null,
+                                                    "authoritative_value":  null,
+                                                    "canonical_status":  "not_stated",
+                                                    "extraction_status":  "not_stated",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  null,
+                                                                         "source_text":  null,
+                                                                         "clause_category":  null
+                                                                     }
+                                                                 ]
+                                                },
+                                                {
+                                                    "field_key":  "gross_up_enabled",
+                                                    "canonical_field_key":  "gross_up_enabled",
+                                                    "scope_key":  "lease",
+                                                    "value":  null,
+                                                    "authoritative_value":  null,
+                                                    "canonical_status":  "not_stated",
+                                                    "extraction_status":  "not_stated",
+                                                    "requires_review":  false,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "page":  null,
+                                                                         "source_text":  null,
+                                                                         "clause_category":  null
+                                                                     }
+                                                                 ]
+                                                }
+                                            ],
+                        "validation_errors":  [
+
+                                              ],
+                        "warnings":  [
+                                         "Replay artifact generated from bootstrap adjudication for scorer smoke tests only."
+                                     ]
+                    }
+                ],
+    "approval_blockers":  [
+                              {
+                                  "code":  "TERM_DATE_CONSISTENCY_WARNING",
+                                  "canonicalFieldKey":  "lease_term_months",
+                                  "reason":  "Five-year period and explicit dates require reviewer-visible consistency warning.",
+                                  "severity":  "medium"
+                              }
+                          ]
+}

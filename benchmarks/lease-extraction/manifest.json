@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "lease-extraction-eval-manifest/1.0",
+  "description": "Stage B lease extraction evaluation manifest. Macon is the first bootstrap adjudicated fixture; Level 2 target gates remain disabled until corpus diversity requirements are met.",
+  "minimumLevel2FixtureCount": 12,
+  "minimumLevel2PropertyTypes": 4,
+  "minimumLevel2DocumentTypes": 5,
+  "fixtures": [
+    {
+      "fixtureId": "macon-crossing-tnn-2019",
+      "familyId": "macon-crossing-family-001",
+      "documentName": "Macon Crossing Triple Net Lease",
+      "documentType": "lease",
+      "propertyType": "retail",
+      "corpus": "stage-b",
+      "permittedForCI": true,
+      "groundTruthFixture": "benchmarks/lease-extraction/golden/macon-crossing.ground-truth.json",
+      "smokeActualFixture": "benchmarks/lease-extraction/replay/macon-crossing.review-payload.json",
+      "sourceFile": "manual://macon-crossing-triple-net-lease.pdf",
+      "runMode": "requires_captured_actual",
+      "notes": [
+        "Bootstrap fixture derived from supplied prompt facts; requires independent human review before Level 2 target enforcement.",
+        "Smoke actual is a scorer smoke artifact only. It is not used for accuracy scoring unless --smoke is passed."
+      ]
+    }
+  ]
+}

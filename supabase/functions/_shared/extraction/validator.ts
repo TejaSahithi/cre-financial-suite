@@ -536,15 +536,24 @@ export function flattenRecords(
     // Add confidence metadata
     const confidences: Record<string, number> = {};
     const sources: Record<string, string> = {};
-    const evidence: Record<string, { source_text?: string | null; source_page?: number | null }> = {};
+    const evidence: Record<string, { source_text?: string | null; source_page?: number | null; extraction_status?: string | null; candidates?: unknown[]; conflict_candidates?: unknown[]; selected_candidate_id?: string | null }> = {};
     for (const [fieldName, field] of Object.entries(record.fields)) {
       if (field.value !== null) {
         confidences[fieldName] = field.confidence;
         sources[fieldName] = field.source;
-        if (field.sourceText || field.sourcePage != null) {
+        if (field.sourceText || field.sourcePage != null || (field as any).extractionStatus || (field as any).candidates?.length || (field as any).conflictCandidates?.length) {
           evidence[fieldName] = {
             source_text: field.sourceText ?? null,
             source_page: field.sourcePage ?? null,
+            extraction_status: (field as any).extractionStatus ?? null,
+            canonical_status: (field as any).canonicalStatus ?? null,
+            resolution_state: (field as any).resolutionState ?? null,
+            requires_review: (field as any).requiresReview ?? false,
+            candidates: (field as any).candidates ?? [],
+            conflict_candidates: (field as any).conflictCandidates ?? [],
+            conflict_candidate_ids: (field as any).conflictCandidateIds ?? (field as any).conflictCandidates ?? [],
+            decision: (field as any).decision ?? null,
+            selected_candidate_id: (field as any).selectedCandidateId ?? null,
           };
         }
       }

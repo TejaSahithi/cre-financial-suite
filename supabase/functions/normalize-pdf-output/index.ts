@@ -31,6 +31,7 @@ import { normalizeBusinessExtractionMode, type CanonicalBusinessExtractionMode }
 import { isAzureLayoutOutput } from "../_shared/extraction/extraction-provider.ts";
 import { getFieldGroups, getSchema, getEvidencePolicyCoverage } from "../_shared/extraction/schemas.ts";
 import { evaluateCandidateForField } from "../_shared/extraction/candidate-decision.ts";
+import { getAuthoritativeFieldValue, normalizeLeaseReviewFieldStatus, resolutionStateForStatus } from "../_shared/extraction/review-status.ts";
 import { buildLeaseWorkflowAbstraction } from "../_shared/extraction/lease-workflow.ts";
 import { cleanEvidenceSnippet, findPageForSnippet, resolveVerifiedSourcePage } from "../_shared/extraction/evidence-index.ts";
 import { detectFileMagic } from "../_shared/file-magic.ts";
@@ -1082,13 +1083,19 @@ function buildMinimalReviewPayload(opts: {
       const sourceText = debugEvidence?.source_text ?? null;
       const sourcePage = debugEvidence?.source_page ?? null;
       const hasEvidence = !!(sourceText || sourcePage != null);
+      const serverExtractionStatus = String(debugEvidence?.canonical_status ?? debugEvidence?.extraction_status ?? "").toLowerCase();
+      const serverCandidates = Array.isArray(debugEvidence?.candidates) ? debugEvidence.candidates : [];
+      const serverConflictCandidates = Array.isArray(debugEvidence?.conflict_candidates) ? debugEvidence.conflict_candidates : [];
+      const serverConflictCandidateIds = Array.isArray(debugEvidence?.conflict_candidate_ids) ? debugEvidence.conflict_candidate_ids : serverConflictCandidates;
       const effectiveConfidence =
         normalizeConfidence(fieldConfidences[fieldKey]) ??
         normalizeConfidence(debugEvidence?.confidence) ??
         rowConfidence;
 
       let status: string;
-      if (value == null || value === "") {
+      if (serverExtractionStatus === "conflict" || serverExtractionStatus === "conflict_detected") {
+        status = "conflict_detected";
+      } else if (value == null || value === "") {
         status = "missing";
       } else if (hasEvidence && typeof effectiveConfidence === "number" && effectiveConfidence >= 0.9) {
         // System-computed suggestion only — buildReviewField always sets
@@ -1111,13 +1118,27 @@ function buildMinimalReviewPayload(opts: {
         required: !!def.required,
         fieldType: def.type ?? "string",
         description: def.description,
-        evidence: hasEvidence ? { source_text: sourceText, source_page: sourcePage, source_quality: "pending_enrichment" } : null,
+        evidence: hasEvidence || serverCandidates.length || serverConflictCandidates.length ? { source_text: sourceText, source_page: sourcePage, source_quality: "pending_enrichment", candidates: serverCandidates, conflict_candidates: serverConflictCandidates, conflict_candidate_ids: serverConflictCandidateIds, selected_candidate_id: debugEvidence?.selected_candidate_id ?? null, decision: debugEvidence?.decision ?? null } : null,
+        candidates: serverCandidates,
+        conflictCandidates: serverConflictCandidates,
+        selectedCandidateId: debugEvidence?.selected_candidate_id ?? null,
+        conflictCandidateIds: serverConflictCandidateIds,
+        canonicalStatus: debugEvidence?.canonical_status ?? null,
+        resolutionState: debugEvidence?.resolution_state ?? null,
+        requiresReview: debugEvidence?.requires_review ?? undefined,
+        decision: debugEvidence?.decision ?? null,
         status,
         editable: true,
       });
     });
 
+    const duplicateCanonicalFields = findDuplicateCanonicalReviewFields(standardFields);
     const missingRequired = requiredFields.filter((field) => isBlank(values[field]));
+    const rowValidationErrors = duplicateCanonicalFields;
+    const rowWarnings = [
+      ...(missingRequired.length > 0 ? [`Missing required fields: ${missingRequired.join(", ")}`] : []),
+      ...(duplicateCanonicalFields.length > 0 ? [`Duplicate canonical fields: ${duplicateCanonicalFields.map((item) => item.field_key).join(", ")}`] : []),
+    ];
 
     return {
       row_index: index,
@@ -1136,9 +1157,8 @@ function buildMinimalReviewPayload(opts: {
       custom_fields: [],
       missing_required: missingRequired,
       rejected_fields: [],
-      warnings: missingRequired.length > 0
-        ? [`Missing required fields: ${missingRequired.join(", ")}`]
-        : [],
+      validation_errors: rowValidationErrors,
+      warnings: rowWarnings,
       confidence: rowConfidence,
       notes: (r.extraction_notes as string | undefined) ?? null,
       workflow_output: minimalWorkflowOutput,
@@ -1263,7 +1283,7 @@ function buildReviewPayload(opts: {
     }
     const fieldConfidences = (r._field_confidences ?? {}) as Record<string, number>;
     const fieldSources = (r._field_sources ?? {}) as Record<string, string>;
-    const fieldEvidence = (r._field_evidence ?? {}) as Record<string, { source_text?: string | null; source_page?: number | null }>;
+    const fieldEvidence = (r._field_evidence ?? {}) as Record<string, { source_text?: string | null; source_page?: number | null; extraction_status?: string | null; candidates?: unknown[]; conflict_candidates?: unknown[]; selected_candidate_id?: string | null }>;
     // Release 1: calculator.ts's Step6 (_shared/extraction/calculator.ts)
     // computes a real derivation trace for every field it derives (e.g.
     // "monthly_rent(1470) x 12" for annual_rent), but this was previously
@@ -1391,6 +1411,10 @@ function buildReviewPayload(opts: {
       const mergedSourcePage = selectedEvidence?.verifiedPage ?? null;
       const hasEvidence = typeof mergedSourceText === "string" && mergedSourceText.length > 0 && mergedSourcePage != null;
       const effectiveConfidence = normalizeConfidence(fieldConfidences[fieldKey]) ?? rowConfidence;
+      const serverExtractionStatus = String(llmEvidence?.canonical_status ?? llmEvidence?.extraction_status ?? "").toLowerCase();
+      const serverCandidates = Array.isArray(llmEvidence?.candidates) ? llmEvidence.candidates : [];
+      const serverConflictCandidates = Array.isArray(llmEvidence?.conflict_candidates) ? llmEvidence.conflict_candidates : [];
+      const serverConflictCandidateIds = Array.isArray(llmEvidence?.conflict_candidate_ids) ? llmEvidence.conflict_candidate_ids : serverConflictCandidates;
       let inferredStatus = value == null || value === ""
         ? "missing"
         : workflowField?.extraction_status === "calculated"
@@ -1410,7 +1434,9 @@ function buildReviewPayload(opts: {
       }
       const workflowStatus = String(workflowField?.extraction_status ?? "").toLowerCase();
       const finalStatus =
-        inferredStatus === "needs_review"
+        serverExtractionStatus === "conflict" || serverExtractionStatus === "conflict_detected"
+          ? "conflict_detected"
+          : inferredStatus === "needs_review"
           ? "needs_review"
           : workflowStatus === "calculated"
             ? "calculated"
@@ -1440,7 +1466,20 @@ function buildReviewPayload(opts: {
           // previously had no UI-visible provenance at all.
           derivation_trace: workflowField?.derivation_trace ?? calculatorDerivationTraces?.[fieldKey] ?? null,
           source_field_keys: workflowField?.source_field_keys ?? calculatorDerivationSourceFields?.[fieldKey] ?? undefined,
+          candidates: serverCandidates,
+          conflict_candidates: serverConflictCandidates,
+          conflict_candidate_ids: serverConflictCandidateIds,
+          selected_candidate_id: llmEvidence?.selected_candidate_id ?? null,
+          decision: llmEvidence?.decision ?? null,
         },
+        candidates: serverCandidates,
+        conflictCandidates: serverConflictCandidates,
+        selectedCandidateId: llmEvidence?.selected_candidate_id ?? null,
+        conflictCandidateIds: serverConflictCandidateIds,
+        canonicalStatus: llmEvidence?.canonical_status ?? null,
+        resolutionState: llmEvidence?.resolution_state ?? null,
+        requiresReview: llmEvidence?.requires_review ?? undefined,
+        decision: llmEvidence?.decision ?? null,
         status: finalStatus,
         editable: workflowField?.editable ?? true,
         validationErrors: Array.isArray(workflowField?.validation_errors) ? workflowField.validation_errors : [],
@@ -1479,7 +1518,13 @@ function buildReviewPayload(opts: {
       standardValues: values,
     });
     const customFields = [...customFieldsFromRows, ...customFieldsFromDocument];
+    const duplicateCanonicalFields = findDuplicateCanonicalReviewFields([...standardFields, ...customFields]);
     const missingRequired = requiredFields.filter((field) => isBlank(values[field]));
+    const rowValidationErrors = duplicateCanonicalFields;
+    const rowWarnings = [
+      ...(missingRequired.length > 0 ? [`Missing required fields: ${missingRequired.join(", ")}`] : []),
+      ...(duplicateCanonicalFields.length > 0 ? [`Duplicate canonical fields: ${duplicateCanonicalFields.map((item) => item.field_key).join(", ")}`] : []),
+    ];
 
     return {
       row_index: index,
@@ -1501,9 +1546,8 @@ function buildReviewPayload(opts: {
       custom_fields: customFields,
       missing_required: missingRequired,
       rejected_fields: [],
-      warnings: missingRequired.length > 0
-        ? [`Missing required fields: ${missingRequired.join(", ")}`]
-        : [],
+      validation_errors: rowValidationErrors,
+      warnings: rowWarnings,
       confidence: rowConfidence,
       notes: (r.extraction_notes as string | undefined) ?? null,
       workflow_output: workflowOutput,
@@ -1585,6 +1629,28 @@ function rejectMarkupValue(value: unknown): boolean {
   return typeof value === "string" && MARKUP_VALUE_RE.test(value);
 }
 
+function findDuplicateCanonicalReviewFields(fields: Array<Record<string, any>>) {
+  const seen = new Set<string>();
+  const duplicates: Array<{ code: string; field_key: string; canonical_field_key: string; scope_key: string }> = [];
+  for (const field of fields) {
+    const canonicalFieldKey = String(field?.canonical_field_key ?? field?.field_key ?? "").trim();
+    if (!canonicalFieldKey) continue;
+    const scopeKey = String(field?.scope_key ?? "lease").trim() || "lease";
+    const uniqueKey = `${scopeKey}:${canonicalFieldKey}`;
+    if (seen.has(uniqueKey)) {
+      duplicates.push({
+        code: "DUPLICATE_CANONICAL_FIELD",
+        field_key: String(field?.field_key ?? canonicalFieldKey),
+        canonical_field_key: canonicalFieldKey,
+        scope_key: scopeKey,
+      });
+      continue;
+    }
+    seen.add(uniqueKey);
+  }
+  return duplicates;
+}
+
 function buildReviewField(opts: {
   recordIndex: number;
   fieldKey: string;
@@ -1599,11 +1665,23 @@ function buildReviewField(opts: {
   status?: string;
   editable?: boolean;
   validationErrors?: string[];
+  candidates?: unknown[];
+  conflictCandidates?: unknown[];
+  conflictCandidateIds?: unknown[];
+  selectedCandidateId?: string | null;
+  canonicalStatus?: string | null;
+  resolutionState?: string | null;
+  requiresReview?: boolean;
+  decision?: Record<string, unknown> | null;
 }) {
   const hasMarkup = rejectMarkupValue(opts.value);
   const effectiveValue = hasMarkup ? null : (opts.value ?? null);
   const blank = isBlank(effectiveValue);
   const status = hasMarkup ? "needs_review" : opts.status;
+  const hasEvidence = Boolean(opts.evidence);
+  const canonicalStatus = normalizeLeaseReviewFieldStatus(opts.canonicalStatus ?? status, { value: effectiveValue, hasEvidence });
+  const resolutionState = opts.resolutionState ?? resolutionStateForStatus(canonicalStatus, opts.selectedCandidateId ?? null);
+  const requiresReview = opts.requiresReview ?? (canonicalStatus === "conflict" || canonicalStatus === "invalid" || canonicalStatus === "manual_review" || canonicalStatus === "insufficient_evidence");
   const baseValidationErrors = Array.isArray(opts.validationErrors) ? opts.validationErrors : [];
   const validationErrors = hasMarkup
     ? [...baseValidationErrors, "Rejected: extracted value contained HTML/markup fragments"]
@@ -1611,6 +1689,8 @@ function buildReviewField(opts: {
   return {
     id: `${opts.recordIndex}:${opts.isStandard ? "standard" : "custom"}:${opts.fieldKey}`,
     field_key: opts.fieldKey,
+    canonical_field_key: opts.fieldKey,
+    scope_key: "lease",
     label: humanizeFieldName(opts.fieldKey),
     value: effectiveValue,
     original_value: effectiveValue,
@@ -1624,7 +1704,16 @@ function buildReviewField(opts: {
     editable: opts.editable ?? true,
     extraction_status: status ?? (blank ? "not_found" : "extracted"),
     status: status ?? (blank ? "missing" : "pending"),
+    canonical_status: canonicalStatus,
+    resolution_state: resolutionState,
+    requires_review: requiresReview,
+    authoritative_value: getAuthoritativeFieldValue({ value: effectiveValue, status, canonical_status: canonicalStatus, review_status: null, evidence: opts.evidence }),
     validation_errors: validationErrors,
+    candidates: opts.candidates ?? [],
+    conflict_candidates: opts.conflictCandidates ?? [],
+    conflict_candidate_ids: opts.conflictCandidateIds ?? opts.conflictCandidates ?? [],
+    selected_candidate_id: opts.selectedCandidateId ?? null,
+    decision: opts.decision ?? null,
     accepted: false,
     rejected: false,
     user_edit: null,
@@ -2370,7 +2459,7 @@ Deno.serve(async (req: Request) => {
   // ensureSettled(), even on an early auth/validation failure.
   let stage: StageHandle | null = null;
 
-  // ── Auth guard ──────────────────────────────────────────────────────────────
+  // -- Auth guard --------------------------------------------------------------
   // Called from both browser (user JWT via ingest-file) and internally from
   // lease-extraction-worker (service-role Bearer + x-internal-service-key).
   // With verify_jwt=false the Supabase platform skips its own JWT check, so
@@ -2680,13 +2769,13 @@ Deno.serve(async (req: Request) => {
     const doclingBlockCount = Array.isArray((fileRecord.docling_raw as any)?.text_blocks)
       ? (fileRecord.docling_raw as any).text_blocks.length
       : 0;
-    // A document with ≥2 500 chars AND ≥5 text blocks has enough content
+    // A document with >=2 500 chars AND >=5 text blocks has enough content
     // for rule/table/LLM extraction without Vision. These thresholds match
     // the MIN_NATIVE_PDF_TEXT_CHARS and MIN_DIGITAL_BLOCKS constants in
     // _shared/extraction/parser.ts.
-    // A document with ≥2500 chars AND ≥5 text blocks has enough content for
+    // A document with >=2500 chars AND >=5 text blocks has enough content for
     // rule/table/LLM extraction without Vision. The second condition catches
-    // plain-text OCR fallback results (0 text_blocks but full_text ≥ 5000 chars)
+    // plain-text OCR fallback results (0 text_blocks but full_text >= 5000 chars)
     // — re-downloading the file in that case would be redundant and OOM the function.
     const doclingTextIsGood = doclingTextLength >= 2500 && (doclingBlockCount >= 5 || doclingTextLength >= 5000);
     const azureLayoutMode =
@@ -3085,7 +3174,7 @@ Deno.serve(async (req: Request) => {
         }, 422);
       }
 
-      // ── Fast core-field persist ─────────────────────────────────────────
+      // -- Fast core-field persist -----------------------------------------
       // Persist a minimal, schema-versioned payload from the raw rule/table/
       // LLM values BEFORE buildReviewPayload() runs its expensive workflow
       // abstraction + clause records + per-field evidence-page verification
@@ -3175,7 +3264,7 @@ Deno.serve(async (req: Request) => {
         `values=${minimalValueCount} source_backed=${minimalSourceBackedCount} core_ready=${minimalPayload.core_ready}`,
       );
 
-      // ── Document Intelligence v3 side-write (Phase 2, opt-in) ────────────
+      // -- Document Intelligence v3 side-write (Phase 2, opt-in) ------------
       // Runs only when ENABLE_DOCUMENT_INTELLIGENCE_V3=true (checked first
       // thing inside runDocumentIntelligenceV3SideWrite -- zero DB calls
       // when unset, matching current default behavior exactly). Placed
@@ -3204,7 +3293,7 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      // ── P0.1: defer the expensive evidence/clause pass ───────────────────
+      // -- P0.1: defer the expensive evidence/clause pass -------------------
       // By default (NORMALIZE_INLINE_ENRICHMENT unset/false), return success
       // right here — the minimal payload above is already durable and
       // review-worthy (P0.2). The evidence/clause pass (buildReviewPayload,
@@ -3278,7 +3367,7 @@ Deno.serve(async (req: Request) => {
         (result as Record<string, unknown>).workflow_output = uiReviewPayload.metadata.workflow_output;
       }
 
-      // ── Consolidated extraction_debug ──────────────────────────────────
+      // -- Consolidated extraction_debug ----------------------------------
       // Merge the pipeline's parser/vision diagnostics with the workflow's
       // profile + mapping + expense-rule diagnostics into one object using
       // canonical key names, then surface mapping_failure_reason. The debug

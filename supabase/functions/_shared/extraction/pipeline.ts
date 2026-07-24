@@ -176,6 +176,50 @@ function getAllExtractableFieldNames(moduleType: ModuleType): string[] {
     .map(([name]) => name);
 }
 
+export const HIGH_RISK_LEASE_COMPETING_CANDIDATE_FIELDS = [
+  "cam_amount",
+  "cam_cap_type",
+  "cam_cap_pct",
+  "admin_fee_pct",
+  "management_fee_basis",
+  "gross_up_enabled",
+  "gross_up_threshold",
+  "base_year",
+  "expense_stop",
+  "responsibility_taxes",
+  "responsibility_insurance",
+  "responsibility_utilities",
+  "responsibility_repairs",
+  "tenant_pro_rata_share",
+  "hvac_responsibility",
+  "tenant_insurance_required",
+  "general_liability_min",
+  "property_insurance_responsibility",
+  "waiver_of_subrogation",
+  "additional_insureds_required",
+  "security_deposit",
+  "escalation_rate",
+  "escalation_type",
+  "escalation_timing",
+  "renewal_options",
+  "renewal_type",
+  "renewal_notice_months",
+  "option_exercise_deadline",
+  "termination_notice_months",
+  "early_termination_option",
+  "assignment_provisions",
+  "default_cure_period",
+  "commencement_date",
+  "expiration_date",
+  "rent_commencement_date",
+] as const;
+
+function getHighRiskLeaseCandidateFields(moduleType: ModuleType): string[] {
+  if (!["lease", "leases"].includes(String(moduleType))) return [];
+  const schema = getSchema(moduleType);
+  return HIGH_RISK_LEASE_COMPETING_CANDIDATE_FIELDS.filter((field) => schema[field] && !schema[field].derived);
+}
+
 export function snapshotFieldMap(records: any[]): Record<string, Record<string, unknown>> {
   const first = records?.[0]?.fields ?? {};
   const out: Record<string, Record<string, unknown>> = {};
@@ -186,6 +230,15 @@ export function snapshotFieldMap(records: any[]): Record<string, Record<string, 
       confidence: (entry as any)?.confidence ?? null,
       source_text: (entry as any)?.sourceText ?? (entry as any)?.source_text ?? null,
       source_page: (entry as any)?.sourcePage ?? (entry as any)?.source_page ?? null,
+      extraction_status: (entry as any)?.extractionStatus ?? (entry as any)?.extraction_status ?? null,
+      candidates: (entry as any)?.candidates ?? [],
+      conflict_candidates: (entry as any)?.conflictCandidates ?? (entry as any)?.conflict_candidates ?? [],
+      conflict_candidate_ids: (entry as any)?.conflictCandidateIds ?? (entry as any)?.conflict_candidate_ids ?? (entry as any)?.conflictCandidates ?? [],
+      canonical_status: (entry as any)?.canonicalStatus ?? (entry as any)?.canonical_status ?? null,
+      resolution_state: (entry as any)?.resolutionState ?? (entry as any)?.resolution_state ?? null,
+      requires_review: (entry as any)?.requiresReview ?? (entry as any)?.requires_review ?? false,
+      decision: (entry as any)?.decision ?? null,
+      selected_candidate_id: (entry as any)?.selectedCandidateId ?? (entry as any)?.selected_candidate_id ?? null,
     };
   }
   return out;
@@ -312,17 +365,18 @@ export async function runExtractionPipeline(
   let llmResult = { records: [], warnings: [] as string[] };
   let llmFieldCount = 0;
   let chunksProcessed = 0;
+  const highRiskCandidateFields = getHighRiskLeaseCandidateFields(moduleType);
 
   if (!skipLLM) {
     const initialMissingFields = findMissingFields(ruleResult, tableResult, moduleType);
     const missingFields = shallowLeaseTextDetected
       ? [...new Set([...initialMissingFields, ...getAllExtractableFieldNames(moduleType)])]
-      : initialMissingFields;
+      : [...new Set([...initialMissingFields, ...highRiskCandidateFields])];
     log.step(
       3,
-      "LLM Extraction (fallback)",
+      "LLM Extraction (fallback + high-risk candidates)",
       `missing=${missingFields.length} fields: [${missingFields.join(", ")}]` +
-        (shallowLeaseTextDetected ? " (full lease field pass because parser text is shallow)" : ""),
+        (shallowLeaseTextDetected ? " (full lease field pass because parser text is shallow)" : (highRiskCandidateFields.length ? " (competing high-risk candidates=" + highRiskCandidateFields.length + ")" : "")),
     );
 
     if (missingFields.length > 0) {
@@ -547,6 +601,7 @@ export async function runExtractionPipeline(
         shallow_lease_text_detected: shallowLeaseTextDetected,
         shallow_lease_text_threshold: LEASE_SHALLOW_TEXT_THRESHOLD,
         llm_all_fields_due_to_shallow_text: shallowLeaseTextDetected,
+        llm_competing_candidate_fields: highRiskCandidateFields,
         weak_text_detected: weakTextDetected,
         weak_text_threshold: WEAK_TEXT_THRESHOLD,
         fileBase64_available: fileBase64Available,

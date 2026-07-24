@@ -27,7 +27,7 @@
  */
 
 import type { FieldDef } from "./schemas.ts";
-import type { ModuleType } from "./types.ts";
+import type { ModuleType, CandidateReasonCode } from "./types.ts";
 
 // Bumped only when the decision order/semantics in evaluateCandidateForField
 // change in a way that could shift historical accept/reject/needs_review
@@ -48,6 +48,7 @@ export interface EvidenceValidationResult {
   matchedRequiredTerms: string[];
   matchedRejectedTerms: string[];
   reasons: string[];
+  reasonCodes: CandidateReasonCode[];
 }
 
 function bareCategory(factCategory: string | null | undefined): string | null {
@@ -67,9 +68,79 @@ function unconstrained(reason: string): EvidenceValidationResult {
     matchedRequiredTerms: [],
     matchedRejectedTerms: [],
     reasons: [reason],
+    reasonCodes: ["MODEL_ONLY_UNSUPPORTED"],
   };
 }
 
+
+function compactText(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function valueFoundInEvidence(value: unknown, sourceText: string): boolean {
+  const valueText = compactText(value);
+  if (!valueText || !sourceText) return false;
+  const evidenceText = compactText(sourceText);
+  return evidenceText.includes(valueText) || evidenceText.includes(valueText.replace(/[#]/g, ""));
+}
+
+function semanticPolicyFindings(fieldKey: string, value: unknown, sourceText: string): Array<{ decision: "reject" | "needs_review"; reason: string; code: CandidateReasonCode }> {
+  const findings: Array<{ decision: "reject" | "needs_review"; reason: string; code: CandidateReasonCode }> = [];
+  const valueText = compactText(value);
+  const text = compactText(sourceText);
+  const hasUtilityPaymentAnchor = /\b(?:electric(?:ity|al)?\s+(?:service|charges?|costs?|utilities|meter|submeter|payment|bills?)|power\s+(?:service|charges?|costs?|meter|payment)|utilities?|metered|submetered|direct\s+payment|pay\s+(?:for\s+)?electric)\b/i.test(sourceText);
+  const hasRepairOnlyElectricAnchor = /\b(?:electrical\s+(?:wiring|systems?|fixtures?|equipment)|repair|maintain|maintenance|replace|damage)\b/i.test(sourceText) && !hasUtilityPaymentAnchor;
+
+  if ((fieldKey === "unit_number" || fieldKey === "suite_number" || fieldKey === "floor") && valueText) {
+    const first = valueText.split(/\s+/)[0];
+    if (/^(?:in|at|of|the|and|to|from|for|with|on|by|as|is|be|not|no|per|premises|tenant|landlord)$/.test(first)) {
+      findings.push({ decision: "reject", reason: `${fieldKey} value "${value}" is a word fragment, not a suite/unit/floor identifier`, code: "VALUE_SHAPE_INVALID" });
+    }
+  }
+
+  if (fieldKey === "property_name") {
+    const badTimingFragment = /\b(?:one\s*\(1\)\s+day|calendar\s+year|\bdays?\b|\bshall\b|\bmust\b|\bmay\b)\b/i.test(String(value ?? ""));
+    const legitimatePropertyContext = /\b(?:shopping\s+center|building|plaza|center|mall|development|project|complex|park|village)\b/i.test(String(value ?? ""));
+    if (badTimingFragment && !legitimatePropertyContext) {
+      findings.push({ decision: "reject", reason: `property_name value "${value}" looks like timing/obligation text, not a property name`, code: "VALUE_SHAPE_INVALID" });
+    }
+    if (sourceText && /\b(?:parking|common\s+area|calendar\s+year|one\s*\(1\)\s+day)\b/i.test(sourceText) && !/\b(?:premises|property\s+name|shopping\s+center\s+known\s+as|located\s+in)\b/i.test(sourceText)) {
+      findings.push({ decision: "reject", reason: "property_name evidence came from parking/common-area timing text instead of premises/property identification", code: "WRONG_CLAUSE_CATEGORY" });
+    }
+  }
+
+  if (["responsibility_insurance", "insurance_responsibility", "property_insurance_responsibility"].includes(fieldKey)) {
+    if (/\b(?:waiver\s+of\s+subrogation|subrogat(?:e|ion)|indemnif|casualty\s+proceeds|limitation\s+of\s+liability)\b/i.test(sourceText)) {
+      findings.push({ decision: "reject", reason: `${fieldKey} cannot be supported by waiver/subrogation/indemnity evidence`, code: "WRONG_CLAUSE_CATEGORY" });
+    }
+  }
+
+  if (fieldKey === "electric_responsibility" || fieldKey === "responsibility_utilities") {
+    if (hasRepairOnlyElectricAnchor) {
+      findings.push({ decision: "reject", reason: `${fieldKey} requires utility-payment or metering evidence; repair-only electrical wording is insufficient`, code: "WRONG_CLAUSE_CATEGORY" });
+    }
+  }
+
+  if (fieldKey === "landlord_consent_for_transfer" || fieldKey === "assignment_provisions") {
+    const conditionalConsent = /\bif\s+landlord\s+consents?\b|\bsubject\s+to\s+landlord'?s\s+consent\b/i.test(sourceText);
+    const soleDiscretion = /\bsole\s+(?:and\s+)?absolute\s+discretion\b|\bwithhold\s+consent\s+for\s+any\s+reason\b/i.test(sourceText);
+    if ((conditionalConsent || soleDiscretion) && /\b(?:shall|must)\s+consent\b/i.test(String(value ?? ""))) {
+      findings.push({ decision: "reject", reason: "conditional or discretionary assignment consent was converted into a mandatory consent obligation", code: conditionalConsent ? "CONDITIONAL_LANGUAGE" : "SCOPE_MATCH" });
+    } else if (conditionalConsent || soleDiscretion) {
+      findings.push({ decision: "needs_review", reason: "assignment consent evidence contains conditional/discretionary modality and requires review", code: conditionalConsent ? "CONDITIONAL_LANGUAGE" : "SCOPE_MATCH" });
+    }
+  }
+
+  if (fieldKey === "additional_insureds_required" && /^additional insureds?$/i.test(String(sourceText ?? "").trim())) {
+    findings.push({ decision: "reject", reason: "additional insured heading alone is not operative evidence", code: "HEADING_ONLY" });
+  }
+
+  if (value != null && sourceText && !valueFoundInEvidence(value, sourceText) && /^(?:property_name|unit_number|suite_number|cam_cap_pct|admin_fee_pct|gross_up_threshold|general_liability_min)$/.test(fieldKey)) {
+    findings.push({ decision: "needs_review", reason: `candidate value "${value}" was not found verbatim in the cited evidence`, code: "MODEL_ONLY_UNSUPPORTED" });
+  }
+
+  return findings;
+}
 export function evaluateCandidateForField(args: {
   field: FieldDef;
   fieldKey: string;
@@ -113,6 +184,7 @@ export function evaluateCandidateForField(args: {
   const matchedRejectedCategories: string[] = [];
   const matchedRequiredTerms: string[] = [];
   const matchedRejectedTerms: string[] = [];
+  const reasonCodes: CandidateReasonCode[] = [];
 
   // Step 2: classified category explicitly rejected — hard veto.
   if (category && rejectedCategories.includes(category)) {
@@ -120,6 +192,7 @@ export function evaluateCandidateForField(args: {
     decision = "reject";
     categoryMatch = false;
     reasons.push(`fact category "clause:${category}" is rejected for ${fieldKey}`);
+    reasonCodes.push("WRONG_CLAUSE_CATEGORY");
   }
 
   // Step 3: source text matches a field-specific exclusion pattern — hard
@@ -131,6 +204,7 @@ export function evaluateCandidateForField(args: {
         matchedRejectedTerms.push(pattern.source);
         decision = "reject";
         reasons.push(`source text matched a rejected evidence pattern for ${fieldKey}: ${pattern.source}`);
+        reasonCodes.push("WRONG_CLAUSE_CATEGORY");
         break;
       }
     }
@@ -147,6 +221,7 @@ export function evaluateCandidateForField(args: {
         matchedRejectedTerms.push(pattern.source);
         decision = "reject";
         reasons.push(`value matched a rejected value pattern for ${fieldKey}: ${pattern.source}`);
+        reasonCodes.push("VALUE_SHAPE_INVALID");
         break;
       }
     }
@@ -160,6 +235,7 @@ export function evaluateCandidateForField(args: {
     categoryMatch = true;
     domainMatch = true;
     reasons.push(`fact category "clause:${category}" is allowed for ${fieldKey}`);
+    reasonCodes.push("CORRECT_CLAUSE_CATEGORY");
   }
 
   // Step 5: classified category present, non-default, allow-list non-empty,
@@ -170,6 +246,7 @@ export function evaluateCandidateForField(args: {
     categoryMatch = false;
     decision = "needs_review";
     reasons.push(`fact category "clause:${category}" is neither allowed nor rejected for ${fieldKey}`);
+    reasonCodes.push("WRONG_CLAUSE_CATEGORY");
   }
 
   // Step 6: no usable category (legacy path, or fact-ledger classified as
@@ -190,15 +267,36 @@ export function evaluateCandidateForField(args: {
     if (matchedRequiredTerms.length > 0) {
       domainMatch = true;
       reasons.push(`source text matched a required/label term for ${fieldKey}`);
+      reasonCodes.push("HAS_EVIDENCE", "VALUE_SHAPE_VALID");
       decision = "accept";
     } else if (policy === "enforced") {
       decision = "needs_review";
       reasons.push(`no category available and no required/label term matched for ${fieldKey} (enforced policy)`);
+      reasonCodes.push("MODEL_ONLY_UNSUPPORTED");
     } else {
       decision = "unconstrained";
     }
   }
 
+
+  // Stage A semantic field policies: targeted legal/evidence guards for known
+  // high-risk failure modes. These run after base evidence policy so high
+  // confidence cannot override wrong-domain, heading-only, conditional, or
+  // value-shape failures.
+  if (sourceText) {
+    for (const finding of semanticPolicyFindings(fieldKey, args.value, sourceText)) {
+      reasons.push(finding.reason);
+      reasonCodes.push(finding.code);
+      if (finding.decision === "reject") {
+        decision = "reject";
+        domainMatch = false;
+        break;
+      }
+      if (decision !== "reject") {
+        decision = "needs_review";
+      }
+    }
+  }
   // Step 7: advisory fields report the same signal but never hard-reject —
   // the configuration gap is intentional and visible (see
   // getEvidencePolicyCoverage), not silently enforced everywhere at once.
@@ -217,5 +315,6 @@ export function evaluateCandidateForField(args: {
     matchedRequiredTerms,
     matchedRejectedTerms,
     reasons,
+    reasonCodes: [...new Set(reasonCodes)],
   };
 }

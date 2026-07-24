@@ -20,6 +20,66 @@ export const SOURCE_CONFIDENCE: Record<ExtractionSource, number> = {
 
 // ── Core extraction types ────────────────────────────────────────────────────
 
+export interface ExtractionCandidate {
+  candidateId: string;
+  fieldKey: string;
+  rawValue: unknown;
+  normalizedValue: unknown;
+  source: ExtractionSource;
+  confidence: number;
+  clauseCategory: string | null;
+  evidenceIds: string[];
+  validationErrors: string[];
+  sourceText: string | null;
+  sourcePage: number | null;
+  createdAt: string;
+}
+export type LeaseReviewFieldStatus =
+  | "extracted"
+  | "derived"
+  | "not_stated"
+  | "not_applicable"
+  | "insufficient_evidence"
+  | "conflict"
+  | "invalid"
+  | "manual_review";
+
+export type CandidateReasonCode =
+  | "HAS_EVIDENCE"
+  | "VALUE_FOUND_IN_EVIDENCE"
+  | "CORRECT_CLAUSE_CATEGORY"
+  | "WRONG_CLAUSE_CATEGORY"
+  | "ACTOR_MATCH"
+  | "ACTION_MATCH"
+  | "SCOPE_MATCH"
+  | "EXPLICIT_OPERATIVE_LANGUAGE"
+  | "CONDITIONAL_LANGUAGE"
+  | "NEGATED_LANGUAGE"
+  | "HEADING_ONLY"
+  | "TABLE_HEADER_MATCH"
+  | "VALUE_SHAPE_VALID"
+  | "VALUE_SHAPE_INVALID"
+  | "ENUM_VALID"
+  | "ENUM_INVALID"
+  | "CROSS_FIELD_CONSISTENT"
+  | "CROSS_FIELD_CONFLICT"
+  | "AMENDMENT_PRECEDENCE"
+  | "OCR_LOW_CONFIDENCE"
+  | "DUPLICATE_ALIAS"
+  | "MODEL_ONLY_UNSUPPORTED";
+
+export interface CandidateDecisionRecord {
+  decisionId: string;
+  extractionRunId: string;
+  fieldKey: string;
+  status: "selected" | "conflict" | "not_stated" | "insufficient_evidence" | "manual_review";
+  selectedCandidateId: string | null;
+  conflictCandidateIds: string[];
+  scores: Record<string, number>;
+  reasons: Record<string, CandidateReasonCode[]>;
+  policyVersion: string;
+  createdAt: string;
+}
 /** A single extracted field with provenance */
 export interface ExtractedField {
   value: unknown;
@@ -27,6 +87,16 @@ export interface ExtractedField {
   confidence: number;
   sourceText?: string; // the raw text snippet this was extracted from
   sourcePage?: number | null; // page number in the source document, if known
+  extractionStatus?: "extracted" | "needs_review" | "conflict_detected" | "not_found" | "conflict" | "invalid" | "manual_review" | "insufficient_evidence" | "not_stated";
+  canonicalStatus?: LeaseReviewFieldStatus;
+  resolutionState?: "authoritative" | "provisional" | "unresolved";
+  requiresReview?: boolean;
+  selectedCandidateId?: string | null;
+  candidates?: ExtractionCandidate[];
+  conflictCandidateIds?: string[];
+  /** @deprecated Compatibility only. Store candidate IDs here, not duplicated candidate objects. */
+  conflictCandidates?: string[];
+  decision?: CandidateDecisionRecord | null;
   /** Set by candidate-decision.ts's evaluateCandidateForField() when this
    *  candidate's domain match was ambiguous ("needs_review") — the merge
    *  still accepted it (preserving pre-Release-1 merge behavior), but it's

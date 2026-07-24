@@ -16,9 +16,9 @@
  *   - LLM fields are matched by row index
  */
 
-import type { ExtractedField, ExtractedRecord, StepResult, ModuleType } from "./types.ts";
+import type { CandidateDecisionRecord, ExtractedField, ExtractedRecord, StepResult, ModuleType } from "./types.ts";
 import { getSchema } from "./schemas.ts";
-import { evaluateCandidateForField } from "./candidate-decision.ts";
+import { CANDIDATE_DECISION_VERSION, evaluateCandidateForField } from "./candidate-decision.ts";
 
 /** Priority order for tie-breaking */
 const SOURCE_PRIORITY: Record<string, number> = {
@@ -128,6 +128,158 @@ export function mergeResults(
   return { records: merged, warnings, rejectedCandidates };
 }
 
+const HIGH_RISK_CONFLICT_FIELDS = new Set([
+  "cam_amount",
+  "cam_cap_type",
+  "cam_cap_pct",
+  "admin_fee_pct",
+  "management_fee_basis",
+  "gross_up_enabled",
+  "gross_up_threshold",
+  "base_year",
+  "expense_stop",
+  "responsibility_taxes",
+  "responsibility_insurance",
+  "responsibility_utilities",
+  "responsibility_repairs",
+  "tenant_pro_rata_share",
+  "hvac_responsibility",
+  "tenant_insurance_required",
+  "general_liability_min",
+  "property_insurance_responsibility",
+  "waiver_of_subrogation",
+  "additional_insureds_required",
+  "security_deposit",
+  "escalation_rate",
+  "escalation_type",
+  "escalation_timing",
+  "renewal_options",
+  "renewal_type",
+  "renewal_notice_months",
+  "option_exercise_deadline",
+  "termination_notice_months",
+  "early_termination_option",
+  "assignment_provisions",
+  "default_cure_period",
+  "commencement_date",
+  "expiration_date",
+  "rent_commencement_date",
+]);
+
+function stableString(value: unknown): string {
+  if (value == null) return "";
+  if (Array.isArray(value)) return `[${value.map(stableString).join(",")}]`;
+  if (typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}:${stableString(v)}`).join(",")}}`;
+  }
+  return String(value).trim().toLowerCase().replace(/[$,\s]+/g, " ");
+}
+
+function candidateIdFor(fieldKey: string, field: ExtractedField): string {
+  const raw = `${fieldKey}|${field.source}|${stableString(field.value)}|${String(field.sourceText ?? "").slice(0, 160)}|${field.sourcePage ?? ""}`;
+  let hash = 0;
+  for (let i = 0; i < raw.length; i++) hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
+  return `${fieldKey}:${field.source}:${Math.abs(hash).toString(36)}`;
+}
+
+function toCandidate(fieldKey: string, field: ExtractedField) {
+  return {
+    candidateId: candidateIdFor(fieldKey, field),
+    fieldKey,
+    rawValue: field.value ?? null,
+    normalizedValue: field.value ?? null,
+    source: field.source,
+    confidence: field.confidence ?? 0,
+    clauseCategory: null,
+    evidenceIds: [],
+    validationErrors: [],
+    sourceText: field.sourceText ?? null,
+    sourcePage: field.sourcePage ?? null,
+    createdAt: new Date(0).toISOString(),
+  };
+}
+
+function mergeCandidateLists(fieldKey: string, existing: ExtractedField | null | undefined, incoming: ExtractedField) {
+  const byId = new Map<string, any>();
+  for (const candidate of [...((existing as any)?.candidates ?? [])]) {
+    if (candidate?.candidateId) byId.set(candidate.candidateId, candidate);
+  }
+  if (existing) {
+    const existingCandidate = toCandidate(fieldKey, existing);
+    byId.set(existingCandidate.candidateId, existingCandidate);
+  }
+  const incomingCandidate = toCandidate(fieldKey, incoming);
+  byId.set(incomingCandidate.candidateId, incomingCandidate);
+  return [...byId.values()];
+}
+
+function candidateHasEvidence(field: ExtractedField): boolean {
+  return Boolean(field.sourceText && String(field.sourceText).trim()) || field.sourcePage != null;
+}
+
+function isStrongCandidate(field: ExtractedField): boolean {
+  return field.value !== null && field.value !== undefined && String(field.value).trim() !== "" && (field.confidence ?? 0) >= 0.7 && candidateHasEvidence(field);
+}
+
+function valuesDisagree(left: unknown, right: unknown): boolean {
+  const a = stableString(left);
+  const b = stableString(right);
+  return Boolean(a && b && a !== b);
+}
+
+function shouldFlagConflict(fieldKey: string, existing: ExtractedField, incoming: ExtractedField): boolean {
+  return HIGH_RISK_CONFLICT_FIELDS.has(fieldKey) && isStrongCandidate(existing) && isStrongCandidate(incoming) && valuesDisagree(existing.value, incoming.value);
+}
+
+function sourcePriority(field: ExtractedField): number {
+  return SOURCE_PRIORITY[field.source] ?? 0;
+}
+
+function selectPreferred(existing: ExtractedField, incoming: ExtractedField): ExtractedField {
+  if ((incoming.confidence ?? 0) > (existing.confidence ?? 0)) return incoming;
+  if ((incoming.confidence ?? 0) === (existing.confidence ?? 0) && sourcePriority(incoming) > sourcePriority(existing)) return incoming;
+  return existing;
+}
+
+function decisionIdFor(fieldKey: string, candidateIds: string[], status: CandidateDecisionRecord["status"]): string {
+  const raw = `${fieldKey}|${status}|${candidateIds.join("|")}`;
+  let hash = 0;
+  for (let i = 0; i < raw.length; i++) hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
+  return `${fieldKey}:decision:${Math.abs(hash).toString(36)}`;
+}
+
+function buildCandidateDecisionRecord(args: {
+  fieldKey: string;
+  status: CandidateDecisionRecord["status"];
+  selectedCandidateId: string | null;
+  conflictCandidateIds?: string[];
+  candidates: any[];
+  reasonCodes?: string[];
+}): CandidateDecisionRecord {
+  const scores: Record<string, number> = {};
+  const reasons: Record<string, any[]> = {};
+  for (const candidate of args.candidates) {
+    if (!candidate?.candidateId) continue;
+    scores[candidate.candidateId] = Number(candidate.confidence ?? 0);
+    reasons[candidate.candidateId] = Array.isArray(candidate.validationErrors) && candidate.validationErrors.length
+      ? candidate.validationErrors
+      : [];
+  }
+  if (args.reasonCodes?.length && args.selectedCandidateId) reasons[args.selectedCandidateId] = [...new Set([...(reasons[args.selectedCandidateId] ?? []), ...args.reasonCodes])];
+  const ids = args.conflictCandidateIds ?? args.candidates.map((candidate) => candidate?.candidateId).filter(Boolean);
+  return {
+    decisionId: decisionIdFor(args.fieldKey, ids, args.status),
+    extractionRunId: "legacy_hybrid_runtime",
+    fieldKey: args.fieldKey,
+    status: args.status,
+    selectedCandidateId: args.selectedCandidateId,
+    conflictCandidateIds: ids,
+    scores,
+    reasons,
+    policyVersion: CANDIDATE_DECISION_VERSION,
+    createdAt: new Date(0).toISOString(),
+  };
+}
 /**
  * Merge a single field into the record, keeping the higher-confidence value.
  * Domain-aware (Release 1): a candidate whose source text is hard-rejected
@@ -148,6 +300,7 @@ function mergeField(
   const fieldDef = schema[key];
 
   let incomingToMerge = incoming;
+  let evaluationReasonCodes: string[] = [];
   if (fieldDef) {
     const result = evaluateCandidateForField({
       field: fieldDef,
@@ -158,12 +311,8 @@ function mergeField(
       confidence: incoming.confidence,
       sourceType: incoming.source,
     });
+    evaluationReasonCodes = result.reasonCodes ?? [];
     if (result.decision === "reject") {
-      // Hard veto — this candidate never overwrites, never merges, and
-      // never becomes `existing` for future comparisons. Previously dropped
-      // with no record anywhere; now retained for lineage (never silently
-      // discarded — matches openai-fact-ledger's rejected-candidate audit
-      // trail, which the default legacy_hybrid/merger.ts path lacked).
       rejectedCandidates.push({
         field_key: key,
         candidate_value: incoming.value,
@@ -176,28 +325,61 @@ function mergeField(
       return;
     }
     if (result.decision === "needs_review") {
-      incomingToMerge = { ...incoming, evidenceDecision: "needs_review" };
+      incomingToMerge = { ...incoming, evidenceDecision: "needs_review", extractionStatus: "needs_review" };
     }
   }
 
   if (!existing) {
-    target[key] = incomingToMerge;
+    const candidate = toCandidate(key, incomingToMerge);
+    target[key] = {
+      ...incomingToMerge,
+      canonicalStatus: incomingToMerge.extractionStatus === "needs_review" ? "manual_review" : "extracted",
+      resolutionState: incomingToMerge.extractionStatus === "needs_review" ? "unresolved" : "authoritative",
+      requiresReview: incomingToMerge.extractionStatus === "needs_review",
+      candidates: [candidate],
+      conflictCandidateIds: [],
+      conflictCandidates: [],
+      selectedCandidateId: candidate.candidateId,
+      decision: buildCandidateDecisionRecord({ fieldKey: key, status: incomingToMerge.extractionStatus === "needs_review" ? "manual_review" : "selected", selectedCandidateId: candidate.candidateId, candidates: [candidate], reasonCodes: evaluationReasonCodes }),
+    } as any;
     return;
   }
 
-  // Higher confidence wins
-  if (incomingToMerge.confidence > existing.confidence) {
-    target[key] = incomingToMerge;
+  const candidates = mergeCandidateLists(key, existing, incomingToMerge);
+  const preferred = selectPreferred(existing, incomingToMerge);
+
+  if (shouldFlagConflict(key, existing, incomingToMerge)) {
+    const selectedCandidate = toCandidate(key, preferred);
+    const conflictCandidateIds = candidates.map((candidate) => candidate.candidateId).filter(Boolean);
+    target[key] = {
+      ...preferred,
+      extractionStatus: "conflict",
+      canonicalStatus: "conflict",
+      resolutionState: selectedCandidate?.candidateId ? "provisional" : "unresolved",
+      requiresReview: true,
+      evidenceDecision: "needs_review",
+      candidates,
+      conflictCandidateIds,
+      conflictCandidates: conflictCandidateIds,
+      selectedCandidateId: selectedCandidate?.candidateId ?? null,
+      decision: buildCandidateDecisionRecord({ fieldKey: key, status: "conflict", selectedCandidateId: selectedCandidate?.candidateId ?? null, conflictCandidateIds, candidates, reasonCodes: ["CROSS_FIELD_CONFLICT"] }),
+    } as any;
     return;
   }
 
-  // Equal confidence — use source priority
-  if (
-    incomingToMerge.confidence === existing.confidence &&
-    (SOURCE_PRIORITY[incomingToMerge.source] ?? 0) > (SOURCE_PRIORITY[existing.source] ?? 0)
-  ) {
-    target[key] = incomingToMerge;
-  }
+  const selectedCandidateId = (preferred as any).selectedCandidateId ?? toCandidate(key, preferred).candidateId;
+  const manualReview = (preferred as any).extractionStatus === "needs_review" || (preferred as any).evidenceDecision === "needs_review";
+  target[key] = {
+    ...preferred,
+    candidates,
+    conflictCandidateIds: [],
+    conflictCandidates: [],
+    selectedCandidateId,
+    canonicalStatus: manualReview ? "manual_review" : "extracted",
+    resolutionState: manualReview ? "unresolved" : "authoritative",
+    requiresReview: manualReview,
+    decision: buildCandidateDecisionRecord({ fieldKey: key, status: manualReview ? "manual_review" : "selected", selectedCandidateId, candidates, reasonCodes: evaluationReasonCodes }),
+  } as any;
 }
 
 /**

@@ -52,7 +52,6 @@ function resolveToConcept(key) {
 // is never silently unrepresented.
 // ---------------------------------------------------------------------------
 const REVIEW_FIELD_EXCLUSIONS = {
-  floor: "FIELD_ALIASES has a 'floor' entry but neither it nor its 'floor_number' alias is a LEASE_FIELD_CONTRACT canonicalKey -- pre-existing gap, not modeled in the extraction contract yet.",
   parking_rights: "Not present in LEASE_FIELD_CONTRACT or FIELD_ALIASES at all -- pre-existing UI-only field with no extraction-contract counterpart.",
   common_area_description: "Not present in LEASE_FIELD_CONTRACT or FIELD_ALIASES at all -- pre-existing UI-only field with no extraction-contract counterpart.",
   late_fee_grace_days: "Not present in LEASE_FIELD_CONTRACT or FIELD_ALIASES -- distinct from late_fee_amount ($) and late_fee_percent (%), neither of which covers a grace-period day count.",

@@ -648,6 +648,8 @@ function buildResolverOutput(rawResult, sourcePath, fieldKey) {
     output.reviewStatus =
       rawResult.review_status ||
       rawResult.reviewStatus ||
+      rawResult.canonical_status ||
+      rawResult.canonicalStatus ||
       rawResult.extraction_status ||
       null;
     output.evidenceType =
@@ -671,7 +673,11 @@ function buildResolverOutput(rawResult, sourcePath, fieldKey) {
       rawResult.derivationTrace ||
       rawResult.evidence?.derivation_trace ||
       null;
-    output.requiresReview = Boolean(rawResult.requires_review ?? rawResult.requiresReview ?? false);
+    output.canonicalStatus = rawResult.canonical_status ?? rawResult.canonicalStatus ?? rawResult.evidence?.canonical_status ?? null;
+    output.resolutionState = rawResult.resolution_state ?? rawResult.resolutionState ?? rawResult.evidence?.resolution_state ?? null;
+    output.conflictCandidateIds = rawResult.conflict_candidate_ids ?? rawResult.conflictCandidateIds ?? rawResult.evidence?.conflict_candidate_ids ?? [];
+    output.decision = rawResult.decision ?? rawResult.evidence?.decision ?? null;
+    output.requiresReview = Boolean(rawResult.requires_review ?? rawResult.requiresReview ?? rawResult.evidence?.requires_review ?? false);
     const rawValidationErrors =
       rawResult.validation_errors ||
       rawResult.validationErrors ||

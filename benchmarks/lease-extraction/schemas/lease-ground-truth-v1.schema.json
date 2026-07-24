@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cre-financial-suite.local/schemas/lease-ground-truth-v1.schema.json",
+  "title": "Lease Extraction Ground Truth Fixture v1",
+  "type": "object",
+  "required": ["fixtureVersion", "fixtureId", "documentName", "documentType", "propertyType", "sourceFile", "expectedDocumentPages", "expectedFields", "forbiddenExtractions", "expectedApprovalBlockers", "adjudication"],
+  "properties": {
+    "fixtureVersion": { "const": "lease-ground-truth/1.0" },
+    "fixtureId": { "type": "string" },
+    "documentName": { "type": "string" },
+    "documentType": { "enum": ["lease", "amendment", "assignment", "commencement_letter", "cam_reconciliation", "other"] },
+    "propertyType": { "enum": ["retail", "office", "industrial", "ground", "mixed_use", "other"] },
+    "sourceFile": { "type": "string" },
+    "expectedDocumentPages": { "type": ["integer", "null"] },
+    "expectedFields": { "type": "array", "items": { "$ref": "#/$defs/GroundTruthField" } },
+    "expectedExpenseRules": { "type": "array", "items": { "$ref": "#/$defs/GroundTruthStructuredRule" }, "default": [] },
+    "expectedInsuranceRequirements": { "type": "array", "items": { "$ref": "#/$defs/GroundTruthStructuredRule" }, "default": [] },
+    "expectedRepairRules": { "type": "array", "items": { "$ref": "#/$defs/GroundTruthStructuredRule" }, "default": [] },
+    "expectedUtilityRules": { "type": "array", "items": { "$ref": "#/$defs/GroundTruthStructuredRule" }, "default": [] },
+    "expectedConditionalRights": { "type": "array", "items": { "$ref": "#/$defs/GroundTruthStructuredRule" }, "default": [] },
+    "expectedAssignmentRules": { "type": "array", "items": { "$ref": "#/$defs/GroundTruthStructuredRule" }, "default": [] },
+    "expectedClauseRecords": { "type": "array", "items": { "$ref": "#/$defs/GroundTruthClauseRecord" }, "default": [] },
+    "expectedDynamicTerms": { "type": "array", "items": { "$ref": "#/$defs/GroundTruthDynamicTerm" }, "default": [] },
+    "forbiddenExtractions": { "type": "array", "items": { "$ref": "#/$defs/ForbiddenExtraction" } },
+    "expectedApprovalBlockers": { "type": "array", "items": { "$ref": "#/$defs/ExpectedApprovalBlocker" } },
+    "adjudication": {
+      "type": "object",
+      "required": ["adjudicatedBy", "adjudicatedAt", "reviewedBy", "notes"],
+      "properties": {
+        "adjudicatedBy": { "type": "string" },
+        "adjudicatedAt": { "type": "string" },
+        "reviewedBy": { "type": ["string", "null"] },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "$defs": {
+    "GroundTruthField": {
+      "type": "object",
+      "required": ["canonicalFieldKey", "scopeKey", "expectation", "normalizedValue", "criticality", "expectedEvidence"],
+      "properties": {
+        "canonicalFieldKey": { "type": "string" },
+        "scopeKey": { "type": ["string", "null"] },
+        "domain": { "type": "string" },
+        "expectation": { "enum": ["value", "not_stated", "not_applicable", "insufficient_evidence", "conflict"] },
+        "normalizedValue": {},
+        "acceptedAlternativeValues": { "type": "array" },
+        "criticality": { "enum": ["critical", "high", "medium", "low"] },
+        "expectedEvidence": { "type": "array", "items": { "$ref": "#/$defs/GroundTruthEvidenceExpectation" } },
+        "notes": { "type": "string" }
+      }
+    },
+    "GroundTruthEvidenceExpectation": {
+      "type": "object",
+      "required": ["page"],
+      "properties": {
+        "page": { "type": "integer" },
+        "requiredTextAny": { "type": "array", "items": { "type": "string" } },
+        "requiredTextAll": { "type": "array", "items": { "type": "string" } },
+        "forbiddenText": { "type": "array", "items": { "type": "string" } },
+        "clauseCategory": { "type": "string" },
+        "allowEquivalentSpan": { "type": "boolean" }
+      }
+    },
+    "GroundTruthStructuredRule": {
+      "type": "object",
+      "required": ["ruleId", "domain", "expectation", "normalizedValue", "expectedEvidence"],
+      "properties": {
+        "ruleId": { "type": "string" },
+        "domain": { "type": "string" },
+        "expectation": { "type": "string" },
+        "normalizedValue": {},
+        "criticality": { "enum": ["critical", "high", "medium", "low"] },
+        "expectedEvidence": { "type": "array", "items": { "$ref": "#/$defs/GroundTruthEvidenceExpectation" } },
+        "notes": { "type": "string" }
+      }
+    },
+    "GroundTruthClauseRecord": {
+      "type": "object",
+      "required": ["clauseId", "category", "summary", "expectedEvidence"],
+      "properties": { "clauseId": { "type": "string" }, "category": { "type": "string" }, "summary": { "type": "string" }, "expectedEvidence": { "type": "array", "items": { "$ref": "#/$defs/GroundTruthEvidenceExpectation" } } }
+    },
+    "GroundTruthDynamicTerm": {
+      "type": "object",
+      "required": ["termId", "label", "normalizedValue", "expectedEvidence"],
+      "properties": { "termId": { "type": "string" }, "label": { "type": "string" }, "normalizedValue": {}, "expectedEvidence": { "type": "array", "items": { "$ref": "#/$defs/GroundTruthEvidenceExpectation" } } }
+    },
+    "ForbiddenExtraction": {
+      "type": "object",
+      "required": ["reason", "severity"],
+      "properties": {
+        "canonicalFieldKey": { "type": "string" },
+        "displayedLabel": { "type": "string" },
+        "forbiddenValue": {},
+        "forbiddenEvidenceCategory": { "type": "string" },
+        "reason": { "type": "string" },
+        "severity": { "enum": ["critical", "high", "medium"] }
+      }
+    },
+    "ExpectedApprovalBlocker": {
+      "type": "object",
+      "properties": { "code": { "type": "string" }, "canonicalFieldKey": { "type": "string" }, "reason": { "type": "string" }, "severity": { "type": "string" } }
+    }
+  }
+}

@@ -2,7 +2,7 @@
 /**
  * Extraction Pipeline - Step 3: LLM Fallback Extraction
  *
- * ONLY called for fields that Step 1 (rule) and Step 2 (table) could not extract.
+ * Called for missing fields and for configured high-risk lease domains that require competing candidates.
  * Sends focused, field-wise prompts to OpenAI with ONLY relevant text chunks.
  *
  * Key design rules:
@@ -320,12 +320,10 @@ function normalizeLlmEvidence(raw: unknown): LlmFieldEvidence {
   if (typeof raw === "object" && !Array.isArray(raw) && ("value" in (raw as Record<string, unknown>))) {
     const obj = raw as Record<string, unknown>;
     const conf = obj.confidence;
-    const sourceText = typeof obj.source_text === "string"
-      ? obj.source_text.replace(/\s+/g, " ").trim().slice(0, 2400)
-      : null;
+    const sourceText = typeof obj.source_text === "string" ? obj.source_text : null;
     return {
       value: obj.value ?? null,
-      sourceText: sourceText || null,
+      sourceText: sourceText && sourceText.length > 0 ? sourceText : null,
       sourcePage: Number.isFinite(Number(obj.source_page)) && Number(obj.source_page) > 0 ? Number(obj.source_page) : null,
       confidence: typeof conf === "number" && Number.isFinite(conf) ? Math.max(0, Math.min(1, conf > 1 ? conf / 100 : conf)) : null,
     };
@@ -499,7 +497,7 @@ async function callLLMAndParse<T = unknown>(
 /**
  * Step 3 of the extraction pipeline.
  *
- * Only extracts fields that are MISSING from previous steps.
+ * Extracts requested fields. The pipeline passes missing fields plus high-risk fields that need competing candidates.
  * Uses targeted prompts with relevant text snippets.
  * Uses OpenAI for targeted field extraction.
  * Returns StepResult.diagnostics with full LLM call diagnostics so the
