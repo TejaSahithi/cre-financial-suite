@@ -48,6 +48,7 @@ const GOLDEN_FIELDS: Record<string, { expected: unknown; check?: (actual: unknow
   tenant_signatory_name: { expected: "Narendra Pydi" },
   square_footage: { expected: 1110 },
   commencement_date: { expected: "2024-02-01" },
+  expiration_date: { expected: "2025-01-31" },
   monthly_rent: { expected: 1400 },
   annual_rent: { expected: 16800 },
   escalation_rate: { expected: 5 },

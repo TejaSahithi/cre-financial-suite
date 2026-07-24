@@ -3,6 +3,7 @@ import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.t
 import { mapFactsToStandardFields } from "../_shared/extraction/openai-fact-ledger/fact-field-mapper.ts";
 import { computeProfileApprovalBlockers } from "../_shared/extraction/openai-fact-ledger/approval-blockers.ts";
 import { runOpenAIFactLedgerPipeline } from "../_shared/extraction/openai-fact-ledger/orchestrator.ts";
+import { __test__ as factLedgerExtractorTest } from "../_shared/extraction/openai-fact-ledger/fact-ledger-extractor.ts";
 import type { Fact } from "../_shared/extraction/openai-fact-ledger/types.ts";
 
 function makeFact(overrides: Partial<Fact>): Fact {
@@ -38,6 +39,27 @@ function assertIsExtractionPipelineResultShape(result: any) {
   assert(typeof result.metadata.chunksProcessed === "number");
   assert(typeof result.metadata.processingTimeMs === "number");
 }
+
+Deno.test("fact ledger dedupe preserves same-source lease term dates as distinct facts", () => {
+  const sourceText = "5. Term. The lease term shall be from an initial five-year period from March 1, 2019 through December 31, 2023.";
+  const facts = factLedgerExtractorTest.parseFactsResponse({
+    facts: [
+      { category: "clause:lease_term", value: "March 1, 2019", source_text: sourceText, source_page: 1, confidence: 0.91 },
+      { category: "clause:lease_term", value: "December 31, 2023", source_text: sourceText, source_page: 1, confidence: 0.92 },
+      { category: "clause:lease_term", value: "March 1, 2019", source_text: sourceText, source_page: 1, confidence: 0.91 },
+    ],
+  });
+
+  assertEquals(facts.length, 3);
+  const deduped = factLedgerExtractorTest.dedupeFacts(facts);
+  assertEquals(deduped.map((fact: Fact) => fact.value), ["March 1, 2019", "December 31, 2023"]);
+
+  const mapped = mapFactsToStandardFields({ facts: deduped, moduleType: "lease" });
+  assertEquals(mapped.records[0]?.fields?.start_date?.value, "2019-03-01");
+  assertEquals(mapped.records[0]?.fields?.end_date?.value, "2023-12-31");
+  assertEquals(mapped.records[0]?.fields?.commencement_date?.value, "2019-03-01");
+  assertEquals(mapped.records[0]?.fields?.expiration_date?.value, "2023-12-31");
+});
 
 Deno.test("runOpenAIFactLedgerPipeline: no OpenAI credentials configured — degrades cleanly, never throws/hangs", async () => {
   Deno.env.delete("OPENAI_API_KEY");
@@ -133,5 +155,74 @@ Deno.test("runOpenAIFactLedgerPipeline: mocked successful OpenAI call — return
   } finally {
     globalThis.fetch = realFetch;
     Deno.env.delete("OPENAI_API_KEY");
+  }
+});
+Deno.test("runOpenAIFactLedgerPipeline: mocked same-source lease term facts become canonical dates", async () => {
+  const sourceText = "5. Term. The lease term shall be from an initial five-year period from March 1, 2019 through December 31, 2023.";
+  const docling = {
+    full_text: `LEASE AGREEMENT\n\n${sourceText}`,
+    page_count: 1,
+    pages: [{ number: 1, text: sourceText, dimensions: { width: 612, height: 792 } }],
+    text_blocks: [{ block_index: 0, type: "paragraph", page: 1, text: sourceText }],
+    tables: [],
+    fields: [],
+  };
+
+  const previousOpenAIKey = Deno.env.get("OPENAI_API_KEY");
+  const previousAzureEndpoint = Deno.env.get("AZURE_OPENAI_ENDPOINT");
+  Deno.env.set("OPENAI_API_KEY", "sk-fake-openai-key-for-testing");
+  Deno.env.delete("AZURE_OPENAI_ENDPOINT");
+
+  const realFetch = globalThis.fetch;
+  let callCount = 0;
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = input.toString();
+    if (url.includes("api.openai.com/v1/chat/completions")) {
+      callCount++;
+      const responseText = callCount === 1
+        ? JSON.stringify({ document_profile: "full_lease", confidence: 0.9, reasoning: "test fixture" })
+        : JSON.stringify({
+          facts: [
+            { category: "clause:lease_term", value: "March 1, 2019", source_text: sourceText, source_page: 1, confidence: 0.91 },
+            { category: "clause:lease_term", value: "December 31, 2023", source_text: sourceText, source_page: 1, confidence: 0.92 },
+          ],
+        });
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: responseText }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 10, completion_tokens: 10 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    return realFetch(input, init);
+  }) as typeof fetch;
+
+  try {
+    const result = await runOpenAIFactLedgerPipeline({
+      moduleType: "lease",
+      fileName: "macon-term.txt",
+      docling,
+      documentSubtype: null,
+    });
+
+    assertIsExtractionPipelineResultShape(result);
+    assertEquals(result.method, "llm_only");
+
+    const debug = (result.metadata as any).extractionDebug;
+    const fields = debug.merged_field_sources;
+    assertEquals(debug.openai_fact_ledger.facts_extracted_count, 2);
+    assertEquals(fields.start_date?.value, "2019-03-01");
+    assertEquals(fields.end_date?.value, "2023-12-31");
+    assertEquals(fields.commencement_date?.value, "2019-03-01");
+    assertEquals(fields.expiration_date?.value, "2023-12-31");
+    assertEquals(fields.commencement_date?.source_text, sourceText);
+    assertEquals(fields.expiration_date?.source_text, sourceText);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (previousOpenAIKey == null) Deno.env.delete("OPENAI_API_KEY");
+    else Deno.env.set("OPENAI_API_KEY", previousOpenAIKey);
+    if (previousAzureEndpoint == null) Deno.env.delete("AZURE_OPENAI_ENDPOINT");
+    else Deno.env.set("AZURE_OPENAI_ENDPOINT", previousAzureEndpoint);
   }
 });

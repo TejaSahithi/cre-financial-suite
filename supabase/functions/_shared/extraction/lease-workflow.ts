@@ -156,6 +156,19 @@ const GENERIC_EXPENSE_RULE_SOURCE_PATTERNS = [
 ];
 
 export const CLAUSE_DEFINITIONS = [
+  // Added to close a gap where party-identity and premises-address facts had
+  // no correct clause category to be classified under at all (fell to
+  // use_clause/indemnification/default instead) -- see fact-field-mapper.ts's
+  // scoreFactAgainstField and candidate-decision.ts's allowedClauseCategories
+  // gating, now populated for tenant_name/landlord_name/property_name/
+  // property_address in LEASE_SCHEMA.
+  { type: "party_identification", title: "Party Identification", keywords: ["by and between", "is made and entered into", "referred to as \"landlord\"", "referred to as \"tenant\"", "landlord:", "tenant:", "lessor:", "lessee:", "hereinafter referred to as"], maxChars: 620 },
+  { type: "premises_description", title: "Premises Description", keywords: ["the premises", "demised premises", "leased premises", "rentable square feet", "square footage", "known as", "shopping center", "premises located at", "address of the premises"], maxChars: 720 },
+  // Same gap for lease term/date facts -- previously had no category of
+  // their own and fell to "default", so commencement/expiration dates from
+  // an unlabeled "Term. ... from X through Y" sentence had no positive
+  // category signal at all.
+  { type: "lease_term", title: "Lease Term / Dates", keywords: ["lease term", "term of this lease", "term shall be", "initial term", "commencement date", "expiration date", "period from", "commencing on", "expiring on"], maxChars: 520 },
   { type: "rent_escalation", title: "Rent & Escalation", keywords: ["base rent", "monthly rent", "minimum rent", "rent shall", "annual rent", "escalation", "increase"], maxChars: 720 },
   { type: "security_deposit", title: "Security Deposit", keywords: ["security deposit", "deposit"], maxChars: 520 },
   { type: "operating_expense_recovery", title: "Operating Expense Recovery", keywords: ["operating expenses", "additional rent", "tenant shall reimburse", "tenant shall pay", "taxes, insurance", "common area maintenance"], maxChars: 820 },
@@ -1842,6 +1855,9 @@ const BUSINESS_AREA_BY_FIELD_GROUP: Record<string, string> = {
 };
 
 const BUSINESS_AREA_BY_CLAUSE_TYPE: Record<string, string> = {
+  party_identification: "parties_premises",
+  premises_description: "parties_premises",
+  lease_term: "critical_dates",
   rent_clause: "rent_charges",
   operating_expense_recovery: "expenses_recoveries",
   cam_recoveries: "cam_rules",

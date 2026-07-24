@@ -149,7 +149,11 @@ function dedupeFacts(facts: Fact[]): Fact[] {
   const seen = new Set<string>();
   const result: Fact[] = [];
   for (const fact of facts) {
-    const key = `${fact.category}|${normalizeForPageMatch(fact.sourceText)}`;
+    // A single source sentence can prove multiple atomic facts. Lease term
+    // dates are the important example: "from March 1, 2019 through December
+    // 31, 2023" must survive as two same-category, same-source facts whose
+    // only distinguishing feature is the value.
+    const key = `${fact.category}|${normalizeForPageMatch(fact.sourceText)}|${normalizeForPageMatch(fact.value)}`;
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(fact);
@@ -402,4 +406,6 @@ export async function extractFactLedger(args: {
 export const __test__ = {
   dominantClassification,
   CLASSIFICATION_PRIORITY,
+  dedupeFacts,
+  parseFactsResponse,
 };

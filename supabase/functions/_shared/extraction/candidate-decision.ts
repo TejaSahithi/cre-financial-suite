@@ -99,9 +99,11 @@ export function evaluateCandidateForField(args: {
   const rejectedCategories = field.rejectedClauseCategories ?? [];
   const allowedCategories = field.allowedClauseCategories ?? [];
   const rejectedPatterns = field.rejectedEvidencePatterns ?? [];
+  const rejectedValuePatterns = field.rejectedValuePatterns ?? [];
   const requiredPatterns = field.requiredEvidencePatterns ?? [];
   const category = bareCategory(args.factCategory);
   const text = String(sourceText ?? "");
+  const valueText = args.value == null ? "" : String(args.value);
 
   const reasons: string[] = [];
   let decision: CandidateDecision = "unconstrained";
@@ -129,6 +131,22 @@ export function evaluateCandidateForField(args: {
         matchedRejectedTerms.push(pattern.source);
         decision = "reject";
         reasons.push(`source text matched a rejected evidence pattern for ${fieldKey}: ${pattern.source}`);
+        break;
+      }
+    }
+  }
+
+  // Step 3b: the candidate's own VALUE (not its surrounding sourceText)
+  // structurally doesn't belong in this field — e.g. a numeric measurement
+  // string landing in a short-name field. Independent of category/sourceText
+  // signal, since the clause the value came from can be entirely legitimate
+  // for this field while the specific value still isn't.
+  if (decision !== "reject" && valueText) {
+    for (const pattern of rejectedValuePatterns) {
+      if (pattern.test(valueText)) {
+        matchedRejectedTerms.push(pattern.source);
+        decision = "reject";
+        reasons.push(`value matched a rejected value pattern for ${fieldKey}: ${pattern.source}`);
         break;
       }
     }

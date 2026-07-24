@@ -54,8 +54,19 @@ export interface FieldDef {
   rejectedClauseCategories?: string[];
   /** Field-specific exclusion phrasing that a clause-category vocabulary
    *  can't express (e.g. landlord_name rejecting M&A/assignment context).
-   *  A match hard-rejects, same as rejectedClauseCategories. */
+   *  A match hard-rejects, same as rejectedClauseCategories. Tested against
+   *  the candidate's sourceText. */
   rejectedEvidencePatterns?: RegExp[];
+  /** Same hard-reject mechanism as rejectedEvidencePatterns, but tested
+   *  against the candidate's own VALUE instead of its sourceText — for
+   *  cases where the surrounding clause is legitimately on-topic (so a
+   *  sourceText-based pattern can't distinguish the good and bad
+   *  candidates) but the specific extracted value is structurally wrong for
+   *  this field's type (e.g. property_name, a short marketing/trade name,
+   *  should never literally be a "1,875 square feet" measurement string —
+   *  that shape belongs to square_footage, not a name field, regardless of
+   *  which clause it came from). */
+  rejectedValuePatterns?: RegExp[];
   /** Positive text signal used only when no fact category is available
    *  (the legacy rule/table/LLM path never has one). */
   requiredEvidencePatterns?: RegExp[];
@@ -104,7 +115,20 @@ export const LEASE_SCHEMA: ModuleSchema = {
   tenant_name: {
     type: "string",
     required: true,
-    labels: ["tenant", "lessee", "occupant", "tenant name", "lessee name"],
+    // Deliberately NOT "tenant"/"lessee"/"occupant" as bare, standalone
+    // labels: "Tenant" is the document's own defined term for the party and
+    // is used as a plain pronoun throughout virtually every clause in the
+    // lease (repairs, nuisance, insurance, defaults...), not just the
+    // identity clause -- a bare-word label match on ANY such clause clears
+    // MIN_LABEL_SCORE even after the needs_review penalty, and clears it at
+    // FULL strength when the fact's category resolves to clause:default
+    // (bareCategory() treats "default" as no-category, skipping the
+    // needs_review halving entirely). The multi-word phrases below only
+    // appear in genuinely identity-labeled contexts ("Tenant Name:",
+    // labeled table headers), which is the actual signal this field needs
+    // from keyword matching; category-based accept (party_identification)
+    // and tableHeaders/patterns carry the rest.
+    labels: ["tenant name", "lessee name"],
     tableHeaders: ["tenant", "tenant_name", "tenant name", "lessee", "company"],
     patterns: [
       // Numbered summary: "4. Tenant: Riverside Consulting, Inc."
@@ -126,6 +150,14 @@ export const LEASE_SCHEMA: ModuleSchema = {
     // rejects source text pulled from an M&A/assignment clause instead of the
     // actual identity clause.
     rejectedEvidencePatterns: [/\b(closely held|voting shares|reorganization|merger|consolidation|assignee|permitted transfer)\b/i],
+    // allowedClauseCategories closes the actual flagship bug: without this,
+    // a fact whose sourceText merely CONTAINS the word "tenant"/"landlord"
+    // anywhere (e.g. an indemnification clause naming Landlord as the party
+    // being held harmless) passes candidate-decision.ts's fallback check and
+    // can win this field on keyword length alone, even though its value has
+    // nothing to do with party identity.
+    allowedClauseCategories: ["party_identification"],
+    rejectedClauseCategories: ["indemnification"],
   },
   tenant_signatory_name: {
     type: "string",
@@ -175,6 +207,21 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "Common patterns: 'located in the [Name] Shopping Center', 'known as [Name]', 'Property Name: [Name]'. " +
       "Return ONLY the short property name (2-6 words). Do NOT return street addresses, clause text, party names, or mailing addresses. " +
       "If no named property or shopping center is identified in the lease, return null.",
+    // Previously fully unconfigured -- any fact could win this field on
+    // keyword length alone (e.g. a square-footage fact whose sourceText
+    // happened to mention "building"). See fact-field-mapper.ts /
+    // candidate-decision.ts.
+    domain: "premises",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["premises_description"],
+    // A "premises" clause frequently bundles the property name, square
+    // footage, AND address in one sentence -- premises_description is a
+    // correct category for all three, so the category veto alone can't
+    // stop a square-footage-valued fact from winning here too. This is the
+    // structural fix: a name field's value should never itself BE a bare
+    // measurement, regardless of which (legitimately on-topic) clause it
+    // came from.
+    rejectedValuePatterns: [/^\s*[\d,]+\.?\d*\s*(rentable\s+|leasable\s+)?(square\s+feet|square\s+footage|sq\.?\s*ft\.?|\bsf\b|\brsf\b)\s*$/i],
   },
   property_address: {
     type: "string",
@@ -201,11 +248,21 @@ export const LEASE_SCHEMA: ModuleSchema = {
       /(?:premises|property\s+address|premises\s+address|street\s+address|address)\s*[:.]\s*([^\n]{4,180})/i,
     ],
     description: "Street address or premises description for the leased property (NOT the landlord's or tenant's mailing address)",
+    // See property_name above -- was fully unconfigured; rejectedClauseCategories
+    // is a direct veto for the concretely-observed failure (a permitted-use
+    // clause's "Tenant shall use the Premises for Restaurant..." winning this
+    // field purely because it contains the word "Premises").
+    domain: "premises",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["premises_description"],
+    rejectedClauseCategories: ["use_clause"],
   },
   landlord_name: {
     type: "string",
     required: true,
-    labels: ["landlord", "lessor", "owner", "landlord name", "lessor name"],
+    // See tenant_name's identical comment -- "Landlord" is used as a plain
+    // pronoun throughout the whole document, not just the identity clause.
+    labels: ["landlord name", "lessor name"],
     tableHeaders: ["landlord", "landlord_name", "landlord name", "lessor", "owner"],
     patterns: [
       // Numbered summary: "2. Landlord: Sunbelt Holdings, LLC"
@@ -228,6 +285,8 @@ export const LEASE_SCHEMA: ModuleSchema = {
     domain: "parties",
     evidencePolicy: "enforced",
     rejectedEvidencePatterns: [/\b(closely held|voting shares|reorganization|merger|consolidation|assignee|permitted transfer)\b/i],
+    allowedClauseCategories: ["party_identification"],
+    rejectedClauseCategories: ["indemnification"],
   },
   // ─── Contact/notice addresses — added to close a gap flagged in
   // docs/lease-standard-field-model.md: these already had working
@@ -369,6 +428,13 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["start date", "commencement date", "lease start", "commence", "effective date", "begin date"],
     tableHeaders: ["start_date", "start date", "commencement", "commence", "start", "effective"],
     description: "Lease start date in YYYY-MM-DD",
+    // See fact-field-mapper.ts's resolveLeaseTermDatePair() for how an
+    // unlabeled "term shall be from X through Y" sentence still populates
+    // this field even though its own labels[] can't disambiguate start vs.
+    // end within one shared source sentence.
+    domain: "dates",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["lease_term"],
   },
   end_date: {
     type: "date",
@@ -379,6 +445,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
       /(?:amended\s+expiration\s+date|expiration\s+date\s+is\s+amended\s+to|term\s+is\s+extended\s+to|extended\s+through|expires?\s+on)[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
     ],
     description: "Lease expiration date in YYYY-MM-DD",
+    domain: "dates",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["lease_term"],
   },
   monthly_rent: {
     type: "number",
@@ -442,7 +511,12 @@ export const LEASE_SCHEMA: ModuleSchema = {
   square_footage: {
     type: "number",
     min: 0,
-    labels: ["rentable area", "leased area", "premises rentable square feet", "rentable square feet", "rsf", "leased sf", "tenant rsf", "premises area"],
+    // "square feet"/"square footage" added as bare labels -- the previous
+    // list required a "rentable"/"leased"/"premises" qualifier immediately
+    // adjacent, which a plain "approximately 1,875 square feet of floor
+    // area" (no qualifier) never matches, leaving this field permanently
+    // unmapped for documents phrased that way.
+    labels: ["rentable area", "leased area", "premises rentable square feet", "rentable square feet", "rsf", "leased sf", "tenant rsf", "premises area", "square feet", "square footage", "floor area"],
     tableHeaders: ["square_footage", "sqft", "sq ft", "sf", "rsf", "rentable sf", "leased sf"],
     patterns: [
       /approximately\s+([\d,]+)\s+rentable\s+square\s+feet/i,
@@ -453,6 +527,23 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "The rentable square footage of THE LEASED PREMISES (the tenant's space), in plain number form (no commas). " +
       "DO NOT use building totals, project totals, common area, or property-wide square footage. " +
       "If the lease says 'Premises containing approximately 1,110 rentable square feet', use 1110, NOT the building total.",
+    // See property_name's rejectedValuePatterns comment -- the same
+    // premises clause commonly also states the property name and address,
+    // which is why this field needs the same category-based protection
+    // (property_name/property_address winning a square-footage-valued fact
+    // was the visible symptom; this is square_footage's own side of the
+    // same shared-clause ambiguity, needed for it to be able to win back).
+    domain: "premises",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["premises_description"],
+    // The broadened "square feet"/"square footage" bare labels above (added
+    // for documents that state the premises size with no "rentable"/
+    // "leased" qualifier) would otherwise also match building_rsf's very
+    // different concept -- "Building Total Rentable Square Footage: 45,000"
+    // describes the WHOLE BUILDING, not the leased premises (see this
+    // field's own description). Reject that phrasing explicitly rather than
+    // let a longer bare-word match silently steal the fact from building_rsf.
+    rejectedEvidencePatterns: [/\bbuilding\s+(?:total|rsf|square\s+footage|rentable\s+square\s+fe?e?t)\b/i],
   },
   // Added to close a CAM-accuracy gap flagged in docs/lease-standard-field-model.md:
   // deriveCamProfile() (lease-workflow.ts) already reads fieldMap.building_rsf to
@@ -747,6 +838,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "Effective Date', 'upon issuance of a Certificate of Occupancy', or 'the later of X or Y') and no explicit " +
       "calendar date appears in the document, return null — do NOT substitute the lease_date, signing date, or " +
       "effective date. Only return a value when a specific calendar date is stated.",
+    domain: "dates",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["lease_term"],
   },
   expiration_date: {
     type: "date",
@@ -761,6 +855,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
       /(?:expiring\s+(?:on|the))\s+([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
     ],
     description: "Lease expiration / end date in YYYY-MM-DD. If text says 'January 31 of each year' with commencement YYYY, use YYYY+1.",
+    domain: "dates",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["lease_term"],
   },
   rent_commencement_date: {
     type: "date",
