@@ -236,17 +236,33 @@ export function toIsoDate(value: unknown) {
     .slice(0, 10);
 }
 
+function getApprovedValue(lease: Record<string, unknown>, key: string, aliases: string[] = []) {
+  const snapshotFields = (lease.abstract_snapshot as any)?.fields || {};
+  const candidates = [key, ...aliases];
+  for (const k of candidates) {
+    if (snapshotFields[k] && snapshotFields[k].value !== undefined && snapshotFields[k].value !== null) {
+      return snapshotFields[k].value;
+    }
+  }
+  for (const k of candidates) {
+    if (lease[k] !== undefined && lease[k] !== null) {
+      return lease[k];
+    }
+  }
+  return null;
+}
+
 export function toNoticeDays(lease: Record<string, unknown>) {
   for (const key of ["renewal_notice_days"]) {
-    const value = Number(lease?.[key]);
+    const value = Number(getApprovedValue(lease, key));
     if (Number.isFinite(value) && value > 0) return value;
   }
   for (const key of ["renewal_notice_months"]) {
-    const value = Number(lease?.[key]);
+    const value = Number(getApprovedValue(lease, key));
     if (Number.isFinite(value) && value > 0) return Math.round(value * 30);
   }
   for (const key of ["renewal_notice_period", "renewal_notice", "notice_period"]) {
-    const raw = String(lease?.[key] || "").toLowerCase();
+    const raw = String(getApprovedValue(lease, key) || "").toLowerCase();
     if (!raw) continue;
     const match = raw.match(/(\d+(?:\.\d+)?)\s*(day|month|year)/);
     if (!match) continue;
@@ -266,11 +282,11 @@ function toNumber(value: unknown) {
 }
 
 function toTermMonths(lease: Record<string, unknown>) {
-  const direct = toNumber(lease?.lease_term_months ?? lease?.term_months);
+  const direct = toNumber(getApprovedValue(lease, "lease_term_months", ["term_months"]));
   if (direct && direct > 0) return Math.round(direct);
 
   for (const key of ["lease_term", "term", "initial_term"]) {
-    const raw = String(lease?.[key] || "").toLowerCase();
+    const raw = String(getApprovedValue(lease, key) || "").toLowerCase();
     if (!raw) continue;
     const years = raw.match(/(\d+(?:\.\d+)?)\s*(year|yr)/);
     if (years) return Math.round(Number(years[1]) * 12);
@@ -307,24 +323,16 @@ function correctSuspiciousExpiration(commencement: string | null, expiration: st
 
 export function buildCriticalDateRows(approvedLease: Record<string, unknown>, today = new Date().toISOString().slice(0, 10)) {
   const commencement = toIsoDate(
-    approvedLease.commencement_date ??
-    approvedLease.start_date ??
-    approvedLease.lease_start_date ??
-    approvedLease.term_start_date,
+    getApprovedValue(approvedLease, "commencement_date", ["start_date", "lease_start_date", "term_start_date"])
   );
   const rawExpiration = toIsoDate(
-    approvedLease.expiration_date ??
-    approvedLease.end_date ??
-    approvedLease.lease_end_date ??
-    approvedLease.term_end_date,
+    getApprovedValue(approvedLease, "expiration_date", ["end_date", "lease_end_date", "term_end_date"])
   );
   const expiration = correctSuspiciousExpiration(commencement, rawExpiration, approvedLease);
   const optionDeadline = toIsoDate(
-    approvedLease.option_exercise_deadline ??
-    approvedLease.renewal_exercise_deadline ??
-    approvedLease.option_deadline,
+    getApprovedValue(approvedLease, "option_exercise_deadline", ["renewal_exercise_deadline", "option_deadline"])
   );
-  const rentCommencement = toIsoDate(approvedLease.rent_commencement_date);
+  const rentCommencement = toIsoDate(getApprovedValue(approvedLease, "rent_commencement_date"));
   const renewalNoticeDays = toNoticeDays(approvedLease);
   const baseRow = {
     org_id: approvedLease.org_id,
