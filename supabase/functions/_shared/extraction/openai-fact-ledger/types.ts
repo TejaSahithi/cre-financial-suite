@@ -135,6 +135,15 @@ export interface ProfileApprovalBlockersResult {
 
 // ── Orchestrator input (mirrors ExtractionInput from ../types.ts) ───────────
 
+export interface FactLedgerResumeState {
+  startChunkIndex?: number;
+  priorFacts?: Fact[];
+  chunksProcessed?: number;
+  chunksSucceeded?: number;
+  chunksFailed?: number;
+  failedChunkIndexes?: number[];
+}
+
 export interface OpenAIFactLedgerInput {
   document?: DoclingOutput;
   /** @deprecated Use document. */

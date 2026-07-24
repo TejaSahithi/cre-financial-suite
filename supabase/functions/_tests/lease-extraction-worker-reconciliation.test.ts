@@ -21,6 +21,11 @@ const {
   parkLeaseForManualReview,
   repairStaleReconciledState,
   resetJobForRetryableReconciliation,
+  queueNormalizeTransportRetry,
+  markNormalizePending,
+  buildFactLedgerResumeFromMetadata,
+  readNormalizeActivity,
+  resolvePendingNormalizeBeforeRun,
   selectWithRetry,
 } = __test__;
 
@@ -589,5 +594,233 @@ Deno.test({
     };
     await selectWithRetry(queryFn);
     assertEquals(calls, 1);
+  },
+});
+
+Deno.test({
+  name: "queueNormalizeTransportRetry: normalize timeout requeues the job and never writes manual_review_fallback",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  async fn() {
+    const originalUploadedFiles = {
+      ...azureAliasedRow(),
+      status: "validating",
+      processing_status: "validating",
+      extraction_method: "azure_layout",
+      normalized_output: { method: "previous_good", rows: [{ tenant_name: "Existing Tenant" }] },
+      ui_review_payload: { records: [{ values: { tenant_name: "Existing Tenant" } }] },
+    };
+    const job = { ...JOB, metadata: { existing: true }, attempt: 2, status: "running" };
+    const events: any[] = [];
+    const logger = {
+      event(stage: string, status: string, payload: Record<string, unknown>) {
+        events.push({ stage, status, payload });
+        return Promise.resolve();
+      },
+    };
+    const supabaseAdmin = makeMockSupabase({
+      rows: {
+        uploaded_files: { ...originalUploadedFiles },
+        pipeline_jobs: { ...job, available_at: new Date(0).toISOString() },
+      },
+    });
+
+    const response = await queueNormalizeTransportRetry(
+      supabaseAdmin,
+      job,
+      FILE_ID,
+      logger,
+      { status: 504, error_code: "STAGE_TIMEOUT", error: "normalize-pdf-output timed out after 90s" },
+      "normalize_transport_not_durable",
+    );
+    const body = await response.json();
+
+    assertEquals(response.status, 200);
+    assertEquals(body.error_code, "NORMALIZE_RETRY_QUEUED");
+    assertEquals(body.retryable, true);
+    assertEquals(supabaseAdmin.__rows.uploaded_files.normalized_output, originalUploadedFiles.normalized_output, "transport timeout retry must preserve existing normalized output");
+    assertEquals(supabaseAdmin.__rows.uploaded_files.ui_review_payload, originalUploadedFiles.ui_review_payload, "transport timeout retry must preserve existing review payload");
+    assertEquals(supabaseAdmin.__rows.uploaded_files.processing_status, "normalize_pending");
+    assertEquals(supabaseAdmin.__rows.uploaded_files.failed_step, null);
+    assertEquals(supabaseAdmin.__rows.uploaded_files.error_message, null);
+    assertEquals(supabaseAdmin.__rows.pipeline_jobs.status, "queued");
+    assertEquals(supabaseAdmin.__rows.pipeline_jobs.error_code, null);
+    assertEquals(supabaseAdmin.__rows.pipeline_jobs.error_message, null);
+    assertEquals(supabaseAdmin.__rows.pipeline_jobs.attempt, 2, "attempt remains consumed by claim_pipeline_job; retry budget stays bounded");
+    assertEquals(supabaseAdmin.__rows.pipeline_jobs.metadata.existing, true);
+    assertEquals(supabaseAdmin.__rows.pipeline_jobs.metadata.retry_stage, "normalize");
+    assertEquals(supabaseAdmin.__rows.pipeline_jobs.metadata.retry_transport_error_code, "STAGE_TIMEOUT");
+    assertEquals(supabaseAdmin.__rows.pipeline_jobs.metadata.retry_requeue_reason, "normalize_transport_not_durable");
+    assertNotEquals(supabaseAdmin.__rows.pipeline_jobs.available_at, new Date(0).toISOString());
+    assertEquals(events.at(-1)?.stage, "normalize");
+    assertEquals(events.at(-1)?.status, "retry_queued");
+    const uploadedFilesWrite = supabaseAdmin.__updates.find((u) => u.table === "uploaded_files");
+    assertEquals(uploadedFilesWrite?.patch?.extraction_method, undefined, "retrying normalize must never write manual_review_fallback to uploaded_files");
+    assertEquals(uploadedFilesWrite?.patch?.normalized_output, undefined, "retrying normalize must never clear normalized_output");
+    assertEquals(uploadedFilesWrite?.patch?.ui_review_payload, undefined, "retrying normalize must never clear ui_review_payload");
+  },
+});
+
+function durableNormalizeRow(overrides: Record<string, any> = {}) {
+  return {
+    id: FILE_ID,
+    org_id: ORG_ID,
+    status: "review_required",
+    processing_status: "review_required",
+    extraction_method: "llm_only",
+    ui_review_payload: {
+      extraction_method: "llm_only",
+      records: [{ record_index: 0, values: { tenant_name: "Acme Corp" }, standard_fields: [{ field_key: "tenant_name", value: "Acme Corp" }], custom_fields: [] }],
+    },
+    parsed_data: [{ tenant_name: "Acme Corp" }],
+    normalized_output: { method: "llm_only", rows: [{ tenant_name: "Acme Corp" }], warnings: [], validationErrors: [], metadata: {} },
+    updated_at: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+function testLogger(events: any[] = []) {
+  return {
+    event(stage: string, status: string, payload: Record<string, unknown>) {
+      events.push({ stage, status, payload });
+      return Promise.resolve();
+    },
+  };
+}
+
+Deno.test({
+  name: "resolvePendingNormalizeBeforeRun: timeout retry finds completed durable output and does not rerun normalize",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  async fn() {
+    const job = { ...JOB, metadata: { normalize_pending: true, retry_stage: "normalize" }, status: "running" };
+    const events: any[] = [];
+    const supabaseAdmin = makeMockSupabase({
+      rows: { uploaded_files: durableNormalizeRow(), pipeline_jobs: { ...job } },
+    });
+
+    const result = await resolvePendingNormalizeBeforeRun(supabaseAdmin, job, FILE_ID, ORG_ID, testLogger(events));
+    const body = await result.response!.json();
+
+    assertEquals(body.status, "completed");
+    assertEquals(body.reconciled, true);
+    assertEquals(result.factLedgerResume, null);
+    assertEquals(supabaseAdmin.__rows.pipeline_jobs.status, "completed");
+    assertEquals(events.at(-1)?.status, "reconciled");
+    const normalizeWrite = supabaseAdmin.__updates.find((u) => u.table === "uploaded_files" && u.patch?.extraction_method === "manual_review_fallback");
+    assertEquals(normalizeWrite, undefined);
+  },
+});
+
+Deno.test({
+  name: "resolvePendingNormalizeBeforeRun: duplicate retry observes active validating upload and does not start concurrent normalization",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  async fn() {
+    const now = new Date().toISOString();
+    const job = { ...JOB, metadata: { normalize_pending: true, retry_stage: "normalize" }, status: "running" };
+    const supabaseAdmin = makeMockSupabase({
+      rows: {
+        uploaded_files: fallbackShapedNormalizeRow({ org_id: ORG_ID, status: "validating", processing_status: "validating", updated_at: now }),
+        pipeline_jobs: { ...job },
+      },
+    });
+
+    const result = await resolvePendingNormalizeBeforeRun(supabaseAdmin, job, FILE_ID, ORG_ID, testLogger());
+    const body = await result.response!.json();
+
+    assertEquals(body.error_code, "NORMALIZE_PENDING");
+    assertEquals(result.factLedgerResume, null);
+    assertEquals(supabaseAdmin.__rows.pipeline_jobs.status, "queued");
+    assertEquals(supabaseAdmin.__rows.pipeline_jobs.metadata.normalize_pending, true);
+    const uploadedFilesWrite = supabaseAdmin.__updates.find((u) => u.table === "uploaded_files");
+    assertEquals(uploadedFilesWrite, undefined, "active retry must not alter uploaded_files or launch another normalize call");
+  },
+});
+
+Deno.test({
+  name: "resolvePendingNormalizeBeforeRun: stale incomplete normalize resumes from persisted fact-ledger checkpoint",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  async fn() {
+    const stale = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    const partialFact = { category: "tenant_name", value: "Acme Corp", sourceText: "Tenant: Acme Corp", sourcePage: 1, confidence: 0.96, chunkIndex: 0 };
+    const job = {
+      ...JOB,
+      metadata: {
+        normalize_pending: true,
+        retry_stage: "normalize",
+        openai_fact_ledger_progress: {
+          chunksProcessed: 1,
+          chunksSucceeded: 1,
+          chunksFailed: 0,
+          nextChunkIndex: 1,
+          partialFacts: [partialFact],
+          updated_at: stale,
+        },
+      },
+      status: "running",
+    };
+    const supabaseAdmin = makeMockSupabase({
+      rows: {
+        uploaded_files: fallbackShapedNormalizeRow({ org_id: ORG_ID, status: "validating", processing_status: "normalize_pending", updated_at: stale }),
+        pipeline_jobs: { ...job },
+      },
+    });
+
+    const result = await resolvePendingNormalizeBeforeRun(supabaseAdmin, job, FILE_ID, ORG_ID, testLogger());
+
+    assertEquals(result.response, null);
+    assertEquals(result.factLedgerResume?.startChunkIndex, 1);
+    assertEquals(result.factLedgerResume?.priorFacts, [partialFact]);
+    assertEquals(result.factLedgerResume?.chunksSucceeded, 1);
+  },
+});
+
+Deno.test({
+  name: "parkLeaseForManualReview: genuine non-transport normalize failure reaches terminal manual review with diagnostics",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  async fn() {
+    const priorDiagnostics = {
+      failure_classification: "auth_error",
+      failure_provider_error_code: "invalid_api_key",
+      failure_request_id: "req_terminal",
+      failure_request_url: "https://api.openai.com/v1/chat/completions",
+    };
+    const supabaseAdmin = makeMockSupabase({
+      rows: {
+        uploaded_files: fallbackShapedNormalizeRow({
+          org_id: ORG_ID,
+          status: "validating",
+          processing_status: "validating",
+          extraction_method: "llm_only",
+          diag: priorDiagnostics,
+          normalized_output: { metadata: { extractionDebug: { openai_fact_ledger: priorDiagnostics } }, rows: [], warnings: [], validationErrors: [] },
+        }),
+        pipeline_jobs: { ...JOB, status: "running" },
+      },
+    });
+
+    const result = await parkLeaseForManualReview(
+      supabaseAdmin,
+      JOB,
+      FILE_ID,
+      ORG_ID,
+      "Lease document",
+      "leases",
+      "base_lease",
+      "NORMALIZE_FAILED",
+      "Provider returned terminal auth error",
+      "normalize",
+    );
+
+    assertEquals(result.outcome, "parked");
+    assertEquals(supabaseAdmin.__rows.pipeline_jobs.status, "failed");
+    assertEquals(supabaseAdmin.__rows.uploaded_files.extraction_method, "manual_review_fallback");
+    assertEquals(
+      supabaseAdmin.__rows.uploaded_files.normalized_output.metadata.extractionDebug.openai_fact_ledger,
+      priorDiagnostics,
+    );
   },
 });

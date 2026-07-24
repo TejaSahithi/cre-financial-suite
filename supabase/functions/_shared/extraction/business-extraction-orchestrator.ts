@@ -84,6 +84,7 @@ export interface RunBusinessExtractionOptions {
     context: import("./provenance/types.ts").ProvenanceContext;
   };
   factLedgerProgress?: (progress: Record<string, unknown>) => Promise<void> | void;
+  factLedgerResume?: import("./openai-fact-ledger/types.ts").FactLedgerResumeState;
 }
 
 function factLedgerDebug(debug: Record<string, unknown>): Record<string, unknown> {
@@ -262,6 +263,7 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
         deadlineAt: startTime + OPENAI_TOTAL_BUDGET_MS,
         ...(opts.provenance ? { provenance: opts.provenance } : {}),
         ...(opts.factLedgerProgress ? { onProgress: opts.factLedgerProgress } : {}),
+        ...(opts.factLedgerResume ? { resume: opts.factLedgerResume } : {}),
       },
     );
   }

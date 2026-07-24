@@ -361,6 +361,7 @@ export async function extractFactLedger(args: {
   provenance?: { supabaseAdmin: any; context: import("../provenance/types.ts").ProvenanceContext };
   maxChunks?: number;
   onProgress?: (progress: Record<string, unknown>) => Promise<void> | void;
+  resume?: import("./types.ts").FactLedgerResumeState;
 }): Promise<FactLedgerResult> {
   const { docIndex, moduleType, fileBase64, fileMimeType, fileModeOverride, deadlineAt, provenance } = args;
   const warnings: string[] = [];
@@ -404,10 +405,17 @@ export async function extractFactLedger(args: {
       `OpenAI fact ledger processed ${chunks.length} of ${allChunks.length} chunks because OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS is set; unset or increase it to cover the full document.`,
     );
   }
-  const allFacts: Fact[] = [];
-  let chunksProcessed = 0;
-  let successfulChunkCount = 0;
-  let failedChunkCount = 0;
+  const resumeStartChunkIndex = Math.max(
+    0,
+    Math.min(chunks.length, Math.floor(Number(args.resume?.startChunkIndex ?? 0)) || 0),
+  );
+  const priorFacts = Array.isArray(args.resume?.priorFacts) ? args.resume.priorFacts : [];
+  const allFacts: Fact[] = priorFacts
+    .filter((fact: any) => fact && typeof fact === "object" && typeof fact.category === "string" && typeof fact.sourceText === "string")
+    .map((fact: any) => ({ ...fact }));
+  let chunksProcessed = Math.max(Number(args.resume?.chunksProcessed ?? resumeStartChunkIndex) || 0, resumeStartChunkIndex);
+  let successfulChunkCount = Math.max(Number(args.resume?.chunksSucceeded ?? resumeStartChunkIndex) || 0, 0);
+  let failedChunkCount = Math.max(Number(args.resume?.chunksFailed ?? 0) || 0, 0);
   const chunkClassifications: Array<OpenAIFailureClassification | undefined> = [];
   let lastHttpStatus: number | undefined;
   let lastProviderErrorCode: string | undefined;
@@ -425,7 +433,7 @@ export async function extractFactLedger(args: {
   let continuationRequired = false;
   let continuationReason: string | null = null;
   let nextChunkIndex: number | null = null;
-  const failedChunkIndexes: number[] = [];
+  const failedChunkIndexes: number[] = Array.isArray(args.resume?.failedChunkIndexes) ? [...args.resume!.failedChunkIndexes!] : [];
 
   async function emitProgress() {
     await args.onProgress?.({
@@ -441,10 +449,12 @@ export async function extractFactLedger(args: {
       continuationReason,
       nextChunkIndex,
       peakConcurrency,
+      partialFacts: dedupeFacts(allFacts),
+      resumedFromChunkIndex: resumeStartChunkIndex || null,
     });
   }
 
-  for (let batchStart = 0; batchStart < chunks.length; batchStart += chunkConcurrency) {
+  for (let batchStart = resumeStartChunkIndex; batchStart < chunks.length; batchStart += chunkConcurrency) {
     if (deadlineAt && chunksProcessed > 0 && Date.now() + deadlineReserveMs >= deadlineAt) {
       partialResult = true;
       continuationRequired = true;
@@ -534,6 +544,8 @@ export async function extractFactLedger(args: {
     continuationRequired,
     continuationReason,
     nextChunkIndex,
+    partialFacts: dedupedFacts,
+    resumedFromChunkIndex: resumeStartChunkIndex || null,
     ...(overallFailed
       ? {
         failureClassification: dominantClassification(chunkClassifications),

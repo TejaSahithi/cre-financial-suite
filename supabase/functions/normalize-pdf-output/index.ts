@@ -1915,6 +1915,21 @@ function countMeaningfulRowValues(rows: Array<Record<string, unknown>> | undefin
   return count;
 }
 
+function normalizeFactLedgerResume(value: unknown): import("../_shared/extraction/openai-fact-ledger/types.ts").FactLedgerResumeState | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const startChunkIndex = Math.floor(Number(raw.startChunkIndex ?? raw.nextChunkIndex ?? 0));
+  const priorFacts = Array.isArray(raw.priorFacts) ? raw.priorFacts : Array.isArray(raw.partialFacts) ? raw.partialFacts : [];
+  if ((!Number.isFinite(startChunkIndex) || startChunkIndex <= 0) && priorFacts.length === 0) return undefined;
+  return {
+    startChunkIndex: Number.isFinite(startChunkIndex) && startChunkIndex > 0 ? startChunkIndex : 0,
+    priorFacts: priorFacts as any[],
+    chunksProcessed: Number.isFinite(Number(raw.chunksProcessed)) ? Number(raw.chunksProcessed) : undefined,
+    chunksSucceeded: Number.isFinite(Number(raw.chunksSucceeded)) ? Number(raw.chunksSucceeded) : undefined,
+    chunksFailed: Number.isFinite(Number(raw.chunksFailed)) ? Number(raw.chunksFailed) : undefined,
+    failedChunkIndexes: Array.isArray(raw.failedChunkIndexes) ? raw.failedChunkIndexes.map((n) => Number(n)).filter(Number.isFinite) : undefined,
+  };
+}
 async function persistFactLedgerProgress(args: {
   supabaseAdmin: any;
   logger: any;
@@ -1925,7 +1940,7 @@ async function persistFactLedgerProgress(args: {
   const progress = {
     ...args.progress,
     updated_at: new Date().toISOString(),
-    continuation_enqueue_supported: false,
+    continuation_enqueue_supported: true,
   };
 
   await args.logger.event("normalize", "progress", {
@@ -2413,7 +2428,7 @@ Deno.serve(async (req: Request) => {
             documentSubtype: null,
             correlationId: "dry_run",
           });
-      stampBusinessExtractionPersistedAt(result, new Date().toISOString());
+          stampBusinessExtractionPersistedAt(result, new Date().toISOString());
           extraction = {
             rows: result.rows?.length ?? 0,
             method: result.method ?? "unknown",
@@ -2522,13 +2537,16 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Must be in pdf_parsed state
-    if (fileRecord.status !== "pdf_parsed") {
-      await stage?.fail("INVALID_STATUS", `File status must be 'pdf_parsed'. Current: '${fileRecord.status}'`, { outcome: "terminal_failure" });
+    // Must be ready for normalization. `validating` is accepted for retry/reconcile
+    // calls after the upstream worker timed out while normalize-pdf-output was
+    // already running; rejecting that state loops the job into an empty review.
+    const normalizeRunnableStatuses = new Set(["pdf_parsed", "validating"]);
+    if (!normalizeRunnableStatuses.has(String(fileRecord.status))) {
+      await stage?.fail("INVALID_STATUS", `File status must be 'pdf_parsed' or 'validating'. Current: '${fileRecord.status}'`, { outcome: "terminal_failure" });
       return jsonResponse(
         {
           error: true,
-          message: `File status must be 'pdf_parsed'. Current: '${fileRecord.status}'`,
+          message: `File status must be 'pdf_parsed' or 'validating'. Current: '${fileRecord.status}'`,
           error_code: "INVALID_STATUS",
         },
         422,
@@ -2837,6 +2855,7 @@ Deno.serve(async (req: Request) => {
       // providers already produced -- buildReviewPayload/buildLeaseWorkflowAbstraction/
       // persistence below are unmodified and unaware this replaced a ternary.
       const mockOpenAIScenario = resolveMockOpenAIScenario(req, body as Record<string, unknown>, businessExtractionProvider);
+      const factLedgerResume = normalizeFactLedgerResume((body as any)?.fact_ledger_resume);
       const result = await runBusinessExtraction({
         requestedProvider: businessExtractionProvider,
         moduleType: extractionModuleType,
@@ -2856,6 +2875,7 @@ Deno.serve(async (req: Request) => {
           fileId: file_id,
           progress,
         }),
+        ...(factLedgerResume ? { factLedgerResume } : {}),
         ...(stage?.stageRunId
           ? {
             provenance: {

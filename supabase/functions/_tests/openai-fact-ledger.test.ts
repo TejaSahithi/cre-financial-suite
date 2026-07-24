@@ -583,3 +583,86 @@ Deno.test("runOpenAIFactLedgerPipeline: execution budget guard pauses with conti
     if (previousReserve == null) Deno.env.delete("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS"); else Deno.env.set("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS", previousReserve);
   }
 });
+Deno.test("runOpenAIFactLedgerPipeline: large document resumes from checkpoint and maps prior plus later chunk facts", async () => {
+  const previousOpenAIKey = Deno.env.get("OPENAI_API_KEY");
+  const previousAzureEndpoint = Deno.env.get("AZURE_OPENAI_ENDPOINT");
+  const previousConcurrency = Deno.env.get("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY");
+  const previousReserve = Deno.env.get("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS");
+  Deno.env.set("OPENAI_API_KEY", "sk-fake-openai-key-for-testing");
+  Deno.env.delete("AZURE_OPENAI_ENDPOINT");
+  Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", "1");
+  Deno.env.set("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS", "60000");
+
+  const rentSourceText = "Base Rent: $2,100 per month.";
+  const expirationSourceText = "Expiration Date: December 31, 2023.";
+  const textBlocks = [
+    { block_index: 0, type: "paragraph", page: 1, text: `${rentSourceText} ${"Lease text. ".repeat(700)}` },
+    { block_index: 1, type: "paragraph", page: 2, text: `${expirationSourceText} ${"Lease text. ".repeat(700)}` },
+  ];
+  const docling = {
+    full_text: textBlocks.map((block) => block.text).join("\n\n"),
+    page_count: textBlocks.length,
+    pages: textBlocks.map((block) => ({ number: block.page, text: block.text, dimensions: { width: 612, height: 792 } })),
+    text_blocks: textBlocks,
+    tables: [],
+    fields: [],
+  };
+
+  const realFetch = globalThis.fetch;
+  let profileCalls = 0;
+  const progressEvents: any[] = [];
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = input.toString();
+    if (!url.includes("api.openai.com/v1/chat/completions")) return realFetch(input, init);
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    const userPrompt = String((body.messages || []).find((m: any) => m.role === "user")?.content ?? "");
+    if (profileCalls === 0 || userPrompt.includes("document_profile")) {
+      profileCalls++;
+      return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: JSON.stringify({ document_profile: "full_lease", confidence: 0.9, reasoning: "test fixture" }) }, finish_reason: "stop" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    const facts = userPrompt.includes(expirationSourceText)
+      ? [{ category: "clause:lease_term", value: "2023-12-31", source_text: expirationSourceText, source_page: 2, confidence: 0.96 }]
+      : userPrompt.includes(rentSourceText)
+        ? [{ category: "clause:rent_escalation", value: 2100, source_text: rentSourceText, source_page: 1, confidence: 0.96 }]
+        : [];
+    return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: JSON.stringify({ facts }) }, finish_reason: "stop" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+
+  try {
+    const first = await runOpenAIFactLedgerPipeline(
+      { moduleType: "lease", fileName: "resume-first.txt", docling, documentSubtype: "full_lease" },
+      { deadlineAt: Date.now() + 1, onProgress: (progress) => progressEvents.push(progress) },
+    );
+    const firstDebug = (first.metadata as any).extractionDebug.openai_fact_ledger;
+    const checkpoint = progressEvents.at(-1);
+    assertEquals(firstDebug.continuation_required, true);
+    assertEquals(firstDebug.next_chunk_index, 1);
+    assertEquals(Array.isArray(checkpoint.partialFacts), true);
+    assertEquals(checkpoint.partialFacts.length, 1);
+
+    const resumed = await runOpenAIFactLedgerPipeline(
+      { moduleType: "lease", fileName: "resume-second.txt", docling, documentSubtype: "full_lease" },
+      {
+        resume: {
+          startChunkIndex: checkpoint.nextChunkIndex,
+          priorFacts: checkpoint.partialFacts,
+          chunksProcessed: checkpoint.chunksProcessed,
+          chunksSucceeded: checkpoint.chunksSucceeded,
+          chunksFailed: checkpoint.chunksFailed,
+          failedChunkIndexes: checkpoint.failedChunkIndexes,
+        },
+      },
+    );
+    const resumedDebug = (resumed.metadata as any).extractionDebug.openai_fact_ledger;
+    assertEquals(resumedDebug.resumed_from_chunk_index, 1);
+    assertEquals(resumedDebug.continuation_required, false);
+    assertEquals(resumed.rows[0]?.monthly_rent, 2100);
+    assertEquals(resumed.rows[0]?.expiration_date, "2023-12-31");
+  } finally {
+    globalThis.fetch = realFetch;
+    if (previousOpenAIKey == null) Deno.env.delete("OPENAI_API_KEY"); else Deno.env.set("OPENAI_API_KEY", previousOpenAIKey);
+    if (previousAzureEndpoint == null) Deno.env.delete("AZURE_OPENAI_ENDPOINT"); else Deno.env.set("AZURE_OPENAI_ENDPOINT", previousAzureEndpoint);
+    if (previousConcurrency == null) Deno.env.delete("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY"); else Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", previousConcurrency);
+    if (previousReserve == null) Deno.env.delete("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS"); else Deno.env.set("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS", previousReserve);
+  }
+});

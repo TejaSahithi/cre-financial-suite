@@ -450,6 +450,87 @@ Deno.test("mapFactsToStandardFields: a whole-building square footage fact still 
   assertEquals(result.records[0]?.fields?.square_footage, undefined);
 });
 
+Deno.test("mapFactsToStandardFields: party clause binds landlord and tenant names to their own role labels", () => {
+  const sourceText = '1. Parties. This lease dated this 4 day of Feb 2019, is hereby made and entered into by and between MAcon Crossing (herein called "Landlord"), and JUSTIN CRESS (herein called "Tenant").';
+  const facts = [
+    fact({ category: "clause:party_identification", value: "MAcon Crossing", sourceText, confidence: 0.99 }),
+    fact({ category: "clause:party_identification", value: "JUSTIN CRESS", sourceText, confidence: 0.99 }),
+  ];
+  const result = mapFactsToStandardFields({ facts, moduleType: "lease" });
+  assertEquals(result.records[0]?.fields?.landlord_name?.value, "MAcon Crossing");
+  assertEquals(result.records[0]?.fields?.tenant_name?.value, "JUSTIN CRESS");
+});
+
+Deno.test("mapFactsToStandardFields: a tenant-pronoun rent-abatement clause cannot populate tenant_name", () => {
+  const facts = [
+    fact({
+      category: "clause:default",
+      value: "no abatement of rent",
+      sourceText: "If the damage is due to the fault or neglect of Tenant or its employees, there shall be no abatement of rent.",
+      confidence: 0.98,
+    }),
+  ];
+  const result = mapFactsToStandardFields({ facts, moduleType: "lease" });
+  assertEquals(result.records[0]?.fields?.tenant_name, undefined);
+});
+
+Deno.test("mapFactsToStandardFields: a common-area license phrase cannot populate property_name", () => {
+  const facts = [
+    fact({
+      category: "clause:premises_description",
+      value: "non-exclusive license",
+      sourceText: "Tenant is hereby given a non-exclusive license to use the common areas of the Shopping Center.",
+      confidence: 0.96,
+    }),
+  ];
+  const result = mapFactsToStandardFields({ facts, moduleType: "lease" });
+  assertEquals(result.records[0]?.fields?.property_name, undefined);
+});
+
+Deno.test("mapFactsToStandardFields: annual amount plus monthly installments maps rent to the correct canonical fields", () => {
+  const sourceText = "Tenant agrees to pay Landlord as Minimum Rent, without notice or demand, the annual amount of $25,200, payable in the monthly installments of $2,100 in advance.";
+  const facts = [
+    fact({ category: "clause:rent_escalation", value: 25200, sourceText, confidence: 0.97 }),
+    fact({ category: "clause:rent_escalation", value: 2100, sourceText, confidence: 0.97 }),
+  ];
+  const result = mapFactsToStandardFields({ facts, moduleType: "lease" });
+  assertEquals(result.records[0]?.fields?.annual_rent?.value, 25200);
+  assertEquals(result.records[0]?.fields?.monthly_rent?.value, 2100);
+});
+
+Deno.test("mapFactsToStandardFields: annual rent value is not accepted as monthly rent when source text says annual amount", () => {
+  const sourceText = "Tenant agrees to pay Landlord as Minimum Rent, the annual amount of $25,200, payable in monthly installments.";
+  const facts = [fact({ category: "clause:rent_escalation", value: 25200, sourceText, confidence: 0.97 })];
+  const result = mapFactsToStandardFields({ facts, moduleType: "lease" });
+  assertEquals(result.records[0]?.fields?.monthly_rent, undefined);
+  assertEquals(result.records[0]?.fields?.annual_rent?.value, 25200);
+});
+
+Deno.test("mapFactsToStandardFields: OCR-confused first-day term date still populates start and commencement", () => {
+  const sourceText = "5. Term. The lease term shall be from an initial five-year period from IST March 2019 through Dec 31, 2023.";
+  const facts = [
+    fact({ category: "clause:lease_term", value: "IST March 2019", sourceText }),
+    fact({ category: "clause:lease_term", value: "Dec 31, 2023", sourceText }),
+  ];
+  const result = mapFactsToStandardFields({ facts, moduleType: "lease" });
+  assertEquals(result.records[0]?.fields?.start_date?.value, "2019-03-01");
+  assertEquals(result.records[0]?.fields?.commencement_date?.value, "2019-03-01");
+  assertEquals(result.records[0]?.fields?.end_date?.value, "2023-12-31");
+  assertEquals(result.records[0]?.fields?.expiration_date?.value, "2023-12-31");
+});
+
+Deno.test("mapFactsToStandardFields: renewal period count is not renewal notice months without notice language", () => {
+  const facts = [
+    fact({
+      category: "clause:renewal_option",
+      value: 2,
+      sourceText: "The Tenant may also have the first right of refusal for (2) optional five (5) year lease periods.",
+      confidence: 0.95,
+    }),
+  ];
+  const result = mapFactsToStandardFields({ facts, moduleType: "lease" });
+  assertEquals(result.records[0]?.fields?.renewal_notice_months, undefined);
+});
 // ── merger.ts integration: legacy_hybrid path (previously zero test coverage) ──
 
 function stepResult(fields) {

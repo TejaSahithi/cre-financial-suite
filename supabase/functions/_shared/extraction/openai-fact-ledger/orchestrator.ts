@@ -179,6 +179,7 @@ export async function runOpenAIFactLedgerPipeline(
       deadlineAt: options.deadlineAt,
       provenance: options.provenance,
       maxChunks: options.maxChunks,
+      resume: options.resume,
       onProgress: options.onProgress,
     });
 
@@ -277,6 +278,7 @@ export async function runOpenAIFactLedgerPipeline(
             continuation_required: factLedger.continuationRequired ?? false,
             continuation_reason: factLedger.continuationReason ?? null,
             next_chunk_index: factLedger.nextChunkIndex ?? null,
+            resumed_from_chunk_index: factLedger.resumedFromChunkIndex ?? null,
             facts_mapped_count: llmFieldsExtracted,
             facts_unmapped_count: mapped.unmappedFacts.length,
             approval_blockers: approvalBlockers.blockers,

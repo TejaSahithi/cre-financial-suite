@@ -58,7 +58,12 @@ import {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
+function envBoundedInt(name: string, fallback: number, min: number, max: number): number {
+  const raw = Deno.env.get(name);
+  const value = raw ? Number(raw) : fallback;
+  const parsed = Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
 /** Edge Function caller with selective retry and strict timeout budget.
  *
  * Timeout budget: Supabase Edge Functions have a 150 s hard wall. With two
@@ -1145,7 +1150,7 @@ Deno.serve(async (req: Request) => {
       const pipelineStartedAt = Date.now();
       const MAX_INGEST_WAIT_MS = 135_000;
       const RESPONSE_SAFETY_MS = 10_000;
-      const PARSE_TIMEOUT_MS = 90_000;
+      const PARSE_TIMEOUT_MS = envBoundedInt("INGEST_PARSE_TIMEOUT_MS", 90_000, 30_000, 120_000);
 
       // Step 1: Azure Document Intelligence extraction with enhanced error handling
       // discardSuccessBody=true: parse-document-azure writes parser output directly
@@ -1246,9 +1251,10 @@ Deno.serve(async (req: Request) => {
       // pushes ingest-file past the 546 memory ceiling.
       // After success we read review_required directly from the DB (below).
       const elapsedAfterParseMs = Date.now() - pipelineStartedAt;
+      const maxNormalizeWaitMs = envBoundedInt("INGEST_NORMALIZE_TIMEOUT_MS", 90_000, 20_000, 120_000);
       const normalizeTimeoutMs = Math.max(
         20_000,
-        Math.min(90_000, MAX_INGEST_WAIT_MS - elapsedAfterParseMs - RESPONSE_SAFETY_MS),
+        Math.min(maxNormalizeWaitMs, MAX_INGEST_WAIT_MS - elapsedAfterParseMs - RESPONSE_SAFETY_MS),
       );
 
       const normalizeResult = await callEdgeFunction(

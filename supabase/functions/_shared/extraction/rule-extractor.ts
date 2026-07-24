@@ -38,6 +38,9 @@ const MONTHS: Record<string, string> = {
 export function parseDate(s: string): string | null {
   if (!s) return null;
   s = s.trim().replace(/\s+/g, " ");
+  // Azure/OCR can read "1st March" as "IST March" or "lst March".
+  s = s.replace(/\b(?:i|l)st\s+([A-Za-z]+)\s+(\d{4})\b/i, "1 $1 $2");
+  s = s.replace(/\b(\d{1,2})(st|nd|rd|th)\b/gi, "$1");
 
   // Already ISO
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;

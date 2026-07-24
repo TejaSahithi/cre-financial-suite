@@ -27,6 +27,115 @@ import type { ExtractedField, ExtractedRecord, ModuleType } from "../types.ts";
 import type { Fact, FactFieldMappingResult } from "./types.ts";
 
 const MIN_LABEL_SCORE = 3; // shortest meaningful label match (e.g. "by:" is too weak alone)
+function normalizeMoneyValue(value: unknown): number | null {
+  if (value == null) return null;
+  const text = String(value).replace(/[$,\s]/g, "").trim();
+  if (!text || !/^-?\d+(?:\.\d+)?$/.test(text)) return null;
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function moneyNearLabel(sourceText: string, labelPattern: RegExp): number | null {
+  const match = sourceText.match(labelPattern);
+  if (!match?.[1]) return null;
+  return normalizeMoneyValue(match[1]);
+}
+
+function sourceMonthlyInstallmentAmount(sourceText: string): number | null {
+  const clean = sourceText.replace(/\s+/g, " ");
+  return (
+    moneyNearLabel(clean, /monthly\s+installments?\s+of\s*(?:[$#]\s*)?([\d,]+(?:\s+\d{3})?(?:\.\d{2})?)/i) ??
+    moneyNearLabel(clean, /installments?\s+of\s*(?:[$#]\s*)?([\d,]+(?:\s+\d{3})?(?:\.\d{2})?)\s*(?:per\s+month|monthly)/i) ??
+    moneyNearLabel(clean, /(?:per\s+month|monthly)\s*(?:installments?|rent)?\s*(?:of|in)?\s*(?:[$#]\s*)?([\d,]+(?:\s+\d{3})?(?:\.\d{2})?)/i)
+  );
+}
+
+function sourceAnnualRentAmount(sourceText: string): number | null {
+  const clean = sourceText.replace(/\s+/g, " ");
+  return (
+    moneyNearLabel(clean, /annual\s+(?:amount|rent|base\s+rent)[^$#\d]{0,60}(?:[$#]\s*)?([\d,]+(?:\.\d{2})?)/i) ??
+    moneyNearLabel(clean, /(?:per\s+year|annually|yearly)[^$#\d]{0,40}(?:[$#]\s*)?([\d,]+(?:\.\d{2})?)/i) ??
+    moneyNearLabel(clean, /(?:[$#]\s*)?([\d,]+(?:\.\d{2})?)\s*(?:per\s+year|annually|yearly)/i)
+  );
+}
+
+function roughlyEqualMoney(a: number | null, b: number | null): boolean {
+  return a !== null && b !== null && Math.abs(a - b) <= 1;
+}
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function valueIsLabeledAsRole(valueText: string, sourceText: string, rolePattern: string): boolean {
+  if (!valueText) return false;
+  const escapedValue = escapeRegExp(valueText).replace(/\s+/g, "\\s+");
+  return new RegExp(`${escapedValue}.{0,80}(?:herein\\s+called|referred\\s+to\\s+as|called)\\s+["']?(?:${rolePattern})\\b`, "i").test(sourceText) ||
+    new RegExp(`(?:${rolePattern})\\s+name\\s*[:.]\\s*${escapedValue}`, "i").test(sourceText) ||
+    new RegExp(`(?:^|\\n)\\s*(?:${rolePattern})\\s*[:.]\\s*${escapedValue}`, "i").test(sourceText);
+}
+function looksLikeFieldCompatibleFact(fact: Fact, fieldName: string): boolean {
+  const valueText = String(fact.value ?? "").trim();
+  const sourceText = String(fact.sourceText ?? "");
+  const sourceLower = sourceText.toLowerCase();
+
+  if (fieldName === "monthly_rent") {
+    const value = normalizeMoneyValue(fact.value);
+    const monthlyInstallment = sourceMonthlyInstallmentAmount(sourceText);
+    if (monthlyInstallment !== null && value !== null && !roughlyEqualMoney(value, monthlyInstallment)) return false;
+    const annualAmount = sourceAnnualRentAmount(sourceText);
+    if (annualAmount !== null && value !== null && roughlyEqualMoney(value, annualAmount)) return false;
+  }
+
+  if (fieldName === "annual_rent") {
+    const value = normalizeMoneyValue(fact.value);
+    const annualAmount = sourceAnnualRentAmount(sourceText);
+    if (annualAmount !== null && value !== null && roughlyEqualMoney(value, annualAmount)) return true;
+    const monthlyInstallment = sourceMonthlyInstallmentAmount(sourceText);
+    if (monthlyInstallment !== null && value !== null && roughlyEqualMoney(value, monthlyInstallment)) return false;
+  }
+
+  if (fieldName === "tenant_name" || fieldName === "landlord_name") {
+    if (!valueText || valueText.split(/\s+/).length > 12) return false;
+    if (/^[a-z][a-z\s-]+$/.test(valueText) && !/\b(?:llc|l\.l\.c\.|inc|corp|company|co\.|lp|llp|trust|foundation|partners?|crossing|center|restaurant)\b/i.test(valueText)) {
+      return false;
+    }
+    if (!/\b(?:party|parties|between|tenant\s+name|landlord\s+name|lessee\s+name|lessor\s+name|herein\s+called|referred\s+to\s+as|called\s+["']?(?:tenant|landlord|lessee|lessor))\b/i.test(sourceText)) {
+      return false;
+    }
+    const expectedRole = fieldName === "tenant_name" ? "tenant|lessee" : "landlord|lessor";
+    const oppositeRole = fieldName === "tenant_name" ? "landlord|lessor" : "tenant|lessee";
+    if (!new RegExp(`(?:herein\\s+called|referred\\s+to\\s+as|called)\\s+["']?(?:${expectedRole})\\b|(?:${expectedRole})\\s+name`, "i").test(sourceText)) {
+      return false;
+    }
+    const hasExplicitExpectedRole = valueIsLabeledAsRole(valueText, sourceText, expectedRole);
+    const hasExplicitOppositeRole = valueIsLabeledAsRole(valueText, sourceText, oppositeRole);
+    if (hasExplicitOppositeRole && !hasExplicitExpectedRole) return false;
+  }
+
+  if (fieldName === "property_name") {
+    if (!valueText || valueText.split(/\s+/).length > 8) return false;
+    if (/^[a-z][a-z\s-]+$/.test(valueText)) return false;
+    if (/\b(?:license|non-exclusive|common\s+areas?|premises|lease|tenant|landlord|abatement|damage|fault|neglect)\b/i.test(valueText)) return false;
+    if (!/\b(?:shopping\s+center|development|plaza|complex|park|building|mall|village|known\s+as|property\s+name)\b/i.test(sourceText)) return false;
+  }
+
+  if (fieldName === "renewal_notice_months") {
+    if (!/\b(?:notice|notify|written\s+notice|exercise)\b/i.test(sourceText)) return false;
+    if (!/\b(?:prior|before|advance|not\s+less\s+than|at\s+least)\b/i.test(sourceText)) return false;
+  }
+
+  if (fieldName === "renewal_options") {
+    if (!/\b(?:renew|renewal|option|extend|extension)\b/i.test(sourceText)) return false;
+    if (/\b(subject\s+and\s+subordinate|deeds?\s+of\s+trust|mortgages?)\b/i.test(sourceLower)) return false;
+  }
+
+  if (fieldName === "assignment_provisions") {
+    if (!/\b(?:assign|assignment|sublet|sublease|transfer)\b/i.test(sourceText)) return false;
+    if (/\b(?:default|failure\s+by\s+tenant|cure\s+period|remed(?:y|ies))\b/i.test(sourceText) && !/\b(?:assign|assignment|sublet|sublease|transfer)\b/i.test(valueText)) return false;
+  }
+
+  return true;
+}
 
 /**
  * Domain-aware (Release 1): fact.category is a real classified value (the
@@ -38,6 +147,8 @@ const MIN_LABEL_SCORE = 3; // shortest meaningful label match (e.g. "by:" is too
  * the clause is genuinely about late fees, not CAM).
  */
 function scoreFactAgainstField(fact: Fact, fieldName: string, def: FieldDef, moduleType: ModuleType): number {
+  if (!looksLikeFieldCompatibleFact(fact, fieldName)) return 0;
+
   const decision = evaluateCandidateForField({
     field: def,
     fieldKey: fieldName,
@@ -72,6 +183,10 @@ function scoreFactAgainstField(fact: Fact, fieldName: string, def: FieldDef, mod
   if (decision.decision === "accept" && decision.matchedAllowedCategories.length > 0) score += 10;
   else if (decision.decision === "needs_review") score = Math.floor(score / 2); // cross-domain candidate — heavy penalty, not a hard zero
 
+  if (fieldName === "annual_rent" && roughlyEqualMoney(normalizeMoneyValue(fact.value), sourceAnnualRentAmount(String(fact.sourceText ?? "")))) score += 12;
+  if (fieldName === "monthly_rent" && roughlyEqualMoney(normalizeMoneyValue(fact.value), sourceMonthlyInstallmentAmount(String(fact.sourceText ?? "")))) score += 12;
+  if ((fieldName === "tenant_name" || fieldName === "landlord_name") && valueIsLabeledAsRole(String(fact.value ?? "").trim(), String(fact.sourceText ?? ""), fieldName === "tenant_name" ? "tenant|lessee" : "landlord|lessor")) score += 12;
+
   return score;
 }
 
@@ -87,7 +202,9 @@ function tryParseDate(value: unknown): Date | null {
   if (!Number.isNaN(direct.getTime())) return direct;
   // Strip ordinal suffixes ("1st"/"2nd"/"3rd"/"4th") — a common source-text
   // shape Date.parse doesn't handle ("1st March 2019").
-  const stripped = text.replace(/\b(\d{1,2})(st|nd|rd|th)\b/gi, "$1");
+  const stripped = text
+    .replace(/\b(\d{1,2})(st|nd|rd|th)\b/gi, "$1")
+    .replace(/\b(?:i|l)st\s+([A-Za-z]+)\s+(\d{4})\b/gi, "1 $1 $2");
   const retry = new Date(stripped);
   return Number.isNaN(retry.getTime()) ? null : retry;
 }
@@ -217,6 +334,19 @@ export function mapFactsToStandardFields(args: {
       bestByField.set(bestField, { fact, score: bestScore });
     }
   }
+
+  // Keep paired canonical date fields in sync when a single explicit fact only
+  // wins one schema key by declaration order. Lease Review renders these as
+  // separate rows, but they represent the same canonical concept pairs.
+  const mirrorDateAlias = (from: string, to: string) => {
+    if (!fieldNames.includes(from) || !fieldNames.includes(to)) return;
+    if (!bestByField.has(from) || bestByField.has(to)) return;
+    bestByField.set(to, bestByField.get(from)!);
+  };
+  mirrorDateAlias("start_date", "commencement_date");
+  mirrorDateAlias("commencement_date", "start_date");
+  mirrorDateAlias("end_date", "expiration_date");
+  mirrorDateAlias("expiration_date", "end_date");
 
   const fields: Record<string, ExtractedField> = {};
   for (const [fieldName, { fact }] of bestByField.entries()) {

@@ -30,6 +30,12 @@ import { withExtractionStage } from "../_shared/extraction/provenance/recorder.t
 
 const WORKER_NAME = "lease-extraction-worker";
 
+function envBoundedInt(name: string, fallback: number, min: number, max: number): number {
+  const raw = Deno.env.get(name);
+  const value = raw ? Number(raw) : fallback;
+  const parsed = Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
 async function runParseStageInline(
   supabaseAdmin: any,
   fileId: string,
@@ -371,24 +377,20 @@ async function runParseStageInline(
   }
 }
 
-const PARSE_TIMEOUT_MS = 140_000;
+const PARSE_TIMEOUT_MS = envBoundedInt("LEASE_WORKER_PARSE_TIMEOUT_MS", 140_000, 30_000, 145_000);
 // Supabase Edge Functions have a 150s hard wall (see ingest-file/index.ts's
-// callEdgeFunction doc comment) -- this worker runs parse (inline, typically
-// 20-35s) and then normalize sequentially in the SAME invocation, so
-// NORMALIZE_TIMEOUT_MS must leave enough of that 150s budget for parse +
-// response overhead that this client-side AbortSignal always fires BEFORE
-// the platform's hard kill. A value close to or above 150s (as this was
-// previously set: 240_000) meant the platform silently killed the whole
-// invocation mid-await on any normalize call slow enough to matter -- before
-// any of this file's own timeout/reconciliation code ever ran, leaving the
-// job orphaned in "running" forever with no error, no log line, nothing.
-// 90s leaves ~35-40s of margin for parse + overhead to stay under 150s.
-const NORMALIZE_TIMEOUT_MS = 90_000;
+// callEdgeFunction doc comment) -- when this worker runs parse and normalize
+// sequentially in the SAME invocation, the chained normalize timeout must leave
+// enough budget for parse + response overhead so this client-side AbortSignal
+// fires before the platform hard-kills the invocation.
+const CHAINED_NORMALIZE_TIMEOUT_MS = envBoundedInt("LEASE_WORKER_CHAINED_NORMALIZE_TIMEOUT_MS", 90_000, 20_000, 120_000);
+// Jobs that start directly at normalize get a fresh invocation budget.
+const NORMALIZE_TIMEOUT_MS = envBoundedInt("LEASE_WORKER_NORMALIZE_TIMEOUT_MS", 130_000, 30_000, 145_000);
+const NORMALIZE_RETRY_DELAY_MS = envBoundedInt("LEASE_WORKER_NORMALIZE_RETRY_DELAY_MS", 30_000, 5_000, 300_000);
+const NORMALIZE_ACTIVE_GRACE_MS = envBoundedInt("LEASE_WORKER_NORMALIZE_ACTIVE_GRACE_MS", 180_000, 60_000, 900_000);
 // The enrich stage is dispatched as its own separate pipeline job / worker
-// invocation (not chained after parse+normalize in the same request), so it
-// gets its own fresh ~150s budget -- but must still leave headroom under
-// that same hard wall for its own overhead.
-const ENRICH_TIMEOUT_MS = 130_000;
+// invocation, so it gets its own fresh invocation budget.
+const ENRICH_TIMEOUT_MS = envBoundedInt("LEASE_WORKER_ENRICH_TIMEOUT_MS", 130_000, 30_000, 145_000);
 
 // Azure staging P0: durable-state reconciliation must distinguish "confirmed
 // absent" from "couldn't determine" — a reconciliation read failing under the
@@ -570,29 +572,251 @@ const LEASE_MANUAL_REVIEW_FIELDS = [
 ];
 
 /**
- * Reset a job back to a genuinely retryable state after a reconciliation
- * read came back "unknown" — never touches uploaded_files, never counts as
- * a terminal outcome. `attempt` was already incremented for this invocation
- * at claim time, so leaving it alone (only clearing error fields and status)
- * correctly consumes one unit of the existing max_attempts budget without
- * inventing new retry infrastructure.
+ * Reset a job back to a genuinely retryable state after reconciliation is
+ * inconclusive or a transport/runtime failure confirms no durable output yet.
+ * Never touches uploaded_files and never counts as a terminal outcome. `attempt`
+ * was already incremented for this invocation at claim time, so leaving it alone
+ * correctly consumes one unit of the existing max_attempts budget.
  */
-async function resetJobForRetryableReconciliation(supabaseAdmin: any, job: any, fileId: string, reason: string) {
+async function resetJobForRetryableReconciliation(
+  supabaseAdmin: any,
+  job: any,
+  fileId: string,
+  reason: string,
+  opts: { delayMs?: number; metadata?: Record<string, unknown> } = {},
+) {
+  const now = new Date();
+  const patch: Record<string, unknown> = {
+    status: "queued",
+    error_code: null,
+    error_message: null,
+    updated_at: now.toISOString(),
+  };
+  if (opts.delayMs && opts.delayMs > 0) {
+    patch.available_at = new Date(now.getTime() + opts.delayMs).toISOString();
+  }
+  if (opts.metadata) {
+    patch.metadata = {
+      ...(job.metadata || {}),
+      ...opts.metadata,
+      retry_requeue_reason: reason,
+      retry_requeued_at: now.toISOString(),
+    };
+  }
+
   await supabaseAdmin
     .from("pipeline_jobs")
-    .update({
-      status: "queued",
-      error_code: null,
-      error_message: null,
-      updated_at: new Date().toISOString(),
-    })
+    .update(patch)
     .eq("id", job.id);
   console.warn(
-    `[${WORKER_NAME}] reconciliation_inconclusive file_id=${fileId} job=${job.id} — ` +
-    `read failed even after retry; requeueing without touching uploaded_files (${reason})`,
+    `[${WORKER_NAME}] retryable_requeue file_id=${fileId} job=${job.id} ` +
+    `requeueing without touching uploaded_files (${reason})`,
   );
 }
 
+async function queueNormalizeTransportRetry(
+  supabaseAdmin: any,
+  job: any,
+  fileId: string,
+  logger: any,
+  normalizeResult: any,
+  reason: string,
+): Promise<Response> {
+  await markNormalizePending(supabaseAdmin, fileId, job.org_id || job.input?.org_id, normalizeResult, reason);
+  await resetJobForRetryableReconciliation(supabaseAdmin, job, fileId, reason, {
+    delayMs: NORMALIZE_RETRY_DELAY_MS,
+    metadata: {
+      normalize_pending: true,
+      normalize_transport_outcome: "unknown",
+      retry_stage: "normalize",
+      retry_transport_status: normalizeResult?.status ?? null,
+      retry_transport_error_code: normalizeResult?.error_code ?? normalizeResult?.data?.error_code ?? null,
+      retry_transport_message: String(normalizeResult?.error || "").slice(0, 500),
+      retry_delay_ms: NORMALIZE_RETRY_DELAY_MS,
+    },
+  });
+  await logger.event("normalize", "retry_queued", {
+    provider: "lease-extraction-worker",
+    metadata: {
+      job_id: job.id,
+      reason,
+      transport_status: normalizeResult?.status ?? null,
+      retry_delay_ms: NORMALIZE_RETRY_DELAY_MS,
+    },
+  });
+  return jsonResponse({
+    error: true,
+    error_code: "NORMALIZE_RETRY_QUEUED",
+    job_id: job.id,
+    stage: "normalize",
+    retryable: true,
+    retry_delay_ms: NORMALIZE_RETRY_DELAY_MS,
+    message: "Normalization hit a transport/runtime timeout before durable output was confirmed; job requeued for retry.",
+  }, 200);
+}
+
+async function markNormalizePending(
+  supabaseAdmin: any,
+  fileId: string,
+  orgId: string,
+  normalizeResult: any,
+  reason: string,
+) {
+  await supabaseAdmin
+    .from("uploaded_files")
+    .update({
+      processing_status: "normalize_pending",
+      failed_step: null,
+      error_message: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", fileId)
+    .eq("org_id", orgId);
+}
+
+function isPendingNormalizeReconciliation(metadata: any): boolean {
+  return Boolean(metadata?.normalize_pending === true || metadata?.retry_stage === "normalize");
+}
+
+function buildFactLedgerResumeFromMetadata(metadata: any): Record<string, unknown> | null {
+  const progress = metadata?.openai_fact_ledger_progress;
+  if (!progress || typeof progress !== "object") return null;
+  const nextChunkIndex = Number(progress.nextChunkIndex ?? progress.next_chunk_index ?? progress.chunksProcessed ?? 0);
+  const partialFacts = Array.isArray(progress.partialFacts) ? progress.partialFacts : [];
+  if ((!Number.isFinite(nextChunkIndex) || nextChunkIndex <= 0) && partialFacts.length === 0) return null;
+  return {
+    startChunkIndex: Number.isFinite(nextChunkIndex) && nextChunkIndex > 0 ? Math.floor(nextChunkIndex) : 0,
+    priorFacts: partialFacts,
+    chunksProcessed: progress.chunksProcessed,
+    chunksSucceeded: progress.chunksSucceeded,
+    chunksFailed: progress.chunksFailed,
+    failedChunkIndexes: progress.failedChunkIndexes,
+  };
+}
+
+function timestampIsFresh(value: unknown, graceMs = NORMALIZE_ACTIVE_GRACE_MS): boolean {
+  const ts = typeof value === "string" ? Date.parse(value) : NaN;
+  return Number.isFinite(ts) && Date.now() - ts < graceMs;
+}
+
+async function readNormalizeActivity(supabaseAdmin: any, fileId: string, orgId: string, job: any) {
+  const { data: fileRow } = await supabaseAdmin
+    .from("uploaded_files")
+    .select("status, processing_status, updated_at")
+    .eq("id", fileId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const progress = job?.metadata?.openai_fact_ledger_progress;
+  const latestProgressAt = progress && typeof progress === "object" ? (progress as any).updated_at : null;
+  const latestActivityAt = timestampIsFresh(latestProgressAt) ? latestProgressAt : fileRow?.updated_at;
+  return {
+    fileStatus: fileRow?.status ?? null,
+    processingStatus: fileRow?.processing_status ?? null,
+    latestActivityAt,
+    active: fileRow?.status === "validating" && timestampIsFresh(latestActivityAt),
+  };
+}
+
+async function resolvePendingNormalizeBeforeRun(
+  supabaseAdmin: any,
+  job: any,
+  fileId: string,
+  orgId: string,
+  logger: any,
+): Promise<{ response: Response | null; factLedgerResume: Record<string, unknown> | null }> {
+  if (!isPendingNormalizeReconciliation(job?.metadata)) {
+    return { response: null, factLedgerResume: null };
+  }
+
+  const reconciled = await reconcileDurableNormalize(supabaseAdmin, fileId, orgId);
+  if (reconciled.state === "durable") {
+    await repairStaleReconciledState(
+      supabaseAdmin,
+      fileId,
+      orgId,
+      String(reconciled.status ?? "review_required"),
+      String(reconciled.status ?? "review_required"),
+    );
+    await supabaseAdmin
+      .from("pipeline_jobs")
+      .update({
+        status: "completed",
+        error_code: null,
+        error_message: null,
+        completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        metadata: {
+          ...(job.metadata || {}),
+          normalize_reconciled_from_pending: true,
+          normalize_reconciled_at: new Date().toISOString(),
+          reconciled_durable_status: reconciled.status,
+        },
+      })
+      .eq("id", job.id);
+    await logger.event("normalize", "reconciled", {
+      provider: "lease-extraction-worker",
+      metadata: { job_id: job.id, reason: "pending_timeout_durable_output_found", durable_status: reconciled.status },
+    });
+    return {
+      response: jsonResponse({
+        error: false,
+        job_id: job.id,
+        stage: "normalize",
+        status: "completed",
+        reconciled: true,
+        durable_status: reconciled.status,
+      }),
+      factLedgerResume: null,
+    };
+  }
+
+  if (reconciled.state === "unknown") {
+    await resetJobForRetryableReconciliation(supabaseAdmin, job, fileId, "normalize_pending_reconciliation_unknown", {
+      delayMs: NORMALIZE_RETRY_DELAY_MS,
+      metadata: { normalize_pending: true, retry_stage: "normalize" },
+    });
+    await logger.event("normalize", "reconciliation_unknown", {
+      provider: "lease-extraction-worker",
+      metadata: { job_id: job.id, reason: "pending_timeout_reconciliation_unknown" },
+    });
+    return {
+      response: jsonResponse({
+        error: true,
+        error_code: "RECONCILIATION_INCONCLUSIVE",
+        job_id: job.id,
+        stage: "normalize",
+        retryable: true,
+        message: "Could not determine durable normalize state after a pending timeout; reconciliation requeued.",
+      }, 200),
+      factLedgerResume: null,
+    };
+  }
+
+  const activity = await readNormalizeActivity(supabaseAdmin, fileId, orgId, job);
+  if (activity.active) {
+    await resetJobForRetryableReconciliation(supabaseAdmin, job, fileId, "normalize_still_active", {
+      delayMs: NORMALIZE_RETRY_DELAY_MS,
+      metadata: { normalize_pending: true, retry_stage: "normalize", normalize_active_observed_at: activity.latestActivityAt },
+    });
+    await logger.event("normalize", "pending", {
+      provider: "lease-extraction-worker",
+      metadata: { job_id: job.id, reason: "normalize_still_active", latest_activity_at: activity.latestActivityAt },
+    });
+    return {
+      response: jsonResponse({
+        error: false,
+        error_code: "NORMALIZE_PENDING",
+        job_id: job.id,
+        stage: "normalize",
+        retryable: true,
+        message: "Normalization is still active; reconciliation requeued without starting duplicate work.",
+      }, 200),
+      factLedgerResume: null,
+    };
+  }
+
+  return { response: null, factLedgerResume: buildFactLedgerResumeFromMetadata(job.metadata) };
+}
 /**
  * Repair a row that reconciliation has just confirmed holds durable, valid
  * data but whose status/processing_status/failed_step/error_message were
@@ -1107,6 +1331,11 @@ export const __test__ = {
   parkLeaseForManualReview,
   repairStaleReconciledState,
   resetJobForRetryableReconciliation,
+  queueNormalizeTransportRetry,
+  markNormalizePending,
+  buildFactLedgerResumeFromMetadata,
+  readNormalizeActivity,
+  resolvePendingNormalizeBeforeRun,
   selectWithRetry,
   isCancelRequested,
   stopForCancellation,
@@ -1310,6 +1539,7 @@ Deno.serve(async (req: Request) => {
     // when EdgeRuntime.waitUntil is unavailable the fire-and-forget fetch is
     // cancelled before the TCP connection is established, so normalize never ran.
     let currentStage = job.stage;
+    const normalizeChainedAfterParse = currentStage === "parse";
 
     if (currentStage === "parse") {
       // Checkpoint 1: cancel-upload may have flagged this job between the
@@ -1624,6 +1854,17 @@ Deno.serve(async (req: Request) => {
         return await stopForCancellation(supabaseAdmin, job, fileId, logger, "before_normalize");
       }
 
+      const pendingNormalizeResolution = await resolvePendingNormalizeBeforeRun(
+        supabaseAdmin,
+        job,
+        fileId,
+        orgId,
+        logger,
+      );
+      if (pendingNormalizeResolution.response) {
+        return pendingNormalizeResolution.response;
+      }
+      const factLedgerResume = pendingNormalizeResolution.factLedgerResume;
       // Fast re-extraction path: when the job is enqueued directly at the
       // "normalize" stage (docling_raw already had usable text, so OCR was
       // skipped), the file status is still "parsing" from enqueueLeaseExtractionJob
@@ -1632,16 +1873,17 @@ Deno.serve(async (req: Request) => {
       // status guard rejects the call with "File status must be 'pdf_parsed'.
       // Current: 'parsing'". setStatus is a no-op when already "pdf_parsed"
       // (the path that came from the "parse" branch above).
-      const pdfParsedTransition = await setStatus(supabaseAdmin, fileId, "pdf_parsed", {
-        processing_status: "pdf_parsed",
-      });
-      if (pdfParsedTransition.error) {
-        console.error(
-          `[${WORKER_NAME}] Failed to transition to pdf_parsed before normalize stage:`,
-          pdfParsedTransition.error.message,
-        );
+      if (fileRecord.status !== "validating") {
+        const pdfParsedTransition = await setStatus(supabaseAdmin, fileId, "pdf_parsed", {
+          processing_status: "pdf_parsed",
+        });
+        if (pdfParsedTransition.error) {
+          console.error(
+            `[${WORKER_NAME}] Failed to transition to pdf_parsed before normalize stage:`,
+            pdfParsedTransition.error.message,
+          );
+        }
       }
-
       await logger.event("normalize", "running", {
         provider: "lease-extraction-worker",
         metadata: { job_id: job.id, attempt },
@@ -1658,9 +1900,10 @@ Deno.serve(async (req: Request) => {
           worker_attempt: attempt,
           generation_id: claimedJob.generation_id,
           extraction_run_id: normalizeExtractionRunId,
+          ...(factLedgerResume ? { fact_ledger_resume: factLedgerResume } : {}),
         },
         orgId,
-        NORMALIZE_TIMEOUT_MS,
+        normalizeChainedAfterParse ? CHAINED_NORMALIZE_TIMEOUT_MS : NORMALIZE_TIMEOUT_MS,
       );
       let normalizeReconciledToComplete = false;
 
@@ -1741,7 +1984,14 @@ Deno.serve(async (req: Request) => {
               message: "Could not determine durable normalize state after a transport failure; job requeued for retry.",
             }, 200);
           }
-          // state === "not_durable": falls through below exactly as before.
+          return await queueNormalizeTransportRetry(
+            supabaseAdmin,
+            job,
+            fileId,
+            logger,
+            normalizeResult,
+            "normalize_transport_not_durable",
+          );
         }
 
         if (isLeaseModule) {
