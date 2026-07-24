@@ -121,16 +121,42 @@ function valueLooksLikePartyResponsibility(valueText: string): boolean {
   return /\b(?:tenant|landlord|shared|both|included|gross|full\s+service|landlord\s+with\s+cap)\b/i.test(valueText) &&
     !/,.*(?:cam|insurance|maintenance|janitorial|utility|utilities)/i.test(valueText);
 }
+
+function sourceHasResponsibilityDomain(fieldName: string, sourceText: string): boolean {
+  const source = cleanEvidenceSnippet(sourceText);
+  if (/^(?:responsibility_taxes|tax_responsibility)$/.test(fieldName)) return /\b(?:tax|taxes|real\s+estate\s+tax|property\s+tax|assessment)\b/i.test(source);
+  if (/^(?:responsibility_insurance|insurance_responsibility|property_insurance_responsibility)$/.test(fieldName)) return /\b(?:insurance|premium|coverage|policy|policies)\b/i.test(source);
+  if (fieldName === "responsibility_utilities") return /\b(?:utilities|electric(?:ity|al)?|water|sewer|gas|janitorial|trash|refuse)\b/i.test(source);
+  if (fieldName === "responsibility_repairs") return /\b(?:repair|repairs|maintenance|maintain|alteration|condition)\b/i.test(source);
+  if (fieldName === "hvac_responsibility") return /\b(?:hvac|heating|ventilation|air\s+conditioning)\b/i.test(source);
+  return true;
+}
+
 function looksLikeFieldCompatibleFact(fact: Fact, fieldName: string): boolean {
   const valueText = cleanEvidenceSnippet(fact.value).trim();
   const sourceText = cleanEvidenceSnippet(fact.sourceText);
   const sourceLower = sourceText.toLowerCase();
+
+  if (fieldName === "broker_name") {
+    if (!valueText || valueText.split(/\s+/).length > 10) return false;
+    if (/\b(?:costs?\s+of\s+reletting|reletting|damages?|attorneys?|repairs?|maintenance|alterations?|default|remedies?)\b/i.test(valueText)) return false;
+    if (/\b(?:costs?\s+of\s+reletting|damages?|attorneys?|repairs?|maintenance|alterations?|default|remedies?)\b/i.test(sourceText) && !/\b(?:broker|brokers|brokerage|real\s+estate\s+broker|realtor|realty)\b/i.test(sourceText)) return false;
+    if (!/\b(?:broker|brokers|brokerage|real\s+estate\s+broker|realtor|realty)\b/i.test(`${sourceText} ${valueText}`)) return false;
+  }
+
+  if (fieldName === "permitted_use" || fieldName === "premises_use") {
+    if (!valueText || valueText.length > 90) return false;
+    if (/^\s*(?:as\s+is|where\s+is|as\s+is,?\s+where\s+is|premises|permitted\s+use)\s*$/i.test(valueText)) return false;
+    if (/\b(?:delivery\s+of\s+possession|good\s+order|condition\s+and\s+repair|maintenance|common\s+areas?|signage|default|assignment|consent)\b/i.test(valueText)) return false;
+    if (!/\b(?:permitted\s+use|use\s+of\s+(?:the\s+)?premises|shall\s+be\s+used|shall\s+use|solely\s+for|operation\s+of|purpose)\b/i.test(sourceText)) return false;
+  }
 
   if (fieldName === "property_address") {
     if (!valueText || valueText.length < 8) return false;
     if (/\b(?:as\s+is|where\s+is|condition|delivery\s+of\s+possession|tenant\s+acknowledges)\b/i.test(valueText)) return false;
     if (/\b(?:as\s+is|where\s+is|delivery\s+of\s+possession)\b/i.test(sourceText)) return false;
     if (sourceIsLandlordOrTenantAddress(sourceText) && !/\b(?:premises|property|building)\b/i.test(sourceText)) return false;
+    if (looksLikeShortUnitIdentifier(valueText)) return false;
     if (!looksLikeStreetAddress(valueText) && !(sourceIsPremisesLocation(sourceText) && looksLikeStreetAddress(sourceText))) return false;
   }
 
@@ -157,6 +183,7 @@ function looksLikeFieldCompatibleFact(fact: Fact, fieldName: string): boolean {
 
   if (fieldName === "monthly_rent") {
     const value = normalizeMoneyValue(fact.value);
+    if (/\b(?:%|percent|increase|escalat|renewal)\b/i.test(sourceText) && !/\b(?:per\s+month|monthly|installments?)\b/i.test(sourceText)) return false;
     const monthlyInstallment = sourceMonthlyInstallmentAmount(sourceText);
     if (monthlyInstallment !== null && value !== null && !roughlyEqualMoney(value, monthlyInstallment)) return false;
     const annualAmount = sourceAnnualRentAmount(sourceText);
@@ -164,8 +191,8 @@ function looksLikeFieldCompatibleFact(fact: Fact, fieldName: string): boolean {
     if (sourceIsHoldoverOrPenaltyRent(sourceText)) return false;
     if (value !== null && !sourceHasMoneyOrNumberNearValue(sourceText, value) && !roughlyEqualMoney(value, monthlyInstallment)) return false;
   }
-
   if (fieldName === "annual_rent") {
+    if (/\b(?:%|percent|increase|escalat|renewal)\b/i.test(sourceText) && !/\b(?:annual|annually|per\s+year|yearly)\b/i.test(sourceText)) return false;
     const value = normalizeMoneyValue(fact.value);
     const annualAmount = sourceAnnualRentAmount(sourceText);
     if (sourceIsHoldoverOrPenaltyRent(sourceText)) return false;
@@ -195,17 +222,19 @@ function looksLikeFieldCompatibleFact(fact: Fact, fieldName: string): boolean {
 
   if (fieldName === "property_name") {
     if (!valueText || valueText.split(/\s+/).length > 8) return false;
+    if (looksLikeStreetAddress(valueText)) return false;
     if (/^[a-z][a-z\s-]+$/.test(valueText)) return false;
     if (/\b(?:license|non-exclusive|common\s+areas?|premises|lease|tenant|landlord|abatement|damage|fault|neglect)\b/i.test(valueText)) return false;
+    if (/\b(?:building\s*\d+\s*,?\s*suites?|suites?\s*\d+|unit\s*\d+|space\s*\d+)\b/i.test(valueText)) return false;
     if (!/\b(?:shopping\s+center|development|plaza|complex|park|building|mall|village|known\s+as|property\s+name)\b/i.test(sourceText)) return false;
   }
-
   if (fieldName === "renewal_notice_months") {
     if (!/\b(?:notice|notify|written\s+notice|exercise)\b/i.test(sourceText)) return false;
     if (!/\b(?:prior|before|advance|not\s+less\s+than|at\s+least)\b/i.test(sourceText)) return false;
   }
 
   if (fieldName === "renewal_options") {
+    if (/^\s*\d+(?:\.\d+)?\s*%?\s*$/.test(valueText) && /\b(?:rent|increase|escalat|%)\b/i.test(sourceText)) return false;
     if (!/\b(?:renew|renewal|option|extend|extension)\b/i.test(sourceText)) return false;
     if (/\b(subject\s+and\s+subordinate|deeds?\s+of\s+trust|mortgages?)\b/i.test(sourceLower)) return false;
   }
@@ -220,6 +249,9 @@ function looksLikeFieldCompatibleFact(fact: Fact, fieldName: string): boolean {
     if (/\bpermitted\s+use\b/i.test(sourceText) && !/\b(?:assign|assignment|sublet|sublease|transfer)\b/i.test(valueText)) return false;
   }
 
+  if (fieldName === "landlord_consent") {
+    if (/\b(?:shall\s+not\s+(?:assign|sublet)|without\s+landlord(?:'s)?\s+(?:prior\s+written\s+)?consent)\b/i.test(sourceText)) return false;
+  }
   if (fieldName === "assumption_scope") {
     if (!/\b(?:assignee|assignment|assigned|transfer|assumes?\s+(?:the\s+)?(?:obligations|duties|liabilities|lease))\b/i.test(sourceText)) return false;
     if (/\b(?:assumes?\s+all\s+risk|risk\s+of\s+damage|injury\s+or\s+damage|gross\s+negligence)\b/i.test(sourceText) && !/\bassignee\b/i.test(sourceText)) return false;
@@ -233,13 +265,16 @@ function looksLikeFieldCompatibleFact(fact: Fact, fieldName: string): boolean {
   }
 
   if (fieldName === "escalation_rate") {
+    if (sourceIsHoldoverOrPenaltyRent(sourceText)) return false;
     if (!/\b(?:rent|base\s+rent|minimum\s+rent|escalat|increase|renewal)\b/i.test(sourceText)) return false;
     if (!/\b(?:%|percent|increase|escalat)\b/i.test(sourceText)) return false;
     if (/^\s*["']?control["']?\s+(?:shall\s+)?mean/i.test(sourceText)) return false;
   }
 
-  if (/^(?:responsibility_taxes|tax_responsibility|responsibility_insurance|insurance_responsibility|responsibility_utilities|responsibility_repairs|hvac_responsibility)$/.test(fieldName)) {
+  if (/^(?:responsibility_taxes|tax_responsibility|responsibility_insurance|insurance_responsibility|property_insurance_responsibility|responsibility_utilities|responsibility_repairs|hvac_responsibility)$/.test(fieldName)) {
     if (!valueLooksLikePartyResponsibility(valueText)) return false;
+    if (!sourceHasResponsibilityDomain(fieldName, sourceText)) return false;
+    if (/\b(?:good\s+order,?\s+condition\s+and\s+repair|costs?\s+of\s+reletting|all\s+risk\s+of\s+damage)\b/i.test(valueText)) return false;
   }
 
   return true;

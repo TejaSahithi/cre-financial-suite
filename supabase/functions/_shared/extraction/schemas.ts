@@ -188,6 +188,12 @@ export const LEASE_SCHEMA: ModuleSchema = {
     description:
       "Real estate broker or brokerage firm name only. " +
       "Do NOT return the brokerage-fees clause text. If the lease says no broker, leave null.",
+    domain: "parties",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["party_identification"],
+    rejectedClauseCategories: ["default", "late_fees", "repairs_maintenance", "indemnification"],
+    requiredEvidencePatterns: [/\b(?:broker|brokers|brokerage|real\s+estate\s+broker|realtor|realty)\b/i],
+    rejectedValuePatterns: [/\b(?:costs?\s+of\s+reletting|reletting|damages?|attorneys?|repairs?|maintenance|alterations?)\b/i],
   },
   property_name: {
     type: "string",
@@ -238,6 +244,8 @@ export const LEASE_SCHEMA: ModuleSchema = {
       // "for the lease of approximately 4,200 rentable square feet of space (the 'Premises') located at 7804..."
       /for\s+the\s+lease\s+of\s+approximately\s+[\d,]+\s+rentable\s+square\s+feet\s+of\s+space\s+\(?(?:the\s+['"]?premises['"]?)\)?\s+located\s+at\s+([^\n.]{8,180})/i,
       /premises\s+located\s+at\s+([^\n.]{8,180})/i,
+      /\bfurther\s+described\s+as\s+([0-9]{2,6}[^.\n]{8,180})/i,
+      /\b(?:premises|demised\s+premises|leased\s+premises|building|suites?)\b[^.\n]{0,220}?([0-9]{2,6}\s+[A-Za-z0-9.'#&\- ]{2,100},\s*[A-Za-z.'\- ]+,\s*[A-Z]{2}\s*\d{5}(?:-\d{4})?)/i,
       // Building location line: "Building: ... located at 224 S Peters Road Knoxville, TN 37923"
       /\bbuilding\b[^\n]{0,80}?(?:located\s+at|address[:\s]+)\s*([^\n.]{8,180})/i,
       // Numbered summary: "5. Address of Premises: 224 S Peters Road Suite #211 Knoxville, TN 37923"
@@ -417,6 +425,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     type: "date",
     labels: ["lease date", "effective date", "date of lease", "date signed", "execution date"],
     tableHeaders: ["lease_date", "date", "effective date", "execution date"],
+    patterns: [
+      /\b(?:made\s+and\s+entered\s+into|entered\s+into)\s+(?:as\s+of\s+)?(?:this\s+)?(\d{1,2}(?:st|nd|rd|th)?\s+day\s+of\s+[A-Za-z]+,?\s+\d{4}|[A-Za-z]+\s+\d{1,2},?\s+\d{4})/i,
+      /\b(?:lease\s+date|date\s+of\s+lease|execution\s+date|effective\s+date)\b\s*[:;-]?\s*(\d{1,2}(?:st|nd|rd|th)?\s+day\s+of\s+[A-Za-z]+,?\s+\d{4}|[A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
+    ],
     description:
       "The date the lease was signed or executed (YYYY-MM-DD). " +
       "Look for 'made and entered into as of [DATE]', 'Effective Date: [DATE]', 'dated [DATE]', " +
@@ -591,6 +603,8 @@ export const LEASE_SCHEMA: ModuleSchema = {
       // Plain labeled line (short)
       /(?:^|\n)\s*permitted\s+use\s*[:.]\s*([^\n]{2,80})/i,
       /(?:^|\n)\s*use\s+of\s+premises\s*[:.]\s*([^\n]{2,80})/i,
+      /\b(?:demised\s+premises|premises)\s+shall\s+be\s+used\s+and\s+occupied\s+by\s+tenant\s+solely\s+for\s+(?:the\s+)?(?:operation\s+of\s+)?([^.;\n]{3,80})/i,
+      /\btenant\s+shall\s+use\s+(?:the\s+)?premises\s+(?:solely\s+)?(?:for|as)\s+([^.;\n]{3,80})/i,
     ],
     description:
       "Core permitted use — a SHORT phrase (1-10 words) describing the tenant's primary business activity. " +
@@ -599,6 +613,12 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "For 'The Demised Premises shall be used and occupied by Tenant solely for the operation of a restaurant...', return 'restaurant'. " +
       "For '...solely for the purposes of IT work', return 'IT work'. " +
       "Extract the core activity type only; strip boilerplate restriction language.",
+    domain: "use",
+    evidencePolicy: "enforced",
+    allowedClauseCategories: ["use_clause"],
+    rejectedClauseCategories: ["premises_description", "delivery_possession", "repairs_maintenance", "default"],
+    requiredEvidencePatterns: [/\b(?:permitted\s+use|use\s+of\s+(?:the\s+)?premises|shall\s+be\s+used|shall\s+use|solely\s+for|operation\s+of|purpose)\b/i],
+    rejectedValuePatterns: [/^\s*(?:as\s+is|where\s+is|as\s+is,?\s+where\s+is|premises|permitted\s+use)\s*$/i],
   },
   security_deposit: {
     type: "number",
@@ -749,7 +769,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
     type: "number",
     min: 0,
     max: 100,
-    labels: ["escalation", "annual increase", "rent increase", "escalation rate", "annual escalation"],
+    labels: ["escalation", "increase", "annual increase", "rent increase", "rent will increase", "escalation rate", "annual escalation"],
     tableHeaders: ["escalation", "escalation_rate", "increase", "annual increase", "esc rate"],
     patterns: [/(?:annual\s+)?(?:escalation|increase|adjustment)[:\s]+([\d.]+)\s*%/i],
     description:
@@ -1078,7 +1098,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
   // ─── Insurance ──────────────────────────────────────────────────────
   tenant_insurance_required: {
     type: "boolean",
-    labels: ["tenant insurance", "tenant insurance required", "liability insurance"],
+    labels: ["tenant insurance", "tenant insurance required", "liability insurance", "commercial general liability insurance", "tenant shall maintain insurance", "tenant shall carry insurance", "tenant shall keep insurance"],
     tableHeaders: ["tenant_insurance_required"],
     patterns: [/\btenant\s+shall\s+(?:maintain|carry|obtain|provide)[^\n]{0,80}\b(?:insurance|liability)\b/i],
     description: "Whether tenant is required to carry insurance",

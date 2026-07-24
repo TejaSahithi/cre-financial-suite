@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { isMeaningfulValue } from "@/lib/leaseReviewSchema";
+import { cleanSourceEvidenceText, isMeaningfulValue } from "@/lib/leaseReviewSchema";
 
 const TYPE_META = {
   standard: { label: "Standard", className: "bg-blue-50 text-blue-700 border-blue-100" },
@@ -52,12 +52,23 @@ const EXTRACTION_MODE_META = {
   unknown: { label: "Unknown", className: "bg-slate-100 text-slate-600 border-slate-200" },
 };
 
-function formatValue(value) {
+function cleanDisplayText(value) {
+  const cleaned = cleanSourceEvidenceText(value, { truncate: false });
+  return cleaned || String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+export function formatValue(value) {
   if (value === null || value === undefined || value === "") return "-";
   if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (Array.isArray(value)) return value.length ? value.join(", ") : "-";
+  if (Array.isArray(value)) return value.length ? cleanDisplayText(value.join(", ")) : "-";
   if (typeof value === "object") return "-";
-  return String(value);
+  return cleanDisplayText(value) || "-";
+}
+
+export function valuePreview(value) {
+  const formatted = formatValue(value);
+  if (formatted === "-") return formatted;
+  return formatted.length > 160 ? `${formatted.slice(0, 159).trimEnd()}...` : formatted;
 }
 
 function normalizeConfidence(value) {
@@ -65,10 +76,10 @@ function normalizeConfidence(value) {
   return Math.round(value <= 1 ? value * 100 : value);
 }
 
-function sourcePreview(text) {
-  const cleaned = String(text || "").replace(/\s+/g, " ").trim();
+export function sourcePreview(text) {
+  const cleaned = cleanSourceEvidenceText(text, { truncate: false });
   if (!cleaned) return "-";
-  return cleaned.length > 240 ? `${cleaned.slice(0, 239)}...` : cleaned;
+  return cleaned.length > 240 ? `${cleaned.slice(0, 239).trimEnd()}...` : cleaned;
 }
 
 function rowSearchText(row) {
@@ -78,11 +89,26 @@ function rowSearchText(row) {
     .toLowerCase();
 }
 
+export function rowHasDisplayValue(row) {
+  return isMeaningfulValue(row?.value ?? row?.normalized_value ?? row?.normalizedValue);
+}
+
+export function rowMatchesCompletenessFilter(row, completenessFilter = "filled") {
+  const hasValue = rowHasDisplayValue(row);
+  if (completenessFilter === "filled") return hasValue;
+  if (completenessFilter === "missing") {
+    if (hasValue) return false;
+    if (row?.rowType === "clause") return false;
+    return Boolean(row?.defaultVisible || row?.requiredForApproval || row?.requiredForBudget || row?.requiredForCam || row?.requiredForExpenseRules || row?.sourceText || row?.source_text);
+  }
+  return true;
+}
+
 function shouldShowRow(row, showAdvanced) {
   if (row.defaultVisible) return true;
   if (showAdvanced) return true;
   if (row.requiredForApproval || row.requiredForBudget || row.requiredForCam || row.requiredForExpenseRules) return true;
-  if (isMeaningfulValue(row.value ?? row.normalized_value ?? row.normalizedValue)) return true;
+  if (rowHasDisplayValue(row)) return true;
   if (row.sourceText || row.source_text) return true;
   return false;
 }
@@ -92,6 +118,7 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [completenessFilter, setCompletenessFilter] = useState("filled");
 
   const typeOptions = useMemo(() => {
     return Array.from(new Set(rows.map((row) => row.rowType).filter(Boolean))).sort();
@@ -100,19 +127,39 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
     return Array.from(new Set(rows.map((row) => row.status).filter(Boolean))).sort();
   }, [rows]);
 
+  const completenessCounts = useMemo(() => ({
+    filled: rows.filter((row) => shouldShowRow(row, showAdvanced) && rowMatchesCompletenessFilter(row, "filled")).length,
+    missing: rows.filter((row) => shouldShowRow(row, showAdvanced) && rowMatchesCompletenessFilter(row, "missing")).length,
+  }), [rows, showAdvanced]);
+
   const visibleRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return rows.filter((row) => {
       if (!shouldShowRow(row, showAdvanced)) return false;
+      if (!rowMatchesCompletenessFilter(row, completenessFilter)) return false;
       if (typeFilter !== "all" && row.rowType !== typeFilter) return false;
       if (statusFilter !== "all" && row.status !== statusFilter) return false;
       if (needle && !rowSearchText(row).includes(needle)) return false;
       return true;
     });
-  }, [rows, query, typeFilter, statusFilter, showAdvanced]);
+  }, [rows, query, typeFilter, statusFilter, showAdvanced, completenessFilter]);
 
   return (
     <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="inline-flex h-9 items-center rounded-md border border-slate-200 bg-white p-1 shadow-sm">
+          <Button type="button" variant={completenessFilter === "filled" ? "secondary" : "ghost"} size="sm" className="h-7 gap-1.5 px-2 text-xs" onClick={() => setCompletenessFilter("filled")}>
+            <Check className="h-3.5 w-3.5" />
+            Filled
+            <Badge variant="outline" className="ml-1 border-emerald-100 bg-emerald-50 text-emerald-700">{completenessCounts.filled}</Badge>
+          </Button>
+          <Button type="button" variant={completenessFilter === "missing" ? "secondary" : "ghost"} size="sm" className="h-7 gap-1.5 px-2 text-xs" onClick={() => setCompletenessFilter("missing")}>
+            <AlertTriangle className="h-3.5 w-3.5" />
+            Missing
+            <Badge variant="outline" className="ml-1 border-slate-200 bg-slate-50 text-slate-600">{completenessCounts.missing}</Badge>
+          </Button>
+        </div>
+      </div>
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-[220px] flex-1">
           <Search className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-slate-400" />
@@ -164,9 +211,11 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
               };
               const fKey = row.key || row.fieldKey;
               const reviewField = reviewFields?.[fKey] ?? null;
-              const rowValue = formatValue(row.value ?? row.normalized_value ?? row.normalizedValue);
+              const rawRowValue = row.value ?? row.normalized_value ?? row.normalizedValue;
+              const fullRowValue = formatValue(rawRowValue);
+              const rowValue = valuePreview(rawRowValue);
               const reviewValue = reviewField ? formatValue(reviewField.displayValue ?? reviewField.value) : "-";
-              const isMismatch = reviewField && rowValue !== "-" && reviewValue !== "-" && rowValue.trim().toLowerCase() !== reviewValue.trim().toLowerCase();
+              const isMismatch = reviewField && fullRowValue !== "-" && reviewValue !== "-" && fullRowValue.trim().toLowerCase() !== reviewValue.trim().toLowerCase();
 
               return (
                 <TableRow key={row.key || row.fieldKey || `${row.rowType}-${index}`} className="align-top hover:bg-slate-50/70">
@@ -174,8 +223,8 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
                     {row.label || row.fieldKey || "Untitled"}
                     {row.rowType === "read_only_reference" && <div className="mt-1 text-[10px] font-normal text-slate-500">Read-only reference</div>}
                   </TableCell>
-                  <TableCell className="text-xs text-slate-700">
-                    {rowValue}
+                  <TableCell className="max-w-[220px] text-xs text-slate-700" title={fullRowValue !== "-" ? fullRowValue : undefined}>
+                    <span className="block whitespace-normal break-words leading-relaxed">{rowValue}</span>
                     {isMismatch && (
                       <div className="mt-1 flex items-center gap-1 text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5" title={`Canonical projection: ${reviewValue}`}>
                         <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
@@ -187,7 +236,7 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
                   <TableCell className="text-center text-xs text-slate-600">{confidence == null ? "-" : `${confidence}%`}</TableCell>
                   <TableCell className="text-xs"><Badge variant="outline" className={extractionModeMeta.className}>{extractionModeMeta.label}</Badge></TableCell>
                   <TableCell className="text-center text-xs text-slate-600">{row.sourcePage ?? row.source_page ?? row.page_number ?? "-"}</TableCell>
-                  <TableCell className="text-xs text-slate-600"><span title={row.sourceText ?? row.source_text ?? ""}>{sourcePreview(row.sourceText ?? row.source_text)}</span></TableCell>
+                  <TableCell className="text-xs text-slate-600"><span title={sourcePreview(row.sourceText ?? row.source_text)}>{sourcePreview(row.sourceText ?? row.source_text)}</span></TableCell>
                   <TableCell className="text-right">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>

@@ -45,6 +45,12 @@ export function parseDate(s: string): string | null {
   // Already ISO
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
 
+  // "8 day of September 2020" / "8th day of September, 2020"
+  const dayOfMonth = s.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+day\s+of\s+([A-Za-z]+),?\s+(\d{4})$/i);
+  if (dayOfMonth) {
+    const m = MONTHS[dayOfMonth[2].toLowerCase()];
+    if (m) return `${dayOfMonth[3]}-${m}-${dayOfMonth[1].padStart(2, "0")}`;
+  }
   // MM/DD/YYYY or M/D/YYYY
   const us = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
   if (us) return `${us[3]}-${us[1].padStart(2, "0")}-${us[2].padStart(2, "0")}`;

@@ -77,8 +77,12 @@ function isDefinitionLikeFact(fact: Fact): boolean {
 function shouldSuppressDynamicFact(fact: Fact, possibleCanonicalMatch: string | null): boolean {
   const key = categoryKey(fact.category);
   if (SUPPRESSED_DYNAMIC_CATEGORIES.has(key)) return true;
-  if (possibleCanonicalMatch) return true;
   if (isDefinitionLikeFact(fact)) return true;
+
+  // Business-domain facts should still surface in their tabs when they fail
+  // canonical mapping. A generic word like "tenant" is only a near-miss
+  // diagnostic; it should not hide an expense/CAM/tax/insurance finding.
+  if (possibleCanonicalMatch && businessAreaForFact(key) === "clause_records") return true;
   return false;
 }
 function findPossibleCanonicalMatch(fact: Fact): string | null {

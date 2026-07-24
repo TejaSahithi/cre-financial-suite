@@ -51,4 +51,13 @@ describe("LeaseReviewTabTable contract", () => {
     expect(source).toContain("colSpan={8}");
     expect(source).not.toContain("colSpan={7}");
   });
+
+  it("separates filled rows from missing/source-only rows and cleans source previews", () => {
+    expect(source).toContain("completenessFilter");
+    expect(source).toContain("Filled");
+    expect(source).toContain("Missing");
+    expect(source).toContain("rowMatchesCompletenessFilter(row, completenessFilter)");
+    expect(source).toContain("cleanSourceEvidenceText(text, { truncate: false })");
+    expect(source).toContain("valuePreview(rawRowValue)");
+  });
 });

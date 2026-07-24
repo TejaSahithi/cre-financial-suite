@@ -8,6 +8,7 @@ import { runOpenAIFactLedgerPipeline } from "../_shared/extraction/openai-fact-l
 import { __test__ as factLedgerExtractorTest } from "../_shared/extraction/openai-fact-ledger/fact-ledger-extractor.ts";
 import type { Fact } from "../_shared/extraction/openai-fact-ledger/types.ts";
 import { chunkDocument } from "../_shared/extraction/chunker.ts";
+import { parseDate } from "../_shared/extraction/rule-extractor.ts";
 
 const realServeForNormalizeImport = Deno.serve;
 (Deno as any).serve = (..._args: unknown[]) => ({ finished: Promise.resolve(), shutdown: () => {} });
@@ -702,7 +703,7 @@ Deno.test("fact mapper keeps compatible source-backed rent and premises facts", 
   const mapped = mapFactsToStandardFields({ facts, moduleType: "lease" });
   const fields = mapped.records[0]?.fields ?? {};
   assertEquals(fields.property_address?.value, "224 S Peters Road Knoxville, TN 37923");
-  assertEquals(fields.unit_number?.value, "Suite 212");
+  assertEquals(fields.unit_number?.value, "212");
   assertEquals(fields.monthly_rent?.value, 1400);
   assertEquals(fields.escalation_rate?.value, 5);
   assertEquals(fields.landlord_consent_for_transfer?.value, "Landlord consent required");
@@ -728,4 +729,39 @@ Deno.test("dynamic fact surfacer suppresses canonical near-misses and definition
 Deno.test("evidence cleaner strips Azure table markup without losing lease text", () => {
   const cleaned = cleanEvidenceSnippet('</td> <td>Date:</td> <td>January 9, 2024</td> </tr> <tr> <td colspan="2">Premises containing approximately 1,110 rentable square feet.</td>');
   assertEquals(cleaned, "Date: January 9, 2024 Premises containing approximately 1,110 rentable square feet.");
+});
+
+Deno.test("rule extractor parses opening-recital ordinal lease dates", () => {
+  assertEquals(parseDate("8 day of September 2020"), "2020-09-08");
+  assertEquals(parseDate("8th day of September, 2020"), "2020-09-08");
+});
+
+Deno.test("fact mapper rejects Craven-style unrelated business field values", () => {
+  const facts = [
+    makeFact({ category: "clause:default", value: "costs of reletting", sourceText: "In addition to all other damages, Tenant will also pay to Landlord its costs of reletting which include reasonable costs and expenses.", sourcePage: 7, confidence: 0.97 }),
+    makeFact({ category: "clause:delivery_possession", value: "AS IS", sourceText: "Tenant accepts the Premises AS IS and acknowledges no representations regarding condition.", sourcePage: 1, confidence: 0.93 }),
+    makeFact({ category: "clause:repairs_maintenance", value: "good order, condition and repair", sourceText: "Tenant shall keep and maintain the Premises in good order, condition and repair.", sourcePage: 4, confidence: 0.99 }),
+    makeFact({ category: "clause:signage", value: "landlord", sourceText: "Landlord may remove signage at Tenant's sole cost and expense.", sourcePage: 5, confidence: 0.95 }),
+  ];
+
+  const mapped = mapFactsToStandardFields({ facts, moduleType: "lease" });
+  const fields = mapped.records[0]?.fields ?? {};
+  assertEquals(fields.broker_name, undefined);
+  assertEquals(fields.permitted_use, undefined);
+  assertEquals(fields.responsibility_utilities, undefined);
+  assertEquals(fields.responsibility_repairs, undefined);
+});
+
+Deno.test("fact mapper keeps Craven-style compatible source-backed use and expense facts", () => {
+  const facts = [
+    makeFact({ category: "clause:use_clause", value: "restaurant", sourceText: "6. Tenant's Use and Operation: The Demised Premises shall be used and occupied by Tenant solely for the operation of a restaurant and for no other use without Landlord's prior written consent.", sourcePage: 2, confidence: 0.98 }),
+    makeFact({ category: "clause:taxes", value: "tenant", sourceText: "In addition to Tenant's proportionate share of real estate taxes, Tenant shall pay any and all sales, excise, gross receipts and other taxes levied during Tenant's occupancy.", sourcePage: 1, confidence: 0.95 }),
+    makeFact({ category: "clause:insurance", value: true, sourceText: "Tenant shall keep in force throughout the Term a Commercial General Liability Insurance policy covering the Premises.", sourcePage: 5, confidence: 0.99 }),
+  ];
+
+  const mapped = mapFactsToStandardFields({ facts, moduleType: "lease" });
+  const fields = mapped.records[0]?.fields ?? {};
+  assertEquals(fields.permitted_use?.value, "restaurant");
+  assertEquals(fields.responsibility_taxes?.value, "tenant");
+  assertEquals(fields.tenant_insurance_required?.value, true);
 });
