@@ -248,6 +248,12 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
                         <span>Canonical: {reviewValue}</span>
                       </div>
                     )}
+                    {!isMismatch && row.validationMessage && (
+                      <div className="mt-1 flex items-start gap-1 text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5" title={row.validationMessage}>
+                        <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0 mt-px" />
+                        <span className="leading-snug">{row.validationMessage}</span>
+                      </div>
+                    )}
                   </TableCell>
                   <TableCell className="text-xs"><Badge variant="outline" className={statusMeta.className}>{statusMeta.label}</Badge></TableCell>
                   <TableCell className="text-center text-xs text-slate-600">{confidence == null ? "-" : `${confidence}%`}</TableCell>

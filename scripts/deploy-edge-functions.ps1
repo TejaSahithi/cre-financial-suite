@@ -5,51 +5,24 @@
 # Migrations are NOT pushed here (db push requires an interactive password).
 # To push migrations:  npx supabase db push
 # (You'll be prompted for your database password.)
-
-# Use Continue (not Stop) — the Supabase CLI writes upload status to stderr,
-# and Stop would abort on the first status line. We track success via
-# $LASTEXITCODE per command instead.
+#
+# The function list is auto-discovered from supabase\functions\* (any folder
+# with its own index.ts), not hardcoded. A previous hardcoded list of 34 names
+# silently drifted ~60 functions behind the actual folder count over time —
+# including lease-extraction-worker, whose already-merged compute-exhaustion
+# fix (commits 0299555/52abf23) never got deployed because this script never
+# tried to deploy that function at all. Auto-discovery makes that whole class
+# of drift impossible: every folder with an index.ts is deployed, every run.
+# `_`-prefixed folders (e.g. _shared, _tests) and helper folders with no
+# index.ts (e.g. azure/, a shared .ts module with no function entrypoint) are
+# excluded automatically.
 $ErrorActionPreference = "Continue"
 $ProjectRef = "cjwdwuqqdokblakheyjb"
 
-$Functions = @(
-    "parse-document-azure",
-    "parse-file",
-    "extract-document-fields",
-    "extract-with-custom-fields",
-    "extract-lease",
-    "extract-lease-expense-rules",
-    "normalize-pdf-output",
-    "validate-data",
-    "store-data",
-    "ingest-file",
-    "upload-handler",
-    "pipeline-status",
-    "review-approve",
-    "compute-lease",
-    "compute-revenue",
-    "compute-expense",
-    "compute-cam",
-    "compute-budget",
-    "compute-reconciliation",
-    "generate-budget",
-    "signup",
-    "first-login",
-    "accept-invite",
-    "invite-user",
-    "invite-client",
-    "complete-onboarding",
-    "approve-organization",
-    "approve-request",
-    "reset-mfa",
-    "save-security-questions",
-    "debug-user",
-    "send-email",
-    "submit-contact",
-    "export-data",
-    "custom-fields",
-    "validate-address-ups"
-)
+$Functions = Get-ChildItem -Path "supabase\functions" -Directory |
+    Where-Object { $_.Name -notlike "_*" -and (Test-Path (Join-Path $_.FullName "index.ts")) } |
+    Select-Object -ExpandProperty Name |
+    Sort-Object
 
 Write-Host ""
 Write-Host ("=== Deploying " + $Functions.Count + " edge functions to " + $ProjectRef + " ===") -ForegroundColor Yellow

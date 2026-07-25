@@ -78,6 +78,15 @@ export const FIELD_ALIASES = {
   responsibility_insurance: ["responsibility_insurance", "insurance_responsibility"],
   responsibility_utilities: ["responsibility_utilities", "utilities_responsibility"],
   responsibility_repairs: ["responsibility_repairs", "maintenance_responsibility"],
+  // Reverse aliases for the two OR-alternate pairs above. Without these,
+  // getFieldAliases("tax_responsibility") / getFieldAliases("insurance_responsibility")
+  // normalize to themselves with no FIELD_ALIASES entry, so they never see
+  // data stored under responsibility_taxes/responsibility_insurance — even
+  // though the reverse direction already worked. Both LEASE_SCHEMA fields in
+  // each pair are independently extractable (field-contract.ts), so both
+  // review-table rows need to read either name.
+  tax_responsibility: ["tax_responsibility", "responsibility_taxes"],
+  insurance_responsibility: ["insurance_responsibility", "responsibility_insurance"],
 
   // Insurance
   commercial_general_liability: ["commercial_general_liability", "cgl", "general_liability"],
