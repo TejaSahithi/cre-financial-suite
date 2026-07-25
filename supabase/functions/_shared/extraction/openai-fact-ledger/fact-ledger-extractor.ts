@@ -63,10 +63,13 @@ sentence:
     Good: "224 Partners, LLC"   Bad: "is made January 9, 2024 by and between 224 Partners, LLC"
     Good: "February 1, 2024"    Bad: "commencing with the Commencement Date, without regard to calendar years"
   - "source_text" is the grounding quote proving where "value" came from — a
-    COMPLETE sentence or complete table row, copied verbatim, start to end. Never
-    start or end mid-sentence/mid-clause; if the fact comes from a row in a
-    label/value summary table, quote the full row ("Landlord: 224 Partners, LLC"),
-    not an unrelated adjacent sentence.
+    COMPLETE sentence, a complete table row, OR a single "Label: value" line,
+    copied verbatim, start to end. Never start or end mid-sentence/mid-clause;
+    if the fact comes from a row in a label/value summary table (or a labeled
+    line in prose), quote the full row/line ("Landlord: 224 Partners, LLC"), not
+    an unrelated adjacent sentence. A short labeled line or table row is
+    first-class evidence on its own — it does not need to be embedded in a
+    longer sentence.
 
 PRIORITIZE structured label/value sections (e.g. a "Summary of Basic Lease
 Information" block, a defined-terms table, an exhibit summary) as the single most
@@ -82,9 +85,23 @@ same source_text sentence, since it proves both values): one fact with value = t
 per-month figure only, one fact with value = the per-year figure only. Never let
 the annual figure be recorded as a monthly value or vice versa — "per month" /
 "monthly" / "per year" / "annually" / "annual" is often the only word that
-distinguishes them; read it carefully. If a stepped rent schedule table is shown,
-extract the FIRST NON-ZERO Monthly Base Rent row (skip $0/free-rent rows) as the
-monthly fact. If only ONE of monthly/annual is stated anywhere in the document,
+distinguishes them; read it carefully. If a stepped rent schedule (multiple rows
+for different periods) is shown, extract EVERY distinct non-free-rent row as ITS
+OWN separate fact (do not collapse them into one row yourself) — each fact's
+source_text must be that row's full text (period label + amount), so a reviewer
+can see which period it covers. Skip $0/free-rent rows entirely (do not emit a
+fact for them here). For confidence: give a row HIGHER confidence (0.85-0.95)
+only when it is clearly the initial/regular term (e.g. explicitly labeled
+"Initial Term", "Lease Year 1", "Months 1-X", or is the first non-free-rent row
+under a plain "Base Rent Schedule" heading with no renewal/amendment/option/
+additional-space language). Give a row LOWER confidence (0.4-0.6) if it is a
+partial-month/stub period, or is labeled as a renewal, option, extension,
+amendment, or additional-space rent — these are real facts worth capturing, but
+must not outrank a genuine initial-term row. Do not artificially force one row
+to a high confidence just to produce a single answer — if you cannot tell which
+row is authoritative, give the competing rows similar (not artificially
+separated) confidence and let each stand as its own fact; do not silently drop
+any of them. If only ONE of monthly/annual is stated anywhere in the document,
 extract only that one fact — never calculate or infer the other; the pipeline
 derives it deterministically downstream.
 
@@ -110,8 +127,9 @@ ${CLAUSE_CATEGORY_VOCAB.map((c) => `clause:${c}`).join(", ")}
 Pick the closest matching category for each fact. If nothing fits, use "clause:default".
 
 RULES:
-1. source_text MUST be the exact verbatim text from the document, a complete
-   sentence or table row (never truncated mid-sentence) — never paraphrase.
+1. source_text MUST be the exact verbatim text from the document — a complete
+   sentence, a complete table row, or a single "Label: value" line (never
+   truncated mid-sentence or mid-clause) — never paraphrase.
 2. If you cannot provide exact source_text for a fact, DO NOT include it.
 3. NEVER guess, infer, or calculate values not explicitly stated.
 4. Extract as many distinct facts as the text supports, not just a summary.`;

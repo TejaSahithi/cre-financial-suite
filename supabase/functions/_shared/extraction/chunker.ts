@@ -13,6 +13,7 @@
  */
 
 import type { DoclingOutput, DoclingTextBlock, TextChunk } from "./types.ts";
+import type { FieldDef } from "./schemas.ts"; // type-only import, no circular dependency
 
 /** Approximate token count — conservative for English CRE documents */
 function estimateTokens(text: string): number {
@@ -136,13 +137,25 @@ function chunkPlainText(
   return chunks;
 }
 
+function testPatternSafely(pattern: RegExp, text: string): boolean {
+  // Regexes with the g/y flag carry mutable lastIndex state. Reusing the same
+  // RegExp object (from FieldDef.patterns) across many blocks in this loop
+  // would make .test() results depend on call order — a match in an earlier
+  // block can suppress a match in a later block. Reset explicitly so scoring
+  // is deterministic regardless of block order.
+  pattern.lastIndex = 0;
+  const matched = pattern.test(text);
+  pattern.lastIndex = 0;
+  return matched;
+}
+
 /**
  * Build a focused text snippet from Azure document output for a specific field group.
- * Selects only the most relevant text blocks based on field labels.
+ * Selects only the most relevant text blocks based on field labels/patterns/table headers.
  */
 export function buildRelevantSnippet(
   docling: DoclingOutput,
-  fieldLabels: string[],
+  fieldDefs: FieldDef[],
   maxTokens = 2000,
 ): string {
   const blocks = docling.text_blocks ?? [];
@@ -151,32 +164,68 @@ export function buildRelevantSnippet(
   // If small enough, return everything
   if (estimateTokens(fullText) <= maxTokens) return fullText;
 
-  // Score each block by relevance to the field labels
-  const scored = blocks.map((block) => {
+  // Score each block by relevance to the field labels/patterns/table headers
+  const scored = blocks.map((block, index) => {
     const textLower = block.text.toLowerCase();
     let score = 0;
-    for (const label of fieldLabels) {
-      if (textLower.includes(label.toLowerCase())) score += 2;
+    for (const def of fieldDefs) {
+      for (const label of def.labels ?? []) {
+        if (textLower.includes(label.toLowerCase())) score += 2;
+      }
+      for (const header of def.tableHeaders ?? []) {
+        if (textLower.includes(header.toLowerCase())) score += 2;
+      }
+      for (const pattern of def.patterns ?? []) {
+        if (testPatternSafely(pattern, block.text)) score += 3; // a regex hit is a stronger, more specific signal than a bare substring
+      }
     }
-    // Headings get a small bonus (likely section headers)
-    if (block.type === "heading") score += 1;
-    return { block, score };
+    // Only reward a heading that already matched something — an unmatched
+    // heading ("Miscellaneous", "Exhibit C", "Table of Contents") is not
+    // itself relevant, and scoring it positive would defeat the score>0
+    // stop-condition below.
+    if (score > 0 && block.type === "heading") score += 1;
+    return { block, index, score };
   });
 
+  const byIndex = new Map(scored.map((s) => [s.index, s]));
   // Sort by score descending, take top blocks within token budget
-  scored.sort((a, b) => b.score - a.score);
+  const positive = scored.filter((s) => s.score > 0).sort((a, b) => b.score - a.score);
 
-  const selectedBlocks = [];
+  const selectedIndexes = new Set<number>();
   let tokens = 0;
-  for (const item of scored) {
-    const blockTokens = estimateTokens(item.block.text);
-    if (tokens + blockTokens > maxTokens) break;
-    selectedBlocks.push(item.block);
-    tokens += blockTokens;
+  for (const item of positive) {
+    if (selectedIndexes.has(item.index)) continue;
+    const itemTokens = estimateTokens(item.block.text);
+    if (tokens + itemTokens > maxTokens) {
+      // Skip (not stop) — a single oversized high-scoring block (e.g. a big
+      // table) must not prevent smaller, still-relevant blocks ranked below
+      // it from being considered.
+      continue;
+    }
+    selectedIndexes.add(item.index);
+    tokens += itemTokens;
+
+    // Pull in the immediate neighboring block on each side, budget permitting.
+    // Low-risk recall fix for split obligation/exception sentences that sit
+    // just outside the matched block (e.g. "Tenant shall maintain the HVAC
+    // system." followed by "Notwithstanding the foregoing, Landlord shall
+    // replace units that fail through ordinary wear.") — this is NOT a
+    // clause-aware retrieval architecture: no semantic queries, no multi-hop
+    // cross-reference resolution, just the immediate ±1 block.
+    for (const neighborIndex of [item.index - 1, item.index + 1]) {
+      const neighbor = byIndex.get(neighborIndex);
+      if (!neighbor || selectedIndexes.has(neighborIndex)) continue;
+      const neighborTokens = estimateTokens(neighbor.block.text);
+      if (tokens + neighborTokens > maxTokens) continue;
+      selectedIndexes.add(neighborIndex);
+      tokens += neighborTokens;
+    }
   }
 
-  // Restore original document order so the LLM can reason about context
-  selectedBlocks.sort((a, b) => (a.block_index ?? 0) - (b.block_index ?? 0));
+  // Restore original document order using the index tracked above (not
+  // block.block_index, which may be unset on some blocks) so the LLM can
+  // reason about context.
+  const selectedBlocks = [...selectedIndexes].sort((a, b) => a - b).map((i) => byIndex.get(i)!.block);
 
   let result = "";
   let lastPage = null;

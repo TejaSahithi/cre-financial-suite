@@ -874,6 +874,98 @@ function inferLeaseType(text: string): ExtractedField | null {
  * Produces a single record (for single-document extraction like lease abstracts)
  * or no records if nothing matched.
  */
+// ── Step 1e: Deterministic rent-schedule row classification ─────────────────
+// Addresses "the first non-zero/non-free-rent row can still be wrong" — a
+// stub, renewal, amendment, or otherwise ambiguous row can be mistaken for
+// the authoritative initial monthly rent by a purely positional heuristic.
+// This classifies every candidate row from a Docling-detected table
+// deterministically and only publishes a value when one row is unambiguously
+// the initial term; otherwise it publishes nothing rather than guessing.
+// Runs independent of the LLM financial-group prompt, which remains the
+// fallback for leases that state rent in prose rather than a parseable table.
+//
+// Internal-only classification bookkeeping — never exported, never part of
+// any wire/schema contract. The function below still returns a plain
+// Record<string, ExtractedField> (value + confidence + sourceText), exactly
+// like every other rule-extraction helper in this file.
+interface RentRowCandidate {
+  amount: number;
+  periodLabel: string;
+  rowText: string;
+  tableIndex: number;
+  rowIndex: number;
+  isFreeRent: boolean;
+  isStub: boolean; // partial-month / short period
+  isRenewalOrAmendment: boolean;
+  explicitlyMonthly: boolean; // column header clearly says "Monthly Base Rent" / "Rent / Mo"
+  isInitialTermLabeled: boolean; // row itself says "Initial Term", "Lease Year 1", "Months 1-X", "Commencement Period"
+}
+
+function classifyRentRow(
+  row: string[],
+  headers: string[],
+  periodColIdx: number,
+  rentColIdx: number,
+  tableIndex: number,
+  rowIndex: number,
+): RentRowCandidate | null {
+  const periodLabel = String(row[periodColIdx] ?? "").trim();
+  const rentCell = String(row[rentColIdx] ?? "").trim();
+  const amount = parseMoney(rentCell);
+  if (amount === null) return null;
+  const combinedText = `${periodLabel} ${rentCell}`.toLowerCase();
+  const headerText = (headers[rentColIdx] ?? "").toLowerCase();
+  return {
+    amount,
+    periodLabel,
+    rowText: `${headers.join(" | ")}\n${row.join(" | ")}`.trim(),
+    tableIndex,
+    rowIndex,
+    isFreeRent: amount === 0 || /free\s*rent|abated?/.test(combinedText),
+    isStub: /\bstub\b|\bpartial\s*(month|period)\b/.test(combinedText),
+    isRenewalOrAmendment: /\brenewal\b|\boption\b|\bextension\b|\bamendment\b|\badditional\s+(premises|space)\b/.test(combinedText),
+    explicitlyMonthly: /monthly/.test(headerText),
+    isInitialTermLabeled: /\binitial\s+term\b|\blease\s+year\s*1\b|\bmonths?\s*1\b|\bcommencement\s+period\b|\byear\s*1\b/.test(combinedText),
+  };
+}
+
+function extractRentScheduleFromTables(tables: DoclingOutput["tables"]): Record<string, ExtractedField> {
+  const result: Record<string, ExtractedField> = {};
+  let best: RentRowCandidate | null = null;
+  let ambiguous = false;
+
+  (tables ?? []).forEach((table, tableIndex) => {
+    const headers = (table.headers ?? []).map((h) => String(h).toLowerCase());
+    const periodColIdx = headers.findIndex((h) => /month|period|year|lease\s*year/.test(h));
+    const rentColIdx = headers.findIndex((h) => /monthly\s*(base\s*)?rent|base\s*rent|rent\s*\/?\s*mo/.test(h));
+    if (periodColIdx === -1 || rentColIdx === -1) return; // not a rent-schedule-shaped table
+
+    (table.rows ?? []).forEach((row, rowIndex) => {
+      const candidate = classifyRentRow(row, table.headers ?? [], periodColIdx, rentColIdx, tableIndex, rowIndex);
+      if (!candidate || candidate.isFreeRent) return;
+      if (candidate.isRenewalOrAmendment) return; // never treat a renewal/amendment row as the initial rent
+
+      if (candidate.isInitialTermLabeled && candidate.explicitlyMonthly && !candidate.isStub) {
+        // Unambiguous: explicit monthly column + explicitly labeled initial term, no stub markers.
+        if (best && best.amount !== candidate.amount) ambiguous = true;
+        best = candidate;
+      } else if (!best) {
+        // Plausible but not unambiguous — keep as a lower-confidence fallback
+        // candidate only if nothing better has been found yet.
+        best = candidate;
+      } else if (best.amount !== candidate.amount) {
+        ambiguous = true;
+      }
+    });
+  });
+
+  if (!best || ambiguous) return result; // multiple plausible, differing rows -> publish nothing rather than guess
+
+  const confidence = (best.isInitialTermLabeled && best.explicitlyMonthly && !best.isStub) ? 0.90 : 0.82;
+  result.monthly_rent = { value: best.amount, source: "rule", confidence, sourceText: best.rowText };
+  return result;
+}
+
 export function extractRuleBased(
   docling: DoclingOutput,
   moduleType: ModuleType,
@@ -886,16 +978,19 @@ export function extractRuleBased(
     return { records: [], warnings: ["Text too short for rule-based extraction"] };
   }
 
-  // Run all three sub-steps
+  // Run all sub-steps
   const fromFields = extractFromDoclingFields(docling.fields ?? [], schema);
   const fromKeyValueTables = extractFromKeyValueTables(docling.tables ?? [], schema, moduleType);
   const fromPatterns = extractViaPatterns(fullText, schema);
   const fromLabels = extractViaLabels(fullText, schema);
+  const fromRentTable = (moduleType === "lease" || moduleType === "leases")
+    ? extractRentScheduleFromTables(docling.tables)
+    : {};
 
-  // Merge: Azure document fields / key-value tables > patterns > labels (by confidence)
+  // Merge: Azure document fields / key-value tables > patterns > labels > rent-table (by confidence)
   const merged: Record<string, ExtractedField> = {};
 
-  for (const source of [fromLabels, fromPatterns, fromKeyValueTables, fromFields]) {
+  for (const source of [fromLabels, fromPatterns, fromKeyValueTables, fromFields, fromRentTable]) {
     for (const [key, field] of Object.entries(source)) {
       if (!merged[key] || field.confidence > merged[key].confidence) {
         merged[key] = field;

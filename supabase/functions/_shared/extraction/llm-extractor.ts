@@ -48,6 +48,43 @@ RULES:
    Examples: '180 days' notice -> 6 months. '90 days' notice -> 3 months. '30 days' notice -> 1 month.
    This conversion applies ONLY to notice-period fields (renewal_notice_months, termination_notice_months).
 
+5b. LEGAL-REASONING DISCIPLINE:
+    - Distinguish PROCUREMENT (who obtains/arranges something, e.g. "Tenant shall obtain insurance")
+      from PAYMENT (who bears the cost, e.g. "Landlord shall pay for insurance and include it in CAM") —
+      these are frequently two different parties in the same clause. Extract the one the field actually asks for.
+    - Distinguish MAINTENANCE (routine upkeep) from REPAIR (fixing damage/defects) from REPLACEMENT
+      (full substitution of a system/component) — a responsibility clause naming one does not imply the others.
+    - Distinguish DISCRETIONARY language ("may", "at Landlord's option", "Landlord may elect to") from
+      REQUIRED/mandatory language ("shall", "must", "is required to") — never upgrade a discretionary right
+      into a mandatory obligation, or vice versa.
+    - Never infer a field's value from the document's OVERALL lease-type classification alone (e.g. do not
+      assume every responsibility field defaults to "tenant" just because the lease is labeled NNN, or to
+      "landlord" just because it is labeled Gross/Full Service) — always require the field's own specific,
+      explicit clause language. The one narrow exception: a Base Year or expense-stop provision may itself
+      be explicit evidence of the stated operating-expense allocation method for taxes/insurance/CAM
+      specifically — it does not establish unrelated repair, utility, or other category responsibilities.
+
+5c. BOOLEAN FIELDS — THREE-STATE POLICY:
+    Every boolean field has three possible outcomes, not two:
+      true  -> the document contains OPERATIVE language that grants, requires, or affirmatively states the
+               condition (e.g. "Tenant shall name Landlord as an additional insured on all policies").
+      false -> the document contains OPERATIVE language that explicitly denies, waives, or negates the
+               condition (e.g. "no waiver of subrogation shall apply", "Tenant shall not have a right of
+               first refusal").
+      null  -> the relevant topic is not addressed in the provided text at all, OR the only text found is a
+               bare section heading, defined-term mention, or cross-reference with no actual operative
+               sentence (e.g. a "Waiver of Subrogation" heading with no clause beneath it in the snippet).
+    Do NOT return true merely because a keyword or defined term (e.g. "gross-up", "additional insured",
+    "right of first refusal") appears somewhere in the text — the surrounding sentence must actually grant,
+    require, or affirm the condition, not just name it. When in doubt between false and null, prefer null:
+    "not addressed" and "explicitly denied" are different facts and must not be conflated.
+    CONDITIONAL OR SCOPED PROVISIONS: when operative language grants a right or imposes an obligation only
+    under a stated condition or within a limited scope (e.g. "If Tenant expands into the Adjacent Space,
+    Tenant shall have a right of first offer on the remaining space"), return true only for a field that
+    itself represents the existence of that conditional/scoped provision. Do not return a global/unconditional
+    true when the canonical field means an unconditional right — note the condition in source_text so a
+    reviewer can see the scope was limited.
+
 6. ENTITY vs PERSON disambiguation - critical:
    tenant_name and landlord_name are LEGAL ENTITY names (LLC, Inc., Corp, Trust, individual property owner).
    Signatory / signer / "By:" lines belong to tenant_signatory_name or landlord_signatory_name, NEVER to *_name.
@@ -77,10 +114,11 @@ RULES:
 
 7. Date conventions:
    YYYY-MM-DD format. "January 1, 2024" -> "2024-01-01".
-   When the lease shows "commences on February 1, 2024 and ends January 31" with year elided,
-   the end year is one year AFTER the commencement year unless the lease explicitly says otherwise.
-   So "commences February 1, 2024 and ends January 31" -> end_date.value = "2025-01-31".
-   If unsure of the year, leave value null with confidence 0.
+   When a date's YEAR is not explicitly stated in the evidence text (e.g. "ends January 31" with no year
+   given), do NOT manufacture a complete date by assuming an offset from another date. Return null for that
+   field, with confidence 0, and let source_text show the year-elided text you found. A deterministic
+   downstream step may later derive a full date from the lease term and an anchor date when unambiguous —
+   that derived value is computed by the pipeline, not by you, and would be marked as derived, not extracted.
 
 8. Monthly vs Annual rent:
    Only put a value in monthly_rent if the lease explicitly says "per month" / "monthly" / "$X/mo".
@@ -97,10 +135,17 @@ RULES:
 12. source_text MUST BE THE EXACT VERBATIM text from the document snippet. NEVER paraphrase your reasoning. NEVER explain how you derived the value.
     If you derived the value from a specific phrase (e.g. extracting Tenant from "Assignee: John"), the source_text MUST BE the exact phrase "Assignee: John".
     If the text is OCR-garbled, return the garbled text exactly as it appears.
-    For lease review fields, source_text must be a COMPLETE, EXACT FULL SENTENCE from the lease document that contains the value and enough surrounding context for a reviewer to understand why the value was extracted.
-    Do NOT return fragments like only "THIS LEASE AGREEMENT", only a party name, only a date, or text ending mid-sentence.
-    Prefer the SHORTEST verbatim clause that supports the value - a single numbered line item or sentence is ideal.
-    Do NOT quote an entire paragraph, section header, or document preamble (e.g., "SUMMARY OF BASIC LEASE INFORMATION...").
+    source_text may take EITHER of these forms — both are first-class evidence, pick whichever actually appears in
+    the document, do not force one shape onto the other:
+      (a) a COMPLETE sentence or clause containing the value and enough surrounding context for a reviewer to
+          understand why the value was extracted, OR
+      (b) a "Label: value" line, a numbered summary line (e.g. "3. Security Deposit: $12,500"), or a single table
+          row, copied verbatim — a short labeled line or table row does NOT need to be embedded in a longer
+          sentence to count as valid evidence.
+    Do NOT return a bare section heading with no value attached (e.g. only "THIS LEASE AGREEMENT", or only
+    "ADDITIONAL INSUREDS" with nothing else) — that is not evidence for any value.
+    Prefer the SHORTEST verbatim quote that supports the value - a single numbered line item, labeled line, table row, or sentence is ideal.
+    Do NOT quote an entire paragraph, multi-clause section, or document preamble (e.g., "SUMMARY OF BASIC LEASE INFORMATION...") when a shorter labeled line or sentence already proves the value.
     If the snippet contains [[PAGE n]] markers, source_page is mandatory and must match the page containing source_text.
     If you cannot provide an exact source_text for a found value, return value null.
 
@@ -218,7 +263,7 @@ function buildFieldGroupPrompt(
     : "TEXT SNIPPET (May contain OCR fragments/errors)";
   const importantNote = isFileMode
     ? "IMPORTANT: Use the Azure-extracted text provided below. Values such as rent schedules, security deposits, CAM caps, gross-up provisions, and escalation rates may appear later in the snippet; do not invent values that are not supported by the text."
-    : "IMPORTANT: The text snippet may come from OCR and contain fragments or misread characters. Use context to infer the correct values where possible.";
+    : "IMPORTANT: The text snippet may come from OCR and contain fragments or misread characters (stray characters, broken words, misread digits/letters). Where OCR noise makes a character ambiguous, use surrounding context to work out what the source text actually says — but do NOT use context to supply, guess, or calculate a value the document does not explicitly state. If a field's value is not explicitly present (even after accounting for OCR noise), return null per Rule 4.";
   const noTextFallback = isFileMode
     ? "[No Azure-extracted text provided]"
     : "[No text provided]";
@@ -285,7 +330,7 @@ TEXT (May contain OCR fragments/errors):
 ${textSnippet}
 ---------------------------
 
-IMPORTANT: The text snippet may come from OCR and contain fragments or misread characters. Carefully reconstruct the records from the fragments.
+IMPORTANT: The text snippet may come from OCR and contain fragments or misread characters (stray characters, broken words, misread digits/letters). Use surrounding context and table/row structure to correctly assemble each record's fields from these fragments — but do NOT use context to supply, guess, or calculate a value the document does not explicitly state. If a specific field's value is not explicitly present for a given record, return null for that field per Rule 4.
 
 For each field in a record, return a JSON object with this EXACT shape:
 {
@@ -580,16 +625,14 @@ async function fillMissingFieldsForRecords(
 ): Promise<StepResult> {
   const records: ExtractedRecord[] = [];
 
-  // Collect all labels from the missing fields for snippet building
-  const allLabels: string[] = [];
-  for (const group of groups) {
-    for (const f of group.fields) {
-      if (schema[f]?.labels) allLabels.push(...schema[f].labels);
-    }
-  }
+  // Collect all field defs from the missing fields for snippet building
+  // (deduped by key so a field appearing in more than one group, or an
+  // OR-alternate pair, doesn't double-count its labels/patterns toward a
+  // block's relevance score).
+  const allFieldDefs = [...new Set(groups.flatMap((g) => g.fields))].map((f) => schema[f]).filter(Boolean);
 
   for (const group of groups) {
-    const snippet = buildRelevantSnippet(docling, allLabels, 24000);
+    const snippet = buildRelevantSnippet(docling, allFieldDefs, 24000);
     const prompt = buildMultiRowPrompt(group.fields, schema, snippet, moduleType);
     diag.groups_attempted += 1;
     // Note: buildMultiRowPrompt is for multi-record extraction; file-mode
@@ -738,11 +781,8 @@ async function extractFieldGroups(
   };
 
   const workItems: GroupWork[] = groups.map((group) => {
-    const labels: string[] = [];
-    for (const f of group.fields) {
-      if (schema[f]?.labels) labels.push(...schema[f].labels);
-    }
-    const snippet = buildRelevantSnippet(docling, labels, 24000);
+    const fieldDefs = [...new Set(group.fields)].map((f) => schema[f]).filter(Boolean);
+    const snippet = buildRelevantSnippet(docling, fieldDefs, 24000);
     const prompt = buildFieldGroupPrompt(group, schema, snippet, moduleType, Boolean(input.fileBase64));
     return { group, prompt };
   });

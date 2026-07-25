@@ -77,6 +77,12 @@ export interface FieldDef {
    *  getFieldEvidencePolicy() for the actual resolved value — most fields
    *  don't set this literal directly, same reasoning as `domain`. */
   evidencePolicy?: "enforced" | "advisory" | "unconfigured";
+  /** Declares how this field is meant to be populated, for reachability tooling
+   *  and future readers. Most fields leave this unset (their extraction path
+   *  is whatever combination of LEASE_GROUPS/patterns/labels already applies).
+   *  Set explicitly only when a field's intended path needs to be documented
+   *  in the schema itself rather than inferred. */
+  extractionMode?: "automatic" | "derived" | "human_only";
 }
 
 /** Coarse business domains for candidate-decision reconciliation (Release 1
@@ -766,7 +772,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["electric responsibility", "electric utility", "electric"],
     tableHeaders: ["electric_responsibility", "electric responsibility"],
     patterns: [/((?:tenant|landlord)\s+must\s+pay\s+electric[^.\n]{0,120})/i],
-    description: "Clause describing who is responsible for electric service",
+    description:
+      "Normalized responsibility for electric service payment (e.g. 'tenant', 'landlord', 'shared') — the " +
+      "supporting clause excerpt belongs in source_text, not in value.",
     domain: "utilities",
     evidencePolicy: "enforced",
     allowedClauseCategories: ["utilities"],
@@ -779,7 +787,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["water/sewer responsibility", "water sewer responsibility", "water/sewer utility"],
     tableHeaders: ["water_sewer_responsibility", "water/sewer responsibility"],
     patterns: [/((?:tenant|landlord)[^.\n]{0,80}(?:water\s*\/?\s*sewer)[^.\n]{0,140})/i],
-    description: "Clause describing who is responsible for water and sewer charges",
+    description:
+      "Normalized responsibility for water/sewer service payment (e.g. 'tenant', 'landlord', 'shared') — the " +
+      "supporting clause excerpt belongs in source_text, not in value.",
   },
   escalation_rate: {
     type: "number",
@@ -849,10 +859,18 @@ export const LEASE_SCHEMA: ModuleSchema = {
     tableHeaders: ["status", "lease status"],
     description: "One of: active, expired, pending, vacant",
   },
+  // notes: intentionally has no labels/patterns/table headers and is not in any
+  // LEASE_GROUPS entry. It is free-form human annotation with no fixed document
+  // vocabulary to key extraction off of — inventing generic labels ("notes",
+  // "comments", "remarks") risks false-positive matches against unrelated
+  // document text via rule-extractor's document-wide label search. Declared
+  // human_only here (not just in a test file) so this is a documented schema
+  // decision, checked by lease-schema-declared-extraction-metadata.test.ts.
   notes: {
     type: "string",
     labels: [],
     description: "Additional notes or context",
+    extractionMode: "human_only",
   },
 
   // ─── Dates extension ────────────────────────────────────────────────
@@ -1101,7 +1119,11 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["gross up", "gross-up"],
     tableHeaders: ["gross_up_enabled"],
     patterns: [/\bgross[\s-]up\b/i],
-    description: "Whether the lease includes a gross-up provision",
+    description:
+      "Whether the lease's OPERATING-EXPENSE clause actually applies a gross-up adjustment (not just whether " +
+      "the term 'gross-up' is defined or mentioned). Return true only when an operative sentence directs that " +
+      "expenses be grossed up to a stated occupancy level; return null if the topic is not addressed or only a " +
+      "defined term/heading appears.",
   },
   gross_up_threshold: {
     type: "number",
@@ -1150,7 +1172,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["waiver of subrogation"],
     tableHeaders: ["waiver_of_subrogation"],
     patterns: [/\bwaiver\s+of\s+subrogation\b/i],
-    description: "Whether mutual waiver of subrogation is present",
+    description:
+      "Whether an operative sentence actually waives subrogation rights (e.g. 'Landlord and Tenant each waive " +
+      "all rights of subrogation against the other') — not just whether the term is defined or headed. Return " +
+      "null if only a defined term or heading appears with no operative sentence.",
   },
   additional_insureds_required: {
     type: "boolean",
@@ -1182,14 +1207,20 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["right of first refusal", "rofr"],
     tableHeaders: ["right_of_first_refusal"],
     patterns: [/\bright\s+of\s+first\s+refusal\b|\brofr\b/i],
-    description: "Whether tenant has right of first refusal on additional space",
+    description:
+      "Whether the lease contains an OPERATIVE clause granting tenant a right of first refusal or first offer " +
+      "on specific additional space — not just whether the term 'ROFR'/'right of first refusal' appears. " +
+      "Return null if the topic is not addressed or only a heading/defined term appears with no granting sentence.",
   },
   early_termination_option: {
     type: "boolean",
     labels: ["early termination", "early out", "termination option"],
     tableHeaders: ["early_termination_option"],
     patterns: [/\bearly\s+termination\b|\bearly\s+out\b/i],
-    description: "Whether tenant has an early termination / early-out option",
+    description:
+      "Whether the lease contains an OPERATIVE clause granting tenant the right to terminate the lease before " +
+      "its stated expiration — not just whether the phrase 'early termination'/'early out' appears. Return " +
+      "null if the topic is not addressed or only a heading/defined term appears with no granting sentence.",
   },
   assignment_provisions: {
     type: "string",
@@ -1782,8 +1813,8 @@ export function getSchema(moduleType: ModuleType): ModuleSchema {
 
 const LEASE_GROUPS: FieldGroup[] = [
   {
-    name: "parties",
-    fields: ["tenant_name", "tenant_signatory_name", "landlord_name", "landlord_signatory_name", "property_name", "property_address", "unit_number", "landlord_address", "tenant_address", "tenant_contact_name", "tenant_contact_phone", "broker_name"],
+    name: "party_entities",
+    fields: ["tenant_name", "tenant_signatory_name", "landlord_name", "landlord_signatory_name"],
     hint:
       "Identify the LEGAL ENTITIES: tenant_name and landlord_name are the company/LLC names ONLY. " +
       "Signatory names (the individual who signed 'By:') go into tenant_signatory_name and landlord_signatory_name — never into *_name. " +
@@ -1792,38 +1823,71 @@ const LEASE_GROUPS: FieldGroup[] = [
       "(2) 'between [LANDLORD ENTITY] (\"Landlord\") and [TENANT ENTITY] (\"Tenant\")' — the simpler parenthetical shorthand. " +
       "In BOTH formats, extract the entity name BEFORE the parenthetical — e.g. 'Sunbelt Holdings, LLC' from 'between Sunbelt Holdings, LLC (\"Landlord\")'. " +
       "Do NOT return body-text phrases like 'hereby leases Premises to' — those are clause text, not entity names. " +
-      "Also extract property name, premises address, unit/suite if present. " +
+      "For ALL fields: source_text MUST be the exact verbatim line or sentence from the document — never paraphrase.",
+  },
+  {
+    name: "premises_identity",
+    fields: ["property_name", "property_address", "unit_number"],
+    hint:
+      "Extract property name, premises address, and unit/suite if present. " +
       "unit_number: the suite/unit identifier, typically a short number or code found in the Premises section (e.g. 'Suites 3 and 4'). " +
+      "For ALL fields: source_text MUST be the exact verbatim line or sentence from the document — never paraphrase.",
+  },
+  {
+    name: "party_contact_and_broker",
+    fields: ["landlord_address", "tenant_address", "tenant_contact_name", "tenant_contact_phone", "broker_name"],
+    hint:
       "landlord_address: the landlord's mailing or notice address (NOT the premises address). " +
       "tenant_address: the tenant's mailing or notice address. " +
-      "tenant_contact_name: the individual signing on behalf of the tenant (the 'By:' signer). " +
+      "tenant_contact_name: the tenant's day-to-day point-of-contact person for notices/communications (e.g. a " +
+      "property manager, leasing contact, or 'Attn:' name on the tenant's notice address) — this is NOT " +
+      "necessarily the person who signed the lease. Do not confuse with tenant_signatory_name (the 'By:' " +
+      "signer on the signature page), which is a separate field extracted elsewhere. " +
       "tenant_contact_phone: the tenant's contact phone number. " +
       "broker_name: the real estate broker or brokerage firm named in the lease. " +
       "For ALL fields: source_text MUST be the exact verbatim line or sentence from the document — never paraphrase.",
   },
   { name: "assignment", fields: ["assignor_name", "assignee_name", "assignment_effective_date", "landlord_consent", "assumption_scope", "assignee_notice_address", "assignment_consideration", "all_other_terms_remain_same"], hint: "For assignments, identify assignor, assignee, effective date, consent, assumption language, notice address, explicit consideration, and all-other-terms language. Do not infer expense terms from assignment language." },
   {
-    name: "dates",
-    fields: ["lease_date", "start_date", "end_date", "commencement_date", "expiration_date", "rent_commencement_date", "renewal_notice_months", "termination_notice_months", "option_exercise_deadline", "tenant_signature_date", "landlord_signature_date"],
+    name: "term_dates",
+    fields: ["start_date", "end_date", "commencement_date", "expiration_date"],
     hint:
-      "Find lease term dates. " +
-      "lease_date is the date the lease was signed / executed — look for 'made and entered into as of [DATE]', " +
-      "'Effective Date: [DATE]', or 'dated [DATE]' in the opening paragraph. " +
       "commencement_date and expiration_date are the term start/end. " +
       "Often the lease shows 'Commencement Date: February 1, 2024' and 'Expiration Date: January 31, 2025'. " +
-      "If only month/day is given for expiration (e.g. 'January 31 of each year'), use commencement_year + 1. " +
+      "If only month/day is given for expiration with no explicit year, return null for expiration_date/end_date " +
+      "— do not assume commencement_year + 1. " +
       "CRITICAL: If commencement_date is defined FORMULAICALLY (e.g. 'one day after four months from the Effective " +
       "Date', 'upon Certificate of Occupancy', 'the later of X or Y') with NO explicit calendar date, return null " +
       "for commencement_date — do NOT use the lease_date or signing date as a substitute. " +
-      "rent_commencement_date is when rent payments start (may differ from term commencement when free-rent applies). " +
-      "Renewal/termination notice = how many months notice required. All dates → YYYY-MM-DD. " +
-      "tenant_signature_date: the date the tenant signed the lease (look for the tenant signature block). " +
-      "landlord_signature_date: the date the landlord signed the lease (look for the landlord signature block). " +
+      "start_date/end_date mirror commencement_date/expiration_date when the lease uses that terminology instead — " +
+      "extract whichever labels the document actually uses; if both label styles appear for the same dates, they " +
+      "should agree. All dates → YYYY-MM-DD. " +
       "source_text for each date MUST be the exact verbatim line containing that date.",
   },
   {
-    name: "financial",
-    fields: ["monthly_rent", "annual_rent", "amended_base_rent_for_additional_year", "rent_per_sf", "security_deposit", "cam_amount", "escalation_rate", "escalation_type", "escalation_timing", "billing_frequency"],
+    name: "execution_and_rent_commencement_dates",
+    fields: ["lease_date", "rent_commencement_date", "tenant_signature_date", "landlord_signature_date"],
+    hint:
+      "lease_date is the date the lease was signed / executed — look for 'made and entered into as of [DATE]', " +
+      "'Effective Date: [DATE]', or 'dated [DATE]' in the opening paragraph. " +
+      "rent_commencement_date is when rent payments start (may differ from the term commencement date, extracted " +
+      "in a different group, when free-rent applies). " +
+      "tenant_signature_date: the date the tenant signed the lease (look for the tenant signature block). " +
+      "landlord_signature_date: the date the landlord signed the lease (look for the landlord signature block). " +
+      "All dates → YYYY-MM-DD. source_text for each date MUST be the exact verbatim line containing that date.",
+  },
+  {
+    name: "renewal_and_notice_dates",
+    fields: ["renewal_notice_months", "termination_notice_months", "option_exercise_deadline"],
+    hint:
+      "Renewal/termination notice = how many months' notice is required before the applicable deadline (convert " +
+      "days to months per the system prompt's notice-period conversion rule if the lease states days). " +
+      "option_exercise_deadline: the calendar date or deadline by which a renewal/purchase/other option must be " +
+      "exercised, if explicitly stated. source_text for each field MUST be the exact verbatim line/sentence.",
+  },
+  {
+    name: "rent_amounts",
+    fields: ["monthly_rent", "annual_rent", "amended_base_rent_for_additional_year", "rent_per_sf", "billing_frequency"],
     hint:
       "Extract base rent values EXACTLY as labeled in the lease. " +
       "If the lease shows a STEPPED RENT SCHEDULE table (multiple rows for different periods), " +
@@ -1833,32 +1897,54 @@ const LEASE_GROUPS: FieldGroup[] = [
       "extract monthly_rent = 18562.50 and annual_rent = 222750 from row 2. " +
       "monthly_rent must be the per-month rent; annual_rent must be the per-year rent. " +
       "If only one is present, leave the other NULL. " +
-      "escalation_rate: the fixed annual percentage increase (e.g. 3 for '3.00% per year' or " +
-      "'annual base rent increases by 3.00%'). " +
-      "security_deposit: look for 'Cash Security Deposit', 'Security Deposit', or 'Deposit' labeled rows. Return the TOTAL final amount, NOT component month rents used in the deposit calculation. " +
-      "cam_amount: ONLY return if a specific dollar amount is explicitly labeled as CAM or common area maintenance. Return null if only percentage splits or pro-rata obligations are described — not a dollar figure. " +
-      "escalation_type: fixed_pct / cpi / stepped / fmv / none. " +
+      "amended_base_rent_for_additional_year: an amended/updated annual base rent figure stated specifically for " +
+      "an additional lease year (distinct from the original annual_rent). " +
+      "rent_per_sf: the rent expressed as a $/SF rate, if separately stated (not calculated by you from monthly_rent " +
+      "and square footage — only extract if the document states a $/SF figure directly). " +
       "billing_frequency: monthly / quarterly / annual. " +
+      "ANTI-HALLUCINATION: If a value is not explicitly stated, return null — never estimate, infer, or calculate.",
+  },
+  {
+    name: "deposit_and_escalation",
+    fields: ["security_deposit", "cam_amount", "escalation_rate", "escalation_type", "escalation_timing"],
+    hint:
+      "security_deposit: look for 'Cash Security Deposit', 'Security Deposit', or 'Deposit' labeled rows. Return " +
+      "the TOTAL final amount, NOT component month rents used in the deposit calculation. " +
+      "cam_amount: ONLY return if a specific dollar amount is explicitly labeled as CAM or common area maintenance. " +
+      "Return null if only percentage splits or pro-rata obligations are described — not a dollar figure. " +
+      "escalation_rate: the fixed annual percentage increase (e.g. 3 for '3.00% per year' or 'annual base rent " +
+      "increases by 3.00%'). escalation_type: fixed_pct / cpi / stepped / fmv / none. " +
+      "escalation_timing: lease_anniversary / calendar_year / fiscal_year — when escalations occur. " +
       "ANTI-HALLUCINATION: If a value is not explicitly stated, return null — never estimate or infer dollar amounts.",
   },
   {
-    name: "terms",
-    fields: ["square_footage", "building_rsf", "lease_type", "permitted_use", "lease_term_months", "renewal_options", "renewal_type", "ti_allowance", "free_rent_months", "status"],
+    name: "premises_and_use",
+    fields: ["square_footage", "building_rsf", "lease_type", "permitted_use"],
     hint:
-      "Find the LEASED PREMISES square footage (tenant's space, not the whole building), " +
-      "lease type, permitted use (e.g. 'IT work', 'general office'), term length, renewal type/terms, and TI allowance. " +
-      "For lease_term_months: look for both numeric ('86 months') AND written-out forms " +
-      "('eighty-six (86) months', 'for a period of eighty-six (86) months'). " +
-      "Extract the digit inside the parentheses from written-out forms. " +
+      "Find the LEASED PREMISES square footage (tenant's space, not the whole building), lease type, and " +
+      "permitted use (e.g. 'IT work', 'general office'). " +
       "building_rsf is the WHOLE BUILDING's total rentable square footage (often only in a rent roll or CAM " +
       "reconciliation exhibit) — distinct from square_footage, which is the tenant's leased premises only.",
+  },
+  {
+    name: "term_length_and_incentives",
+    fields: ["lease_term_months", "renewal_options", "renewal_type", "ti_allowance", "free_rent_months", "status"],
+    hint:
+      "Find term length, renewal type/terms, TI allowance, free rent, and lease status. " +
+      "For lease_term_months: look for both numeric ('86 months') AND written-out forms " +
+      "('eighty-six (86) months', 'for a period of eighty-six (86) months'). " +
+      "Extract the digit inside the parentheses from written-out forms.",
   },
   {
     name: "expense_recovery",
     fields: ["responsibility_taxes", "responsibility_insurance", "responsibility_utilities", "responsibility_repairs", "base_year", "expense_stop"],
     hint:
       "Identify WHO PAYS for each expense category. Use: 'landlord', 'tenant', 'shared', or 'landlord_with_cap'. " +
-      "For Triple Net (NNN): tenant pays most. For Full Service / Gross: landlord pays most. " +
+      "Base this ONLY on each category's own explicit clause language in the text below — the lease's overall " +
+      "NNN / Gross / Modified Gross classification is context, not proof, and must never substitute for a " +
+      "category's own stated responsibility language. A lease can be labeled NNN and still make the landlord " +
+      "responsible for a specific category (e.g. a landlord-paid roof/structure carve-out), or vice versa — " +
+      "read each category's own clause. " +
       "For MODIFIED GROSS or BASE YEAR leases: base rent includes landlord's share of taxes/insurance/CAM for the " +
       "Base Year — that means responsibility = 'landlord_with_cap' (landlord covers base year, tenant pays increases). " +
       "Example: 'Base rent includes Tenant's share of operating expenses, real estate taxes, and property insurance " +
@@ -1867,6 +1953,46 @@ const LEASE_GROUPS: FieldGroup[] = [
       "For utilities: 'included in base rent during normal business hours' + 'Tenant shall pay for after-hours/supplemental' " +
       "→ responsibility_utilities = 'shared'. " +
       "Also extract base_year (calendar year for base-year pass-throughs) and expense_stop dollar amount if present.",
+  },
+  {
+    name: "fees_and_charges",
+    fields: ["late_fee_amount", "returned_payment_fee_amount", "application_fee_amount", "administrative_fee_amount", "pet_fee_amount", "pet_rent_amount", "parking_fee_amount"],
+    hint:
+      "Extract miscellaneous fee/charge amounts, each as a plain USD number, ONLY if a specific dollar amount is " +
+      "explicitly stated for that exact fee. Do NOT infer one fee's amount from another, and do NOT return a " +
+      "percentage or rate as a substitute for a stated dollar figure. Do NOT populate these fields from unrelated " +
+      "charges: broker commissions, legal review fees, lender fees, construction administration fees, CAM " +
+      "management-fee PERCENTAGES, transfer/assignment review fees, security deposits, or parking taxes — only " +
+      "the exact charge each field names. " +
+      "late_fee_amount: the late/delinquent-rent-payment fee, if a dollar amount is stated (a late fee stated only " +
+      "as a percentage of rent belongs elsewhere — return null for this field in that case). " +
+      "returned_payment_fee_amount: fee for a returned/dishonored/bounced payment (check or ACH). " +
+      "application_fee_amount: one-time tenant application/screening fee. " +
+      "administrative_fee_amount: a flat administrative/admin fee charged to the tenant directly (distinct from " +
+      "the CAM administrative/management fee PERCENTAGE, admin_fee_pct, in a different group — e.g. '15% " +
+      "administrative fee on Operating Expenses' is admin_fee_pct, NOT this field). " +
+      "pet_fee_amount: one-time pet fee (not recurring). pet_rent_amount: recurring monthly pet rent. " +
+      "parking_fee_amount: recurring monthly parking/garage charge. " +
+      "ANTI-HALLUCINATION: if a fee category is not mentioned at all, or mentioned only as a percentage/formula " +
+      "with no computed dollar amount, return null — never estimate.",
+  },
+  {
+    name: "utilities_and_responsibility",
+    fields: ["utility_reimbursement_amount", "water_sewer_reimbursement_amount", "tax_responsibility", "insurance_responsibility", "electric_responsibility", "water_sewer_responsibility"],
+    hint:
+      "Extract utility charge-back amounts and per-category expense responsibility. For every field in this group, " +
+      "put the NORMALIZED short responsibility answer (e.g. 'tenant', 'landlord', 'shared', or whatever form the " +
+      "field's own description specifies) in `value` — never put clause prose in `value`. Put the exact " +
+      "supporting clause excerpt in `source_text` only; `value` and `source_text` serve different purposes. " +
+      "utility_reimbursement_amount / water_sewer_reimbursement_amount: a specific recurring dollar amount the " +
+      "tenant reimburses for that utility, ONLY if explicitly stated as a dollar figure. " +
+      "tax_responsibility / insurance_responsibility: identify who pays real estate taxes / who pays for property " +
+      "insurance — base this ONLY on this category's own explicit clause language, never on the lease's overall " +
+      "NNN/Gross classification alone. " +
+      "electric_responsibility / water_sewer_responsibility: who pays for and/or arranges that utility service — " +
+      "distinguish PAYING for the utility from merely maintaining/repairing the electrical or plumbing SYSTEM " +
+      "(a different field/topic); the normalized payer answer goes in `value`, the supporting clause in " +
+      "`source_text`.",
   },
   {
     name: "cam_structure",
@@ -1882,7 +2008,10 @@ const LEASE_GROUPS: FieldGroup[] = [
       "  'management fee not exceeding X%' (e.g. 4 for 4.00%, or 3 for 3.00%). " +
       "management_fee_basis: what mgmt fees are calculated on — cam_pool_pro_rata / tenant_annual_rent / gross_rent / fixed. " +
       "  'Not exceeding X% of gross collected revenue' → gross_rent. " +
-      "gross_up_enabled: true if the lease contains a gross-up provision (look for 'gross-up' or 'gross up'). " +
+      "gross_up_enabled: true ONLY if the lease contains OPERATIVE gross-up language that actually applies an " +
+      "adjustment (e.g. 'Landlord shall gross up Operating Expenses to reflect 95% occupancy'). A mere mention " +
+      "of the defined term 'Gross-Up' in a definitions list with no operative sentence, or a heading alone, is " +
+      "NOT sufficient — return null in that case, not true. " +
       "gross_up_threshold: the occupancy % at which gross-up applies. " +
       "  Look for 'if the Building is less than X% occupied ... gross up' (e.g. 95 for 95% occupied). " +
       "hvac_responsibility: landlord / tenant / shared — who maintains HVAC.",
@@ -1894,15 +2023,26 @@ const LEASE_GROUPS: FieldGroup[] = [
       "Extract insurance requirements. " +
       "general_liability_min: the minimum coverage amount in USD (e.g. 1000000 for $1M / $1,000,000). " +
       "Look for clauses like 'Tenant shall maintain commercial general liability insurance in an amount not less than $X'. " +
-      "additional_insureds_required: true if landlord must be named as additional insured.",
+      "additional_insureds_required: true ONLY if an operative sentence actually requires Landlord (or " +
+      "Landlord's agents/mortgagees) to be named as an additional insured on Tenant's policy — not merely " +
+      "because the phrase 'additional insured' appears (e.g. as a section heading with no clause beneath it). " +
+      "The evidence must be semantically equivalent to such a requirement; no single exact wording is " +
+      "required — commercial leases phrase this many different ways.",
   },
   {
     name: "legal_options",
     fields: ["right_of_first_refusal", "early_termination_option", "assignment_provisions", "default_cure_period", "landlord_consent_for_transfer"],
     hint:
       "Extract tenant options and remedies. " +
-      "right_of_first_refusal: true if tenant has ROFR on additional space. " +
-      "early_termination_option: true if tenant has an early-out clause. " +
+      "right_of_first_refusal: true ONLY if an operative sentence actually GRANTS tenant a right of first " +
+      "refusal or first offer on specific additional space (e.g. 'Landlord shall first offer the Adjacent " +
+      "Space to Tenant before offering it to any third party'). A mention of 'Right of First Refusal' only as " +
+      "a defined term, section heading, or in a list of exhibits, with no granting sentence, is NOT " +
+      "sufficient — return null. " +
+      "early_termination_option: true ONLY if an operative sentence actually GRANTS tenant the right to " +
+      "terminate the lease early (e.g. 'Tenant may terminate this Lease effective as of the last day of the " +
+      "60th month upon 180 days' prior written notice and payment of the Termination Fee'). A section heading " +
+      "or defined-term mention alone is NOT sufficient — return null. " +
       "assignment_provisions: brief summary (e.g. 'requires landlord consent, not unreasonably withheld'). " +
       "default_cure_period: days a defaulting party has to cure before remedies (e.g. 30 days for monetary, 60 for non-monetary). " +
       "landlord_consent_for_transfer: whether landlord consent is required for assignment/transfer (e.g. 'Required', 'Not required', 'Required but not unreasonably withheld'). " +
