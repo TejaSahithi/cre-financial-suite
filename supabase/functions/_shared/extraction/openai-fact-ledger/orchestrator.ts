@@ -290,6 +290,14 @@ export async function runOpenAIFactLedgerPipeline(
             // table yet — visible here for debugging/tuning; forward-
             // compatible with document_validation_drops (Release 2).
             rejected_candidates: mapped.rejectedCandidates,
+            // Micro-step 0 (pipeline-audit provenance, additive/optional —
+            // see openai-fact-ledger/types.ts's FieldSelectionProvenance and
+            // LEASE_EXTRACTION_UI_PIPELINE_AUDIT.md Section 16.3). Bounded to
+            // TRACKED_PROVENANCE_FIELDS in fact-field-mapper.ts, not all
+            // fields. `?? {}` so an older mapper build (or a test fixture
+            // built before this change) that doesn't return fieldProvenance
+            // at all degrades to an empty object here, never undefined.
+            field_provenance: mapped.fieldProvenance ?? {},
             // Phase 6 Task G: diagnostic-only, not read by any business logic.
             document_index_source: indexResolution.indexSource,
             document_index_fallback_reason: indexResolution.fallbackReason,

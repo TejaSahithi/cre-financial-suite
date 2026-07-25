@@ -15,7 +15,7 @@ import {
   resolveSourceTextQuality,
   resolveExtractionStatus,
 } from "@/lib/leaseReviewSchema";
-import { getFieldAliases } from "@/lib/leaseFieldResolver";
+import { getFieldAliases, resolveLeaseField } from "@/lib/leaseFieldResolver";
 import { entryValue, entrySourceText, entrySourcePage } from "@/components/lease-review/utils/fieldExtractors";
 
 // Single canonical implementation - delegates to leaseReviewSchema so both
@@ -502,7 +502,11 @@ function currentEvidenceIsUnsupported(evidence, value) {
   });
 }
 
-function buildDerivedFieldEvidence(lease, key, currentValue, currentEvidence = {}) {
+// Exported (in addition to internal use by buildCanonicalLeaseReviewField)
+// solely so field-provenance.test.js can assert on the annual_rent
+// selectionProvenance shape directly -- no behavior change, this is a
+// visibility-only edit.
+export function buildDerivedFieldEvidence(lease, key, currentValue, currentEvidence = {}) {
   const monthlyEvidence = readFieldEvidence(lease, "monthly_rent");
   const baseMonthlyEvidence = readFieldEvidence(lease, "base_rent_monthly");
   const effectiveMonthlyEvidence = hasValidSourceEvidence(monthlyEvidence) ? monthlyEvidence : baseMonthlyEvidence;
@@ -520,6 +524,21 @@ function buildDerivedFieldEvidence(lease, key, currentValue, currentEvidence = {
   if (key === "annual_rent" && monthlyRent != null && monthlyHasSource) {
     const value = Math.round(monthlyRent * 12 * 100) / 100;
     if (!shouldUpgrade(value)) return null;
+    // Micro-step 0 (pipeline-audit provenance, additive-only): this records
+    // WHERE the unsafe monthly_rent x 12 derivation's input came from and
+    // whether that input was itself flagged, so a reviewer/diagnostic tool
+    // can see "this annual_rent is downstream of an unverified monthly_rent"
+    // without re-deriving it. It does NOT change the `value` computed above
+    // — the derivation itself is unchanged, only explained. Fixing the
+    // "unsafe input, blind derivation" behavior itself is an explicitly
+    // separate, later Micro-step (see LEASE_EXTRACTION_UI_PIPELINE_AUDIT.md
+    // Section 16.0/16.3).
+    const parentResolved = resolveLeaseField(lease, "monthly_rent", { mode: "canonical" });
+    const parentValidationStatus = effectiveMonthlyEvidence?.requiresReview
+      ? "requires_review"
+      : (effectiveMonthlyEvidence?.sourceTextQuality === "derived" || effectiveMonthlyEvidence?.sourceTextQuality === "inferred")
+        ? "unverified_source_quality"
+        : (monthlyHasSource ? "has_source_evidence" : "no_source_evidence");
     return {
       value,
       sourceText: effectiveMonthlyEvidence.sourceText,
@@ -529,6 +548,15 @@ function buildDerivedFieldEvidence(lease, key, currentValue, currentEvidence = {
       sourceFieldKeys: ["monthly_rent", "base_rent_monthly"],
       derivationTrace: `annual_rent = monthly_rent (${monthlyRent}) x 12`,
       extractionStatus: "calculated",
+      selectionProvenance: {
+        pipelinePath: "derived",
+        derivedFromField: "monthly_rent",
+        derivedFromValue: monthlyRent,
+        parentSourcePath: parentResolved?.sourcePath ?? null,
+        parentValidationStatus,
+        parentGenerationId: lease?.uploaded_files?.active_generation_id ?? lease?.uploaded_file?.active_generation_id ?? null,
+        derivationExpression: "monthly_rent * 12",
+      },
     };
   }
 

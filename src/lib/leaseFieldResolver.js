@@ -883,3 +883,151 @@ export function resolveLeaseFields(lease, fieldKeys, options = {}) {
 export function getFieldSourcePath(lease, fieldKey, options = {}) {
   return resolveLeaseField(lease, fieldKey, options).sourcePath;
 }
+
+// ── Micro-step 0: display-resolution provenance (additive, debug-only) ─────
+// Everything below is new, read-only, and does not change resolveLeaseField's
+// behavior, return shape, or fallback order in any way — it answers "why is
+// THIS particular value displayed?" (as distinct from fact-field-mapper.ts's
+// FieldSelectionProvenance, which answers "why did this candidate win on the
+// backend?"). See LEASE_EXTRACTION_UI_PIPELINE_AUDIT.md Section 16.3.
+
+// Mirrors resolveLeaseField's own two fallbackHierarchy orderings (lines
+// ~791-840 above) so a resolved `sourcePath` string can be turned into a
+// position index for display. Duplicated rather than refactoring
+// resolveLeaseField to expose it, to keep this Micro-step's change to that
+// function at zero — if resolveLeaseField's hierarchy ever changes, these
+// two lists need updating too; a mismatch only degrades
+// frontendFallbackIndex to -1 (unknown position), it cannot affect which
+// value is displayed.
+const DISPLAY_FALLBACK_PATHS = [
+  "lease.extraction_data.workflow_output.lease_fields",
+  "uf.records[0].workflow_output.lease_fields",
+  "uf.records[0].standard_fields",
+  "uf.records[0].fields",
+  "lease.extraction_data.fields",
+  "lease.extraction_data.lease_fields",
+  "uploaded_files.reviewed_output",
+  "lease.extraction_data.workflow_output.expense_rules",
+  "lease.extraction_data.workflow_output.cam_rules",
+  "lease.extraction_data.workflow_output.lease_clauses",
+  "lease.extraction_data.workflow_output.extracted_document_items",
+  "lease.extraction_data.extracted_document_items",
+  "lease.extracted_fields",
+  "uf.records[0].custom_fields",
+  "uf.records[0]",
+  "uploaded_files.ui_review_payload",
+  "approved_lease_abstracts.snapshot_json",
+  "lease.abstract_snapshot",
+  "lease.extraction_data.abstract",
+  "lease (top-level)",
+];
+const CANONICAL_FALLBACK_PATHS = [
+  "approved_lease_abstracts.snapshot_json",
+  "lease.abstract_snapshot",
+  "lease.extraction_data.abstract",
+  "lease.extraction_data.workflow_output.lease_fields",
+  "lease.extraction_data.workflow_output.expense_rules",
+  "lease.extraction_data.workflow_output.cam_rules",
+  "lease.extraction_data.workflow_output.lease_clauses",
+  "lease.extraction_data.fields",
+  "lease.extraction_data.lease_fields",
+  "lease.extraction_data.workflow_output.extracted_document_items",
+  "lease.extraction_data.extracted_document_items",
+  "lease.extracted_fields",
+  "uploaded_files.reviewed_output",
+  "uf.records[0].workflow_output.lease_fields",
+  "uf.records[0].fields",
+  "uf.records[0].standard_fields",
+  "uf.records[0].custom_fields",
+  "uf.records[0]",
+  "uploaded_files.ui_review_payload",
+  "uploaded_files.normalized_output.rows[0]",
+  "uploaded_files.parsed_data[0]",
+  "uploaded_files.ui_review_payload.metadata.extractionDebug",
+  "lease (top-level)",
+];
+
+/**
+ * Best-effort (not exhaustive) check for whether a NON-requested alias key
+ * has raw data present under a few of the most common containers actually
+ * used by resolveLeaseField's fallback hierarchy. This is deliberately NOT
+ * a full re-implementation of extractValueFromSource — after this session's
+ * earlier fix making FIELD_ALIASES bidirectional, every alias in
+ * getFieldAliases(fieldKey) already resolves identically via
+ * resolveLeaseField (each alias's own alias list now includes all the
+ * others), so comparing resolveLeaseField outputs across aliases can no
+ * longer distinguish "which literal key actually had the data" -- only a
+ * raw, unaliased presence check can. This checks presence only, not
+ * precedence, and only in the containers most relevant to the fields this
+ * Micro-step tracks (see fact-field-mapper.ts's TRACKED_PROVENANCE_FIELDS).
+ */
+function bestEffortRawKeyForField(lease, fieldKey) {
+  const requestedFieldKey = normalizeLeaseFieldKey(fieldKey);
+  const aliases = getFieldAliases(fieldKey); // includes requestedFieldKey itself
+  const containers = [
+    lease?.extraction_data?.workflow_output?.lease_fields,
+    lease?.extraction_data?.fields,
+    lease?.extraction_data?.lease_fields,
+    lease?.uploaded_files?.ui_review_payload?.records?.[0]?.fields,
+    lease?.uploaded_files?.ui_review_payload?.records?.[0]?.standard_fields,
+  ].filter((c) => c && typeof c === "object");
+
+  const hasRawPresence = (key) =>
+    containers.some((container) => {
+      if (container[key] !== undefined && container[key] !== null) return true;
+      const exactKey = Object.keys(container).find((k) => normalizeLeaseFieldKey(k) === key);
+      return exactKey !== undefined && container[exactKey] !== undefined && container[exactKey] !== null;
+    });
+
+  // Requested key itself first -- only report an alias switch when the
+  // canonical key has NO raw presence but a different alias does.
+  if (hasRawPresence(requestedFieldKey)) {
+    return { resolvedFieldKey: requestedFieldKey, aliasUsed: false };
+  }
+  const matchedAlias = aliases.find((alias) => alias !== requestedFieldKey && hasRawPresence(alias));
+  if (matchedAlias) {
+    return { resolvedFieldKey: matchedAlias, aliasUsed: true };
+  }
+  return { resolvedFieldKey: requestedFieldKey, aliasUsed: false };
+}
+
+/**
+ * Additive, debug-only diagnostic: explains WHERE a field's displayed value
+ * actually came from (which of resolveLeaseField's ~17-23 fallback sources
+ * won, and its position), whether an alias key supplied the underlying data,
+ * and whether the file's currently-active generation matches what's on the
+ * lease object passed in. Does not affect rendering, does not change
+ * resolution order, and calling this alongside resolveLeaseField for the
+ * same field is safe (resolveLeaseField itself is side-effect-free).
+ *
+ * generationMatch is intentionally `null` (unknown, not "false") when
+ * payloadGenerationId can't be determined -- ui_review_payload does not
+ * currently carry its own generation-of-origin stamp (see
+ * LEASE_EXTRACTION_UI_PIPELINE_AUDIT.md Section 16.3's known limitation);
+ * this only diagnoses a mismatch when one is actually detectable, per the
+ * guardrail that this step must not fabricate a comparison.
+ */
+export function getFieldDisplayProvenance(lease, fieldKey, options = {}) {
+  const mode = options.mode || "display";
+  const output = resolveLeaseField(lease, fieldKey, options);
+  const pathList = mode === "canonical" ? CANONICAL_FALLBACK_PATHS : DISPLAY_FALLBACK_PATHS;
+  const frontendFallbackIndex = output?.sourcePath ? pathList.indexOf(output.sourcePath) : -1;
+  const { resolvedFieldKey, aliasUsed } = bestEffortRawKeyForField(lease, fieldKey);
+  const activeGenerationId =
+    lease?.uploaded_files?.active_generation_id ?? lease?.uploaded_file?.active_generation_id ?? null;
+  // Not currently stamped per-payload anywhere this resolver reads from —
+  // see the comment above. Kept as an explicit, honest null rather than
+  // reusing activeGenerationId, which would fabricate a guaranteed "match".
+  const payloadGenerationId = null;
+
+  return {
+    requestedFieldKey: normalizeLeaseFieldKey(fieldKey),
+    resolvedFieldKey,
+    aliasUsed,
+    frontendResolutionSource: output?.sourcePath ?? null,
+    frontendFallbackIndex: frontendFallbackIndex >= 0 ? frontendFallbackIndex : null,
+    payloadGenerationId,
+    activeGenerationId,
+    generationMatch: payloadGenerationId != null ? payloadGenerationId === activeGenerationId : null,
+  };
+}

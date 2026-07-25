@@ -19,6 +19,7 @@
 import type { CandidateDecisionRecord, ExtractedField, ExtractedRecord, StepResult, ModuleType } from "./types.ts";
 import { getSchema } from "./schemas.ts";
 import { CANDIDATE_DECISION_VERSION, evaluateCandidateForField } from "./candidate-decision.ts";
+import { checkFieldSemanticCompatibility, hasSemanticRequirement, inferSemanticProfile } from "./semantic-compatibility.ts";
 
 /** Priority order for tie-breaking */
 const SOURCE_PRIORITY: Record<string, number> = {
@@ -326,6 +327,34 @@ function mergeField(
     }
     if (result.decision === "needs_review") {
       incomingToMerge = { ...incoming, evidenceDecision: "needs_review", extractionStatus: "needs_review" };
+    }
+  }
+
+  // Shared semantic-compatibility layer (semantic-compatibility.ts) -- the
+  // SAME module and role rules openai_fact_ledger's fact-field-mapper.ts
+  // uses, so both pipelines hard-reject the same semantically-incompatible
+  // candidate shapes (e.g. a repair-only sentence for electric_responsibility,
+  // a bare monthly-installment phrase for annual_rent). Checked after the
+  // existing domain/category veto above, before this candidate ever reaches
+  // the confidence-based selection below -- this is a HARD rejection
+  // (dropped from consideration entirely, never a score penalty), matching
+  // Implementation rule 3. legacy_hybrid's ExtractedField candidates don't
+  // carry a classified clause category, so `category` is passed as null --
+  // the classifier here works from sourceText alone either way.
+  if (hasSemanticRequirement(key)) {
+    const profile = inferSemanticProfile({ value: incomingToMerge.value, sourceText: incomingToMerge.sourceText ?? "", category: null });
+    const semanticResult = checkFieldSemanticCompatibility(profile, key, { value: incomingToMerge.value, sourceText: incomingToMerge.sourceText ?? "", category: null });
+    if (!semanticResult.compatible) {
+      rejectedCandidates.push({
+        field_key: key,
+        candidate_value: incomingToMerge.value,
+        candidate_source: incomingToMerge.source,
+        decision: "reject",
+        reason: semanticResult.reason ?? "semantic_incompatible",
+        source_page: incomingToMerge.sourcePage ?? null,
+        source_text: incomingToMerge.sourceText ?? null,
+      });
+      return;
     }
   }
 

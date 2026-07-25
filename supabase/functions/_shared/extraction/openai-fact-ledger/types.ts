@@ -118,6 +118,102 @@ export interface FactFieldMappingResult {
   /** Facts the domain-aware decision engine hard-rejected for a field their
    *  own labels/keywords would otherwise have matched. */
   rejectedCandidates: RejectedCandidate[];
+  /** Micro-step 0 (pipeline-audit provenance): per-field selection
+   *  provenance for a bounded set of high-value fields (see
+   *  TRACKED_PROVENANCE_FIELDS in fact-field-mapper.ts). Purely additive and
+   *  optional — absent/undefined must be treated identically to "no
+   *  provenance available" by every consumer, and this must never become a
+   *  required property. Does not affect which fact wins a field; it only
+   *  explains why. */
+  fieldProvenance?: Record<string, FieldSelectionProvenance>;
+}
+
+// ── Micro-step 0: field selection provenance (additive, diagnostic-only) ────
+// See LEASE_EXTRACTION_UI_PIPELINE_AUDIT.md Section 16.3 for the design this
+// implements. Every type here is additive — nothing here changes what value
+// a field resolves to; it only explains the decision that already happened.
+
+/** Which extraction pipeline produced a field's winning value. This module
+ *  (fact-field-mapper.ts) is only ever invoked from the openai_fact_ledger
+ *  orchestrator, so every FieldSelectionProvenance this module builds is
+ *  stamped "openai_fact_ledger" — the other pipelinePath values are reserved
+ *  for a future pass that instruments the legacy_hybrid pipeline
+ *  (rule-extractor.ts/llm-extractor.ts), which this Micro-step does not
+ *  touch. */
+export type FieldPipelinePath =
+  | "openai_fact_ledger"
+  | "legacy_rule"
+  | "legacy_targeted_llm"
+  | "table_extraction"
+  | "derived"
+  | "unknown";
+
+/** Explicit accept/reject explanation for looksLikeFieldCompatibleFact's
+ *  per-field value-shape guard (fact-field-mapper.ts). `guard` names which
+ *  field's guard block evaluated the candidate; `reasons` are the specific
+ *  condition(s) that fired. `guard: null` means no guard is configured for
+ *  this field at all (an intentional finding in itself — see the original
+ *  audit's ti_allowance/tenant_signatory_name/electric_responsibility gaps). */
+export interface FieldGuardDecision {
+  passed: boolean;
+  guard: string | null;
+  reasons: string[];
+}
+
+/** A candidate value considered for a field, trimmed for payload-size safety
+ *  (sourceText capped, see CANDIDATE_SOURCE_TEXT_MAX_CHARS in
+ *  fact-field-mapper.ts). */
+export interface FieldCandidateSummary {
+  value: unknown;
+  sourceText: string | null;
+  sourcePage: number | null;
+  chunkIndex: number | null;
+  mapperScore: number | null;
+  modelConfidence: number | null;
+}
+
+export interface FieldRejectedCandidateSummary extends FieldCandidateSummary {
+  rejectionReason: string | null;
+}
+
+/** Backend answer to "why did this candidate win?" — as distinct from
+ *  FieldDisplayResolutionProvenance (frontend, "why is this value the one
+ *  displayed?"), per the Micro-step 0 design's guardrail #5. */
+export interface FieldSelectionProvenance {
+  fieldKey: string;
+  pipelinePath: FieldPipelinePath;
+  chunkIndex: number | null;
+  clauseCategory: string | null;
+  /** Raw CandidateDecision from candidate-decision.ts's
+   *  evaluateCandidateForField ("accept" | "reject" | "needs_review" |
+   *  "unconstrained") for the WINNING candidate specifically. */
+  clauseCategoryDecision: string | null;
+  clauseCategoryAllowed: boolean | null;
+  clauseCategoryReasons: string[];
+  mapperScore: number | null;
+  matchedLabels: string[];
+  shapeGuard: FieldGuardDecision;
+  /** Kept deliberately separate from mapperScore/ruleConfidence — a fact-
+   *  ledger LLM's self-reported 0-1 confidence is not the same scale as a
+   *  rule-extractor's hardcoded 0.88/0.92/0.98 or the mapper's integer
+   *  keyword score. This Micro-step does not compute a blended
+   *  "finalConfidence"; that conflation is exactly what the original audit
+   *  flagged as a gap (Section 11), not something to reproduce here. */
+  modelConfidence: number | null;
+  ruleConfidence: number | null;
+  validationStatus: "accepted" | "rejected" | "warning" | "not_run" | "unknown";
+  selected: FieldCandidateSummary;
+  /** Capped at 5 — see CANDIDATE_LIST_MAX_LENGTH in fact-field-mapper.ts. */
+  competingCandidates: FieldCandidateSummary[];
+  /** Capped at 5. */
+  rejectedCandidates: FieldRejectedCandidateSummary[];
+  // Present only when pipelinePath === "derived" (e.g. annual_rent).
+  derivedFromField?: string | null;
+  derivedFromValue?: unknown;
+  parentSourcePath?: string | null;
+  parentValidationStatus?: string | null;
+  parentGenerationId?: string | null;
+  derivationExpression?: string | null;
 }
 
 // ── Approval blockers (backend-only, advisory in this pass) ─────────────────
