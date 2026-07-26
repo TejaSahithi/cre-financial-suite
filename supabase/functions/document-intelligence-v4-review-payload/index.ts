@@ -7,7 +7,7 @@ import { buildCanonicalReviewFieldRegistry } from "../_shared/extraction/documen
 import { buildEnterpriseReviewPayload } from "../_shared/extraction/document-intelligence-v3/enterprise-review-payload.ts";
 import { persistEnterpriseReviewPayload } from "../_shared/extraction/document-intelligence-v3/enterprise-review-persistence.ts";
 import { resolveCanonicalReviewRolloutForOrg } from "../_shared/extraction/document-intelligence-v3/canonical-review-rollout.ts";
-import { isCanonicalApprovalGatingEnabled, isCanonicalHybridEmergencyFallbackEnabled, isDocumentSemanticsV6Enabled, isEnterpriseReviewPayloadV2Enabled, isSemanticFieldSearchV6Enabled } from "../_shared/extraction/document-intelligence-v3/feature-flag.ts";
+import { isCanonicalApprovalGatingEnabled, isDocumentSemanticsV6Enabled, isEnterpriseReviewPayloadV2Enabled, isSemanticFieldSearchV6Enabled } from "../_shared/extraction/document-intelligence-v3/feature-flag.ts";
 import { buildDefinitionRecords, persistDefinitionRecords } from "../_shared/extraction/document-semantics/definitions.ts";
 import { parseCrossReferences } from "../_shared/extraction/document-semantics/cross-reference-parser.ts";
 import { resolveCrossReferences, persistCrossReferences } from "../_shared/extraction/document-semantics/cross-reference-resolver.ts";
@@ -198,15 +198,27 @@ Deno.serve(async (req: Request) => {
     }
 
     const rollout = await resolveCanonicalReviewRolloutForOrg({ supabaseAdmin, orgId, documentFamily: "lease" });
-    const run = await resolveRun({ supabaseAdmin, orgId, runId: parsed.runId, uploadedFileId: parsed.uploadedFileId });
+    let run: Record<string, unknown> | null = null;
+    let runResolutionError: string | null = null;
+    try {
+      run = await resolveRun({ supabaseAdmin, orgId, runId: parsed.runId, uploadedFileId: parsed.uploadedFileId });
+    } catch (resolveError: any) {
+      // resolveRun throws if the underlying v3 tables aren't provisioned in
+      // this environment (e.g. document_intelligence_runs doesn't exist).
+      // That's operationally identical to "no run exists" -- there is
+      // nothing reliable to show from the canonical system either way -- so
+      // degrade to the same graceful no-run response below in every
+      // rollout mode, instead of letting it propagate to an unhandled 500.
+      runResolutionError = resolveError?.message ?? String(resolveError);
+    }
     if (!run) {
       return jsonResponse({
         mode: rollout.mode,
         uiAuthority: "legacy",
         enterpriseReviewPayload: null,
         legacyReviewPayload: null,
-        authorityReadiness: { ready: false, materialMismatchCount: 0, approvalCriticalMismatchCount: 0, canonicalMissingCount: 0, unsupportedFieldCount: 0, reasons: ["no_completed_document_intelligence_run"] },
-        diagnostics: { rollout },
+        authorityReadiness: { ready: false, materialMismatchCount: 0, approvalCriticalMismatchCount: 0, canonicalMissingCount: 0, unsupportedFieldCount: 0, reasons: [runResolutionError ? "document_intelligence_run_resolution_failed" : "no_completed_document_intelligence_run"] },
+        diagnostics: { rollout, runResolutionError },
       });
     }
 
@@ -327,18 +339,22 @@ Deno.serve(async (req: Request) => {
         },
       });
     } catch (buildError: any) {
-      if ((rollout.mode === "shadow" || rollout.mode === "canonical_hybrid") && isCanonicalHybridEmergencyFallbackEnabled()) {
-        return jsonResponse({
-          mode: "legacy",
-          sourceMode: "legacy",
-          uiAuthority: "legacy",
-          enterpriseReviewPayload: null,
-          legacyReviewPayload: uploadedFile.ui_review_payload ?? null,
-          authorityReadiness: { ready: false, reasons: ["canonical_review_payload_build_failed"] },
-          diagnostics: { rollout, emergencyFallback: true, error: buildError?.message ?? String(buildError) },
-        });
-      }
-      throw buildError;
+      // A canonical-payload build failure must never surface as an
+      // unhandled 500 to the reviewer -- the legacy ui_review_payload is
+      // always a safe, available fallback regardless of rollout mode. This
+      // used to be gated to shadow/canonical_hybrid plus an emergency-
+      // fallback flag, which meant a legacy-mode org (the default for any
+      // unconfigured org) had no fallback at all and a build error 500'd
+      // straight through.
+      return jsonResponse({
+        mode: "legacy",
+        sourceMode: "legacy",
+        uiAuthority: "legacy",
+        enterpriseReviewPayload: null,
+        legacyReviewPayload: uploadedFile.ui_review_payload ?? null,
+        authorityReadiness: { ready: false, reasons: ["canonical_review_payload_build_failed"] },
+        diagnostics: { rollout, emergencyFallback: true, originalMode: rollout.mode, error: buildError?.message ?? String(buildError) },
+      });
     }
   } catch (error: any) {
     console.error(`[document-intelligence-v4-review-payload] error: ${error?.message ?? error}`);
