@@ -268,16 +268,35 @@ function looksLikeFieldCompatibleFact(fact: Fact, fieldName: string, reasonsOut?
     if (/^[a-z][a-z\s-]+$/.test(valueText) && !/\b(?:llc|l\.l\.c\.|inc|corp|company|co\.|lp|llp|trust|foundation|partners?|crossing|center|restaurant)\b/i.test(valueText)) {
       return reject(`${fieldName}: value looks like lowercase prose with no entity-suffix/proper-noun token`);
     }
-    if (!/\b(?:party|parties|between|tenant\s+name|landlord\s+name|lessee\s+name|lessor\s+name|herein\s+called|referred\s+to\s+as|called\s+["']?(?:tenant|landlord|lessee|lessor))\b/i.test(sourceText)) {
-      return reject(`${fieldName}: source text has no party-identification framing language`);
-    }
     const expectedRole = fieldName === "tenant_name" ? "tenant|lessee" : "landlord|lessor";
     const oppositeRole = fieldName === "tenant_name" ? "landlord|lessor" : "tenant|lessee";
-    if (!new RegExp(`(?:herein\\s+called|referred\\s+to\\s+as|called)\\s+["']?(?:${expectedRole})\\b|(?:${expectedRole})\\s+name`, "i").test(sourceText)) {
-      return reject(`${fieldName}: source text does not label a party as "${expectedRole.replace("|", "/")}"`);
+    // A bare labelled key-value pair ("Tenant: Justin Cress", "Landlord:
+    // Example Holdings LLC" -- the shape deterministic-candidates.ts produces
+    // from Azure Layout key-value pairs / docling.fields) is itself
+    // sufficient framing: the label IS the role assertion, no additional
+    // "referred to as"/"herein called" sentence is needed. This generalizes
+    // the guard to cover deterministic label/value candidates alongside the
+    // existing full-sentence LLM forms, without loosening anything for those
+    // existing forms. Deliberately tied to THIS fact's own valueText
+    // appearing immediately after the label (not merely "sourceText starts
+    // with this label somewhere") -- a longer multi-field block like
+    // "TENANT: Downtown Bistro LLC By: ... Name: Morgan Reyes" also starts
+    // with "TENANT:" but its value there is "Downtown Bistro LLC", not this
+    // candidate's own value, so it must not spuriously satisfy the guard for
+    // a different fact's value.
+    const escapedValue = escapeRegExp(valueText).replace(/\s+/g, "\\s+");
+    const isLabelledAsExpectedRole = new RegExp(`^\\s*(?:${expectedRole})\\s*[:.]\\s*${escapedValue}\\b`, "i").test(sourceText);
+    const isLabelledAsOppositeRole = new RegExp(`^\\s*(?:${oppositeRole})\\s*[:.]\\s*${escapedValue}\\b`, "i").test(sourceText);
+    if (!isLabelledAsExpectedRole) {
+      if (!/\b(?:party|parties|between|tenant\s+name|landlord\s+name|lessee\s+name|lessor\s+name|herein\s+called|referred\s+to\s+as|called\s+["']?(?:tenant|landlord|lessee|lessor))\b/i.test(sourceText)) {
+        return reject(`${fieldName}: source text has no party-identification framing language`);
+      }
+      if (!new RegExp(`(?:herein\\s+called|referred\\s+to\\s+as|called)\\s+["']?(?:${expectedRole})\\b|(?:${expectedRole})\\s+name`, "i").test(sourceText)) {
+        return reject(`${fieldName}: source text does not label a party as "${expectedRole.replace("|", "/")}"`);
+      }
     }
-    const hasExplicitExpectedRole = valueIsLabeledAsRole(valueText, sourceText, expectedRole);
-    const hasExplicitOppositeRole = valueIsLabeledAsRole(valueText, sourceText, oppositeRole);
+    const hasExplicitExpectedRole = isLabelledAsExpectedRole || valueIsLabeledAsRole(valueText, sourceText, expectedRole);
+    const hasExplicitOppositeRole = isLabelledAsOppositeRole || valueIsLabeledAsRole(valueText, sourceText, oppositeRole);
     if (hasExplicitOppositeRole && !hasExplicitExpectedRole) return reject(`${fieldName}: value is explicitly labeled as the OPPOSITE role ("${oppositeRole.replace("|", "/")}") in the source text`);
   }
 

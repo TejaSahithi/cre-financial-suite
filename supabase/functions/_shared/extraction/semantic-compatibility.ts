@@ -410,6 +410,20 @@ export const FIELD_SEMANTIC_REQUIREMENTS: Record<string, FieldSemanticRule> = {
     requireDateRole: ["expiration"],
     rejectDateRole: ["signature", "execution"],
   },
+  commencement_date: {
+    // Direct fix for "execution dates mapped as commencement dates" -- the
+    // mirror image of expiration_date's own guard above.
+    requireDateRole: ["commencement"],
+    rejectDateRole: ["signature", "execution", "expiration"],
+  },
+  start_date: {
+    requireDateRole: ["commencement"],
+    rejectDateRole: ["signature", "execution", "expiration"],
+  },
+  end_date: {
+    requireDateRole: ["expiration"],
+    rejectDateRole: ["signature", "execution"],
+  },
   broker_name: {
     requirePartyRole: ["broker"],
     custom: (profile, ctx) => {
@@ -473,6 +487,13 @@ export const FIELD_SEMANTIC_REQUIREMENTS: Record<string, FieldSemanticRule> = {
       }
       return { compatible: true };
     },
+  },
+  late_fee_amount: {
+    // Rejects a plausible-looking dollar figure that is actually an address
+    // number, unit count, or other unrelated numeric value picked up near an
+    // unrelated label -- requires the source text to actually be framed as a
+    // late/delinquent-payment penalty, not just any nearby dollar amount.
+    requireMonetaryRole: ["penalty"],
   },
 };
 

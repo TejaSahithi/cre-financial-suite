@@ -106,7 +106,14 @@ Deno.test("runOpenAIFactLedgerPipeline: ENABLE_DOCUMENT_INTELLIGENCE_V3 unset us
     assertEquals(vfl.document_index_fallback_reason, null);
     assertEquals(vfl.evidence_anchors, []);
   } finally {
-    Deno.env.set("ENABLE_DOCUMENT_INTELLIGENCE_V3", "true");
+    // Bug fix: this test explicitly deletes the flag above (line 89) to test
+    // the unset/default behavior -- the teardown must restore that same
+    // "unset" state, not flip it to "true". Setting it true here previously
+    // leaked ENABLE_DOCUMENT_INTELLIGENCE_V3=true for the remainder of any
+    // `deno test` invocation that ran this file before others, silently
+    // changing document-index-v3 resolution (canonical_layout vs
+    // legacy_evidence_index) for every subsequent test in the same process.
+    Deno.env.delete("ENABLE_DOCUMENT_INTELLIGENCE_V3");
   }
 });
 
@@ -236,13 +243,24 @@ Deno.test("runOpenAIFactLedgerPipeline: mocked same-source lease term facts beco
   }
 });
 
-Deno.test("runOpenAIFactLedgerPipeline: processes every generated text chunk by default", async () => {
+Deno.test("runOpenAIFactLedgerPipeline: processes every generated text chunk when adaptive extraction is disabled", async () => {
+  // This test exercises the whole-document chunking path specifically
+  // (extractFactLedger), not the Section-Aware Candidate Router that is now
+  // the default (adaptive-extractor.ts). The fixture below is generic filler
+  // text with no real section headings, so under adaptive routing every
+  // domain would correctly resolve to "not applicable" or need at most one
+  // call each -- a real, intended cost reduction, not a regression. Setting
+  // DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION=true here preserves this test's
+  // original intent: proving the legacy chunk-per-chunk path itself still
+  // works correctly, since it remains the fallback/kill-switch path.
   const previousOpenAIKey = Deno.env.get("OPENAI_API_KEY");
   const previousAzureEndpoint = Deno.env.get("AZURE_OPENAI_ENDPOINT");
   const previousMaxChunks = Deno.env.get("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS");
+  const previousAdaptiveDisabled = Deno.env.get("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION");
   Deno.env.set("OPENAI_API_KEY", "sk-fake-openai-key-for-testing");
   Deno.env.delete("AZURE_OPENAI_ENDPOINT");
   Deno.env.delete("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS");
+  Deno.env.set("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION", "true");
 
   const textBlocks = Array.from({ length: 9 }, (_, index) => {
     const n = index + 1;
@@ -305,17 +323,23 @@ Deno.test("runOpenAIFactLedgerPipeline: processes every generated text chunk by 
     else Deno.env.set("AZURE_OPENAI_ENDPOINT", previousAzureEndpoint);
     if (previousMaxChunks == null) Deno.env.delete("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS");
     else Deno.env.set("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS", previousMaxChunks);
+    if (previousAdaptiveDisabled == null) Deno.env.delete("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION");
+    else Deno.env.set("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION", previousAdaptiveDisabled);
   }
 });
-Deno.test("runOpenAIFactLedgerPipeline: final chunk fact maps through canonical fields into ui_review_payload", async () => {
+Deno.test("runOpenAIFactLedgerPipeline: final chunk fact maps through canonical fields into ui_review_payload (adaptive extraction disabled)", async () => {
+  // Same rationale as the test above -- exercises the legacy whole-document
+  // chunking path explicitly.
   const previousOpenAIKey = Deno.env.get("OPENAI_API_KEY");
   const previousAzureEndpoint = Deno.env.get("AZURE_OPENAI_ENDPOINT");
   const previousMaxChunks = Deno.env.get("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS");
   const previousConcurrency = Deno.env.get("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY");
+  const previousAdaptiveDisabled = Deno.env.get("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION");
   Deno.env.set("OPENAI_API_KEY", "sk-fake-openai-key-for-testing");
   Deno.env.delete("AZURE_OPENAI_ENDPOINT");
   Deno.env.delete("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS");
   Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", "2");
+  Deno.env.set("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION", "true");
 
   const finalSourceText = "Final economic terms. Base Rent: $2,100 per month for the Premises.";
   const textBlocks = Array.from({ length: 10 }, (_, index) => ({
@@ -396,6 +420,7 @@ Deno.test("runOpenAIFactLedgerPipeline: final chunk fact maps through canonical 
     if (previousAzureEndpoint == null) Deno.env.delete("AZURE_OPENAI_ENDPOINT"); else Deno.env.set("AZURE_OPENAI_ENDPOINT", previousAzureEndpoint);
     if (previousMaxChunks == null) Deno.env.delete("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS"); else Deno.env.set("OPENAI_FACT_LEDGER_EMERGENCY_MAX_CHUNKS", previousMaxChunks);
     if (previousConcurrency == null) Deno.env.delete("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY"); else Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", previousConcurrency);
+    if (previousAdaptiveDisabled == null) Deno.env.delete("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION"); else Deno.env.set("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION", previousAdaptiveDisabled);
   }
 });
 
@@ -468,13 +493,17 @@ Deno.test("runOpenAIFactLedgerPipeline: concurrent chunk extraction is determini
   }
 });
 
-Deno.test("runOpenAIFactLedgerPipeline: one failed chunk preserves successful facts and reports partial diagnostics", async () => {
+Deno.test("runOpenAIFactLedgerPipeline: one failed chunk preserves successful facts and reports partial diagnostics (adaptive extraction disabled)", async () => {
+  // Chunk-level partial-failure diagnostics are specific to the legacy
+  // whole-document chunking path; exercised explicitly via the kill switch.
   const previousOpenAIKey = Deno.env.get("OPENAI_API_KEY");
   const previousAzureEndpoint = Deno.env.get("AZURE_OPENAI_ENDPOINT");
   const previousConcurrency = Deno.env.get("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY");
+  const previousAdaptiveDisabled = Deno.env.get("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION");
   Deno.env.set("OPENAI_API_KEY", "sk-fake-openai-key-for-testing");
   Deno.env.delete("AZURE_OPENAI_ENDPOINT");
   Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", "2");
+  Deno.env.set("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION", "true");
 
   const rentSourceText = "Base Rent shall be $2,100 per month.";
   const textBlocks = [
@@ -521,17 +550,23 @@ Deno.test("runOpenAIFactLedgerPipeline: one failed chunk preserves successful fa
     if (previousOpenAIKey == null) Deno.env.delete("OPENAI_API_KEY"); else Deno.env.set("OPENAI_API_KEY", previousOpenAIKey);
     if (previousAzureEndpoint == null) Deno.env.delete("AZURE_OPENAI_ENDPOINT"); else Deno.env.set("AZURE_OPENAI_ENDPOINT", previousAzureEndpoint);
     if (previousConcurrency == null) Deno.env.delete("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY"); else Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", previousConcurrency);
+    if (previousAdaptiveDisabled == null) Deno.env.delete("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION"); else Deno.env.set("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION", previousAdaptiveDisabled);
   }
 });
-Deno.test("runOpenAIFactLedgerPipeline: execution budget guard pauses with continuation diagnostics after a completed batch", async () => {
+Deno.test("runOpenAIFactLedgerPipeline: execution budget guard pauses with continuation diagnostics after a completed batch (adaptive extraction disabled)", async () => {
+  // Chunk-batch execution-budget pausing/continuation is specific to the
+  // legacy whole-document chunking path; exercised explicitly via the kill
+  // switch.
   const previousOpenAIKey = Deno.env.get("OPENAI_API_KEY");
   const previousAzureEndpoint = Deno.env.get("AZURE_OPENAI_ENDPOINT");
   const previousConcurrency = Deno.env.get("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY");
   const previousReserve = Deno.env.get("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS");
+  const previousAdaptiveDisabled = Deno.env.get("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION");
   Deno.env.set("OPENAI_API_KEY", "sk-fake-openai-key-for-testing");
   Deno.env.delete("AZURE_OPENAI_ENDPOINT");
   Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", "1");
   Deno.env.set("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS", "60000");
+  Deno.env.set("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION", "true");
 
   const firstSourceText = "Base Rent: $2,100 per month.";
   const textBlocks = [
@@ -584,17 +619,25 @@ Deno.test("runOpenAIFactLedgerPipeline: execution budget guard pauses with conti
     if (previousAzureEndpoint == null) Deno.env.delete("AZURE_OPENAI_ENDPOINT"); else Deno.env.set("AZURE_OPENAI_ENDPOINT", previousAzureEndpoint);
     if (previousConcurrency == null) Deno.env.delete("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY"); else Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", previousConcurrency);
     if (previousReserve == null) Deno.env.delete("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS"); else Deno.env.set("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS", previousReserve);
+    if (previousAdaptiveDisabled == null) Deno.env.delete("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION"); else Deno.env.set("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION", previousAdaptiveDisabled);
   }
 });
-Deno.test("runOpenAIFactLedgerPipeline: large document resumes from checkpoint and maps prior plus later chunk facts", async () => {
+Deno.test("runOpenAIFactLedgerPipeline: large document resumes from checkpoint and maps prior plus later chunk facts (adaptive extraction disabled)", async () => {
+  // Checkpoint/resume support is specific to the legacy whole-document
+  // chunking path (extractFactLedger); adaptive mode falls back to it
+  // automatically whenever a resume state is provided (see
+  // adaptive-extractor.ts's fallback conditions), but this test exercises
+  // the resume mechanics directly via the kill switch for clarity.
   const previousOpenAIKey = Deno.env.get("OPENAI_API_KEY");
   const previousAzureEndpoint = Deno.env.get("AZURE_OPENAI_ENDPOINT");
   const previousConcurrency = Deno.env.get("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY");
   const previousReserve = Deno.env.get("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS");
+  const previousAdaptiveDisabled = Deno.env.get("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION");
   Deno.env.set("OPENAI_API_KEY", "sk-fake-openai-key-for-testing");
   Deno.env.delete("AZURE_OPENAI_ENDPOINT");
   Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", "1");
   Deno.env.set("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS", "60000");
+  Deno.env.set("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION", "true");
 
   const rentSourceText = "Base Rent: $2,100 per month.";
   const expirationSourceText = "Expiration Date: December 31, 2023.";
@@ -667,6 +710,7 @@ Deno.test("runOpenAIFactLedgerPipeline: large document resumes from checkpoint a
     if (previousAzureEndpoint == null) Deno.env.delete("AZURE_OPENAI_ENDPOINT"); else Deno.env.set("AZURE_OPENAI_ENDPOINT", previousAzureEndpoint);
     if (previousConcurrency == null) Deno.env.delete("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY"); else Deno.env.set("OPENAI_FACT_LEDGER_CHUNK_CONCURRENCY", previousConcurrency);
     if (previousReserve == null) Deno.env.delete("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS"); else Deno.env.set("OPENAI_FACT_LEDGER_DEADLINE_RESERVE_MS", previousReserve);
+    if (previousAdaptiveDisabled == null) Deno.env.delete("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION"); else Deno.env.set("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION", previousAdaptiveDisabled);
   }
 });
 

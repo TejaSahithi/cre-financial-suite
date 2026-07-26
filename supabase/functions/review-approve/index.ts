@@ -348,6 +348,23 @@ Deno.serve(async (req: Request) => {
     // are out of P0's scope (no review_readiness concept applies to them)
     // and keep the original setStatus("approved") path unchanged.
     if (isLeaseModule(fileRecord.module_type)) {
+      // Lease Truth Assembly approval-safety gate: block before the DB
+      // finalizer even runs when any field carries an unresolved, genuine
+      // conflict (see findConflictingTruthAssemblyFields above) -- this is
+      // additive to the existing review_readiness gate below, not a
+      // replacement for it.
+      const conflictingFields = findConflictingTruthAssemblyFields(fileRecord);
+      if (conflictingFields.length > 0) {
+        return jsonResponse(
+          {
+            error: true,
+            message: `Cannot approve: ${conflictingFields.length} field(s) have an unresolved conflict between independently-extracted candidates: ${conflictingFields.join(", ")}.`,
+            error_code: "TRUTH_ASSEMBLY_CONFLICT",
+            conflicting_fields: conflictingFields,
+          },
+          422,
+        );
+      }
       const { data: finalizeResult, error: finalizeRpcError } = await supabaseAdmin.rpc(
         "finalize_lease_review_approval",
         {
@@ -804,6 +821,28 @@ function appendAudit(existing: unknown, event: Record<string, unknown>) {
 
 function isLeaseModule(moduleType: string | null | undefined): boolean {
   return moduleType === "leases" || moduleType === "lease";
+}
+
+// Lease Truth Assembly approval-safety gate (bounded, application-layer
+// check -- no DB migration, no change to the existing review_readiness DB
+// gate). A field the canonical publisher (lease-truth-assembly.ts) has
+// explicitly marked "conflicting" (a genuine, evidence-backed disagreement
+// between duplicate-concept candidates, e.g. start_date vs. commencement_date)
+// must block approval rather than silently approving whichever value
+// happened to be displayed.
+function findConflictingTruthAssemblyFields(fileRecord: any): string[] {
+  const records = fileRecord?.ui_review_payload?.records;
+  if (!Array.isArray(records) || records.length === 0) return [];
+  const conflicting = new Set<string>();
+  for (const record of records) {
+    const standardFields = Array.isArray(record?.standard_fields) ? record.standard_fields : [];
+    for (const field of standardFields) {
+      if (field?.truth_assembly_status === "conflicting") {
+        conflicting.add(field.truth_assembly_field_id ?? field.field_key);
+      }
+    }
+  }
+  return [...conflicting];
 }
 
 function getExistingReviewedRows(fileRecord: any): Record<string, unknown>[] {
@@ -2001,4 +2040,5 @@ function humanizeFieldName(fieldName: string): string {
 // Test hook (same pattern as lease-extraction-worker/index.ts's __test__).
 export const __test__ = {
   buildLeaseReviewDraftPayload,
+  findConflictingTruthAssemblyFields,
 };

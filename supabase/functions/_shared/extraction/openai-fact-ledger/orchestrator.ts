@@ -29,6 +29,26 @@ import { snapshotFieldMap } from "../pipeline.ts";
 import { resolveDocumentIndex, enrichFactWithBlockEvidence } from "./document-index-v3.ts";
 import { classifyDocumentProfile } from "./profile-classifier.ts";
 import { extractFactLedger } from "./fact-ledger-extractor.ts";
+import { extractFactLedgerAdaptive } from "./adaptive-extractor.ts";
+
+// Section-Aware Candidate Router: ON by default (the whole point is real
+// cost/accuracy behavior change, not another opt-in side-write sitting next
+// to document-intelligence-v3). DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION is an
+// explicit, fast operator kill switch (no code deploy needed) back to the
+// original whole-document chunking path, for exactly the situations this
+// sandboxed session cannot itself validate against (real Azure/OpenAI
+// traffic). extractFactLedgerAdaptive() itself also falls back to
+// extractFactLedger() per-document whenever adaptive routing cannot
+// confidently apply (no text blocks, resume requested, file-mode requested)
+// -- this flag is a coarser, whole-deployment override on top of that
+// per-document safety net.
+function adaptiveExtractionDisabled(): boolean {
+  try {
+    return String(Deno.env.get("DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION") || "").toLowerCase() === "true";
+  } catch {
+    return false;
+  }
+}
 import { mapFactsToStandardFields } from "./fact-field-mapper.ts";
 import { surfaceDynamicFacts } from "./dynamic-fact-surfacer.ts";
 import { computeProfileApprovalBlockers } from "./approval-blockers.ts";
@@ -169,7 +189,7 @@ export async function runOpenAIFactLedgerPipeline(
       documentSubtype: input.documentSubtype ?? null,
     });
 
-    const factLedger = await extractFactLedger({
+    const extractorArgs = {
       docIndex,
       profile,
       moduleType: input.moduleType,
@@ -181,7 +201,10 @@ export async function runOpenAIFactLedgerPipeline(
       maxChunks: options.maxChunks,
       resume: options.resume,
       onProgress: options.onProgress,
-    });
+    };
+    const factLedger = adaptiveExtractionDisabled()
+      ? await extractFactLedger(extractorArgs)
+      : await extractFactLedgerAdaptive(extractorArgs);
 
     // Phase 6 Task E: when the canonical layout index was actually used,
     // enrich each fact with block-level evidence (never fabricated -- a
@@ -298,6 +321,12 @@ export async function runOpenAIFactLedgerPipeline(
             // built before this change) that doesn't return fieldProvenance
             // at all degrades to an empty object here, never undefined.
             field_provenance: mapped.fieldProvenance ?? {},
+            // Section-Aware Candidate Router instrumentation (adaptive-
+            // extractor.ts) -- per-domain call/skip decisions, escalation
+            // reasons, token estimates, cache hits. `null` when
+            // DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION forced the legacy
+            // whole-document chunking path instead.
+            adaptive_extraction: (factLedger as any).adaptiveInstrumentation ?? null,
             // Phase 6 Task G: diagnostic-only, not read by any business logic.
             document_index_source: indexResolution.indexSource,
             document_index_fallback_reason: indexResolution.fallbackReason,

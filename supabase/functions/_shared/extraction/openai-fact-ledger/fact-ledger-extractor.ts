@@ -148,7 +148,7 @@ function coerceCategory(value: unknown): string {
   return CLAUSE_CATEGORY_VOCAB.includes(type) ? `clause:${type}` : "clause:default";
 }
 
-function parseFactsResponse(raw: unknown): Fact[] {
+export function parseFactsResponse(raw: unknown): Fact[] {
   const arr = Array.isArray(raw) ? raw : Array.isArray((raw as any)?.facts) ? (raw as any).facts : [];
   const facts: Fact[] = [];
   for (const entry of arr) {
@@ -184,7 +184,7 @@ function sortFactsDeterministically(facts: Fact[]): Fact[] {
   return [...facts].sort((a, b) => stableFactKey(a).localeCompare(stableFactKey(b)));
 }
 
-function dedupeFacts(facts: Fact[]): Fact[] {
+export function dedupeFacts(facts: Fact[]): Fact[] {
   const seen = new Set<string>();
   const result: Fact[] = [];
   for (const fact of sortFactsDeterministically(facts)) {

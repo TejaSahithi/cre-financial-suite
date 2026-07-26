@@ -50,6 +50,7 @@ import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/t
 import { resolveExtractionRunId, withExtractionStage } from "../_shared/extraction/provenance/recorder.ts";
 import type { StageHandle } from "../_shared/extraction/provenance/types.ts";
 import { EXTRACTION_CONTRACT_VERSION } from "../_shared/extraction/contract-version.ts";
+import { assembleCanonicalFields, publishIdFor, LEASE_TRUTH_ASSEMBLY_VERSION } from "../_shared/extraction/lease-truth-assembly.ts";
 import {
   buildBlockedReviewPayload,
   buildPipelineMetadata,
@@ -1051,6 +1052,22 @@ function buildMinimalReviewPayload(opts: {
   // already useful for review before the deferred "enrich" pass ever runs.
   const extractionDebug = (result.metadata as any)?.extractionDebug ?? {};
   const mergedFieldSources = (extractionDebug.merged_field_sources ?? {}) as Record<string, any>;
+  // Lease Truth Assembly: the ONE canonical publication layer (see
+  // lease-truth-assembly.ts). Consumes the exact same merged_field_sources
+  // both pipelines already produce identically, resolves true aliases and
+  // duplicate-concept pairs (e.g. start_date/commencement_date,
+  // tax_responsibility/responsibility_taxes) into one canonical identity per
+  // legal concept, validates obligation direction / term-date order / rent
+  // arithmetic, and caps confidence by the weakest critical component. Its
+  // result below OVERRIDES the per-field value/status/confidence this
+  // function would otherwise compute independently for every schema field
+  // that participates in a tracked canonical concept -- this is what makes
+  // it authoritative rather than an ignored side artifact.
+  const canonicalFields = assembleCanonicalFields({
+    rows: result.rows as Array<Record<string, unknown>>,
+    extractionDebug,
+    moduleType: extractionModuleType,
+  }).canonicalFields;
   const llmReturnedFieldDetails = (extractionDebug.llm_returned_field_details ?? {}) as Record<string, any>;
   const openaiFactLedgerDebug = (extractionDebug as any)?.openai_fact_ledger ?? (extractionDebug as any)?.vertex_fact_ledger ?? null;
   const factLedgerDynamicItems = Array.isArray(openaiFactLedgerDebug?.dynamic_items)
@@ -1078,22 +1095,46 @@ function buildMinimalReviewPayload(opts: {
     const rowConfidence = normalizeConfidence(r.confidence_score ?? result.metadata?.avgConfidence) ?? avgConfidence;
 
     const standardFields = schemaEntries.map(([fieldKey, def]) => {
-      const value = cleanPartyAddressValue(fieldKey, values[fieldKey] ?? null);
+      // Lease Truth Assembly override: when this field participates in a
+      // tracked canonical concept, its reconciled value/status/confidence
+      // takes precedence over this function's own independent per-field
+      // computation below -- this is what makes Lease Truth Assembly the
+      // authoritative publisher rather than a debug-only side artifact. A
+      // "not_stated" canonical result (concept never had a candidate at all)
+      // falls through to the existing logic unchanged.
+      const canonicalPublishId = publishIdFor(fieldKey);
+      const canonicalResult = canonicalFields[canonicalPublishId];
+      const canonicalActive = !!canonicalResult && canonicalResult.status !== "not_stated";
+
+      const rawValue = cleanPartyAddressValue(fieldKey, values[fieldKey] ?? null);
+      const value = canonicalActive ? canonicalResult.value : rawValue;
       const debugEvidence = mergedFieldSources[fieldKey] ?? llmReturnedFieldDetails[fieldKey] ?? null;
-      const sourceText = debugEvidence?.source_text ?? null;
-      const sourcePage = debugEvidence?.source_page ?? null;
+      const sourceText = canonicalActive ? (canonicalResult.sourceText ?? null) : (debugEvidence?.source_text ?? null);
+      const sourcePage = canonicalActive ? (canonicalResult.sourcePage ?? null) : (debugEvidence?.source_page ?? null);
       const hasEvidence = !!(sourceText || sourcePage != null);
       const serverExtractionStatus = String(debugEvidence?.canonical_status ?? debugEvidence?.extraction_status ?? "").toLowerCase();
       const serverCandidates = Array.isArray(debugEvidence?.candidates) ? debugEvidence.candidates : [];
       const serverConflictCandidates = Array.isArray(debugEvidence?.conflict_candidates) ? debugEvidence.conflict_candidates : [];
       const serverConflictCandidateIds = Array.isArray(debugEvidence?.conflict_candidate_ids) ? debugEvidence.conflict_candidate_ids : serverConflictCandidates;
       const effectiveConfidence =
+        (canonicalActive ? normalizeConfidence(canonicalResult.confidenceComponents.final) : null) ??
         normalizeConfidence(fieldConfidences[fieldKey]) ??
         normalizeConfidence(debugEvidence?.confidence) ??
         rowConfidence;
 
       let status: string;
-      if (serverExtractionStatus === "conflict" || serverExtractionStatus === "conflict_detected") {
+      if (canonicalActive && canonicalResult.status === "conflicting") {
+        // A genuine, evidence-backed disagreement between duplicate-concept
+        // candidates (e.g. start_date vs. commencement_date) -- never
+        // silently picked, always surfaced for review.
+        status = "conflict_detected";
+      } else if (canonicalActive && canonicalResult.status === "needs_review") {
+        // Semantic incompatibility, obligation-direction mismatch, or a
+        // cross-field validation failure (term-date order, rent arithmetic)
+        // -- this is the direct fix for values that used to display at
+        // 95-99% confidence despite being semantically invalid.
+        status = "needs_review";
+      } else if (serverExtractionStatus === "conflict" || serverExtractionStatus === "conflict_detected") {
         status = "conflict_detected";
       } else if (value == null || value === "") {
         status = "missing";
@@ -1108,7 +1149,7 @@ function buildMinimalReviewPayload(opts: {
         status = "pending_enrichment";
       }
 
-      return buildReviewField({
+      const reviewField = buildReviewField({
         recordIndex: index,
         fieldKey,
         value,
@@ -1125,11 +1166,23 @@ function buildMinimalReviewPayload(opts: {
         conflictCandidateIds: serverConflictCandidateIds,
         canonicalStatus: debugEvidence?.canonical_status ?? null,
         resolutionState: debugEvidence?.resolution_state ?? null,
-        requiresReview: debugEvidence?.requires_review ?? undefined,
+        requiresReview: canonicalActive && (canonicalResult.status === "needs_review" || canonicalResult.status === "conflicting")
+          ? true
+          : (debugEvidence?.requires_review ?? undefined),
         decision: debugEvidence?.decision ?? null,
         status,
         editable: true,
       });
+      // Additive transparency fields -- new keys only, do not shadow any
+      // existing field on reviewField -- so every downstream consumer that
+      // doesn't yet know about Lease Truth Assembly keeps working unchanged.
+      return {
+        ...reviewField,
+        truth_assembly_field_id: canonicalPublishId,
+        truth_assembly_status: canonicalActive ? canonicalResult.status : null,
+        truth_assembly_validation_results: canonicalActive ? canonicalResult.validationResults : [],
+        truth_assembly_version: canonicalActive ? LEASE_TRUTH_ASSEMBLY_VERSION : null,
+      };
     });
 
     const duplicateCanonicalFields = findDuplicateCanonicalReviewFields(standardFields);
@@ -1261,8 +1314,37 @@ function buildReviewPayload(opts: {
   // openai_fact_ledger diagnostics (undefined for legacy_hybrid — both
   // spreads below become no-ops, preserving existing behavior exactly).
   const openaiFactLedgerDebug = (reviewExtractionDebug as any)?.openai_fact_ledger ?? (reviewExtractionDebug as any)?.vertex_fact_ledger ?? null;
+  // Lease Truth Assembly: the ONE canonical publication layer (see
+  // lease-truth-assembly.ts). Computed HERE, before buildLeaseWorkflowAbstraction
+  // runs, and used to build "effective rows" below -- buildLeaseWorkflowAbstraction's
+  // own leaseFields (workflow_output.lease_fields) independently re-derives
+  // values from the raw row via buildLeaseFieldMap(), and the frontend's
+  // display-mode fallback hierarchy checks workflow_output.lease_fields
+  // BEFORE standard_fields/fields -- so overriding only standard_fields
+  // (below) would leave this earlier, higher-priority fallback source
+  // showing an un-reconciled value whenever it has its own evidence,
+  // silently defeating the whole point of a single canonical publisher.
+  // Feeding buildLeaseWorkflowAbstraction an already-reconciled row is what
+  // makes Lease Truth Assembly authoritative for BOTH payload shapes from
+  // one computation, rather than needing a second copy of its logic inside
+  // lease-workflow.ts.
+  const truthAssemblyCanonicalFields = assembleCanonicalFields({
+    rows: result.rows as Array<Record<string, unknown>>,
+    extractionDebug: reviewExtractionDebug,
+    moduleType: extractionModuleType,
+  }).canonicalFields;
+  const truthAssemblyEffectiveRows = result.rows.map((row) => {
+    const effective: Record<string, unknown> = { ...row };
+    for (const [fieldKey] of schemaEntries) {
+      const publishId = publishIdFor(fieldKey);
+      const canonicalResult = truthAssemblyCanonicalFields[publishId];
+      if (!canonicalResult || canonicalResult.status === "not_stated") continue;
+      effective[fieldKey] = canonicalResult.status === "conflicting" ? null : canonicalResult.value;
+    }
+    return effective;
+  });
   const workflowOutputs = extractionModuleType === "lease"
-    ? result.rows.map((row, rowIndex) =>
+    ? truthAssemblyEffectiveRows.map((row, rowIndex) =>
       buildLeaseWorkflowAbstraction({
         row,
         doclingRaw: doclingRaw ?? null,
@@ -1443,19 +1525,48 @@ function buildReviewPayload(opts: {
             : workflowStatus === "manual_required"
               ? "manual_required"
               : inferredStatus;
-      return buildReviewField({
+
+      // Lease Truth Assembly override -- applied LAST, after every existing
+      // fallback/recovery heuristic above has already computed its own best
+      // value/status/confidence, exactly mirroring the override in
+      // buildMinimalReviewPayload. A "not_stated" canonical result (this
+      // concept never had ANY candidate) leaves all of the above untouched.
+      const truthAssemblyPublishId = publishIdFor(fieldKey);
+      const truthAssemblyResult = truthAssemblyCanonicalFields[truthAssemblyPublishId];
+      const truthAssemblyActive = !!truthAssemblyResult && truthAssemblyResult.status !== "not_stated";
+      const effectiveValue = truthAssemblyActive ? truthAssemblyResult.value : value;
+      const effectiveSourceText = truthAssemblyActive && truthAssemblyResult.sourceText != null ? truthAssemblyResult.sourceText : mergedSourceText;
+      const effectiveSourcePage = truthAssemblyActive && truthAssemblyResult.sourcePage != null ? truthAssemblyResult.sourcePage : mergedSourcePage;
+      const effectiveFieldConfidence = truthAssemblyActive
+        ? (normalizeConfidence(truthAssemblyResult.confidenceComponents.final) ?? effectiveConfidence)
+        : effectiveConfidence;
+      const truthAssemblyHasOwnEvidence = truthAssemblyActive && (truthAssemblyResult.sourceText != null || truthAssemblyResult.sourcePage != null);
+      const effectiveStatus =
+        truthAssemblyActive && truthAssemblyResult.status === "conflicting" ? "conflict_detected"
+        : truthAssemblyActive && truthAssemblyResult.status === "needs_review" ? "needs_review"
+        // A canonical "verified"/"derived_verified" result with its OWN
+        // evidence is authoritative on its own terms -- it must not be
+        // downgraded to missing_source_evidence merely because THIS
+        // function's separate, row-internal (_field_evidence-based) evidence
+        // lookup happens to disagree with what Lease Truth Assembly already
+        // resolved from the shared merged_field_sources evidence.
+        : truthAssemblyHasOwnEvidence && truthAssemblyResult.status === "derived_verified" ? "calculated"
+        : truthAssemblyHasOwnEvidence && truthAssemblyResult.status === "verified" ? "extracted"
+        : finalStatus;
+
+      const truthAssemblyReviewField = buildReviewField({
         recordIndex: index,
         fieldKey,
-        value,
-        confidence: effectiveConfidence,
+        value: effectiveValue,
+        confidence: effectiveFieldConfidence,
         source: fieldSources[fieldKey] ?? source,
         isStandard: true,
         required: !!def.required,
         fieldType,
         description: def.description,
         evidence: {
-          page_number: mergedSourcePage,
-          source_clause: mergedSourceText,
+          page_number: effectiveSourcePage,
+          source_clause: effectiveSourceText,
           source_quality: selectedEvidence?.source === "fallback" ? fallbackEvidence?.source_quality ?? null : null,
           matched_needle: selectedEvidence?.source === "fallback" ? fallbackEvidence?.matched_needle ?? null : null,
           // Release 1: prefer lease-workflow.ts's derivation_trace (richer,
@@ -1478,12 +1589,23 @@ function buildReviewPayload(opts: {
         conflictCandidateIds: serverConflictCandidateIds,
         canonicalStatus: llmEvidence?.canonical_status ?? null,
         resolutionState: llmEvidence?.resolution_state ?? null,
-        requiresReview: llmEvidence?.requires_review ?? undefined,
+        requiresReview: truthAssemblyActive && (truthAssemblyResult.status === "needs_review" || truthAssemblyResult.status === "conflicting")
+          ? true
+          : (llmEvidence?.requires_review ?? undefined),
         decision: llmEvidence?.decision ?? null,
-        status: finalStatus,
+        status: effectiveStatus,
         editable: workflowField?.editable ?? true,
         validationErrors: Array.isArray(workflowField?.validation_errors) ? workflowField.validation_errors : [],
       });
+      // Additive transparency fields -- new keys only, mirrors
+      // buildMinimalReviewPayload's own equivalent addition.
+      return {
+        ...truthAssemblyReviewField,
+        truth_assembly_field_id: truthAssemblyPublishId,
+        truth_assembly_status: truthAssemblyActive ? truthAssemblyResult.status : null,
+        truth_assembly_validation_results: truthAssemblyActive ? truthAssemblyResult.validationResults : [],
+        truth_assembly_version: truthAssemblyActive ? LEASE_TRUTH_ASSEMBLY_VERSION : null,
+      };
     });
     const customFieldsFromRows = Object.entries(values)
       .filter(([key, val]) => {
