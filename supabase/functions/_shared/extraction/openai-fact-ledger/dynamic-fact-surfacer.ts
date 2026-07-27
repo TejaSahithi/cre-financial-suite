@@ -13,7 +13,9 @@
 import { createDocumentItem } from "../lease-workflow.ts";
 import { LEASE_FIELD_CONTRACT } from "../field-contract.ts";
 import { normalizeForPageMatch } from "../evidence-index.ts";
+import { checkFieldSemanticCompatibility, inferSemanticProfile } from "../semantic-compatibility.ts";
 import type { CanonicalDocumentIndex, DocumentProfile, Fact } from "./types.ts";
+import type { ExtractedField } from "../types.ts";
 
 function titleizeCategory(category: string): string {
   const type = category.startsWith("clause:") ? category.slice("clause:".length) : category;
@@ -67,6 +69,27 @@ function businessAreaForFact(category: string): string {
   return BUSINESS_AREA_BY_FACT_CATEGORY[categoryKey(category)] || "clause_records";
 }
 
+function routeFactToFieldOrArea(fact: Fact): { targetField: string | null; businessArea: string } {
+  const categoryKeyStr = categoryKey(fact.category);
+  const baseArea = businessAreaForFact(categoryKeyStr);
+
+  const valueText = String(fact.value ?? "").trim().toLowerCase();
+  const isResponsibilityValue = /^(tenant|landlord|shared|landlord_with_cap|both|included|gross|full\s+service)$/i.test(valueText) && !/,.*(?:cam|insurance|maintenance|janitorial|utility|utilities)/i.test(valueText);
+
+  if (isResponsibilityValue) {
+    const CATEGORY_TO_RESPONSIBILITY_FIELD: Record<string, string> = {
+      "taxes": "responsibility_taxes",
+      "insurance": "insurance_responsibility", 
+      "utilities": "responsibility_utilities",
+      "repairs_maintenance": "responsibility_repairs",
+    };
+    const targetField = CATEGORY_TO_RESPONSIBILITY_FIELD[categoryKeyStr];
+    if (targetField) return { targetField, businessArea: baseArea };
+  }
+  
+  return { targetField: null, businessArea: baseArea };
+}
+
 function isDefinitionLikeFact(fact: Fact): boolean {
   const source = normalizeForPageMatch(fact.sourceText);
   const value = normalizeForPageMatch(String(fact.value ?? ""));
@@ -74,7 +97,7 @@ function isDefinitionLikeFact(fact: Fact): boolean {
     (/^[a-z_ ]{2,40}$/.test(value) && /\b(?:control|affiliate|business days|environmental laws|hazardous materials)\b/.test(source));
 }
 
-function shouldSuppressDynamicFact(fact: Fact, possibleCanonicalMatch: string | null): boolean {
+function shouldSuppressDynamicFact(fact: Fact, possibleCanonicalMatch: string | null, currentMappedFields: Record<string, ExtractedField>): boolean {
   const key = categoryKey(fact.category);
   if (SUPPRESSED_DYNAMIC_CATEGORIES.has(key)) return true;
   if (isDefinitionLikeFact(fact)) return true;
@@ -82,7 +105,10 @@ function shouldSuppressDynamicFact(fact: Fact, possibleCanonicalMatch: string | 
   // Business-domain facts should still surface in their tabs when they fail
   // canonical mapping. A generic word like "tenant" is only a near-miss
   // diagnostic; it should not hide an expense/CAM/tax/insurance finding.
-  if (possibleCanonicalMatch && businessAreaForFact(key) === "clause_records") return true;
+  if (possibleCanonicalMatch && businessAreaForFact(key) === "clause_records") {
+    const fieldIsAlreadyPopulated = currentMappedFields[possibleCanonicalMatch]?.value != null;
+    return fieldIsAlreadyPopulated;
+  }
   return false;
 }
 function findPossibleCanonicalMatch(fact: Fact): string | null {
@@ -104,8 +130,9 @@ export function surfaceDynamicFacts(args: {
   unmappedFacts: Fact[];
   docIndex: CanonicalDocumentIndex;
   documentProfile: DocumentProfile;
+  currentMappedFields: Record<string, ExtractedField>;
 }): any[] {
-  const { unmappedFacts, documentProfile } = args;
+  const { unmappedFacts, documentProfile, currentMappedFields } = args;
   const seen = new Set<string>();
   const items: any[] = [];
 
@@ -126,7 +153,9 @@ export function surfaceDynamicFacts(args: {
         `— fact-field-mapper.ts's label score didn't clear the threshold for this field`,
       );
     }
-    if (shouldSuppressDynamicFact(fact, possibleCanonicalMatch)) continue;
+    if (shouldSuppressDynamicFact(fact, possibleCanonicalMatch, currentMappedFields)) continue;
+
+    const { targetField, businessArea } = routeFactToFieldOrArea(fact);
 
     // createDocumentItem() returns a fixed-shape object (only reads specific
     // named args keys) — the diagnostic tag below is added onto its RETURN
@@ -135,7 +164,7 @@ export function surfaceDynamicFacts(args: {
       item_id: `openai_fact:${fact.category}:${dedupeKey.slice(0, 60)}`,
       document_profile: documentProfile,
       item_type: fact.category,
-      business_area: businessAreaForFact(fact.category),
+      business_area: businessArea,
       label: titleizeCategory(fact.category),
       value: fact.value,
       normalized_value: fact.value,
@@ -156,4 +185,49 @@ export function surfaceDynamicFacts(args: {
   }
 
   return items;
+}
+
+export function rescueNearMissedFacts(args: {
+  unmappedFacts: Fact[];
+  currentFields: Record<string, ExtractedField>;
+}): Record<string, ExtractedField> {
+  const { unmappedFacts, currentFields } = args;
+  const rescued: Record<string, ExtractedField> = {};
+  
+  for (const fact of unmappedFacts) {
+    let target = findPossibleCanonicalMatch(fact);
+    
+    // Also try business-area-based routing for short responsibility answers (R2)
+    if (!target) {
+      const { targetField } = routeFactToFieldOrArea(fact);
+      target = targetField;
+    }
+    
+    if (!target) continue;
+    
+    // Only rescue if the target field is currently empty
+    const existingField = currentFields[target];
+    if (existingField?.value != null) continue;
+    
+    // Run semantic compatibility check
+    const profile = inferSemanticProfile({ value: fact.value, sourceText: fact.sourceText, category: fact.category ?? null });
+    const semanticResult = checkFieldSemanticCompatibility(profile, target, { value: fact.value, sourceText: fact.sourceText, category: fact.category ?? null });
+    if (!semanticResult.compatible) continue;
+    
+    // Rescue: assign to the schema field with a lower confidence
+    rescued[target] = {
+      value: fact.value,
+      source: "llm",
+      confidence: Math.min(fact.confidence ?? 0.5, 0.65), // cap at 0.65
+      sourceText: fact.sourceText,
+      sourcePage: fact.sourcePage,
+      extractionStatus: "extracted",
+      evidence_type: "rescued_near_miss",
+      requires_review: true,
+    };
+    
+    console.log(`[near-miss-rescue] rescued fact → ${target} (was unmapped)`);
+  }
+  
+  return rescued;
 }

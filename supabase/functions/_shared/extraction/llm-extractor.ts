@@ -27,6 +27,7 @@ import { getSchema, getFieldGroups, type FieldDef, type FieldGroup } from "./sch
 import { buildRelevantSnippet, chunkDocument } from "./chunker.ts";
 import { callLLMJSON, isLLMProviderConfigured } from "../llm.ts";
 import { callLLMJSONWithProvenance } from "./provenance/transport/openai.ts";
+import { LEASE_FIELD_CONTRACT } from "./field-contract.ts";
 
 // -- System prompt - short, strict, no room for hallucination -----------------
 
@@ -381,14 +382,42 @@ function parseLLMResponse(raw: unknown, expectedFields: string[]): Record<string
   if (!raw || typeof raw !== "object") return null;
   const obj = raw as Record<string, unknown>;
   const result: Record<string, LlmFieldEvidence> = {};
+  
+  const aliasToCanonical: Record<string, string> = {};
+  for (const entry of LEASE_FIELD_CONTRACT) {
+    for (const alias of entry.aliases) {
+      aliasToCanonical[alias.toLowerCase()] = entry.canonicalKey;
+    }
+  }
+  
   for (const field of expectedFields) {
     result[field] = normalizeLlmEvidence(obj[field]);
   }
+  
+  for (const [key, value] of Object.entries(obj)) {
+    const canonical = aliasToCanonical[key.toLowerCase()];
+    if (canonical && expectedFields.includes(canonical) && result[canonical]?.value == null) {
+      const evidence = normalizeLlmEvidence(value);
+      if (evidence.value != null) {
+        result[canonical] = evidence;
+        console.log(`[llm-extractor] alias rescue: ${key} → ${canonical}`);
+      }
+    }
+  }
+  
   return result;
 }
 
 function parseLLMArrayResponse(raw: unknown, expectedFields: string[]): Array<Record<string, LlmFieldEvidence>> {
   const arr = Array.isArray(raw) ? raw : [raw];
+  
+  const aliasToCanonical: Record<string, string> = {};
+  for (const entry of LEASE_FIELD_CONTRACT) {
+    for (const alias of entry.aliases) {
+      aliasToCanonical[alias.toLowerCase()] = entry.canonicalKey;
+    }
+  }
+  
   return arr
     .filter((item) => item && typeof item === "object")
     .map((item) => {
@@ -397,6 +426,17 @@ function parseLLMArrayResponse(raw: unknown, expectedFields: string[]): Array<Re
       for (const field of expectedFields) {
         result[field] = normalizeLlmEvidence(obj[field]);
       }
+      
+      for (const [key, value] of Object.entries(obj)) {
+        const canonical = aliasToCanonical[key.toLowerCase()];
+        if (canonical && expectedFields.includes(canonical) && result[canonical]?.value == null) {
+          const evidence = normalizeLlmEvidence(value);
+          if (evidence.value != null) {
+            result[canonical] = evidence;
+          }
+        }
+      }
+      
       return result;
     });
 }

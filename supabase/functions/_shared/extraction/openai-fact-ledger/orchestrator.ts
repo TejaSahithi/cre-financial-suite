@@ -50,7 +50,7 @@ function adaptiveExtractionDisabled(): boolean {
   }
 }
 import { mapFactsToStandardFields } from "./fact-field-mapper.ts";
-import { surfaceDynamicFacts } from "./dynamic-fact-surfacer.ts";
+import { surfaceDynamicFacts, rescueNearMissedFacts } from "./dynamic-fact-surfacer.ts";
 import { computeProfileApprovalBlockers } from "./approval-blockers.ts";
 import type { OpenAIFactLedgerInput, OpenAIFactLedgerOptions } from "./types.ts";
 import { LLMProviderError } from "../../llm.ts";
@@ -224,10 +224,22 @@ export async function runOpenAIFactLedgerPipeline(
       moduleType: input.moduleType,
     });
 
+    const currentFields = mapped.records[0]?.fields || {};
+    const rescued = rescueNearMissedFacts({
+      unmappedFacts: mapped.unmappedFacts,
+      currentFields,
+    });
+    
+    // Merge rescued fields into the record
+    for (const [key, value] of Object.entries(rescued)) {
+      currentFields[key] = value as any;
+    }
+
     const dynamicItems = surfaceDynamicFacts({
       unmappedFacts: mapped.unmappedFacts,
       docIndex,
       documentProfile: profile.documentProfile,
+      currentMappedFields: currentFields,
     });
 
     const approvalBlockers = computeProfileApprovalBlockers({
