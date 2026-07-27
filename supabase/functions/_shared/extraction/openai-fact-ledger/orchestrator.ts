@@ -51,6 +51,7 @@ function adaptiveExtractionDisabled(): boolean {
 }
 import { mapFactsToStandardFields } from "./fact-field-mapper.ts";
 import { surfaceDynamicFacts, rescueNearMissedFacts } from "./dynamic-fact-surfacer.ts";
+import { validateFieldAssignments, applyValidationCorrections } from "./llm-field-validator.ts";
 import { computeProfileApprovalBlockers } from "./approval-blockers.ts";
 import type { OpenAIFactLedgerInput, OpenAIFactLedgerOptions } from "./types.ts";
 import { LLMProviderError } from "../../llm.ts";
@@ -235,6 +236,33 @@ export async function runOpenAIFactLedgerPipeline(
       currentFields[key] = value as any;
     }
 
+    // ── LLM Validation Layer ─────────────────────────────────────────────
+    // After the TypeScript router (keyword-based) and near-miss rescue have
+    // done their best, ask the LLM to validate assignments and fill gaps.
+    // This is the semantic comprehension step that keyword matching cannot
+    // do — the LLM reads the schema descriptions and source text to judge
+    // whether each value is in the right field.
+    const validationResult = await validateFieldAssignments({
+      records: mapped.records,
+      unmappedFacts: mapped.unmappedFacts,
+      moduleType: input.moduleType,
+    });
+
+    let validationApplied = 0;
+    let validationSkipped = 0;
+    let validationDetails: string[] = [];
+
+    if (validationResult.llmCallSucceeded && validationResult.corrections.length > 0) {
+      const result = applyValidationCorrections({
+        records: mapped.records,
+        corrections: validationResult.corrections,
+        moduleType: input.moduleType,
+      });
+      validationApplied = result.applied;
+      validationSkipped = result.skipped;
+      validationDetails = result.details;
+    }
+
     const dynamicItems = surfaceDynamicFacts({
       unmappedFacts: mapped.unmappedFacts,
       docIndex,
@@ -339,6 +367,19 @@ export async function runOpenAIFactLedgerPipeline(
             // DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION forced the legacy
             // whole-document chunking path instead.
             adaptive_extraction: (factLedger as any).adaptiveInstrumentation ?? null,
+            // LLM validation layer diagnostics — how many corrections the
+            // semantic validation pass made on top of the TS router's output.
+            llm_validation: {
+              call_succeeded: validationResult.llmCallSucceeded,
+              corrections_proposed: validationResult.corrections.length,
+              corrections_applied: validationApplied,
+              corrections_skipped: validationSkipped,
+              model: validationResult.model,
+              prompt_tokens: validationResult.promptTokens,
+              completion_tokens: validationResult.completionTokens,
+              error: validationResult.error,
+              details: validationDetails,
+            },
             // Phase 6 Task G: diagnostic-only, not read by any business logic.
             document_index_source: indexResolution.indexSource,
             document_index_fallback_reason: indexResolution.fallbackReason,
