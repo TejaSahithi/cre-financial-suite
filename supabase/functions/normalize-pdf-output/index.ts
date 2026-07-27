@@ -32,13 +32,39 @@ import { isAzureLayoutOutput } from "../_shared/extraction/extraction-provider.t
 import { getFieldGroups, getSchema, getEvidencePolicyCoverage } from "../_shared/extraction/schemas.ts";
 import { evaluateCandidateForField } from "../_shared/extraction/candidate-decision.ts";
 import { getAuthoritativeFieldValue, normalizeLeaseReviewFieldStatus, resolutionStateForStatus } from "../_shared/extraction/review-status.ts";
-import { buildLeaseWorkflowAbstraction } from "../_shared/extraction/lease-workflow.ts";
+import {
+  buildLeaseWorkflowAbstraction,
+  runLeaseWorkflowStage1Clauses,
+  runLeaseWorkflowStage2Fields,
+  runLeaseWorkflowStage3Items,
+  runLeaseWorkflowStage4Derivation,
+} from "../_shared/extraction/lease-workflow.ts";
+import { checkGenerationStillActive } from "../_shared/extraction/generation-fence.ts";
+import { checkStageInputAgainstLimits } from "../_shared/extraction/enrich-stage-limits.ts";
+import {
+  ENRICH_EVIDENCE_DOMAIN_STAGES,
+  isEnrichBoundedStageName,
+  isFinalEnrichBoundedStage,
+  firstEnrichBoundedStage,
+  type EnrichBoundedStageName,
+} from "../_shared/extraction/enrich-bounded-stage/stage-sequence.ts";
+import {
+  mergeBoundedStageResult,
+  isStageAlreadyCompleted,
+  readBoundedStageResults,
+  STAGE_RESULT_VERSION,
+  type BoundedStageResultEntry,
+} from "../_shared/extraction/enrich-bounded-stage/stage-persistence.ts";
+import { startBoundedStageTelemetry } from "../_shared/extraction/enrich-bounded-stage/telemetry.ts";
+import { getSchemaEntriesForDomain, getSchemaEntriesWithNoDomain, reorderStandardFieldsBySchema, type LlmCallDomain } from "../_shared/extraction/enrich-bounded-stage/domain-fields.ts";
 import { cleanEvidenceSnippet, findPageForSnippet, resolveVerifiedSourcePage } from "../_shared/extraction/evidence-index.ts";
 import { detectFileMagic } from "../_shared/file-magic.ts";
 import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
 import { createLogger } from "../_shared/logger.ts";
 import { computeCoreReady, uploadedFileRowHasMeaningfulValues } from "../_shared/extraction/payload-guard.ts";
 import { enqueueEnrichmentJob } from "../_shared/extraction/enrichment-dispatch.ts";
+import { getEnrichBoundedStageMode } from "../_shared/extraction/enrich-bounded-stage/feature-mode.ts";
+import { enqueueBoundedEnrichStage } from "../_shared/extraction/enrich-bounded-stage/dispatch.ts";
 import { runDocumentIntelligenceV3SideWrite } from "../_shared/extraction/document-intelligence-v3/side-write.ts";
 import { getLeaseClaimsLedgerMode } from "../_shared/extraction/claims/feature-mode.ts";
 import { maybeRunClaimsLedgerForStage } from "../_shared/extraction/claims/claims-pipeline-orchestrator.ts";
@@ -1263,128 +1289,42 @@ function buildMinimalReviewPayload(opts: {
  * Structured so the UI can render a field-by-field grid with source and
  * confidence badges, and so we can diff it after the reviewer edits.
  */
-function buildReviewPayload(opts: {
-  fileId: string;
-  fileName: string;
-  moduleType: string;
-  documentSubtype: string | null;
-  extractionMethod: string | null;
-  reviewRequired: boolean;
-  doclingRaw?: Record<string, unknown> | null;
-  result: {
-    rows: Record<string, unknown>[];
-    method: string;
-    warnings: string[];
-    validationErrors: unknown[];
-    metadata: Record<string, unknown>;
-  };
+/**
+ * Bounded-enrich-refactor extraction of buildReviewPayload's per-field
+ * evidence-verification loop (see FAILED_EXTRACTION_ROOT_CAUSE.md and the
+ * "Bounded Per-Domain Enrich Refactor" plan). Unlike buildLeaseWorkflowAbstraction,
+ * this loop is genuinely a per-field-independent schemaEntries.map(...) --
+ * each iteration only reads fieldKey/def plus row-level closures, never
+ * another field's result -- so it can be restricted to a subset of
+ * schemaEntries (one domain's fields, via field-contract.ts's FieldGroup ->
+ * LlmCallDomain mapping) and still produce identical per-field output to
+ * running it unrestricted. buildReviewPayload below still calls this with
+ * the FULL schemaEntries list, in one invocation, for every existing
+ * caller -- behavior is unchanged. Only the new enrich_evidence_<domain>
+ * bounded-stage handlers call this with a domain-restricted subset.
+ */
+function buildStandardFieldsForEntries(args: {
+  schemaEntries: Array<[string, any]>;
+  index: number;
+  values: Record<string, unknown>;
+  workflowOutput: any;
+  fieldConfidences: Record<string, number>;
+  fieldSources: Record<string, string>;
+  fieldEvidence: Record<string, { source_text?: string | null; source_page?: number | null; extraction_status?: string | null; candidates?: unknown[]; conflict_candidates?: unknown[]; selected_candidate_id?: string | null }>;
+  calculatorDerivationTraces: Record<string, string>;
+  calculatorDerivationSourceFields: Record<string, string[]>;
+  doclingRaw: Record<string, unknown> | null | undefined;
+  extractionModuleType: string;
+  truthAssemblyCanonicalFields: Record<string, any>;
+  source: string;
+  rowConfidence: number | null;
 }) {
-  const { fileId, fileName, moduleType, documentSubtype, extractionMethod, reviewRequired, doclingRaw, result } = opts;
-  const extractionModuleType = toExtractionModuleType(moduleType);
-  const schema = getSchema(extractionModuleType);
-  const schemaEntries = Object.entries(schema)
-    .filter(([, def]) => !def.derived);
-  const schemaKeys = new Set(schemaEntries.map(([key]) => key));
-  const standardAliases = buildStandardAliases(schema);
-  const requiredFields = schemaEntries
-    .filter(([, def]) => def.required)
-    .map(([key]) => key);
-  const avgConfidence = normalizeConfidence(result.metadata?.avgConfidence);
-  const source = sourceFromMethod(extractionMethod ?? result.method);
-  // §7: genuinely unmapped-but-valued LLM keys, built once from the flat/
-  // global pipeline diagnostics (not per-row — a pre-existing limitation of
-  // these two debug fields) and passed only for the first/only row.
-  const reviewExtractionDebug = (result.metadata as any)?.extractionDebug ?? {};
-  const unmappedLlmKeys: string[] = Array.isArray(reviewExtractionDebug.unmapped_llm_keys)
-    ? reviewExtractionDebug.unmapped_llm_keys
-    : [];
-  const llmReturnedFieldDetailsForUnmapped = (reviewExtractionDebug.llm_returned_field_details ?? {}) as Record<string, any>;
-  const unmappedLlmFields = unmappedLlmKeys
-    .map((key) => {
-      const detail = llmReturnedFieldDetailsForUnmapped[key];
-      return {
-        key,
-        value: detail?.value ?? null,
-        sourceText: detail?.source_text ?? null,
-        sourcePage: detail?.source_page ?? null,
-        confidence: detail?.confidence ?? null,
-      };
-    })
-    .filter((f) => f.value != null && f.value !== "");
-  // openai_fact_ledger diagnostics (undefined for legacy_hybrid — both
-  // spreads below become no-ops, preserving existing behavior exactly).
-  const openaiFactLedgerDebug = (reviewExtractionDebug as any)?.openai_fact_ledger ?? (reviewExtractionDebug as any)?.vertex_fact_ledger ?? null;
-  // Lease Truth Assembly: the ONE canonical publication layer (see
-  // lease-truth-assembly.ts). Computed HERE, before buildLeaseWorkflowAbstraction
-  // runs, and used to build "effective rows" below -- buildLeaseWorkflowAbstraction's
-  // own leaseFields (workflow_output.lease_fields) independently re-derives
-  // values from the raw row via buildLeaseFieldMap(), and the frontend's
-  // display-mode fallback hierarchy checks workflow_output.lease_fields
-  // BEFORE standard_fields/fields -- so overriding only standard_fields
-  // (below) would leave this earlier, higher-priority fallback source
-  // showing an un-reconciled value whenever it has its own evidence,
-  // silently defeating the whole point of a single canonical publisher.
-  // Feeding buildLeaseWorkflowAbstraction an already-reconciled row is what
-  // makes Lease Truth Assembly authoritative for BOTH payload shapes from
-  // one computation, rather than needing a second copy of its logic inside
-  // lease-workflow.ts.
-  const truthAssemblyCanonicalFields = assembleCanonicalFields({
-    rows: result.rows as Array<Record<string, unknown>>,
-    extractionDebug: reviewExtractionDebug,
-    moduleType: extractionModuleType,
-  }).canonicalFields;
-  const truthAssemblyEffectiveRows = result.rows.map((row) => {
-    const effective: Record<string, unknown> = { ...row };
-    for (const [fieldKey] of schemaEntries) {
-      const publishId = publishIdFor(fieldKey);
-      const canonicalResult = truthAssemblyCanonicalFields[publishId];
-      if (!canonicalResult || canonicalResult.status === "not_stated") continue;
-      effective[fieldKey] = canonicalResult.status === "conflicting" ? null : canonicalResult.value;
-    }
-    return effective;
-  });
-  const workflowOutputs = extractionModuleType === "lease"
-    ? truthAssemblyEffectiveRows.map((row, rowIndex) =>
-      buildLeaseWorkflowAbstraction({
-        row,
-        doclingRaw: doclingRaw ?? null,
-        documentSubtype,
-        ...(rowIndex === 0 ? { unmappedLlmFields } : {}),
-        ...(openaiFactLedgerDebug?.document_profile ? { documentProfileOverride: openaiFactLedgerDebug.document_profile } : {}),
-        ...(rowIndex === 0 && Array.isArray(openaiFactLedgerDebug?.dynamic_items)
-          ? { factLedgerDynamicItems: openaiFactLedgerDebug.dynamic_items }
-          : {}),
-      })
-    )
-    : [];
-  const rows = result.rows.map((r, index) => {
-    const values = stripInternalKeys(r);
-    if ((moduleType === "leases" || moduleType === "lease") && isBlank(values.notes)) {
-      const camNote = extractCamNoteFromText(doclingRaw);
-      if (camNote) values.notes = camNote;
-    }
-    const fieldConfidences = (r._field_confidences ?? {}) as Record<string, number>;
-    const fieldSources = (r._field_sources ?? {}) as Record<string, string>;
-    const fieldEvidence = (r._field_evidence ?? {}) as Record<string, { source_text?: string | null; source_page?: number | null; extraction_status?: string | null; candidates?: unknown[]; conflict_candidates?: unknown[]; selected_candidate_id?: string | null }>;
-    // Release 1: calculator.ts's Step6 (_shared/extraction/calculator.ts)
-    // computes a real derivation trace for every field it derives (e.g.
-    // "monthly_rent(1470) x 12" for annual_rent), but this was previously
-    // never read here — stripInternalKeys() above only strips `_`-prefixed
-    // keys from `values`, it doesn't delete them from `r`, so the trace was
-    // silently discarded rather than actually lost. Read directly off the
-    // raw row `r`, same pattern as fieldConfidences/fieldSources above.
-    const calculatorDerivationTraces = (r._derivation_traces ?? {}) as Record<string, string>;
-    // Same rationale as calculatorDerivationTraces above: calculator.ts now
-    // also records which input fields fed each derivation (source_field_keys),
-    // read the identical way -- leaseReviewSchema.js's readFieldEvidence()
-    // already expects this shape (entry.evidence?.source_field_keys), it just
-    // never received it for the fields only calculator.ts derives.
-    const calculatorDerivationSourceFields = (r._derivation_source_fields ?? {}) as Record<string, string[]>;
-    const rowConfidence = normalizeConfidence(
-      r.confidence_score ?? result.metadata?.avgConfidence,
-    ) ?? avgConfidence;
-    const workflowOutput = workflowOutputs[index] ?? null;
-    const standardFields = schemaEntries.map(([fieldKey, def]) => {
+  const {
+    schemaEntries, index, values, workflowOutput, fieldConfidences, fieldSources, fieldEvidence,
+    calculatorDerivationTraces, calculatorDerivationSourceFields, doclingRaw, extractionModuleType,
+    truthAssemblyCanonicalFields, source, rowConfidence,
+  } = args;
+  return schemaEntries.map(([fieldKey, def]) => {
       const workflowField = workflowFieldFor(fieldKey, workflowOutput?.lease_fields ?? {});
       const rawValue = values[fieldKey] ?? workflowField?.value ?? null;
       let value = cleanPartyAddressValue(fieldKey, rawValue);
@@ -1606,6 +1546,163 @@ function buildReviewPayload(opts: {
         truth_assembly_validation_results: truthAssemblyActive ? truthAssemblyResult.validationResults : [],
         truth_assembly_version: truthAssemblyActive ? LEASE_TRUTH_ASSEMBLY_VERSION : null,
       };
+  });
+}
+
+function buildReviewPayload(opts: {
+  fileId: string;
+  fileName: string;
+  moduleType: string;
+  documentSubtype: string | null;
+  extractionMethod: string | null;
+  reviewRequired: boolean;
+  doclingRaw?: Record<string, unknown> | null;
+  result: {
+    rows: Record<string, unknown>[];
+    method: string;
+    warnings: string[];
+    validationErrors: unknown[];
+    metadata: Record<string, unknown>;
+  };
+  /**
+   * Bounded-enrich-refactor hook (see FAILED_EXTRACTION_ROOT_CAUSE.md and the
+   * "Bounded Per-Domain Enrich Refactor" plan). When provided, buildReviewPayload
+   * uses this ALREADY-COMPUTED per-row workflow abstraction (pooled from
+   * enrich_clauses/enrich_fields/enrich_items/enrich_derivation's separate,
+   * bounded invocations via runLeaseWorkflowStage4Derivation) instead of
+   * calling buildLeaseWorkflowAbstraction() fresh in this invocation. This is
+   * the ONE integration point that lets enrich_truth_assembly reuse this
+   * entire function (and its ~150-line final-assembly tail) verbatim instead
+   * of duplicating it -- every existing caller that omits this parameter
+   * gets IDENTICAL behavior to before (computes workflowOutputs fresh, as
+   * always). Index-aligned with result.rows.
+   */
+  precomputedWorkflowOutputs?: Array<Record<string, any>> | null;
+  /**
+   * Bounded-enrich-refactor hook, symmetric to precomputedWorkflowOutputs
+   * above. When provided, buildReviewPayload uses this ALREADY-COMPUTED,
+   * per-row standardFields array (pooled from the 5 enrich_evidence_<domain>
+   * stages' separate, bounded invocations of buildStandardFieldsForEntries)
+   * instead of calling buildStandardFieldsForEntries() fresh, unrestricted,
+   * in this invocation. Without this hook, enrich_truth_assembly reusing
+   * buildReviewPayload would silently re-pay the ENTIRE evidence-verification
+   * cost the 5 domain stages were specifically built to bound -- this is
+   * what actually avoids that. Every existing caller that omits this
+   * parameter gets IDENTICAL behavior to before. Index-aligned with result.rows.
+   */
+  precomputedStandardFieldsByRow?: Array<Array<Record<string, any>>> | null;
+}) {
+  const { fileId, fileName, moduleType, documentSubtype, extractionMethod, reviewRequired, doclingRaw, result, precomputedWorkflowOutputs, precomputedStandardFieldsByRow } = opts;
+  const extractionModuleType = toExtractionModuleType(moduleType);
+  const schema = getSchema(extractionModuleType);
+  const schemaEntries = Object.entries(schema)
+    .filter(([, def]) => !def.derived);
+  const schemaKeys = new Set(schemaEntries.map(([key]) => key));
+  const standardAliases = buildStandardAliases(schema);
+  const requiredFields = schemaEntries
+    .filter(([, def]) => def.required)
+    .map(([key]) => key);
+  const avgConfidence = normalizeConfidence(result.metadata?.avgConfidence);
+  const source = sourceFromMethod(extractionMethod ?? result.method);
+  // §7: genuinely unmapped-but-valued LLM keys, built once from the flat/
+  // global pipeline diagnostics (not per-row — a pre-existing limitation of
+  // these two debug fields) and passed only for the first/only row.
+  const reviewExtractionDebug = (result.metadata as any)?.extractionDebug ?? {};
+  const unmappedLlmKeys: string[] = Array.isArray(reviewExtractionDebug.unmapped_llm_keys)
+    ? reviewExtractionDebug.unmapped_llm_keys
+    : [];
+  const llmReturnedFieldDetailsForUnmapped = (reviewExtractionDebug.llm_returned_field_details ?? {}) as Record<string, any>;
+  const unmappedLlmFields = unmappedLlmKeys
+    .map((key) => {
+      const detail = llmReturnedFieldDetailsForUnmapped[key];
+      return {
+        key,
+        value: detail?.value ?? null,
+        sourceText: detail?.source_text ?? null,
+        sourcePage: detail?.source_page ?? null,
+        confidence: detail?.confidence ?? null,
+      };
+    })
+    .filter((f) => f.value != null && f.value !== "");
+  // openai_fact_ledger diagnostics (undefined for legacy_hybrid — both
+  // spreads below become no-ops, preserving existing behavior exactly).
+  const openaiFactLedgerDebug = (reviewExtractionDebug as any)?.openai_fact_ledger ?? (reviewExtractionDebug as any)?.vertex_fact_ledger ?? null;
+  // Lease Truth Assembly: the ONE canonical publication layer (see
+  // lease-truth-assembly.ts). Computed HERE, before buildLeaseWorkflowAbstraction
+  // runs, and used to build "effective rows" below -- buildLeaseWorkflowAbstraction's
+  // own leaseFields (workflow_output.lease_fields) independently re-derives
+  // values from the raw row via buildLeaseFieldMap(), and the frontend's
+  // display-mode fallback hierarchy checks workflow_output.lease_fields
+  // BEFORE standard_fields/fields -- so overriding only standard_fields
+  // (below) would leave this earlier, higher-priority fallback source
+  // showing an un-reconciled value whenever it has its own evidence,
+  // silently defeating the whole point of a single canonical publisher.
+  // Feeding buildLeaseWorkflowAbstraction an already-reconciled row is what
+  // makes Lease Truth Assembly authoritative for BOTH payload shapes from
+  // one computation, rather than needing a second copy of its logic inside
+  // lease-workflow.ts.
+  const truthAssemblyCanonicalFields = assembleCanonicalFields({
+    rows: result.rows as Array<Record<string, unknown>>,
+    extractionDebug: reviewExtractionDebug,
+    moduleType: extractionModuleType,
+  }).canonicalFields;
+  const truthAssemblyEffectiveRows = result.rows.map((row) => {
+    const effective: Record<string, unknown> = { ...row };
+    for (const [fieldKey] of schemaEntries) {
+      const publishId = publishIdFor(fieldKey);
+      const canonicalResult = truthAssemblyCanonicalFields[publishId];
+      if (!canonicalResult || canonicalResult.status === "not_stated") continue;
+      effective[fieldKey] = canonicalResult.status === "conflicting" ? null : canonicalResult.value;
+    }
+    return effective;
+  });
+  const workflowOutputs = precomputedWorkflowOutputs
+    ? precomputedWorkflowOutputs
+    : extractionModuleType === "lease"
+    ? truthAssemblyEffectiveRows.map((row, rowIndex) =>
+      buildLeaseWorkflowAbstraction({
+        row,
+        doclingRaw: doclingRaw ?? null,
+        documentSubtype,
+        ...(rowIndex === 0 ? { unmappedLlmFields } : {}),
+        ...(openaiFactLedgerDebug?.document_profile ? { documentProfileOverride: openaiFactLedgerDebug.document_profile } : {}),
+        ...(rowIndex === 0 && Array.isArray(openaiFactLedgerDebug?.dynamic_items)
+          ? { factLedgerDynamicItems: openaiFactLedgerDebug.dynamic_items }
+          : {}),
+      })
+    )
+    : [];
+  const rows = result.rows.map((r, index) => {
+    const values = stripInternalKeys(r);
+    if ((moduleType === "leases" || moduleType === "lease") && isBlank(values.notes)) {
+      const camNote = extractCamNoteFromText(doclingRaw);
+      if (camNote) values.notes = camNote;
+    }
+    const fieldConfidences = (r._field_confidences ?? {}) as Record<string, number>;
+    const fieldSources = (r._field_sources ?? {}) as Record<string, string>;
+    const fieldEvidence = (r._field_evidence ?? {}) as Record<string, { source_text?: string | null; source_page?: number | null; extraction_status?: string | null; candidates?: unknown[]; conflict_candidates?: unknown[]; selected_candidate_id?: string | null }>;
+    // Release 1: calculator.ts's Step6 (_shared/extraction/calculator.ts)
+    // computes a real derivation trace for every field it derives (e.g.
+    // "monthly_rent(1470) x 12" for annual_rent), but this was previously
+    // never read here — stripInternalKeys() above only strips `_`-prefixed
+    // keys from `values`, it doesn't delete them from `r`, so the trace was
+    // silently discarded rather than actually lost. Read directly off the
+    // raw row `r`, same pattern as fieldConfidences/fieldSources above.
+    const calculatorDerivationTraces = (r._derivation_traces ?? {}) as Record<string, string>;
+    // Same rationale as calculatorDerivationTraces above: calculator.ts now
+    // also records which input fields fed each derivation (source_field_keys),
+    // read the identical way -- leaseReviewSchema.js's readFieldEvidence()
+    // already expects this shape (entry.evidence?.source_field_keys), it just
+    // never received it for the fields only calculator.ts derives.
+    const calculatorDerivationSourceFields = (r._derivation_source_fields ?? {}) as Record<string, string[]>;
+    const rowConfidence = normalizeConfidence(
+      r.confidence_score ?? result.metadata?.avgConfidence,
+    ) ?? avgConfidence;
+    const workflowOutput = workflowOutputs[index] ?? null;
+    const standardFields = precomputedStandardFieldsByRow?.[index] ?? buildStandardFieldsForEntries({
+      schemaEntries, index, values, workflowOutput, fieldConfidences, fieldSources, fieldEvidence,
+      calculatorDerivationTraces, calculatorDerivationSourceFields, doclingRaw, extractionModuleType,
+      truthAssemblyCanonicalFields, source, rowConfidence,
     });
     const customFieldsFromRows = Object.entries(values)
       .filter(([key, val]) => {
@@ -2564,6 +2661,434 @@ async function handleEnrichMode(args: {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Bounded Per-Domain Enrich Refactor (see FAILED_EXTRACTION_ROOT_CAUSE.md and
+// the "Bounded Per-Domain Enrich Refactor" plan). Each of the 10 stage names
+// in enrich-bounded-stage/stage-sequence.ts is handled by ONE call to
+// handleBoundedEnrichStage below -- one stage, one Edge Function invocation,
+// memory released before the next stage's invocation starts. This is the
+// active wiring: lease-extraction-worker dispatches these stages instead of
+// the single monolithic "enrich" mode when ENRICH_BOUNDED_STAGE_MODE is
+// "active" (see feature-mode.ts) -- the monolithic handleEnrichMode() above
+// remains completely unchanged and is what still runs when it is "off".
+// ---------------------------------------------------------------------------
+
+const STAGE_TO_LLM_CALL_DOMAIN: Partial<Record<EnrichBoundedStageName, LlmCallDomain>> = {
+  enrich_evidence_core_terms: "core_terms",
+  enrich_evidence_rent_and_charges: "rent_and_charges",
+  enrich_evidence_expenses_and_cam: "expenses_and_cam",
+  enrich_evidence_operating_obligations: "operating_obligations",
+  enrich_evidence_legal_rights_and_dates: "legal_rights_and_dates",
+};
+
+/** Reads a prior stage's persisted output, but ONLY if it actually completed -- never reuses a failed/incomplete/missing entry. */
+function getCompletedStageData(results: Record<string, BoundedStageResultEntry>, stage: EnrichBoundedStageName): any | null {
+  const entry = results[stage];
+  return entry && entry.status === "completed" ? entry.data : null;
+}
+
+async function handleBoundedEnrichStage(args: {
+  supabaseAdmin: any;
+  orgId: string;
+  fileId: string;
+  pipelineJobId: string;
+  generationId: string;
+  stage: EnrichBoundedStageName;
+  workerAttempt?: number | null;
+  jsonResponse: (body: unknown, status?: number) => Response;
+}): Promise<Response> {
+  const { supabaseAdmin, orgId, fileId, pipelineJobId, generationId, stage, jsonResponse } = args;
+
+  // --- 1. validate identifiers (reference-only request body -- see the plan) ---
+  if (!fileId) return jsonResponse({ error: true, error_code: "MISSING_FILE_ID", message: "file_id is required" }, 400);
+  if (!pipelineJobId) return jsonResponse({ error: true, error_code: "MISSING_PIPELINE_JOB_ID", message: "pipeline_job_id is required" }, 400);
+  if (!generationId) return jsonResponse({ error: true, error_code: "MISSING_GENERATION_ID", message: "generation_id is required" }, 400);
+  if (!isEnrichBoundedStageName(stage)) {
+    return jsonResponse({ error: true, error_code: "UNKNOWN_BOUNDED_STAGE", message: `Unknown bounded enrich stage: ${stage}` }, 400);
+  }
+
+  const logger = createLogger(supabaseAdmin, fileId, orgId);
+
+  // --- 2. enforce the generation fence BEFORE loading any data ---
+  const preFence = await checkGenerationStillActive({ supabaseAdmin, fileId, orgId, expectedGenerationId: generationId });
+  if (!preFence.stillActive) {
+    console.log(`[normalize-pdf-output] bounded_stage_stale_generation_skipped stage=${stage} file_id=${fileId} generation_id=${generationId} current=${preFence.currentGenerationId}`);
+    return jsonResponse({ error: false, file_id: fileId, stage, stale_generation: true }, 200);
+  }
+
+  // --- 3. load only the persisted input this stage needs. Every bounded
+  // stage needs docling_raw + normalized_output (to reconstruct row state);
+  // only enrich_truth_assembly additionally needs ui_review_payload (it is
+  // the only stage that overwrites it -- see the plan's requirement that
+  // only final assembly may overwrite the minimal payload with the rich
+  // canonical one). file_name/review_required are tiny scalars, fetched
+  // uniformly for simplicity -- they are not the columns previously
+  // implicated in 546 (docling_raw/normalized_output/ui_review_payload,
+  // each "can be 1-3 MB" per handleEnrichMode's own comment above).
+  const needsUiReviewPayload = isFinalEnrichBoundedStage(stage);
+  const { data: fileRecord, error: fetchError } = await supabaseAdmin
+    .from("uploaded_files")
+    .select(
+      "id, org_id, file_name, module_type, document_subtype, extraction_method, review_required, docling_raw, normalized_output, active_generation_id" +
+      (needsUiReviewPayload ? ", ui_review_payload" : ""),
+    )
+    .eq("id", fileId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+
+  if (fetchError || !fileRecord) {
+    return jsonResponse({ error: true, error_code: "FILE_NOT_FOUND", message: `File not found: ${fetchError?.message ?? "invalid file_id"}` }, 404);
+  }
+
+  const normalizedOutput = fileRecord.normalized_output as {
+    rows: Record<string, unknown>[];
+    method: string;
+    warnings: string[];
+    validationErrors: unknown[];
+    metadata: Record<string, unknown>;
+  } | null;
+  if (!normalizedOutput || !Array.isArray(normalizedOutput.rows)) {
+    return jsonResponse({ error: true, error_code: "NO_NORMALIZED_OUTPUT", message: "No normalized_output found to enrich -- run normalize first." }, 422);
+  }
+
+  // --- idempotency: a repeated invocation of an already-completed stage
+  // (same generation, same stage_version) returns the existing result
+  // without recomputing anything -- no Azure/OpenAI calls, no duplicate
+  // rows, no double-advance. ---
+  const idempotencyCheck = isStageAlreadyCompleted({ normalizedOutput, stage, generationId });
+  if (idempotencyCheck.reusable) {
+    console.log(`[normalize-pdf-output] bounded_stage_already_completed stage=${stage} file_id=${fileId} generation_id=${generationId}`);
+    await logger.event(stage, "reused_from_cache", { metadata: { job_id: pipelineJobId, generation_id: generationId } });
+    return jsonResponse({ error: false, file_id: fileId, stage, status: "completed", reused_from_cache: true }, 200);
+  }
+
+  const moduleType = fileRecord.module_type ?? "unknown";
+  const documentSubtype = fileRecord.document_subtype ?? null;
+  const doclingRaw = (fileRecord.docling_raw ?? null) as Record<string, unknown> | null;
+  const row = (normalizedOutput.rows[0] ?? {}) as Record<string, unknown>;
+  const boundedResults = readBoundedStageResults(normalizedOutput);
+
+  // Lease Truth Assembly canonical fields, computed once from the SAME
+  // already-persisted normalize-stage data every stage needs -- cheap
+  // (schema-sized, not document-sized), so recomputing it fresh in each
+  // stage invocation is fine (confirmed not part of the "dominant cost").
+  const extractionModuleType = toExtractionModuleType(moduleType);
+  const truthAssemblyCanonicalFields = assembleCanonicalFields({
+    rows: normalizedOutput.rows as Array<Record<string, unknown>>,
+    extractionDebug: (normalizedOutput.metadata as any)?.extractionDebug ?? {},
+    moduleType: extractionModuleType,
+  }).canonicalFields;
+  // The "effective row" -- row with Lease Truth Assembly's canonical
+  // overrides applied per field -- is what buildReviewPayload feeds into
+  // buildLeaseWorkflowAbstraction (NOT the raw row); the workflow-abstraction
+  // stages (enrich_fields/enrich_items/enrich_derivation) must use the SAME
+  // effective row, or their output silently diverges from the monolithic
+  // path (caught by _tests/enrich-bounded-stages.test.ts's byte-equivalence
+  // gate). The evidence-domain stages/remainder deliberately do NOT use this
+  // -- buildReviewPayload's own evidence loop reads the RAW row too (its
+  // per-field override happens later, inside buildStandardFieldsForEntries
+  // itself, via truthAssemblyCanonicalFields directly).
+  const schemaForEffectiveRow = getSchema(extractionModuleType);
+  const effectiveRow: Record<string, unknown> = { ...row };
+  for (const [fieldKey] of Object.entries(schemaForEffectiveRow).filter(([, def]) => !(def as any).derived)) {
+    const publishId = publishIdFor(fieldKey);
+    const canonicalResult = truthAssemblyCanonicalFields[publishId];
+    if (!canonicalResult || canonicalResult.status === "not_stated") continue;
+    effectiveRow[fieldKey] = canonicalResult.status === "conflicting" ? null : canonicalResult.value;
+  }
+
+  const telemetry = startBoundedStageTelemetry({
+    stage,
+    stageVersion: STAGE_RESULT_VERSION,
+    generationId,
+    input: { text_blocks: doclingRaw?.text_blocks, full_text_length: (doclingRaw?.full_text as string | undefined)?.length ?? 0 },
+  });
+
+  // --- 6. hard limits, checked before every stage executes. Real bounded-
+  // slice splitting is not implemented in this change-set (a deliberate,
+  // explicit scope decision -- see the report); per the requirement, an
+  // oversized document must not silently fall back to whole-document
+  // processing, so this fails explicitly instead. ---
+  const textBlocks = Array.isArray(doclingRaw?.text_blocks) ? (doclingRaw!.text_blocks as unknown[]) : [];
+  const fullTextChars = typeof doclingRaw?.full_text === "string" ? (doclingRaw!.full_text as string).length : 0;
+  const pageCount = Number((doclingRaw as any)?.page_count) || 0;
+  const limitCheck = checkStageInputAgainstLimits(stage, { textBlockCount: textBlocks.length, fullTextChars, pageCount });
+  if (!limitCheck.withinLimits) {
+    const message = `Stage ${stage} input exceeds configured limits: ${limitCheck.exceededBy.join("; ")}`;
+    console.error(`[normalize-pdf-output] bounded_stage_limit_exceeded stage=${stage} file_id=${fileId}: ${message}`);
+    await logger.event(stage, "failed", { error_code: "BOUNDED_STAGE_LIMIT_EXCEEDED", error_message: message, metadata: { job_id: pipelineJobId } });
+    return jsonResponse({ error: true, error_code: "BOUNDED_STAGE_LIMIT_EXCEEDED", limit_exceeded: true, message }, 422);
+  }
+
+  let stageData: any = null;
+
+  try {
+    switch (stage) {
+      case "enrich_clauses": {
+        stageData = runLeaseWorkflowStage1Clauses({ doclingRaw });
+        break;
+      }
+      case "enrich_fields": {
+        const stage1 = getCompletedStageData(boundedResults, "enrich_clauses");
+        if (!stage1) return jsonResponse({ error: true, error_code: "PRIOR_STAGE_MISSING", message: "enrich_clauses must complete before enrich_fields" }, 422);
+        stageData = runLeaseWorkflowStage2Fields({ row: effectiveRow, doclingRaw, documentSubtype, stage1 });
+        break;
+      }
+      case "enrich_items": {
+        const stage1 = getCompletedStageData(boundedResults, "enrich_clauses");
+        const stage2 = getCompletedStageData(boundedResults, "enrich_fields");
+        if (!stage1 || !stage2) return jsonResponse({ error: true, error_code: "PRIOR_STAGE_MISSING", message: "enrich_clauses/enrich_fields must complete before enrich_items" }, 422);
+        stageData = runLeaseWorkflowStage3Items({ row: effectiveRow, doclingRaw, documentSubtype, stage1, stage2 });
+        break;
+      }
+      case "enrich_derivation": {
+        const stage1 = getCompletedStageData(boundedResults, "enrich_clauses");
+        const stage2 = getCompletedStageData(boundedResults, "enrich_fields");
+        const stage3 = getCompletedStageData(boundedResults, "enrich_items");
+        if (!stage1 || !stage2 || !stage3) return jsonResponse({ error: true, error_code: "PRIOR_STAGE_MISSING", message: "prior workflow stages must complete before enrich_derivation" }, 422);
+        stageData = runLeaseWorkflowStage4Derivation({ row: effectiveRow, doclingRaw, documentSubtype, stage1, stage2, stage3 });
+        break;
+      }
+      case "enrich_evidence_core_terms":
+      case "enrich_evidence_rent_and_charges":
+      case "enrich_evidence_expenses_and_cam":
+      case "enrich_evidence_operating_obligations":
+      case "enrich_evidence_legal_rights_and_dates": {
+        const derivation = getCompletedStageData(boundedResults, "enrich_derivation");
+        if (!derivation) return jsonResponse({ error: true, error_code: "PRIOR_STAGE_MISSING", message: "enrich_derivation must complete before evidence-domain stages" }, 422);
+        const domain = STAGE_TO_LLM_CALL_DOMAIN[stage]!;
+        const schema = getSchema(extractionModuleType);
+        const allSchemaEntries = Object.entries(schema).filter(([, def]) => !(def as any).derived);
+        const domainEntries = getSchemaEntriesForDomain(allSchemaEntries, domain);
+        // Deliberately the RAW row here, matching buildReviewPayload's own
+        // evidence loop exactly -- its per-field Lease Truth Assembly
+        // override happens later, inside buildStandardFieldsForEntries,
+        // directly from truthAssemblyCanonicalFields (see that function's
+        // own comment) -- NOT via a pre-overridden row like the workflow-
+        // abstraction stages above need.
+        const values = stripInternalKeys(row);
+        // Mirrors buildReviewPayload's own rows.map() exactly (see its
+        // extractCamNoteFromText call): a blank "notes" field on a lease row
+        // falls back to a CAM sentence pulled from the document text itself.
+        // Omitting this here silently regresses "notes" for lease documents
+        // in the bounded path (caught by _tests/enrich-bounded-stages.test.ts's
+        // byte-equivalence gate).
+        if ((moduleType === "leases" || moduleType === "lease") && isBlank(values.notes)) {
+          const camNote = extractCamNoteFromText(doclingRaw);
+          if (camNote) values.notes = camNote;
+        }
+        const fieldConfidencesRow = (row._field_confidences ?? {}) as Record<string, number>;
+        const fieldSourcesRow = (row._field_sources ?? {}) as Record<string, string>;
+        const fieldEvidenceRow = (row._field_evidence ?? {}) as Record<string, any>;
+        const calculatorDerivationTraces = (row._derivation_traces ?? {}) as Record<string, string>;
+        const calculatorDerivationSourceFields = (row._derivation_source_fields ?? {}) as Record<string, string[]>;
+        const rowConfidence = normalizeConfidence((row as any).confidence_score ?? normalizedOutput.metadata?.avgConfidence);
+        const source = sourceFromMethod(fileRecord.extraction_method ?? normalizedOutput.method);
+        stageData = buildStandardFieldsForEntries({
+          schemaEntries: domainEntries, index: 0, values, workflowOutput: derivation,
+          fieldConfidences: fieldConfidencesRow, fieldSources: fieldSourcesRow, fieldEvidence: fieldEvidenceRow,
+          calculatorDerivationTraces, calculatorDerivationSourceFields, doclingRaw, extractionModuleType,
+          truthAssemblyCanonicalFields, source, rowConfidence,
+        });
+        break;
+      }
+      case "enrich_truth_assembly": {
+        const derivation = getCompletedStageData(boundedResults, "enrich_derivation");
+        const evidenceByDomain = ENRICH_EVIDENCE_DOMAIN_STAGES.map((s) => getCompletedStageData(boundedResults, s));
+        if (!derivation || evidenceByDomain.some((d) => d == null)) {
+          return jsonResponse({ error: true, error_code: "PRIOR_STAGE_MISSING", message: "all workflow and evidence-domain stages must complete before enrich_truth_assembly" }, 422);
+        }
+        // Catch-all remainder pass: any schema field whose FieldGroup maps to
+        // no LlmCallDomain (e.g. budget_inputs/approval_controls) was not
+        // covered by any of the 5 evidence-domain stages -- computed here,
+        // once, so every schema field is covered exactly once overall
+        // (proven for the partition itself in
+        // _tests/enrich-evidence-domain-split.test.ts; this is the one place
+        // that also has to fold the remainder back in).
+        const schema = getSchema(extractionModuleType);
+        const allSchemaEntries = Object.entries(schema).filter(([, def]) => !(def as any).derived);
+        const remainderEntries = getSchemaEntriesWithNoDomain(allSchemaEntries);
+        const values = stripInternalKeys(row);
+        // Mirrors buildReviewPayload's own rows.map() exactly -- see the
+        // matching comment in the evidence-domain-stage case above.
+        if ((moduleType === "leases" || moduleType === "lease") && isBlank(values.notes)) {
+          const camNote = extractCamNoteFromText(doclingRaw);
+          if (camNote) values.notes = camNote;
+        }
+        const fieldConfidencesRow = (row._field_confidences ?? {}) as Record<string, number>;
+        const fieldSourcesRow = (row._field_sources ?? {}) as Record<string, string>;
+        const fieldEvidenceRow = (row._field_evidence ?? {}) as Record<string, any>;
+        const calculatorDerivationTraces = (row._derivation_traces ?? {}) as Record<string, string>;
+        const calculatorDerivationSourceFields = (row._derivation_source_fields ?? {}) as Record<string, string[]>;
+        const rowConfidence = normalizeConfidence((row as any).confidence_score ?? normalizedOutput.metadata?.avgConfidence);
+        const source = sourceFromMethod(fileRecord.extraction_method ?? normalizedOutput.method);
+        const remainderFields = remainderEntries.length > 0
+          ? buildStandardFieldsForEntries({
+            schemaEntries: remainderEntries, index: 0, values, workflowOutput: derivation,
+            fieldConfidences: fieldConfidencesRow, fieldSources: fieldSourcesRow, fieldEvidence: fieldEvidenceRow,
+            calculatorDerivationTraces, calculatorDerivationSourceFields, doclingRaw, extractionModuleType,
+            truthAssemblyCanonicalFields, source, rowConfidence,
+          })
+          : [];
+        // Pooling in dispatch order (domain 1..5, then the remainder) does
+        // NOT match the schema's declared field order -- restore it so the
+        // bounded path's standard_fields order is byte-equivalent to the
+        // monolithic single-pass loop's order, regardless of which stage
+        // produced a given field.
+        const pooledStandardFields = reorderStandardFieldsBySchema(
+          [...evidenceByDomain.flat(), ...remainderFields],
+          allSchemaEntries,
+        );
+
+        // The only canonical publisher: this reuses buildReviewPayload's
+        // final-assembly tail (Lease Truth Assembly + payload shape)
+        // VERBATIM via the precomputed* hooks, exactly as every other
+        // caller does -- no second publisher, no duplicated logic.
+        const enrichedPayload = buildReviewPayload({
+          fileId,
+          fileName: fileRecord.file_name ?? "document",
+          moduleType,
+          documentSubtype,
+          extractionMethod: fileRecord.extraction_method ?? null,
+          reviewRequired: !!fileRecord.review_required,
+          doclingRaw,
+          result: normalizedOutput,
+          precomputedWorkflowOutputs: [derivation],
+          precomputedStandardFieldsByRow: [pooledStandardFields],
+        }) as Record<string, any>;
+
+        const currentPayload = (fileRecord.ui_review_payload ?? {}) as Record<string, unknown>;
+        enrichedPayload.enrichment_status = "completed";
+        enrichedPayload.core_ready = (currentPayload as any).core_ready ?? computeCoreReady(enrichedPayload.records?.[0]?.standard_fields ?? []);
+        if (enrichedPayload.metadata && typeof enrichedPayload.metadata === "object") {
+          enrichedPayload.metadata.extraction_contract_version = EXTRACTION_CONTRACT_VERSION;
+        }
+        stageData = { enriched_payload: enrichedPayload };
+        break;
+      }
+      default: {
+        return jsonResponse({ error: true, error_code: "UNKNOWN_BOUNDED_STAGE", message: `No handler for stage ${stage}` }, 400);
+      }
+    }
+  } catch (computeError: any) {
+    const message = computeError?.message ?? String(computeError);
+    console.error(`[normalize-pdf-output] bounded_stage_failed stage=${stage} file_id=${fileId}: ${message}`);
+    await logger.event(stage, "failed", { error_code: "BOUNDED_STAGE_EXCEPTION", error_message: message, metadata: { job_id: pipelineJobId } });
+    return jsonResponse({ error: true, error_code: "BOUNDED_STAGE_EXCEPTION", message }, 500);
+  }
+
+  // --- 7. enforce the generation fence AGAIN before committing output --
+  // the compute above (especially derivation/evidence stages) can take real
+  // time, during which a newer generation can start. ---
+  const postFence = await checkGenerationStillActive({ supabaseAdmin, fileId, orgId, expectedGenerationId: generationId });
+  if (!postFence.stillActive) {
+    console.log(`[normalize-pdf-output] bounded_stage_stale_generation_skipped_before_persist stage=${stage} file_id=${fileId} generation_id=${generationId} current=${postFence.currentGenerationId}`);
+    return jsonResponse({ error: false, file_id: fileId, stage, stale_generation: true }, 200);
+  }
+
+  // --- persist. Only enrich_truth_assembly may overwrite ui_review_payload
+  // (the minimal payload stays the reviewer-visible payload for every other
+  // stage -- see the requirement that only final assembly is the canonical
+  // publisher). ---
+  const finalTelemetry = telemetry.finish({
+    output: stageData,
+    pageCount,
+    tableCount: Array.isArray((doclingRaw as any)?.tables) ? (doclingRaw as any).tables.length : null,
+  });
+
+  // enrich_truth_assembly's real output (the full rich payload) is persisted
+  // separately into ui_review_payload below -- storing it again inside
+  // normalized_output.bounded_stage_results would just duplicate a large
+  // blob for no benefit; a small completion marker is enough for the
+  // idempotency check and stage-sequence bookkeeping.
+  const updatedNormalizedOutput = mergeBoundedStageResult({
+    normalizedOutput,
+    stage,
+    generationId,
+    status: "completed",
+    data: stage === "enrich_truth_assembly" ? { assembled: true } : stageData,
+  });
+
+  const updates: Record<string, unknown> = { normalized_output: updatedNormalizedOutput, updated_at: new Date().toISOString() };
+  if (stage === "enrich_truth_assembly") {
+    updates.ui_review_payload = stageData.enriched_payload;
+  }
+
+  const { error: persistError } = await supabaseAdmin.from("uploaded_files").update(updates).eq("id", fileId);
+  if (persistError) {
+    console.error(`[normalize-pdf-output] bounded_stage_persist_failed stage=${stage} file_id=${fileId}: ${persistError.message}`);
+    await logger.event(stage, "failed", { error_code: "BOUNDED_STAGE_PERSIST_FAILED", error_message: persistError.message, metadata: { job_id: pipelineJobId } });
+    return jsonResponse({ error: true, error_code: "BOUNDED_STAGE_PERSIST_FAILED", message: persistError.message }, 500);
+  }
+
+  await logger.event(stage, "completed", {
+    metadata: { job_id: pipelineJobId, generation_id: generationId, telemetry: finalTelemetry },
+  });
+  console.log(`[normalize-pdf-output] bounded_stage_completed stage=${stage} file_id=${fileId} duration_ms=${finalTelemetry.duration_ms}`);
+
+  if (stage === "enrich_truth_assembly") {
+    // Same mode-gated post-processing + finalize call as the monolithic
+    // handleEnrichMode() runs today, unchanged -- confirmed no-ops while
+    // their flags default "off" (see FAILED_EXTRACTION_ROOT_CAUSE.md /
+    // the plan's exploration findings).
+    const claimsLedgerMode = getLeaseClaimsLedgerMode();
+    const packageMode = getLeaseDocumentPackageMode();
+    const financialMode = getLeaseFinancialScheduleMode();
+    const enrichedPayload = stageData.enriched_payload;
+    let enrichExtractionRunId: string | null = null;
+    if (claimsLedgerMode !== "off") {
+      enrichExtractionRunId = await resolveExtractionRunId(supabaseAdmin, orgId, generationId);
+      const recordFields = (enrichedPayload.records?.[0]?.fields ?? {}) as Record<string, any>;
+      await maybeRunClaimsLedgerForStage(
+        supabaseAdmin,
+        { orgId, uploadedFileId: fileId, leaseId: null, extractionRunId: enrichExtractionRunId, extractionStageRunId: null, generationId, stageAttempt: 1 },
+        { deterministicFields: {}, semanticCandidateGroups: [], unmappedLlmFields: [], legacyExtractionData: { fields: recordFields } },
+      );
+    }
+    if (packageMode !== "off") {
+      if (!enrichExtractionRunId) enrichExtractionRunId = await resolveExtractionRunId(supabaseAdmin, orgId, generationId);
+      const recordFields = (enrichedPayload.records?.[0]?.fields ?? {}) as Record<string, any>;
+      await maybeRunLeaseDocumentPackagePipeline(
+        supabaseAdmin,
+        { orgId, uploadedFileId: fileId, leaseId: null, extractionRunId: enrichExtractionRunId, extractionStageRunId: null, generationId, stageAttempt: 1 },
+        { singleDocumentCompatibility: { fields: recordFields } },
+      );
+    }
+    if (financialMode !== "off") {
+      if (!enrichExtractionRunId) enrichExtractionRunId = await resolveExtractionRunId(supabaseAdmin, orgId, generationId);
+      const recordFields = (enrichedPayload.records?.[0]?.fields ?? {}) as Record<string, any>;
+      await maybeRunLeaseFinancialScheduleRuntime(
+        supabaseAdmin,
+        { orgId, uploadedFileId: fileId, leaseId: null, extractionRunId: enrichExtractionRunId, generationId, stageAttempt: 1 },
+        { currentCompatibility: { fields: recordFields }, packageAwareInput: packageMode !== "off" },
+      );
+    }
+
+    // Finalize review readiness -- inspect {data, error} explicitly, never
+    // swallow a non-throwing RPC error, keep p_package_mode/p_financial_mode
+    // exactly as every other call site (do not drop them to make this call
+    // succeed locally -- see FAILED_EXTRACTION_ROOT_CAUSE.md).
+    const { error: finalizeError } = await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
+      p_org_id: orgId,
+      p_uploaded_file_id: fileId,
+      p_generation_id: generationId,
+      p_package_mode: packageMode,
+      p_financial_mode: financialMode,
+    });
+    if (finalizeError) {
+      console.error(`[normalize-pdf-output] finalize_lease_extraction_for_review RPC returned an error file_id=${fileId} generation_id=${generationId}:`, finalizeError.message);
+      await logger.event(stage, "readiness_finalize_failed", { error_code: "READINESS_FINALIZE_RPC_ERROR", error_message: finalizeError.message, metadata: { job_id: pipelineJobId } });
+    }
+
+    return jsonResponse({
+      error: false, file_id: fileId, stage, status: "completed", chain_complete: true,
+      clauses: enrichedPayload.records?.[0]?.workflow_output?.lease_clauses?.length ?? 0,
+    }, 200);
+  }
+
+  return jsonResponse({ error: false, file_id: fileId, stage, status: "completed" }, 200);
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -2695,6 +3220,22 @@ Deno.serve(async (req: Request) => {
       return await handleEnrichMode({
         supabaseAdmin, orgId, fileId: file_id,
         pipelineJobId: pipeline_job_id || job_id,
+        workerAttempt: worker_attempt,
+        jsonResponse,
+      });
+    }
+
+    // Bounded Per-Domain Enrich Refactor: one of the 10 stage names in
+    // enrich-bounded-stage/stage-sequence.ts. Unlike "enrich" above,
+    // generation_id is passed directly in the request body (the worker
+    // reads it fresh off the claimed pipeline_jobs row before dispatching),
+    // not resolved by a separate lookup -- see the plan's request contract.
+    if (isEnrichBoundedStageName(mode)) {
+      return await handleBoundedEnrichStage({
+        supabaseAdmin, orgId, fileId: file_id,
+        pipelineJobId: pipeline_job_id || job_id,
+        generationId: generation_id,
+        stage: mode,
         workerAttempt: worker_attempt,
         jsonResponse,
       });
@@ -3427,13 +3968,29 @@ Deno.serve(async (req: Request) => {
       // set in a deployed environment.
       const inlineEnrichment = Deno.env.get("NORMALIZE_INLINE_ENRICHMENT") === "true";
       if (!inlineEnrichment) {
-        await enqueueEnrichmentJob({
-          supabaseAdmin,
-          orgId,
-          fileId: file_id,
-          moduleType,
-          logger,
-        });
+        // Bounded Per-Domain Enrich Refactor: when active, dispatch the
+        // first bounded stage instead of the single monolithic "enrich"
+        // stage. "off" (default) preserves this exact call, unchanged --
+        // the kill-switch fallback the plan requires.
+        if (getEnrichBoundedStageMode() === "active") {
+          await enqueueBoundedEnrichStage({
+            supabaseAdmin,
+            orgId,
+            fileId: file_id,
+            stage: firstEnrichBoundedStage(),
+            generationId: generation_id ?? fileRecord.active_generation_id ?? null,
+            moduleType,
+            logger,
+          });
+        } else {
+          await enqueueEnrichmentJob({
+            supabaseAdmin,
+            orgId,
+            fileId: file_id,
+            moduleType,
+            logger,
+          });
+        }
         console.log(`[normalize-pdf-output] normalize_returning_after_minimal_payload file_id=${file_id}`);
         await logger.event("normalize", "completed", {
           normalize_status: NORMALIZE_STATUSES.COMPLETED,
@@ -3852,6 +4409,10 @@ export const __test__ = {
   buildPipelineLayoutInput,
   buildMinimalReviewPayload,
   buildReviewPayload,
+  buildStandardFieldsForEntries,
+  handleBoundedEnrichStage,
+  extractCamNoteFromText,
+  isBlank,
   rejectMarkupValue,
   buildReviewField,
   resolveBusinessExtractionProvider,

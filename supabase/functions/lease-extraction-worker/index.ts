@@ -6,6 +6,10 @@ import { setFailed, setStatus } from "../_shared/pipeline-status.ts";
 import { MIN_LEASE_TEXT_CHARS } from "../_shared/extraction/pipeline-contract.ts";
 import { uploadedFileRowHasMeaningfulValues } from "../_shared/extraction/payload-guard.ts";
 import { enqueueEnrichmentJob } from "../_shared/extraction/enrichment-dispatch.ts";
+import { getEnrichBoundedStageMode } from "../_shared/extraction/enrich-bounded-stage/feature-mode.ts";
+import { enqueueBoundedEnrichStage } from "../_shared/extraction/enrich-bounded-stage/dispatch.ts";
+import { completeBoundedEnrichStage } from "../_shared/extraction/enrich-bounded-stage/completion.ts";
+import { firstEnrichBoundedStage, isEnrichBoundedStageName } from "../_shared/extraction/enrich-bounded-stage/stage-sequence.ts";
 import { resolveExtractionRunId } from "../_shared/extraction/provenance/recorder.ts";
 import { getLeaseDocumentPackageMode } from "../_shared/extraction/document-package/feature-mode.ts";
 import { getLeaseFinancialScheduleMode } from "../_shared/extraction/lease-financial-schedule/feature-mode.ts";
@@ -391,6 +395,14 @@ const NORMALIZE_ACTIVE_GRACE_MS = envBoundedInt("LEASE_WORKER_NORMALIZE_ACTIVE_G
 // The enrich stage is dispatched as its own separate pipeline job / worker
 // invocation, so it gets its own fresh invocation budget.
 const ENRICH_TIMEOUT_MS = envBoundedInt("LEASE_WORKER_ENRICH_TIMEOUT_MS", 130_000, 30_000, 145_000);
+// Bounded Per-Domain Enrich Refactor: each of the 10 bounded stages does a
+// deliberately small SLICE of what the monolithic "enrich" stage above did
+// all at once (that's the whole point -- see FAILED_EXTRACTION_ROOT_CAUSE.md
+// and the plan), so none of them should need anywhere near ENRICH_TIMEOUT_MS's
+// budget. One shared constant for all 10 stages, not 10 separate ones --
+// nothing yet distinguishes their real costs (that's what the telemetry this
+// refactor adds is for); split further once real numbers justify it.
+const BOUNDED_ENRICH_STAGE_TIMEOUT_MS = envBoundedInt("LEASE_WORKER_BOUNDED_ENRICH_STAGE_TIMEOUT_MS", 60_000, 15_000, 120_000);
 
 // Azure staging P0: durable-state reconciliation must distinguish "confirmed
 // absent" from "couldn't determine" — a reconciliation read failing under the
@@ -2183,13 +2195,83 @@ Deno.serve(async (req: Request) => {
         postNormalizeCheck.enrichmentStatus !== "completed" &&
         postNormalizeCheck.enrichmentStatus !== "running"
       ) {
-        await enqueueEnrichmentJob({ supabaseAdmin, orgId, fileId, moduleType: fileRecord.module_type, logger });
+        if (getEnrichBoundedStageMode() === "active") {
+          await enqueueBoundedEnrichStage({ supabaseAdmin, orgId, fileId, stage: firstEnrichBoundedStage(), generationId: job.generation_id ?? null, moduleType: fileRecord.module_type, logger });
+        } else {
+          await enqueueEnrichmentJob({ supabaseAdmin, orgId, fileId, moduleType: fileRecord.module_type, logger });
+        }
       }
       // state === "not_durable" or "unknown": safe default is to skip the
       // enrich dispatch rather than guess — an inconclusive determination
       // should not trigger new work.
 
       return jsonResponse({ error: false, job_id: job.id, stage: "normalize", status: "completed" });
+    }
+
+    // Bounded Per-Domain Enrich Refactor (see FAILED_EXTRACTION_ROOT_CAUSE.md
+    // and the "Bounded Per-Domain Enrich Refactor" plan). One call per
+    // invocation, exactly one stage -- this branch does NOT loop through the
+    // whole sequence itself; it dispatches ONE stage to normalize-pdf-output,
+    // then relies on completeBoundedEnrichStage() to enqueue the next stage
+    // as its own fresh, independent invocation. The sequence is resumable
+    // across invocations by construction: a crash here leaves the job row at
+    // whatever pipeline_jobs status it was last set to, and a stale/duplicate
+    // dispatch of the SAME stage is made safe by handleBoundedEnrichStage's
+    // own idempotency check (isStageAlreadyCompleted), not by anything in
+    // this branch. When ENRICH_BOUNDED_STAGE_MODE is "off" (default), this
+    // stage name is never enqueued in the first place -- see the two
+    // enqueue call sites gated on getEnrichBoundedStageMode() -- so the
+    // existing "enrich" branch below remains the only path taken, unchanged.
+    if (isEnrichBoundedStageName(currentStage)) {
+      if (await isCancelRequested(supabaseAdmin, job.id)) {
+        return await stopForCancellation(supabaseAdmin, job, fileId, logger, `before_${currentStage}`);
+      }
+
+      await logger.event(currentStage, "running", {
+        provider: "lease-extraction-worker",
+        metadata: { job_id: job.id, attempt },
+      });
+
+      const stageResult = await callInternalFunction(
+        "normalize-pdf-output",
+        { file_id: fileId, pipeline_job_id: job.id, generation_id: job.generation_id, worker_attempt: attempt, mode: currentStage },
+        orgId,
+        BOUNDED_ENRICH_STAGE_TIMEOUT_MS,
+      );
+
+      if (!stageResult.ok) {
+        const message = stageResult.error || `Bounded enrich stage ${currentStage} failed`;
+        const errorCode = stageResult.error_code || stageResult.data?.error_code || "ENRICH_STAGE_FAILED";
+        const limitExceeded = errorCode === "BOUNDED_STAGE_LIMIT_EXCEEDED" || !!stageResult.data?.limit_exceeded;
+        // Deliberately NOT routed through any "review-ready transport
+        // failure" warning path the way the old monolithic "enrich" branch
+        // below does -- per the explicit requirement, 546/DOWNSTREAM_FUNCTION_FAILED/
+        // generation-fencing/schema/persistence failures must never become
+        // completed_with_warnings here. Every bounded-stage failure is
+        // terminal and visible.
+        await completeBoundedEnrichStage({
+          supabaseAdmin, job, fileId, orgId, moduleType: fileRecord.module_type, stage: currentStage,
+          outcome: { ok: false, limitExceeded, errorCode, errorMessage: message },
+          logger,
+        });
+        return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: currentStage, message }, 200);
+      }
+
+      if (stageResult.data?.stale_generation) {
+        console.log(`[${WORKER_NAME}] ${currentStage}_stale_generation_skipped file_id=${fileId} job_id=${job.id}`);
+      }
+
+      const completion = await completeBoundedEnrichStage({
+        supabaseAdmin, job, fileId, orgId, moduleType: fileRecord.module_type, stage: currentStage,
+        outcome: { ok: true },
+        logger,
+      });
+
+      return jsonResponse({
+        error: false, job_id: job.id, stage: currentStage, status: "completed",
+        chain_complete: !!(completion as any)?.chainComplete,
+        next_stage: (completion as any)?.nextStage ?? null,
+      }, 200);
     }
 
     if (currentStage === "enrich") {

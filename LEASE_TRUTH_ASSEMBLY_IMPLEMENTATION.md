@@ -532,3 +532,328 @@ real call counts against the target table (0–1 / 1–3 / 2–4 calls by
 archetype) and real per-domain escalation reasons, which is the only
 remaining piece neither this pass nor §1–5 could produce without live
 credentials.
+
+---
+
+# 7. Bounded Per-Domain Enrich Refactor (follow-up implementation)
+
+**Status: implemented, tested, wired into the real runtime path as an
+explicit opt-in. Not deployed. Not migrated. `ENRICH_BOUNDED_STAGE_MODE`
+defaults `"off"` everywhere, so nothing about this section changes current
+production behavior until both a migration is pushed AND the flag is set.**
+
+### 7.1 The problem this closes
+
+A real production incident (Craven Wings lease, documented in full in
+`FAILED_EXTRACTION_ROOT_CAUSE.md`) showed `normalize-pdf-output`'s `"enrich"`
+mode gets killed by the platform (HTTP 546, compute/memory exhaustion) on
+complex, multi-table documents, because `buildReviewPayload()` tries to
+rebuild the entire rich review payload — clause records, the 91-field lease
+field map, universal document items, expense-rule derivation, and per-field
+evidence verification across ~88 schema fields — in one Edge Function
+invocation, holding the whole document's state in memory at once. The
+narrow incident fix (already committed, see §-prior-work in
+`FAILED_EXTRACTION_ROOT_CAUSE.md`) stopped that crash from being silently
+masked as a safe "review-ready" result; it did not stop the crash itself.
+This section is the actual fix: splitting `"enrich"` into 10 smaller, bounded,
+independently-retryable stages so no single invocation holds the whole
+document's state.
+
+### 7.2 Exact stage sequence
+
+`_shared/extraction/enrich-bounded-stage/stage-sequence.ts`'s
+`ENRICH_STAGE_SEQUENCE` is the single source of truth, consulted by
+`completeBoundedEnrichStage()` to decide what runs next (no stage hardcodes
+its own successor):
+
+1. `enrich_clauses` — `buildClauseRecords()` only (the in-code-documented
+   "dominant cost behind... 546 failures").
+2. `enrich_fields` — document-profile detection + `buildLeaseFieldMap()`
+   (~91 field specs, 756 lines) — resumes from stage 1's persisted clauses.
+3. `enrich_items` — both `buildUniversalDocumentItems()` calls (kept as two
+   calls, not merged — the second genuinely depends on an intervening
+   profile re-classification) + evidence-clause helpers + lease-type
+   classification.
+4. `enrich_derivation` — the cross-cutting phase:
+   `deriveExpenseRules`/`deriveCamProfile`/`deriveBudgetPreview`/
+   `buildBudgetHandoffReadiness`/`buildValidationResults`, run once over the
+   pooled output of stages 1–3.
+5–9. `enrich_evidence_core_terms`, `enrich_evidence_rent_and_charges`,
+   `enrich_evidence_expenses_and_cam`, `enrich_evidence_operating_obligations`,
+   `enrich_evidence_legal_rights_and_dates` — each runs
+   `buildStandardFieldsForEntries()` (the per-field evidence-verification
+   loop, extracted as its own top-level function in
+   `normalize-pdf-output/index.ts` this pass) restricted to the schema
+   fields whose `FieldGroup` maps to that stage's `LlmCallDomain`, via the
+   pre-existing `FIELD_GROUP_TO_LLM_CALL_DOMAIN` table
+   (`deterministic-candidates.ts`) — no new taxonomy.
+10. `enrich_truth_assembly` — the only canonical publisher. Pools all 9
+   prior stages' outputs (workflow derivation + all 5 evidence-domain
+   results + a remainder pass for the handful of schema fields whose
+   `FieldGroup` maps to no domain, e.g. `notes`, `budget_inputs`), calls
+   `buildReviewPayload()` — the SAME function every other caller uses,
+   verbatim, via two additive hooks (`precomputedWorkflowOutputs`,
+   `precomputedStandardFieldsByRow`) — runs the unchanged
+   `assembleCanonicalFields()` (Lease Truth Assembly), persists the rich
+   `ui_review_payload`, and is the only stage allowed to overwrite it.
+
+`_tests/enrich-bounded-stages.test.ts` asserts this exact order, that
+`nextEnrichBoundedStage()` traverses it correctly, and that
+`isFinalEnrichBoundedStage("enrich_truth_assembly")` is the only true case.
+
+### 7.3 Active dispatch path
+
+Two dispatch sites, both gated on `getEnrichBoundedStageMode() === "active"`
+(everywhere else, `"off"` preserves the exact pre-existing call):
+
+- **`normalize-pdf-output/index.ts`**'s post-normalize dispatch (~line 3975)
+  — enqueues `firstEnrichBoundedStage()` (`"enrich_clauses"`) instead of
+  `enqueueEnrichmentJob()` (the old monolithic `"enrich"` job) once the
+  minimal payload is durable.
+- **`lease-extraction-worker/index.ts`**'s defensive re-dispatch (~line
+  2198, the "did the enqueue call survive a mid-process crash" safety net)
+  — same conditional swap.
+
+Once a bounded stage is queued, **`lease-extraction-worker/index.ts`**'s new
+stage-dispatch branch (`isEnrichBoundedStageName(currentStage)`, ~line 2225,
+sitting directly above the existing `"enrich"` branch it does not touch)
+runs exactly once per invocation: cancellation check → `callInternalFunction("normalize-pdf-output", {file_id, pipeline_job_id, generation_id, worker_attempt, mode: currentStage}, orgId, BOUNDED_ENRICH_STAGE_TIMEOUT_MS)`
+→ on success or failure, `completeBoundedEnrichStage()` (shared, one
+implementation, not 9 hand-copied blocks) either enqueues the next stage or
+marks the job/payload failed. **This branch never loops through the
+sequence itself** — each invocation dispatches one stage and returns; the
+chain advances only because each completion enqueues a fresh,
+independent `pipeline_jobs` row + worker invocation, exactly the
+"new row, new invocation" pattern the old `"enrich"` dispatch already used.
+This is what makes the chain resumable across crashes by construction, with
+no new resume-tracking logic needed.
+
+On the `normalize-pdf-output` side, `Deno.serve`'s top-level dispatch
+(~line 3233) routes any of the 10 stage-name `mode` values to the new
+`handleBoundedEnrichStage()` handler, sitting alongside (not replacing) the
+existing `if (mode === "enrich")` branch.
+
+### 7.4 Persistence locations
+
+No new table, no new column — both additive to `uploaded_files` columns
+already used for cross-stage handoff:
+
+- **`normalized_output.metadata.extractionDebug.bounded_stage_results`**
+  (new sub-object) — one entry per stage,
+  `{status, generation_id, stage_version, completed_at, data, limits_hit, error_code, error_message}`
+  (`stage-persistence.ts`). `isStageAlreadyCompleted()` is the idempotency
+  guard every stage handler calls before doing any work: reusable only when
+  the stored entry's `generation_id` AND `stage_version` (`STAGE_RESULT_VERSION = "v1"`,
+  bumped whenever stage logic changes in a way that invalidates old
+  results) both match — never mixes results across generations, never
+  silently reuses a result computed by now-different logic.
+- **`ui_review_payload`** — untouched by every stage except
+  `enrich_truth_assembly`, which is the only stage that overwrites it with
+  the rich canonical payload (the minimal payload normalize already
+  persisted stays reviewer-visible and diagnostic for every stage in
+  between).
+- **`extractionDebug.merged_field_sources`** — the pre-existing shape
+  `assembleCanonicalFields()` already consumes. `mergeBoundedStageResult()`
+  supports merging a stage's own field-level contributions into it
+  (`fieldContributions` parameter), but **honestly: no current stage
+  actually populates it** — none of the 10 stages discover a NEW raw field
+  value beyond what normalize's own LLM/rule extraction already put in the
+  row; they only derive workflow-abstraction structures and verify evidence
+  for values that already exist. `truthAssemblyCanonicalFields` is instead
+  recomputed fresh, cheaply, at the top of every stage invocation from the
+  row + normalize's own already-persisted `merged_field_sources` — proven
+  cheap (schema-sized, not document-sized) and confirmed correct by the
+  byte-equivalence test (§7.6). The `fieldContributions` merge path exists
+  and is exercised by unit tests, but is currently dead code in practice —
+  flagged here rather than left to look more wired than it is.
+
+### 7.5 Limits and failure behavior
+
+`_shared/extraction/enrich-stage-limits.ts` checks
+`{textBlockCount, fullTextChars, pageCount}` against per-stage limits before
+any stage does real work (`enrich_clauses`/`enrich_fields`: 2,500 blocks /
+150,000 chars / 80 pages; everything else: 4,000 / 250,000 / 120 — initial
+estimates, not measured, since Deno exposes no precise per-invocation memory
+stats; see `telemetry.ts` for what IS measured). **Per the user's explicit
+requirement, exceeding a limit does NOT fall back to whole-document
+processing.** Real bounded-slice splitting (process a page/block range,
+persist it as `"incomplete"`, re-enqueue the same stage for the next range)
+is **deliberately not implemented in this change-set** — an oversized stage
+fails explicitly with `BOUNDED_STAGE_LIMIT_EXCEEDED` (HTTP 422), a plain
+terminal failure, never silently downgraded.
+
+Generation fencing is checked twice per stage (`checkGenerationStillActive()`,
+one shared helper replacing 3 previously-duplicated ad hoc checks): once
+before loading any data, once again immediately before persisting — a
+newer generation starting mid-computation is caught by the second check and
+nothing is written. `completeBoundedEnrichStage()` is the one shared
+failure handler (replacing what would otherwise be 9 hand-copied ~100-150
+line blocks): any `ok:false` outcome — including `limitExceeded`,
+`DOWNSTREAM_FUNCTION_FAILED` (546-shaped), schema failures, and persistence
+failures — marks the `pipeline_jobs` row `"failed"` with the **original**
+error code/message preserved verbatim, sets `ui_review_payload.enrichment_status = "failed"`
+(never `"completed"`/`"completed_with_warnings"`), blocks any further stage
+from enqueueing, and re-runs `finalize_lease_extraction_for_review` so
+approval-time readiness re-evaluation sees the failure. Per the user's
+explicit, repeated instruction, this RPC call still passes
+`p_package_mode`/`p_financial_mode` (`completion.ts`'s
+`callFinalizeExtractionReadiness()`) even though the live deployed function
+doesn't yet accept them (the same pending mismatch `FAILED_EXTRACTION_ROOT_CAUSE.md`
+documents) — the mismatch stays visible everywhere this RPC is called
+rather than being quietly special-cased away here.
+
+### 7.6 Bugs found and fixed while proving this (all real — the byte-equivalence test earned its keep)
+
+`_tests/enrich-bounded-stages.test.ts` asserts the bounded chain's final
+output is byte-equivalent to the monolithic `buildReviewPayload()` call for
+an identical fixture. Three real divergences were caught and fixed while
+getting that assertion to pass:
+
+- **Workflow-abstraction stages were reading the wrong row.**
+  `buildReviewPayload()`'s monolithic path always feeds `buildLeaseWorkflowAbstraction()`
+  the row with Lease Truth Assembly's canonical overrides already applied
+  (`truthAssemblyEffectiveRows`, per an existing in-code comment: "so the
+  frontend's fallback hierarchy doesn't show an un-reconciled value").
+  `handleBoundedEnrichStage()` initially passed the raw row to stages 2–4,
+  producing subtly wrong output (caught via
+  `profile_detection_signals.context_text_chars`/`unmapped_items_count`
+  mismatches). Fixed by computing the same "effective row" once, near the
+  top of the handler, and using it for stages 2–4 — while correctly leaving
+  the evidence-domain/remainder stages on the RAW row, matching
+  `buildReviewPayload`'s own evidence loop (whose Lease Truth Assembly
+  override happens later, per-field, inside `buildStandardFieldsForEntries`
+  itself).
+- **Pooling the 5 domain stages + remainder did not restore schema field
+  order.** Concatenating `[...evidenceByDomain.flat(), ...remainderFields]`
+  in dispatch order produces the right SET of fields but in the wrong
+  ORDER — the monolithic single-pass loop always emits fields in the
+  schema's declared order. Fixed with a new shared helper,
+  `reorderStandardFieldsBySchema()` (`domain-fields.ts`), used identically
+  by both `handleBoundedEnrichStage`'s `enrich_truth_assembly` case and the
+  test's own pooling helper — keeps the reviewer-facing field order stable
+  regardless of which stage produced a given field.
+- **A blank `"notes"` field's CAM-sentence fallback was silently dropped.**
+  `buildReviewPayload()`'s row loop has a lease-specific fallback,
+  independent of `buildStandardFieldsForEntries()`: when `values.notes` is
+  blank, `extractCamNoteFromText(doclingRaw)` pulls a CAM sentence directly
+  from the document text. This lives in `buildReviewPayload`'s own
+  `rows.map()`, so it never ran for the bounded evidence-domain/remainder
+  stages, which build their own local `values` independently. The schema's
+  `notes` field is deliberately `extractionMode: "human_only"` with no
+  labels (by design, to avoid false-positive matches — see its schema
+  comment), so this omission wasn't a validation-safety issue, but it was a
+  real, silent feature regression for lease documents. Fixed by applying
+  the identical `extractCamNoteFromText` fallback at both bounded call
+  sites (and the test's own pooling helper) — `extractCamNoteFromText` and
+  `isBlank` are now exported via `__test__` so the test reuses the exact
+  production logic rather than re-implementing the regex.
+
+A stale doc comment in `enrich-stage-limits.ts` describing a "slice and
+re-enqueue" splitting behavior that was never implemented (superseded by
+the plain `BOUNDED_STAGE_LIMIT_EXCEEDED` terminal failure, per §7.5) was
+also corrected to match actual behavior.
+
+### 7.7 Test results
+
+- **`_tests/lease-workflow-stage-split.test.ts`** (4 tests) — each of the 4
+  workflow-abstraction stage functions produces output identical to running
+  today's single `buildLeaseWorkflowAbstraction()` call, plus a shape-stability
+  regression anchor.
+- **`_tests/enrich-evidence-domain-split.test.ts`** (5 tests) — the 5
+  `LlmCallDomain` buckets partition the lease schema with no field claimed
+  twice and none dropped; pooling all 5 + the remainder reproduces the
+  unrestricted evidence loop's output field-for-field.
+- **`_tests/enrich-bounded-stages.test.ts`** (17 tests) — all scenarios
+  from the required list: exact stage order and traversal; exactly one
+  stage advances per invocation; a completed stage is reused idempotently
+  and rejects a generation/version mismatch; resuming from an
+  already-persisted earlier stage without recomputing it; a terminal
+  failure enqueues nothing further; a stale generation (both pre- and
+  post-compute) persists nothing; duplicate dispatch returns the existing
+  job, not a second row; an oversized stage input fails explicitly with
+  `BOUNDED_STAGE_LIMIT_EXCEEDED` with zero partial persistence; the mode
+  flag defaults `"off"`; `enrich_truth_assembly`'s completion enqueues
+  nothing further; the byte-equivalence gate (§7.6, including truth-assembly
+  markers on the pooled output); pooled evidence spans all 5 domains; a
+  546-shaped failure is a plain terminal failure with the original error
+  preserved and `enrichment_status` never softened to
+  `"completed_with_warnings"`; canonical-only reconstruction makes zero
+  Azure/zero OpenAI calls.
+- **Regression baseline** — the extraction-pipeline-relevant existing suite
+  (`lease-truth-assembly*.test.ts`, `adaptive-extraction-*.test.ts`,
+  `openai-fact-ledger.test.ts`, `lease-extraction-worker-reconciliation.test.ts`,
+  `business-extraction-mock-gate.test.ts`,
+  `business-extraction-provider-default-failsafe.test.ts`,
+  `lease-assignment-semantic-extraction.test.ts`) run together with all 3
+  new files: **134 passed, 0 failed**.
+- **`deno check`** on every modified/new file (`normalize-pdf-output/index.ts`,
+  `lease-extraction-worker/index.ts`, `lease-workflow.ts`,
+  `generation-fence.ts`, `enrich-stage-limits.ts`, every file under
+  `enrich-bounded-stage/`, and all 3 new test files): clean, zero errors.
+- **Not run**: the repo's full `_tests/` directory as one invocation fails
+  ~400 pre-existing tests with `createClient(...)` errors (`SUPABASE_URL`
+  and friends are unset in this sandbox — no live Supabase connection
+  exists here; see the earlier "Full product audit" finding this repo
+  already has on file). Confirmed these are pre-existing and
+  environment-only, not caused by this change: none are in files this pass
+  touched, and every one fails identically with `git stash` applied to
+  every change in this section.
+
+### 7.8 What was deferred, and why (same honesty standard as §4/§6.5)
+
+- **Real bounded-slice splitting for oversized single-stage input** — not
+  built (§7.5). An oversized document fails loudly instead, which is safe
+  but not yet a complete fix for the very largest documents; real slicing
+  is real, separate work.
+- **`"shadow"` mode's dual-run comparison** — `ENRICH_BOUNDED_STAGE_MODE`
+  defines three values (`feature-mode.ts`), but only `"active"` is actually
+  consulted at either dispatch site; `"shadow"` currently behaves exactly
+  like `"off"`. The flag value exists and is tested
+  (`getEnrichBoundedStageMode()`'s own unit test), but the "run both, log a
+  comparison, don't yet trust the new path" behavior the flag's own doc
+  comment describes is not wired to anything yet — flagged here rather than
+  implied to work.
+- **Per-stage `merged_field_sources` contribution** — the merge mechanism
+  exists (`mergeBoundedStageResult`'s `fieldContributions` parameter) but no
+  current stage populates it (§7.4) — there is currently nothing for it to
+  contribute, since no bounded stage discovers a field value normalize
+  didn't already extract. Worth revisiting if a future stage ever needs to
+  add new field-level facts mid-chain.
+- **Telemetry is logged, not aggregated.** `startBoundedStageTelemetry()`
+  produces a real per-stage record (byte counts, duration, best-effort
+  `Deno.memoryUsage()`) passed to `logger.event()`, but nothing yet reads it
+  back into a dashboard or a stored rollup — it exists to make a future
+  "which stage actually needs splitting" decision possible, not to answer
+  it yet.
+- **Real-document validation** — same constraint as §3/§6.3: no live Azure/
+  OpenAI credentials in this sandbox, so no genuine 546-prone document has
+  been run through the bounded chain end-to-end. The byte-equivalence test
+  proves the bounded chain computes the SAME thing the monolithic path
+  does for a fixture small enough to run both ways in a test process; it
+  cannot itself prove the bounded chain avoids 546 on a real oversized
+  document — that requires the live run in §7.9.
+
+### 7.9 Remaining remote prerequisites (nothing in this list has been done)
+
+1. **Push the migration**: `supabase/migrations/20260880000000_enrich_bounded_stage_names.sql`
+   widens `pipeline_jobs_stage_check` to allow the 10 new stage names
+   (`enrich` itself stays allowed). Required before `ENRICH_BOUNDED_STAGE_MODE`
+   can be set to anything other than `"off"` in that environment — without
+   it, `enqueue_pipeline_job` will reject every bounded-stage row with a
+   constraint violation.
+2. **Deploy the 2 modified Edge Functions** (`normalize-pdf-output`,
+   `lease-extraction-worker`) plus the new shared modules under
+   `_shared/extraction/enrich-bounded-stage/`, `generation-fence.ts`, and
+   `enrich-stage-limits.ts`.
+3. **Set `ENRICH_BOUNDED_STAGE_MODE=active`** as a runtime secret in the
+   target environment once (1) and (2) are done — until set, the deployed
+   code behaves identically to today (flag defaults `"off"`), so deploying
+   alone is safe and reversible.
+4. **Validate against a real 546-prone document** (§7.8's last point) before
+   trusting this in production — the concrete next step, same shape as
+   §6.6's recommendation for the Section-Aware Candidate Router.
+5. Tune `enrich-stage-limits.ts`'s per-stage limits once real telemetry
+   (§7.8) exists from that validation run — the current numbers are
+   estimates.
+
+No deployment, migration push, or remote action was taken in this pass.

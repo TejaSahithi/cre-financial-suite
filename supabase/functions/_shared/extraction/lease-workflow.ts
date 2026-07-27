@@ -4382,47 +4382,96 @@ function finalizeDerivedExpenseRules(rules: Record<string, unknown>[]) {
   return [...deduped.values()];
 }
 
-export function buildLeaseWorkflowAbstraction(args: {
+/**
+ * Bounded-enrich-refactor stage split of buildLeaseWorkflowAbstraction (see
+ * FAILED_EXTRACTION_ROOT_CAUSE.md and the "Bounded Per-Domain Enrich
+ * Refactor" plan). buildClauseRecords/buildLeaseFieldMap are, per an
+ * in-repo comment on buildClauseRecords, "the dominant cost behind
+ * normalize-pdf-output's 'not enough compute resources' failures on long
+ * leases" -- each is its own O(N-definitions x full-document-text) regex
+ * sweep. These 4 stage functions let each sweep run in its own bounded Edge
+ * Function invocation (own memory budget, released before the next starts)
+ * instead of all four running back-to-back in one invocation. They do NOT
+ * change behavior on their own -- buildLeaseWorkflowAbstraction below still
+ * calls all 4 in sequence, in one invocation, exactly as before, for every
+ * existing caller. Only the new bounded-enrich-stage handlers in
+ * normalize-pdf-output/index.ts call these directly, one per invocation,
+ * serializing each stage's output to/from uploaded_files.normalized_output
+ * in between (see the plan's "Request/response contract" section).
+ */
+
+export interface LeaseWorkflowStage1Output {
+  clauses: LeaseWorkflowClause[];
+}
+
+/** Stage 1: clause-record generation only. Independent of every other stage. */
+export function runLeaseWorkflowStage1Clauses(args: {
+  doclingRaw?: Record<string, unknown> | null;
+}): LeaseWorkflowStage1Output {
+  const doclingRaw = args?.doclingRaw || {};
+  const fullText = cleanText(doclingRaw?.full_text || "");
+  const clauses = buildClauseRecords(doclingRaw, fullText);
+  return { clauses };
+}
+
+export interface LeaseWorkflowStage2Output {
+  leaseFields: Record<string, LeaseWorkflowField>;
+  profileDetection: ReturnType<typeof detectDocumentProfileSignals>;
+  documentProfile: string;
+}
+
+/** Stage 2: first-pass profile detection + full field-map extraction. Depends on stage 1's clauses. */
+export function runLeaseWorkflowStage2Fields(args: {
   row: Record<string, unknown>;
   doclingRaw?: Record<string, unknown> | null;
   documentSubtype?: string | null;
-  unmappedLlmFields?: Array<{ key: string; value: unknown; sourceText?: string | null; sourcePage?: number | null; confidence?: number | null }>;
-  /** Optional — when present, short-circuits the regex-based profile
-   *  classifier (e.g. openai_fact_ledger's OpenAI-classified profile).
-   *  Undefined/null preserves existing regex-detection behavior exactly. */
   documentProfileOverride?: string | null;
-  /** Optional — pre-built document items (e.g. from openai_fact_ledger's
-   *  dynamic-fact-surfacer.ts) merged into extractedDocumentItems via the
-   *  existing dedup logic in buildUniversalDocumentItems. Undefined/empty
-   *  preserves existing behavior exactly. */
-  factLedgerDynamicItems?: any[];
-}) {
+  unmappedLlmFields?: Array<{ key: string; value: unknown; sourceText?: string | null; sourcePage?: number | null; confidence?: number | null }>;
+  stage1: LeaseWorkflowStage1Output;
+}): LeaseWorkflowStage2Output {
   const row = args?.row || {};
   const doclingRaw = args?.doclingRaw || {};
   const fullText = cleanText(doclingRaw?.full_text || "");
-  // doclingPagesParsed = number of distinct pages Docling produced text
-  // blocks for. For scanned / handwritten PDFs this is often << the real
-  // page count because Docling can't structure-parse image-only pages.
-  // pdfPageCountTotal = the source PDF's actual page count, surfaced by
-  // parse-document-azure on doclingRaw.page_count. When file bytes are sent
-  // to Azure Document Intelligence Azure Document Intelligence reads all pages,
-  // even when Docling only produced text blocks for one.
-  const doclingPagesParsed = new Set(
-    asArray(doclingRaw?.text_blocks)
-      .map((block) => sourcePageOf(block))
-      .filter((page) => page != null),
-  ).size;
-  const pdfPageCountTotal = (() => {
-    const n = Number((doclingRaw as any)?.page_count);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  })();
-  // Back-compat: keep `pages_detected` as docling-parsed pages so older
-  // panels keep working. New panels can read pdf_page_count_total.
-  const pagesDetected = doclingPagesParsed;
-  const clauses = buildClauseRecords(doclingRaw, fullText);
-  let profileDetection = detectDocumentProfileSignals(fullText, args?.documentSubtype || null);
-  let documentProfile = args?.documentProfileOverride || profileDetection.selected_document_profile;
-  const leaseFields = buildLeaseFieldMap(row, doclingRaw, clauses, args?.unmappedLlmFields);
+  const profileDetection = detectDocumentProfileSignals(fullText, args?.documentSubtype || null);
+  const documentProfile = args?.documentProfileOverride || profileDetection.selected_document_profile;
+  const leaseFields = buildLeaseFieldMap(row, doclingRaw, args.stage1.clauses, args?.unmappedLlmFields);
+  return { leaseFields, profileDetection, documentProfile };
+}
+
+export interface LeaseWorkflowStage3Output {
+  leaseFields: Record<string, LeaseWorkflowField>;
+  clauses: LeaseWorkflowClause[];
+  extractedDocumentItems: any[];
+  documentProfile: string;
+  profileDetection: ReturnType<typeof detectDocumentProfileSignals>;
+  genericSourceTextRejected: number;
+}
+
+/**
+ * Stage 3: universal document items (both passes -- the second is a
+ * genuine re-run, not redundant, because the intervening profile
+ * re-detection below can change documentProfile, which the second pass's
+ * item extraction depends on) + field-evidence/expense-cam evidence clause
+ * augmentation + generic-source-text rejection. Depends on stage 2's
+ * leaseFields/documentProfile/profileDetection.
+ */
+export function runLeaseWorkflowStage3Items(args: {
+  row: Record<string, unknown>;
+  doclingRaw?: Record<string, unknown> | null;
+  documentSubtype?: string | null;
+  documentProfileOverride?: string | null;
+  factLedgerDynamicItems?: any[];
+  stage1: LeaseWorkflowStage1Output;
+  stage2: LeaseWorkflowStage2Output;
+}): LeaseWorkflowStage3Output {
+  const row = args?.row || {};
+  const doclingRaw = args?.doclingRaw || {};
+  const fullText = cleanText(doclingRaw?.full_text || "");
+  const leaseFields = args.stage2.leaseFields;
+  const clauses = [...args.stage1.clauses];
+  let documentProfile = args.stage2.documentProfile;
+  let profileDetection = args.stage2.profileDetection;
+
   let extractedDocumentItems = buildUniversalDocumentItems({
     row,
     doclingRaw,
@@ -4466,6 +4515,56 @@ export function buildLeaseWorkflowAbstraction(args: {
     }
     return count;
   }, 0);
+
+  return { leaseFields, clauses, extractedDocumentItems, documentProfile, profileDetection, genericSourceTextRejected };
+}
+
+/**
+ * Stage 4: expense-rule/CAM/budget/validation derivation -- explicitly
+ * cross-cutting (reads fields spanning every domain simultaneously), so
+ * this correctly runs LAST, once, over stages 1-3's pooled output, and
+ * produces the exact same shape buildLeaseWorkflowAbstraction has always
+ * returned. Depends on stages 1-3.
+ */
+export function runLeaseWorkflowStage4Derivation(args: {
+  row: Record<string, unknown>;
+  doclingRaw?: Record<string, unknown> | null;
+  documentSubtype?: string | null;
+  documentProfileOverride?: string | null;
+  stage1: LeaseWorkflowStage1Output;
+  stage2: LeaseWorkflowStage2Output;
+  stage3: LeaseWorkflowStage3Output;
+}) {
+  const row = args?.row || {};
+  const doclingRaw = args?.doclingRaw || {};
+  const fullText = cleanText(doclingRaw?.full_text || "");
+  // doclingPagesParsed = number of distinct pages Docling produced text
+  // blocks for. For scanned / handwritten PDFs this is often << the real
+  // page count because Docling can't structure-parse image-only pages.
+  // pdfPageCountTotal = the source PDF's actual page count, surfaced by
+  // parse-document-azure on doclingRaw.page_count. When file bytes are sent
+  // to Azure Document Intelligence Azure Document Intelligence reads all pages,
+  // even when Docling only produced text blocks for one.
+  const doclingPagesParsed = new Set(
+    asArray(doclingRaw?.text_blocks)
+      .map((block) => sourcePageOf(block))
+      .filter((page) => page != null),
+  ).size;
+  const pdfPageCountTotal = (() => {
+    const n = Number((doclingRaw as any)?.page_count);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  })();
+  // Back-compat: keep `pages_detected` as docling-parsed pages so older
+  // panels keep working. New panels can read pdf_page_count_total.
+  const pagesDetected = doclingPagesParsed;
+
+  const leaseFields = args.stage3.leaseFields;
+  const clauses = args.stage3.clauses;
+  const extractedDocumentItems = args.stage3.extractedDocumentItems;
+  const documentProfile = args.stage3.documentProfile;
+  const profileDetection = args.stage3.profileDetection;
+  const genericSourceTextRejected = args.stage3.genericSourceTextRejected;
+
   const assignmentItems = extractedDocumentItems.filter((item) =>
     ["assignment_amendment", "parties_premises", "dates_term", "rent_charges"].includes(String(item.business_area || "")) &&
     ["assignment", "amendment", "assignment_amendment"].includes(documentProfile)
@@ -4812,6 +4911,58 @@ export function buildLeaseWorkflowAbstraction(args: {
   };
 }
 
+/**
+ * Unchanged public entry point -- every existing caller (buildReviewPayload,
+ * tests, etc.) keeps calling this exactly as before, in one invocation, with
+ * IDENTICAL output. It's now a thin composition of the 4 stage functions
+ * above rather than one monolithic body. The new bounded-enrich-stage
+ * handlers in normalize-pdf-output/index.ts call the 4 stage functions
+ * directly instead, one per Edge Function invocation.
+ */
+export function buildLeaseWorkflowAbstraction(args: {
+  row: Record<string, unknown>;
+  doclingRaw?: Record<string, unknown> | null;
+  documentSubtype?: string | null;
+  unmappedLlmFields?: Array<{ key: string; value: unknown; sourceText?: string | null; sourcePage?: number | null; confidence?: number | null }>;
+  /** Optional — when present, short-circuits the regex-based profile
+   *  classifier (e.g. openai_fact_ledger's OpenAI-classified profile).
+   *  Undefined/null preserves existing regex-detection behavior exactly. */
+  documentProfileOverride?: string | null;
+  /** Optional — pre-built document items (e.g. from openai_fact_ledger's
+   *  dynamic-fact-surfacer.ts) merged into extractedDocumentItems via the
+   *  existing dedup logic in buildUniversalDocumentItems. Undefined/empty
+   *  preserves existing behavior exactly. */
+  factLedgerDynamicItems?: any[];
+}) {
+  const stage1 = runLeaseWorkflowStage1Clauses({ doclingRaw: args?.doclingRaw });
+  const stage2 = runLeaseWorkflowStage2Fields({
+    row: args?.row,
+    doclingRaw: args?.doclingRaw,
+    documentSubtype: args?.documentSubtype,
+    documentProfileOverride: args?.documentProfileOverride,
+    unmappedLlmFields: args?.unmappedLlmFields,
+    stage1,
+  });
+  const stage3 = runLeaseWorkflowStage3Items({
+    row: args?.row,
+    doclingRaw: args?.doclingRaw,
+    documentSubtype: args?.documentSubtype,
+    documentProfileOverride: args?.documentProfileOverride,
+    factLedgerDynamicItems: args?.factLedgerDynamicItems,
+    stage1,
+    stage2,
+  });
+  return runLeaseWorkflowStage4Derivation({
+    row: args?.row,
+    doclingRaw: args?.doclingRaw,
+    documentSubtype: args?.documentSubtype,
+    documentProfileOverride: args?.documentProfileOverride,
+    stage1,
+    stage2,
+    stage3,
+  });
+}
+
 // Test hook (same pattern as _shared/extraction/parser.ts).
 export const __test__ = {
   buildClauseRecords,
@@ -4821,4 +4972,8 @@ export const __test__ = {
   buildBudgetHandoffReadiness,
   profileSignalContext,
   PROFILE_SIGNAL_CONTEXT_MAX_CHARS,
+  runLeaseWorkflowStage1Clauses,
+  runLeaseWorkflowStage2Fields,
+  runLeaseWorkflowStage3Items,
+  runLeaseWorkflowStage4Derivation,
 };
