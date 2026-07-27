@@ -349,12 +349,16 @@ const NON_BASE_RENT_MONETARY_ROLES: MonetaryRole[] = [
 ];
 
 /**
- * Explicit, bounded field set: the 10 fields Micro-step 0 already tracks
- * provenance for (fact-field-mapper.ts's TRACKED_PROVENANCE_FIELDS) plus
- * tax_responsibility, a direct generalization of the electric_responsibility
- * "utility/expense category + responsibilityRole=pays" pattern the field
- * examples themselves describe as a template. Extending coverage beyond this
- * set is a deliberate, separate decision -- not a side effect of this change.
+ * Full field semantic requirement coverage — extended from the original 15 fields
+ * to 73 fields, covering every LEASE_SCHEMA field that had zero semantic role
+ * protection. Each entry is a hard accept/reject gate: an incompatible candidate
+ * is rejected outright (score forced to 0), never merely down-scored.
+ *
+ * Design rule (unchanged from original): rejected-category/pattern matches are
+ * the only hard vetoes. An allowed-category match is a strong positive signal,
+ * never a requirement. "unconfigured" fields (no entry here) are fully
+ * unconstrained — preserving pre-extension behavior for fields intentionally
+ * left open (e.g. notes, status).
  */
 export const FIELD_SEMANTIC_REQUIREMENTS: Record<string, FieldSemanticRule> = {
   monthly_rent: {
@@ -494,6 +498,490 @@ export const FIELD_SEMANTIC_REQUIREMENTS: Record<string, FieldSemanticRule> = {
     // unrelated label -- requires the source text to actually be framed as a
     // late/delinquent-payment penalty, not just any nearby dollar amount.
     requireMonetaryRole: ["penalty"],
+  },
+
+  // ── Extension: all remaining LEASE_SCHEMA fields ─────────────────────────
+  // The 15 fields above were the original set. All remaining fields had
+  // ZERO semantic role protection -- any fact clearing MIN_LABEL_SCORE was
+  // accepted regardless of meaning. Each entry below closes that gap.
+
+  // ── Monetary charge fields ─────────────────────────────────────────────────
+  security_deposit: {
+    requireMonetaryRole: ["deposit"],
+    // A deposit clause must reference "deposit" or "security" -- never accept
+    // a rent-schedule dollar figure that merely scored on keyword proximity.
+    custom: (profile, ctx) => {
+      if (!/\bdeposit\b|\bsecurity\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "security_deposit: source text does not reference a deposit or security context" };
+      }
+      return { compatible: true };
+    },
+  },
+  cam_amount: {
+    requireMonetaryRole: ["cam"],
+    // Must reference CAM or common area explicitly -- not just any dollar figure
+    // near the word "common".
+    custom: (profile, ctx) => {
+      if (!/\bcam\b|\bcommon\s+area\s+maintenance\b|\boperating\s+expense/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "cam_amount: source text does not reference CAM or common area maintenance" };
+      }
+      return { compatible: true };
+    },
+  },
+  parking_fee_amount: {
+    requireMonetaryRole: ["utility_charge", "one_time_charge"],
+    rejectMonetaryRole: ["base_rent", "deposit", "penalty", "allowance"],
+    custom: (profile, ctx) => {
+      if (!/\bparking\b|\bgarage\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "parking_fee_amount: source text does not reference parking or garage" };
+      }
+      return { compatible: true };
+    },
+  },
+  returned_payment_fee_amount: {
+    requireMonetaryRole: ["penalty"],
+    custom: (profile, ctx) => {
+      if (!/\breturned\b|\bbounced\b|\bdishonored\b|\bnsf\b|\bnon[- ]?sufficient/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "returned_payment_fee_amount: source text does not reference a returned/bounced payment" };
+      }
+      return { compatible: true };
+    },
+  },
+  administrative_fee_amount: {
+    // Flat dollar admin fee billed to tenant directly -- NOT the CAM
+    // admin_fee_pct percentage. Rejects percentage-only evidence.
+    rejectMonetaryRole: ["base_rent", "deposit", "penalty"],
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (!/\badministrative\b|\badmin\b/i.test(s)) {
+        return { compatible: false, reason: "administrative_fee_amount: source text does not reference administrative or admin context" };
+      }
+      // Reject if value looks like a percentage rate (the CAM admin_fee_pct
+      // field, not this flat-dollar field).
+      const valueStr = String(ctx.value ?? "");
+      if (/\d+\s*%|percent/i.test(valueStr)) {
+        return { compatible: false, reason: "administrative_fee_amount: value appears to be a percentage rate, not a flat dollar amount" };
+      }
+      return { compatible: true };
+    },
+  },
+  utility_reimbursement_amount: {
+    requireMonetaryRole: ["utility_charge", "reimbursement"],
+    custom: (profile, ctx) => {
+      if (!/\butility\b|\butilities\b|\breimburse/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "utility_reimbursement_amount: source text does not reference utility or reimbursement" };
+      }
+      return { compatible: true };
+    },
+  },
+  water_sewer_reimbursement_amount: {
+    requireMonetaryRole: ["utility_charge", "reimbursement"],
+    custom: (profile, ctx) => {
+      if (!/\bwater\b|\bsewer\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "water_sewer_reimbursement_amount: source text does not reference water or sewer" };
+      }
+      return { compatible: true };
+    },
+  },
+  general_liability_min: {
+    // General liability minimum is a coverage amount (dollar value) in an
+    // insurance context -- not a rent, not a fee. Use a custom check rather
+    // than requireMonetaryRole since the coverage amount may not classify
+    // cleanly as any monetary role.
+    rejectMonetaryRole: ["base_rent", "deposit", "penalty", "cam", "tax", "allowance"],
+    custom: (profile, ctx) => {
+      if (!/\bgeneral\s+liability\b|\bcgl\b|\bcommercial\s+general\b|\bliability\s+insurance\b|\bliability\s+coverage\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "general_liability_min: source text does not reference general liability or CGL insurance coverage" };
+      }
+      return { compatible: true };
+    },
+  },
+  expense_stop: {
+    rejectMonetaryRole: ["base_rent", "deposit", "penalty", "allowance", "cam"],
+    custom: (profile, ctx) => {
+      if (!/\bexpense\s+stop\b|\bexpense\s+cap\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "expense_stop: source text does not reference an expense stop or expense cap" };
+      }
+      return { compatible: true };
+    },
+  },
+  amended_base_rent_for_additional_year: {
+    requireMonetaryRole: ["base_rent"],
+    rejectMonetaryRole: NON_BASE_RENT_MONETARY_ROLES,
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (!/\badditional\s+year\b|\bamended\b|\bextension\b|\bamendment\b|\bextended\s+term\b/i.test(s)) {
+        return { compatible: false, reason: "amended_base_rent_for_additional_year: source text does not reference an amendment, additional year, or extension period" };
+      }
+      return { compatible: true };
+    },
+  },
+  assignment_consideration: {
+    rejectMonetaryRole: ["base_rent", "deposit", "cam", "tax", "penalty"],
+    custom: (profile, ctx) => {
+      if (!/\bassignment\b|\bconsideration\b|\btransfer\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "assignment_consideration: source text does not reference an assignment or consideration" };
+      }
+      return { compatible: true };
+    },
+  },
+
+  // ── Date fields ────────────────────────────────────────────────────────────
+  lease_date: {
+    // Execution or effective date of the lease document itself -- rejects
+    // term commencement, expiration, and signature block dates.
+    requireDateRole: ["execution", "effective"],
+    rejectDateRole: ["commencement", "expiration", "rent_commencement", "option_exercise"],
+  },
+  rent_commencement_date: {
+    requireDateRole: ["rent_commencement", "commencement"],
+    rejectDateRole: ["signature", "execution", "expiration", "option_exercise"],
+  },
+  tenant_signature_date: {
+    requireDateRole: ["signature", "execution"],
+    // Must come from a tenant context in the signature block.
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (!/\btenant\b|\blessee\b/i.test(s)) {
+        return { compatible: false, reason: "tenant_signature_date: source text does not reference tenant or lessee" };
+      }
+      return { compatible: true };
+    },
+  },
+  landlord_signature_date: {
+    requireDateRole: ["signature", "execution"],
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (!/\blandlord\b|\blessor\b/i.test(s)) {
+        return { compatible: false, reason: "landlord_signature_date: source text does not reference landlord or lessor" };
+      }
+      return { compatible: true };
+    },
+  },
+  assignment_effective_date: {
+    requireDateRole: ["effective", "execution"],
+    custom: (profile, ctx) => {
+      if (!/\bassignment\b|\bassign/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "assignment_effective_date: source text does not reference an assignment" };
+      }
+      return { compatible: true };
+    },
+  },
+  option_exercise_deadline: {
+    requireDateRole: ["option_exercise", "notice"],
+    rejectDateRole: ["signature", "execution", "commencement", "expiration"],
+  },
+
+  // ── Notice period fields ──────────────────────────────────────────────────
+  renewal_notice_months: {
+    // Must be framed as required advance notice for a renewal option.
+    requireClauseRole: ["notice", "option"],
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (!/\brenewal\b|\brenew\b|\boption\b|\bextension\b/i.test(s)) {
+        return { compatible: false, reason: "renewal_notice_months: source text does not reference a renewal or option context" };
+      }
+      if (!/\bnotice\b|\bprior\b|\badvance\b|\bat\s+least\b|\bnot\s+less\s+than\b/i.test(s)) {
+        return { compatible: false, reason: "renewal_notice_months: source text has no advance-notice timing language" };
+      }
+      return { compatible: true };
+    },
+  },
+  termination_notice_months: {
+    requireClauseRole: ["notice", "option"],
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (!/\bterminat/i.test(s)) {
+        return { compatible: false, reason: "termination_notice_months: source text does not reference termination" };
+      }
+      if (!/\bnotice\b|\bprior\b|\badvance\b/i.test(s)) {
+        return { compatible: false, reason: "termination_notice_months: source text has no advance-notice timing language" };
+      }
+      return { compatible: true };
+    },
+  },
+
+  // ── Party / entity fields ─────────────────────────────────────────────────
+  tenant_name: {
+    requirePartyRole: ["tenant"],
+    rejectPartyRole: ["broker", "guarantor", "property_manager", "lender"],
+    // Must NOT come from an indemnification, M&A, or transfer clause.
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (/\bclosely\s+held\b|\bvoting\s+shares\b|\breorganization\b|\bmerger\b|\bconsolidation\b/i.test(s)) {
+        return { compatible: false, reason: "tenant_name: source text describes an M&A or reorganization clause, not a party identification clause" };
+      }
+      return { compatible: true };
+    },
+  },
+  landlord_name: {
+    requirePartyRole: ["landlord"],
+    rejectPartyRole: ["broker", "guarantor", "property_manager", "lender", "tenant"],
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (/\bclosely\s+held\b|\bvoting\s+shares\b|\breorganization\b|\bmerger\b|\bconsolidation\b/i.test(s)) {
+        return { compatible: false, reason: "landlord_name: source text describes an M&A or reorganization clause" };
+      }
+      return { compatible: true };
+    },
+  },
+  landlord_signatory_name: {
+    requirePartyRole: ["signatory"],
+    custom: (profile, ctx) => {
+      const sourceText = String(ctx.sourceText ?? "");
+      const hasSignatureFraming = /\bby\s*:|\bname\s*:|\btitle\s*:|\bits\s*:|authorized\s+(?:signatory|representative|officer)|witness(?:ed)?\s+whereof/i.test(sourceText);
+      if (!hasSignatureFraming) {
+        return { compatible: false, reason: "landlord_signatory_name: source text has no signature-block or representative framing" };
+      }
+      if (!/\blandlord\b|\blessor\b/i.test(sourceText)) {
+        return { compatible: false, reason: "landlord_signatory_name: source text does not reference landlord or lessor" };
+      }
+      return { compatible: true };
+    },
+  },
+  assignor_name: {
+    requirePartyRole: ["assignee", "tenant"],
+    custom: (profile, ctx) => {
+      if (!/\bassignor\b|\boriginal\s+tenant\b|\bcurrent\s+tenant\b|\btransferor\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "assignor_name: source text does not reference an assignor or original tenant" };
+      }
+      return { compatible: true };
+    },
+  },
+  assignee_name: {
+    requirePartyRole: ["assignee"],
+    custom: (profile, ctx) => {
+      if (!/\bassignee\b|\bnew\s+tenant\b|\bsuccessor\s+tenant\b|\btransferee\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "assignee_name: source text does not reference an assignee or new tenant" };
+      }
+      return { compatible: true };
+    },
+  },
+
+  // ── Responsibility enum fields ─────────────────────────────────────────────
+  responsibility_taxes: {
+    requireMonetaryRole: ["tax"],
+    requireResponsibilityRole: ["pays", "allocates"],
+    rejectResponsibilityRole: ["repairs", "maintains", "replaces"],
+  },
+  responsibility_insurance: {
+    requireResponsibilityRole: ["pays", "insures"],
+    rejectResponsibilityRole: ["repairs", "maintains", "replaces"],
+    custom: (profile, ctx) => {
+      if (!/\binsurance\b|\bpremium\b|\bcoverage\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "responsibility_insurance: source text does not reference insurance or premium" };
+      }
+      return { compatible: true };
+    },
+  },
+  responsibility_utilities: {
+    requireMonetaryRole: ["utility_charge"],
+    requireResponsibilityRole: ["pays", "allocates"],
+    rejectResponsibilityRole: ["repairs", "maintains", "replaces"],
+  },
+  hvac_responsibility: {
+    requireResponsibilityRole: ["repairs", "maintains", "pays", "replaces"],
+    rejectMonetaryRole: ["base_rent", "deposit", "allowance"],
+    custom: (profile, ctx) => {
+      if (!/\bhvac\b|\bheating\b|\bcooling\b|\bventilation\b|\bair\s+(?:conditioning|handler)\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "hvac_responsibility: source text does not reference HVAC, heating, cooling, or ventilation" };
+      }
+      return { compatible: true };
+    },
+  },
+  water_sewer_responsibility: {
+    requireMonetaryRole: ["utility_charge"],
+    requireResponsibilityRole: ["pays"],
+    rejectResponsibilityRole: ["repairs", "maintains", "replaces"],
+    custom: (profile, ctx) => {
+      if (!/\bwater\b|\bsewer\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "water_sewer_responsibility: source text does not reference water or sewer" };
+      }
+      return { compatible: true };
+    },
+  },
+  property_insurance_responsibility: {
+    requireResponsibilityRole: ["pays", "insures"],
+    rejectResponsibilityRole: ["repairs", "maintains", "replaces"],
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (!/\bproperty\s+insurance\b|\bbuilding\s+insurance\b|\bcasualty\s+insurance\b/i.test(s)) {
+        return { compatible: false, reason: "property_insurance_responsibility: source text does not reference property or building insurance" };
+      }
+      if (/\bwaiver\s+of\s+subrogation\b|\bindemnif/i.test(s)) {
+        return { compatible: false, reason: "property_insurance_responsibility: source text is a subrogation waiver or indemnification clause, not a cost-responsibility clause" };
+      }
+      return { compatible: true };
+    },
+  },
+
+  // ── CAM / expense structure fields ────────────────────────────────────────
+  admin_fee_pct: {
+    rejectMonetaryRole: ["base_rent", "deposit", "penalty"],
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (!/\badmin(?:istrative)?\s+(?:fee|expense)\b|\bmanagement\s+fee\b/i.test(s)) {
+        return { compatible: false, reason: "admin_fee_pct: source text does not reference an administrative or management fee on CAM expenses" };
+      }
+      if (/\blate\b|\bdefault\b|\binterest\b|\bpenalty\b/i.test(s)) {
+        return { compatible: false, reason: "admin_fee_pct: source text is about a late fee or penalty, not a CAM administrative fee" };
+      }
+      return { compatible: true };
+    },
+  },
+  cam_cap_pct: {
+    rejectMonetaryRole: ["base_rent", "deposit", "penalty", "allowance"],
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (!/\bcam\b|\bcontrollable\s+(?:expense|operating)\b|\boperating\s+expense\s+cap\b/i.test(s)) {
+        return { compatible: false, reason: "cam_cap_pct: source text does not reference a CAM cap or controllable expense cap" };
+      }
+      return { compatible: true };
+    },
+  },
+  gross_up_threshold: {
+    custom: (profile, ctx) => {
+      if (!/\bgross[- ]up\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "gross_up_threshold: source text does not reference a gross-up provision" };
+      }
+      return { compatible: true };
+    },
+  },
+  base_year: {
+    custom: (profile, ctx) => {
+      if (!/\bbase\s+year\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "base_year: source text does not reference a base year" };
+      }
+      return { compatible: true };
+    },
+  },
+  escalation_rate: {
+    rejectMonetaryRole: ["penalty", "deposit", "cam", "tax", "allowance"],
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (!/\bescalat|\bincreas|\badjust|\brent\b/i.test(s)) {
+        return { compatible: false, reason: "escalation_rate: source text does not reference rent escalation or increase" };
+      }
+      // Reject if this looks like a late-fee percentage, not a rent increase.
+      if (/\blate\b|\bdefault\b|\bpenalty\b|\binterest\b/i.test(s)) {
+        return { compatible: false, reason: "escalation_rate: source text references a late fee or penalty, not a rent escalation" };
+      }
+      return { compatible: true };
+    },
+  },
+
+  // ── Premises / identity fields ────────────────────────────────────────────
+  square_footage: {
+    rejectMonetaryRole: ["base_rent", "deposit", "cam", "tax", "allowance", "penalty"],
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (!/\bsquare\s+fee?t\b|\bsq\.?\s*ft\b|\brsf\b|\bsf\b|\brentable\s+area\b|\bleased\s+area\b/i.test(s)) {
+        return { compatible: false, reason: "square_footage: source text does not reference square footage or rentable area" };
+      }
+      if (/\bbuilding\s+(?:total|rsf|square\s+footage)\b/i.test(s)) {
+        return { compatible: false, reason: "square_footage: source text references the whole building's RSF, not the leased premises area" };
+      }
+      return { compatible: true };
+    },
+  },
+
+  // ── Boolean / presence fields ──────────────────────────────────────────────
+  tenant_insurance_required: {
+    requireClauseRole: ["obligation", "grant"],
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (!/\btenant\b.*\b(?:shall|must|is\s+required|maintain|carry|obtain|provide)\b.*\binsurance\b|\binsurance\b.*\btenant\b.*\bshall\b/i.test(s)) {
+        return { compatible: false, reason: "tenant_insurance_required: source text does not contain operative language requiring tenant to maintain insurance" };
+      }
+      return { compatible: true };
+    },
+  },
+  waiver_of_subrogation: {
+    requireClauseRole: ["obligation", "grant", "condition"],
+    custom: (profile, ctx) => {
+      if (!/\bwaiver\s+of\s+subrogation\b|\bwaive\s+(?:all\s+)?(?:rights?\s+of\s+)?subrogation\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "waiver_of_subrogation: source text does not contain operative waiver-of-subrogation language" };
+      }
+      return { compatible: true };
+    },
+  },
+  additional_insureds_required: {
+    requireClauseRole: ["obligation", "grant"],
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (!/\badditional\s+insured\b/i.test(s)) {
+        return { compatible: false, reason: "additional_insureds_required: source text does not reference additional insured requirements" };
+      }
+      if (!/\bshall\b|\bmust\b|\brequired\b|\bname\b|\bnamed\b/i.test(s)) {
+        return { compatible: false, reason: "additional_insureds_required: source text contains no operative requirement language for additional insureds" };
+      }
+      return { compatible: true };
+    },
+  },
+  gross_up_enabled: {
+    requireClauseRole: ["obligation", "condition", "calculation"],
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (!/\bgross[- ]up\b/i.test(s)) {
+        return { compatible: false, reason: "gross_up_enabled: source text does not reference gross-up" };
+      }
+      // Must be an operative sentence, not just a heading or defined-term mention.
+      if (!/\bshall\b|\bwill\b|\blandlord\s+(?:shall|will|must)\b|\boperating\s+expenses\b/i.test(s)) {
+        return { compatible: false, reason: "gross_up_enabled: source text appears to be a defined-term mention or heading, not an operative gross-up provision" };
+      }
+      return { compatible: true };
+    },
+  },
+  right_of_first_refusal: {
+    requireClauseRole: ["option", "grant"],
+    rejectClauseRole: ["surrender", "holdover", "default"],
+    custom: (profile, ctx) => {
+      if (!/\bright\s+of\s+first\s+refusal\b|\bright\s+of\s+first\s+offer\b|\brofr\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "right_of_first_refusal: source text does not reference a right of first refusal or first offer" };
+      }
+      return { compatible: true };
+    },
+  },
+  early_termination_option: {
+    requireClauseRole: ["option", "grant"],
+    rejectClauseRole: ["default", "remedy", "surrender"],
+    custom: (profile, ctx) => {
+      if (!/\bearly\s+terminat|\btermination\s+option\b|\bearly\s+out\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "early_termination_option: source text does not reference an early termination option" };
+      }
+      return { compatible: true };
+    },
+  },
+  landlord_consent: {
+    requireClauseRole: ["grant", "condition", "obligation"],
+    custom: (profile, ctx) => {
+      if (!/\bconsent\b|\bapproval\b|\bapprove\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "landlord_consent: source text does not reference consent or approval" };
+      }
+      return { compatible: true };
+    },
+  },
+  landlord_consent_for_transfer: {
+    requireClauseRole: ["condition", "obligation", "prohibition"],
+    custom: (profile, ctx) => {
+      const s = String(ctx.sourceText ?? "");
+      if (!/\blandlord\b.*\bconsent\b|\bconsent\b.*\blandlord\b/i.test(s)) {
+        return { compatible: false, reason: "landlord_consent_for_transfer: source text does not reference landlord consent" };
+      }
+      if (!/\bassign|\btransfer\b|\bsublet\b|\bsublease\b/i.test(s)) {
+        return { compatible: false, reason: "landlord_consent_for_transfer: source text does not reference an assignment or transfer" };
+      }
+      return { compatible: true };
+    },
+  },
+  all_other_terms_remain_same: {
+    requireClauseRole: ["condition", "grant"],
+    custom: (profile, ctx) => {
+      if (!/\ball\s+other\s+terms\b|\bremain\s+(?:unchanged|in\s+full\s+force)\b|\bother\s+terms\s+and\s+conditions\b/i.test(String(ctx.sourceText ?? ""))) {
+        return { compatible: false, reason: "all_other_terms_remain_same: source text does not contain all-other-terms-unchanged language" };
+      }
+      return { compatible: true };
+    },
   },
 };
 
