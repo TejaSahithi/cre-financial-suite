@@ -147,16 +147,25 @@ RULES:
 6. If a value is already listed below under "Already resolved deterministically", confirm it
    (re-report the same value) unless the excerpt reveals a genuine conflict -- in which case
    report the excerpt's own version so a human reviewer can compare.
+7. Read every sentence and paragraph of the excerpt, not just the ones that map to a listed
+   field. If the excerpt states a real, verifiable fact in this topic area that does NOT fit any
+   field above (e.g. a specific clause provision, a per-item obligation, a schedule row), report
+   it in "additional_facts" instead of forcing it into the wrong field or dropping it. This is
+   how information reaches its business tab even when the schema has no dedicated field for it.
 
 Output ONLY a valid JSON object of this exact shape:
   {
     "fields": {
       "<field_key>": { "value": <value>, "source_text": "<verbatim quote>", "source_page": <page or null>, "confidence": <0.0-1.0> }
-    }
+    },
+    "additional_facts": [
+      { "category": "<short topic label>", "value": <value>, "source_text": "<verbatim quote>", "source_page": <page or null>, "confidence": <0.0-1.0> }
+    ]
   }
 For a field with no stated value, either omit its key entirely or set it to
   { "not_stated": true }
-Never omit the "fields" key. Only include keys from the schema field list above.`;
+Never omit the "fields" key. Only include keys from the schema field list above in "fields".
+"additional_facts" may be an empty array when nothing in the excerpt falls outside the field list.`;
 }
 
 interface FieldAssignment {
@@ -241,7 +250,7 @@ async function callDomainLlmForFieldAssignment(args: {
   fields: Array<[string, FieldDef]>;
   moduleType: ModuleType;
   provenance?: { supabaseAdmin: any; context: import("../provenance/types.ts").ProvenanceContext };
-}): Promise<{ assignments: Record<string, FieldAssignment>; promptTokens: number | null; completionTokens: number | null; error: string | null }> {
+}): Promise<{ assignments: Record<string, FieldAssignment>; additionalFacts: Fact[]; promptTokens: number | null; completionTokens: number | null; error: string | null }> {
   const { domain, evidenceText, fields, moduleType, provenance } = args;
   const validFieldKeys = new Set(fields.map(([key]) => key));
   try {
@@ -259,8 +268,18 @@ async function callDomainLlmForFieldAssignment(args: {
       )
       : await callLLMJSON(callOpts);
     const assignments = response.data == null ? {} : parseFieldAssignmentResponse(response.data, validFieldKeys);
+    // Reuses fact-ledger-extractor.ts's own parseFactsResponse (same
+    // {category,value,source_text,source_page,confidence} shape, same
+    // grounding/validity checks) -- content the model found real and
+    // relevant but that doesn't fit this domain's named field list. These
+    // flow into the identical unmappedFacts -> surfaceDynamicFacts path
+    // broad extraction always fed, so switching to schema-aware primary
+    // mapping doesn't silently narrow what can reach a business tab.
+    const additionalFactsRaw = (response.data as any)?.additional_facts;
+    const additionalFacts = Array.isArray(additionalFactsRaw) ? parseFactsResponse(additionalFactsRaw) : [];
     return {
       assignments,
+      additionalFacts,
       promptTokens: (response as any)?.promptTokens ?? null,
       completionTokens: (response as any)?.completionTokens ?? null,
       error: null,
@@ -268,6 +287,7 @@ async function callDomainLlmForFieldAssignment(args: {
   } catch (error) {
     return {
       assignments: {},
+      additionalFacts: [],
       promptTokens: null,
       completionTokens: null,
       error: `LLM-primary field assignment failed for domain=${domain}: ${(error as Error)?.message ?? error}`,
@@ -551,8 +571,9 @@ export async function extractFactLedgerAdaptive(args: ExtractFactLedgerAdaptiveA
         primaryMappingUsed = true;
         llmCallsMade += 1;
         totalOutputTokens += primaryResult.completionTokens ?? 0;
+        const additionalFactsTagged = primaryResult.additionalFacts.map((fact) => ({ ...fact, chunkIndex: LLM_CALL_DOMAINS.indexOf(domain) }));
         callResult = {
-          facts: assignmentsToFacts(domain, primaryResult.assignments, LLM_CALL_DOMAINS.indexOf(domain)),
+          facts: [...assignmentsToFacts(domain, primaryResult.assignments, LLM_CALL_DOMAINS.indexOf(domain)), ...additionalFactsTagged],
           promptTokens: primaryResult.promptTokens,
           completionTokens: primaryResult.completionTokens,
           cacheHit: false,

@@ -161,6 +161,31 @@ Deno.test("mapFactsToStandardFields: a semantic-veto-flagged assignment still po
   assertEquals(field.requiresReview, true);
 });
 
+Deno.test("mapFactsToStandardFields: an additional_facts entry (content outside the domain's named field list) reaches unmappedFacts, not silently dropped", () => {
+  // Proves the fix for the gap found when a real reviewer pointed out that
+  // the schema-aware prompt only asks about its own named fields -- content
+  // real and relevant to the document but not one of the 88 fields must
+  // still reach surfaceDynamicFacts's dynamic-row path (unmappedFacts is
+  // exactly that path's input), the same as the old broad-extraction prompt
+  // always provided.
+  const facts: Fact[] = [
+    {
+      category: "clause:default",
+      value: "Tenant shall maintain a certificate of pest control quarterly.",
+      sourceText: "Tenant shall maintain a certificate of pest control quarterly, at Tenant's sole cost.",
+      sourcePage: 14,
+      confidence: 0.8,
+      chunkIndex: 0,
+      // No llmProposedFieldKey -- this came back in additional_facts, not fields.
+    },
+  ];
+  const result = mapFactsToStandardFields({ facts, moduleType: "lease" });
+  assert(
+    result.unmappedFacts.some((f) => f.sourceText.includes("pest control")),
+    "an additional-facts entry with no matching named field must land in unmappedFacts so it can surface as a dynamic row, not vanish",
+  );
+});
+
 Deno.test("mapFactsToStandardFields: a field with no llmProposedFieldKey fact falls through to ordinary keyword scoring unchanged", () => {
   const facts: Fact[] = [
     {
