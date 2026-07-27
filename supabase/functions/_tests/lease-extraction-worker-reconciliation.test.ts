@@ -46,7 +46,7 @@ const JOB = { id: "job-1", metadata: {} };
  * return in order for a given table's SELECT, letting a test simulate "first
  * read fails, retry succeeds" without needing real network flakiness.
  */
-function makeMockSupabase({ rows, selectQueue = {}, alwaysErrorTables = [], updates = [] }: {
+function makeMockSupabase({ rows, selectQueue = {}, alwaysErrorTables = [], updates = [], rpcErrors = {} }: {
   rows: Record<string, any>;
   selectQueue?: Record<string, Array<{ data: any; error: any }>>;
   // Tables listed here return a query error on EVERY select, unconditionally
@@ -55,6 +55,11 @@ function makeMockSupabase({ rows, selectQueue = {}, alwaysErrorTables = [], upda
   // production code issues, resolves to "unknown".
   alwaysErrorTables?: string[];
   updates?: Array<{ table: string; patch: any; filters: Record<string, any> }>;
+  // rpc name -> {message} to return as `error` for every call to that RPC,
+  // e.g. simulating a real Postgres "function does not exist"/parameter
+  // mismatch response (supabase-js resolves this as {error}, it does not
+  // throw) — used to prove the worker no longer silently swallows it.
+  rpcErrors?: Record<string, { message: string }>;
 }) {
   function from(table: string) {
     // update() is tracked independently of select() so a real Supabase-style
@@ -119,6 +124,7 @@ function makeMockSupabase({ rows, selectQueue = {}, alwaysErrorTables = [], upda
   const rpcCalls: Array<{ name: string; args: any }> = [];
   async function rpc(name: string, args: any) {
     rpcCalls.push({ name, args });
+    if (rpcErrors[name]) return { data: null, error: rpcErrors[name] };
     return { data: null, error: null };
   }
 
@@ -834,18 +840,32 @@ Deno.test({
 });
 
 Deno.test({
-  name: "enrich transport/resource failures are classified as non-blocking for review-ready payloads",
+  name: "enrich transport/resource failures: DOWNSTREAM_FUNCTION_FAILED is now a real (blocking) failure, not review-ready",
   sanitizeResources: false,
   sanitizeOps: false,
   fn() {
-    assertEquals(isReviewReadyEnrichmentTransportFailure("DOWNSTREAM_FUNCTION_FAILED", "Function failed due to not having enough compute resources", 546), true);
+    // Policy reversal (Craven Wings incident, 2026-07-26): DOWNSTREAM_FUNCTION_FAILED
+    // means the downstream normalize-pdf-output invocation was killed/crashed
+    // (e.g. Supabase's own HTTP 546 "not enough compute resources" response)
+    // before it could run at all -- the rich enrichment build never happened,
+    // not just one optional sub-step of it. This used to be masked as
+    // "review ready, minor warning" with a fabricated "some source page
+    // references could not be linked" message, on a document that was still
+    // missing many core fields (monthly_rent, commencement_date, etc.). It
+    // must now reach the real enrichment-failure path (failJob +
+    // enrichment_status: "failed") so evaluate_lease_extraction_readiness()'s
+    // ENRICHMENT_FAILED check -- which finalize_lease_review_approval
+    // re-evaluates fresh at approval time -- actually blocks approval.
+    assertEquals(isReviewReadyEnrichmentTransportFailure("DOWNSTREAM_FUNCTION_FAILED", "Function failed due to not having enough compute resources", 546), false);
+    // STAGE_TIMEOUT/504/"timed out" are unchanged -- no incident evidence
+    // implicates them, and they remain a narrower, genuinely-transient class.
     assertEquals(isReviewReadyEnrichmentTransportFailure("STAGE_TIMEOUT", "normalize-pdf-output timed out after 130s", 504), true);
     assertEquals(isReviewReadyEnrichmentTransportFailure("INVALID_STATUS_FOR_ENRICH", "bad status", 422), false);
   },
 });
 
 Deno.test({
-  name: "completeEnrichmentWithWarning completes the enrich job and preserves review payload values",
+  name: "completeEnrichmentWithWarning completes the enrich job, preserves review payload values, and preserves the ORIGINAL downstream error separately from the friendly summary",
   sanitizeResources: false,
   sanitizeOps: false,
   async fn() {
@@ -865,20 +885,90 @@ Deno.test({
       },
     });
 
+    // STAGE_TIMEOUT is still routed through this "warning" path (unlike
+    // DOWNSTREAM_FUNCTION_FAILED above) -- exercised here with a friendly
+    // summary distinct from the real message, to prove the real one survives.
+    const originalMessage = "normalize-pdf-output timed out after 130s — document may be too large or the parsing service is slow";
     await completeEnrichmentWithWarning(
       supabaseAdmin,
       job,
       FILE_ID,
       ORG_ID,
-      "DOWNSTREAM_FUNCTION_FAILED",
-      "Function failed due to not having enough compute resources",
-      546,
+      "STAGE_TIMEOUT",
+      "Optional enrichment warning: some source page references could not be linked, but all core lease terms were successfully extracted and are ready for review.",
+      504,
+      originalMessage,
     );
 
     assertEquals(supabaseAdmin.__rows.pipeline_jobs.status, "completed");
     assertEquals(supabaseAdmin.__rows.pipeline_jobs.metadata.enrich_completed_with_warning, true);
+    // The original downstream error body must be preserved verbatim,
+    // separately from the friendlier reviewer-facing summary -- this is
+    // what "the original downstream error body is preserved in logs" means
+    // in practice: a later root-cause pass can read exactly what happened,
+    // not just a sanitized paraphrase.
+    assertEquals(supabaseAdmin.__rows.pipeline_jobs.metadata.enrich_original_error, originalMessage);
+    assertNotEquals(supabaseAdmin.__rows.pipeline_jobs.metadata.enrich_original_error, supabaseAdmin.__rows.pipeline_jobs.metadata.enrich_warning_message);
     assertEquals(supabaseAdmin.__rows.uploaded_files.ui_review_payload.enrichment_status, "completed_with_warnings");
     assertEquals(supabaseAdmin.__rows.uploaded_files.ui_review_payload.records[0].fields.tenant_name.value, "Tenant Co");
     assertEquals(supabaseAdmin.__rpcCalls.at(-1)?.name, "finalize_lease_extraction_for_review");
+  },
+});
+
+Deno.test({
+  name: "completeEnrichmentWithWarning no longer silently swallows a finalize_lease_extraction_for_review RPC error (Craven Wings: p_package_mode/p_financial_mode param mismatch against the live DB function)",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  async fn() {
+    const job = { id: "job-enrich-2", generation_id: "gen-2", metadata: {} };
+    const supabaseAdmin = makeMockSupabase({
+      rows: {
+        uploaded_files: {
+          id: FILE_ID,
+          org_id: ORG_ID,
+          active_generation_id: "gen-2",
+          ui_review_payload: { enrichment_status: "running", records: [{ fields: {} }] },
+        },
+        pipeline_jobs: { ...job, status: "running" },
+      },
+      // Reproduces the real failure mode found in production: the deployed
+      // worker calls finalize_lease_extraction_for_review with p_package_mode/
+      // p_financial_mode, parameters the currently-live Postgres function
+      // does not have (added by migrations never pushed to that project) --
+      // supabase-js resolves this as {error}, it does not throw.
+      rpcErrors: {
+        finalize_lease_extraction_for_review: {
+          message: 'Could not find the function public.finalize_lease_extraction_for_review(p_financial_mode, p_generation_id, p_org_id, p_package_mode, p_uploaded_file_id) in the schema cache',
+        },
+      },
+    });
+
+    const originalConsoleError = console.error;
+    const errorCalls: unknown[][] = [];
+    console.error = (...args: unknown[]) => { errorCalls.push(args); };
+    try {
+      await completeEnrichmentWithWarning(
+        supabaseAdmin,
+        job,
+        FILE_ID,
+        ORG_ID,
+        "STAGE_TIMEOUT",
+        "Optional enrichment warning: ...",
+        504,
+        "normalize-pdf-output timed out after 130s",
+      );
+    } finally {
+      console.error = originalConsoleError;
+    }
+
+    // The RPC failure must be visible, not silently discarded -- this is
+    // the difference between an incident that can be diagnosed from logs
+    // (this test) and one that requires forensic DB reconstruction (what
+    // actually happened investigating Craven Wings, since nothing had ever
+    // logged this).
+    assert(
+      errorCalls.some((call) => String(call[0] ?? "").includes("finalize_lease_extraction_for_review") && String(call[1] ?? "").includes("schema cache")),
+      `Expected an error log naming finalize_lease_extraction_for_review and the RPC error; got: ${JSON.stringify(errorCalls)}`,
+    );
   },
 });

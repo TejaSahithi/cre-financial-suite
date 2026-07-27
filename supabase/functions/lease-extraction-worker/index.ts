@@ -567,11 +567,26 @@ async function failJob(supabaseAdmin: any, job: any, errorCode: string, errorMes
 function isReviewReadyEnrichmentTransportFailure(errorCode: string, message: string, status?: number | null): boolean {
   const code = String(errorCode || "").toUpperCase();
   const text = String(message || "").toLowerCase();
+  // DOWNSTREAM_FUNCTION_FAILED (and its "not enough compute resources"
+  // wording, e.g. HTTP 546) used to be included here, on the theory that
+  // enrichment is a "nice to have" pass over an already-good minimal
+  // payload. In practice, DOWNSTREAM_FUNCTION_FAILED means the downstream
+  // normalize-pdf-output invocation was killed/crashed before it could run
+  // at all -- the rich enrichment build (Lease Truth Assembly reconciliation,
+  // workflow abstraction, evidence resolution) never happened, not just one
+  // optional sub-step of it. Treating that as a "review ready, minor warning"
+  // outcome let review_status silently show completed_with_warnings with a
+  // fabricated "some source page references could not be linked" message on
+  // a document that was still missing many core fields (e.g. Craven Wings,
+  // 2026-07-26: monthly_rent, commencement_date, and others never resolved).
+  // A genuine, incomplete resource/process crash must reach the real
+  // enrichment-failure path below (failJob + enrichment_status: "failed"),
+  // which is what evaluate_lease_extraction_readiness()'s ENRICHMENT_FAILED
+  // check actually looks for. STAGE_TIMEOUT/504/"timed out" are left as
+  // review-ready transport hiccups -- no incident evidence implicates them.
   return (
     code === "STAGE_TIMEOUT" ||
-    code === "DOWNSTREAM_FUNCTION_FAILED" ||
     Number(status) === 504 ||
-    text.includes("not enough compute resources") ||
     text.includes("timed out")
   );
 }
@@ -584,6 +599,7 @@ async function completeEnrichmentWithWarning(
   errorCode: string,
   message: string,
   status?: number | null,
+  originalMessage?: string | null,
 ) {
   await supabaseAdmin
     .from("pipeline_jobs")
@@ -599,6 +615,11 @@ async function completeEnrichmentWithWarning(
         enrich_warning_code: errorCode,
         enrich_warning_message: String(message || "Evidence enrichment did not complete").slice(0, 1000),
         enrich_warning_status: status ?? null,
+        // The reviewer-facing `message` above may be a friendlier summary of
+        // `originalMessage` -- never let the real downstream error body be
+        // discarded outright; a future root-cause pass must be able to read
+        // exactly what the downstream call actually returned.
+        enrich_original_error: String(originalMessage ?? message ?? "").slice(0, 1000),
       },
     })
     .eq("id", job.id);
@@ -625,15 +646,25 @@ async function completeEnrichmentWithWarning(
       .eq("id", fileId);
 
     try {
-      await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
+      const { error: finalizeRpcError } = await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
         p_org_id: orgId,
         p_uploaded_file_id: fileId,
         p_generation_id: job.generation_id,
         p_package_mode: getLeaseDocumentPackageMode(),
         p_financial_mode: getLeaseFinancialScheduleMode(),
       });
+      // supabase-js resolves an RPC-level error (e.g. a parameter mismatch
+      // against the currently-deployed function signature) as {error} rather
+      // than throwing -- this used to be silently discarded, which is
+      // exactly why review_readiness/review_handoff can go stale and stay
+      // stale with no visible trace anywhere. Log it loudly; this does not
+      // by itself fix a schema/migration mismatch, but it makes one
+      // immediately diagnosable instead of requiring forensic reconstruction.
+      if (finalizeRpcError) {
+        console.error(`[${WORKER_NAME}] finalize_lease_extraction_for_review RPC returned an error (review_readiness NOT updated) file_id=${fileId}:`, finalizeRpcError.message);
+      }
     } catch (finalizeError: any) {
-      console.warn(`[${WORKER_NAME}] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
+      console.error(`[${WORKER_NAME}] finalize_lease_extraction_for_review call threw file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
     }
   }
 }
@@ -1547,15 +1578,18 @@ Deno.serve(async (req: Request) => {
           console.log(`[${WORKER_NAME}] enrichment_failed_preserved_core_payload file_id=${fileId} reason=max_attempts_exceeded`);
           // P0.5: terminal enrichment outcome — re-evaluate readiness.
           try {
-            await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
+            const { error: finalizeRpcError } = await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
               p_org_id: orgId,
               p_uploaded_file_id: fileId,
               p_generation_id: job.generation_id,
               p_package_mode: getLeaseDocumentPackageMode(),
               p_financial_mode: getLeaseFinancialScheduleMode(),
             });
+            if (finalizeRpcError) {
+              console.error(`[${WORKER_NAME}] finalize_lease_extraction_for_review RPC returned an error (review_readiness NOT updated) file_id=${fileId}:`, finalizeRpcError.message);
+            }
           } catch (finalizeError: any) {
-            console.warn(`[${WORKER_NAME}] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
+            console.error(`[${WORKER_NAME}] finalize_lease_extraction_for_review call threw file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
           }
         } else {
           console.log(`[${WORKER_NAME}] enrich_stale_generation_skipped file_id=${fileId} job_id=${job.id} — superseded, not patching ui_review_payload`);
@@ -2183,12 +2217,16 @@ Deno.serve(async (req: Request) => {
 
         if (isReviewReadyEnrichmentTransportFailure(errorCode, message, enrichResult.status)) {
           const friendlyMessage = "Optional enrichment warning: some source page references could not be linked, but all core lease terms were successfully extracted and are ready for review.";
-          await completeEnrichmentWithWarning(supabaseAdmin, job, fileId, orgId, errorCode, friendlyMessage, enrichResult.status);
-          console.log(`[${WORKER_NAME}] enrichment_completed_with_warning file_id=${fileId}: ${friendlyMessage}`);
+          await completeEnrichmentWithWarning(supabaseAdmin, job, fileId, orgId, errorCode, friendlyMessage, enrichResult.status, message);
+          console.log(`[${WORKER_NAME}] enrichment_completed_with_warning file_id=${fileId}: ${friendlyMessage} (original downstream error: ${message})`);
           await logger.event("enrich", "completed_with_warnings", {
             error_code: errorCode,
             error_message: friendlyMessage,
-            metadata: { job_id: job.id, status: enrichResult.status },
+            // original_error preserves exactly what the downstream call
+            // returned -- never overwrite/discard it in favor of the
+            // friendlier reviewer-facing message above (see PR history for
+            // the Craven Wings incident this fixed).
+            metadata: { job_id: job.id, status: enrichResult.status, original_error: message },
           });
           return jsonResponse({
             error: false,
@@ -2229,15 +2267,18 @@ Deno.serve(async (req: Request) => {
             .eq("id", fileId);
           // P0.5: terminal enrichment outcome — re-evaluate readiness.
           try {
-            await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
+            const { error: finalizeRpcError } = await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
               p_org_id: orgId,
               p_uploaded_file_id: fileId,
               p_generation_id: job.generation_id,
               p_package_mode: getLeaseDocumentPackageMode(),
               p_financial_mode: getLeaseFinancialScheduleMode(),
             });
+            if (finalizeRpcError) {
+              console.error(`[${WORKER_NAME}] finalize_lease_extraction_for_review RPC returned an error (review_readiness NOT updated) file_id=${fileId}:`, finalizeRpcError.message);
+            }
           } catch (finalizeError: any) {
-            console.warn(`[${WORKER_NAME}] finalize_lease_extraction_for_review call failed file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
+            console.error(`[${WORKER_NAME}] finalize_lease_extraction_for_review call threw file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
           }
         } else if (currentFile?.active_generation_id !== job.generation_id) {
           console.log(`[${WORKER_NAME}] enrich_stale_generation_skipped file_id=${fileId} job_id=${job.id} — superseded, not patching ui_review_payload`);
