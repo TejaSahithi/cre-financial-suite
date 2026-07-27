@@ -195,14 +195,36 @@ Deno.test("runOpenAIFactLedgerPipeline: mocked same-source lease term facts beco
     const url = input.toString();
     if (url.includes("api.openai.com/v1/chat/completions")) {
       callCount++;
-      const responseText = callCount === 1
-        ? JSON.stringify({ document_profile: "full_lease", confidence: 0.9, reasoning: "test fixture" })
-        : JSON.stringify({
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const systemPrompt = String((body.messages || []).find((m: any) => m.role === "system")?.content ?? "");
+      // LLM_PRIMARY_MAPPING_MODE defaults to "active" -- adaptive-extractor.ts's
+      // schema-aware domain call (buildDomainFieldAssignmentPrompt) asks for a
+      // direct {fields: {...}} assignment instead of the legacy {facts: [...]}
+      // shape. Responding correctly to whichever prompt was actually sent
+      // keeps this test meaningful regardless of the flag's default.
+      const isFieldAssignmentCall = systemPrompt.includes("SCHEMA FIELDS FOR THIS CALL");
+      let responseText: string;
+      if (callCount === 1) {
+        responseText = JSON.stringify({ document_profile: "full_lease", confidence: 0.9, reasoning: "test fixture" });
+      } else if (isFieldAssignmentCall) {
+        // Only the primary pair -- fact-field-mapper.ts's mirrorDateAlias
+        // fills start_date/end_date from these, exactly as it would for a
+        // real schema-aware response, keeping facts_extracted_count at 2
+        // (matching this test's original, still-accurate intent).
+        responseText = JSON.stringify({
+          fields: {
+            commencement_date: { value: "2019-03-01", source_text: sourceText, source_page: 1, confidence: 0.91 },
+            expiration_date: { value: "2023-12-31", source_text: sourceText, source_page: 1, confidence: 0.92 },
+          },
+        });
+      } else {
+        responseText = JSON.stringify({
           facts: [
             { category: "clause:lease_term", value: "March 1, 2019", source_text: sourceText, source_page: 1, confidence: 0.91 },
             { category: "clause:lease_term", value: "December 31, 2023", source_text: sourceText, source_page: 1, confidence: 0.92 },
           ],
         });
+      }
       return new Response(
         JSON.stringify({
           choices: [{ message: { role: "assistant", content: responseText }, finish_reason: "stop" }],

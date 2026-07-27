@@ -52,6 +52,7 @@ function adaptiveExtractionDisabled(): boolean {
 import { mapFactsToStandardFields } from "./fact-field-mapper.ts";
 import { surfaceDynamicFacts, rescueNearMissedFacts } from "./dynamic-fact-surfacer.ts";
 import { validateFieldAssignments, applyValidationCorrections } from "./llm-field-validator.ts";
+import { isLlmPrimaryMappingActive } from "./llm-primary-mapping-mode.ts";
 import { computeProfileApprovalBlockers } from "./approval-blockers.ts";
 import type { OpenAIFactLedgerInput, OpenAIFactLedgerOptions } from "./types.ts";
 import { LLMProviderError } from "../../llm.ts";
@@ -236,30 +237,29 @@ export async function runOpenAIFactLedgerPipeline(
       currentFields[key] = value as any;
     }
 
-    // ── LLM Validation Layer ─────────────────────────────────────────────
-    // After the TypeScript router (keyword-based) and near-miss rescue have
-    // done their best, ask the LLM to validate assignments and fill gaps.
-    // This is the semantic comprehension step that keyword matching cannot
-    // do — the LLM reads the schema descriptions and source text to judge
-    // whether each value is in the right field.
+    // ── Self-consistency verification pass ──────────────────────────────
+    // Reviews only the fields THIS run's LLM-primary schema-aware mapper
+    // itself set (records[0].fields entries tagged llmPrimaryMapped=true by
+    // fact-field-mapper.ts) -- a fresh second read of each field's own cited
+    // quote, never a re-mapping and never a review of fields it has no
+    // history with. A no-op when LLM_PRIMARY_MAPPING_MODE is "off" (no
+    // llmPrimaryMapped fields exist to review).
     const validationResult = await validateFieldAssignments({
       records: mapped.records,
-      unmappedFacts: mapped.unmappedFacts,
       moduleType: input.moduleType,
     });
 
-    let validationApplied = 0;
-    let validationSkipped = 0;
+    let validationConfirmed = 0;
+    let validationCleared = 0;
     let validationDetails: string[] = [];
 
-    if (validationResult.llmCallSucceeded && validationResult.corrections.length > 0) {
+    if (validationResult.llmCallSucceeded && validationResult.results.length > 0) {
       const result = applyValidationCorrections({
         records: mapped.records,
-        corrections: validationResult.corrections,
-        moduleType: input.moduleType,
+        results: validationResult.results,
       });
-      validationApplied = result.applied;
-      validationSkipped = result.skipped;
+      validationConfirmed = result.confirmed;
+      validationCleared = result.cleared;
       validationDetails = result.details;
     }
 
@@ -367,13 +367,20 @@ export async function runOpenAIFactLedgerPipeline(
             // DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION forced the legacy
             // whole-document chunking path instead.
             adaptive_extraction: (factLedger as any).adaptiveInstrumentation ?? null,
-            // LLM validation layer diagnostics — how many corrections the
-            // semantic validation pass made on top of the TS router's output.
+            // Self-consistency verification pass diagnostics — how many of
+            // THIS run's llmPrimaryMapped fields were confirmed vs. cleared
+            // on a second read. mode tells a reviewer which mapping
+            // mechanism actually produced this document's fields:
+            // "llm_primary" (schema-aware mapper is primary, this
+            // verification pass reviewed its output) vs. "legacy"
+            // (LLM_PRIMARY_MAPPING_MODE=off — keyword mapper is primary, no
+            // llmPrimaryMapped fields exist, this pass is a no-op).
             llm_validation: {
+              mode: isLlmPrimaryMappingActive() ? "llm_primary" : "legacy",
               call_succeeded: validationResult.llmCallSucceeded,
-              corrections_proposed: validationResult.corrections.length,
-              corrections_applied: validationApplied,
-              corrections_skipped: validationSkipped,
+              fields_reviewed: validationResult.results.length,
+              fields_confirmed: validationConfirmed,
+              fields_cleared: validationCleared,
               model: validationResult.model,
               prompt_tokens: validationResult.promptTokens,
               completion_tokens: validationResult.completionTokens,

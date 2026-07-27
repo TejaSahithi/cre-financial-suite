@@ -105,6 +105,30 @@ any of them. If only ONE of monthly/annual is stated anywhere in the document,
 extract only that one fact — never calculate or infer the other; the pipeline
 derives it deterministically downstream.
 
+ADDITIONAL CHARGES vs. BASE RENT: a dollar figure described as being "added to,"
+"in addition to," "on top of," "amortized over," or a "surcharge on" the rent is a
+SEPARATE charge, not the base rent itself — even when the word "rent" appears right
+next to it. Example: "a $174.55 grease trap maintenance charge will be added to the
+monthly rent" describes a $174.55 maintenance surcharge, NOT a $174.55 monthly rent
+figure — do not extract 174.55 as a base/monthly rent value from this sentence.
+Only extract a monthly/annual rent fact from a sentence that states the rent amount
+itself (e.g. "Base Rent shall be $2,100.00 per month," a Base Rent Schedule table
+row, or an amount the lease directly calls "Rent" / "Base Rent"). A surcharge like
+this is still a real fact worth capturing — extract it under its own appropriate
+category (e.g. an expense/CAM/maintenance category), just never as rent.
+
+COMPOUND FORMULA SENTENCES — RATE x QUANTITY = TOTAL: some sentences state a
+formula explicitly, e.g. "$24.00 per square foot x 2,848 rentable square feet =
+$68,352.00 Tenant Improvement Allowance" or "3% of Gross Sales in excess of
+$500,000". When a sentence like this computes a final total/allowance/amount,
+extract the COMPUTED TOTAL as the value for that total/allowance/amount concept —
+never a rate or quantity operand by itself. Good: value = "$68,352.00" for a Tenant
+Improvement Allowance. Bad: value = "2,848" or value = "$24.00" for the same fact.
+If the rate and quantity are also independently meaningful facts in their own right
+(e.g. a genuine "price per square foot" concept exists elsewhere in the schema),
+extract them as their OWN separate facts under their own category — never in place
+of the computed total.
+
 LEASE TERM DATES — START vs. END: leases frequently state the term as one compound
 sentence (e.g. "The lease term shall be from March 1, 2019 through December 31,
 2023" or "...for an initial period from [DATE] to [DATE]"). Extract this as TWO
@@ -115,6 +139,28 @@ merely because the sentence doesn't use the words "commencement" or "expiration"
 "from X through Y" / "from X to Y" / "beginning X and ending Y" all describe a
 start date and an end date just as much as an explicitly labeled "Commencement
 Date:" / "Expiration Date:" line does.
+
+TERM DATES vs. SIGNATURE/EXECUTION DATES: a bare "Date:" line in or near a
+signature block, notarization, acknowledgment, or "IN WITNESS WHEREOF" clause is
+the date a party SIGNED the document — it is not the lease's commencement or
+expiration date, even if no other date is visible nearby. Never extract a
+signature-block date as a lease term date. Only extract commencement/start/
+expiration/end dates from sentences that describe the lease's own time period
+(e.g. "the Lease Term shall commence on...", "shall expire on...", "from X through
+Y"). If the document states no calendar date for a term date (e.g. commencement is
+defined only as a formula: "the date Tenant opens for business" or "X days after
+delivery of possession"), do not substitute a signature or execution date for it —
+report no fact for that concept instead.
+
+SIGNATORY / PARTY NAMES vs. BOILERPLATE CONTRACT LANGUAGE: a party's name or a
+signatory's name must be an actual proper name (a person's name or an entity name
+like "224 Partners, LLC"), never a phrase describing contract mechanics. Generic
+boilerplate such as "successors and assigns," "successors in interest," "their
+respective successors," or "binding upon the parties and their successors" is
+standard amendment/assignment language, not a party or signatory identity — never
+extract this kind of phrase as a value for a party-name, tenant-name, landlord-name,
+or signatory-name fact, even if it appears in a sentence discussing who the lease
+binds.
 
 Output ONLY a valid JSON object of this exact shape (this call is made with the
 API's json_object response mode, which requires a top-level object, never a

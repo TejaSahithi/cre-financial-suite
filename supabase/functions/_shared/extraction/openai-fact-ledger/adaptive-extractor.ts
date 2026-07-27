@@ -22,9 +22,14 @@ import { callLLMJSON, LLMProviderError } from "../../llm.ts";
 import { callLLMJSONWithProvenance } from "../provenance/transport/openai.ts";
 import { resolveVerifiedSourcePage } from "../evidence-index.ts";
 import { routeSections, LLM_CALL_DOMAINS, type LlmCallDomain, type SectionRoutingResult } from "../section-router.ts";
-import { extractDeterministicCandidates, type DeterministicExtractionResult } from "../deterministic-candidates.ts";
+import { extractDeterministicCandidates, type DeterministicExtractionResult, FIELD_GROUP_CLAUSE_CATEGORY } from "../deterministic-candidates.ts";
 import { evaluateDomainReadiness, type DomainReadiness } from "../domain-readiness.ts";
 import { extractFactLedger, parseFactsResponse, dedupeFacts } from "./fact-ledger-extractor.ts";
+import { getSchema, type FieldDef } from "../schemas.ts";
+import { getFieldContract } from "../field-contract.ts";
+import { getSchemaEntriesForDomain } from "../enrich-bounded-stage/domain-fields.ts";
+import { checkFieldSemanticCompatibility, inferSemanticProfile } from "../semantic-compatibility.ts";
+import { isLlmPrimaryMappingActive } from "./llm-primary-mapping-mode.ts";
 import type { ModuleType } from "../types.ts";
 import type { CanonicalDocumentIndex, DocumentProfileClassification, Fact, FactLedgerResult } from "./types.ts";
 
@@ -87,6 +92,189 @@ RULES:
 4. Stay within the stated topic area for this call.`;
 }
 
+// ── LLM-primary schema-aware mapping (LLM_PRIMARY_MAPPING_MODE=active) ──────
+//
+// Instead of extracting loose facts tagged with a broad 34-category clause
+// vocabulary and letting fact-field-mapper.ts's keyword scorer guess which
+// of the 88 schema fields each belongs to, this path hands the model THIS
+// domain's own field list (key, type, description, enum values) and asks it
+// to assign values directly -- putting real schema comprehension at the
+// actual mapping decision, not just at fact extraction. See the "LLM-primary,
+// schema-aware field mapping" plan for the full rationale.
+
+function fieldsForDomain(domain: LlmCallDomain, moduleType: ModuleType): Array<[string, FieldDef]> {
+  const schema = getSchema(moduleType);
+  const nonDerivedEntries = Object.entries(schema).filter(([, def]) => !(def as FieldDef).derived) as Array<[string, FieldDef]>;
+  return getSchemaEntriesForDomain(nonDerivedEntries, domain) as Array<[string, FieldDef]>;
+}
+
+function buildDomainFieldReference(fields: Array<[string, FieldDef]>): string {
+  return fields
+    .map(([key, def]) => {
+      let line = `- ${key} (${def.type}): ${def.description}`;
+      if (def.type === "enum" && def.enumValues) line += ` [enum: ${def.enumValues.join(", ")}]`;
+      return line;
+    })
+    .join("\n");
+}
+
+function buildDomainFieldAssignmentPrompt(domain: LlmCallDomain, moduleType: ModuleType, fields: Array<[string, FieldDef]>): string {
+  return `You are a commercial real estate (${moduleType}) data mapping tool, focused ONLY on the following topic area for this call:
+
+${DOMAIN_CONCEPTS[domain]}
+
+You will be given an excerpt of a real lease document. For EACH of the schema fields listed
+below, decide whether the excerpt states a value for it, and if so, extract that value grounded
+in exact verbatim source text.
+
+SCHEMA FIELDS FOR THIS CALL:
+${buildDomainFieldReference(fields)}
+
+RULES:
+1. "not_stated" is the CORRECT and EXPECTED answer whenever the excerpt does not address a
+   field -- never guess, infer, calculate, or fill a field just to avoid leaving it empty. A
+   field left "not_stated" because the document is genuinely silent on it is a successful,
+   accurate result, not a failure.
+2. "source_text" MUST be exact verbatim text from the excerpt -- a complete sentence, a
+   complete table row, or a single "Label: value" line. Never paraphrase, never truncate
+   mid-sentence, never fabricate a quote.
+3. "value" is the SHORT, ATOMIC answer only -- never a full sentence or clause fragment.
+4. For enum fields, "value" MUST be exactly one of the listed enum values (or "not_stated").
+5. Do not extract a field's value from a sentence discussing a DIFFERENT concept that merely
+   uses similar words (e.g. a maintenance surcharge "added to" the rent is not the rent itself;
+   a signature-block date is not a lease term date; boilerplate "successors and assigns"
+   language is not a party or signatory name).
+6. If a value is already listed below under "Already resolved deterministically", confirm it
+   (re-report the same value) unless the excerpt reveals a genuine conflict -- in which case
+   report the excerpt's own version so a human reviewer can compare.
+
+Output ONLY a valid JSON object of this exact shape:
+  {
+    "fields": {
+      "<field_key>": { "value": <value>, "source_text": "<verbatim quote>", "source_page": <page or null>, "confidence": <0.0-1.0> }
+    }
+  }
+For a field with no stated value, either omit its key entirely or set it to
+  { "not_stated": true }
+Never omit the "fields" key. Only include keys from the schema field list above.`;
+}
+
+interface FieldAssignment {
+  value: unknown;
+  sourceText: string | null;
+  sourcePage: number | null;
+  confidence: number;
+  notStated: boolean;
+}
+
+function parseFieldAssignmentResponse(raw: unknown, validFieldKeys: Set<string>): Record<string, FieldAssignment> {
+  const out: Record<string, FieldAssignment> = {};
+  const fields = (raw as any)?.fields;
+  if (!fields || typeof fields !== "object") return out;
+
+  for (const [key, entry] of Object.entries(fields)) {
+    if (!validFieldKeys.has(key)) continue; // model must stay within this domain's own field list
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as any;
+    if (e.not_stated === true) continue; // not_stated -> no assignment at all, falls through to the legacy path
+    const sourceText = typeof e.source_text === "string" ? e.source_text.trim() : "";
+    if (!sourceText || sourceText.length < 3) continue; // ungrounded -> treat as not_stated, never trust a valueless claim
+    if (e.value == null || e.value === "") continue;
+    const confidence = Number(e.confidence);
+    out[key] = {
+      value: e.value,
+      sourceText,
+      sourcePage: Number.isFinite(Number(e.source_page)) ? Number(e.source_page) : null,
+      confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0.7,
+      notStated: false,
+    };
+  }
+  return out;
+}
+
+/**
+ * Converts a domain's field assignments into Fact[], running the existing
+ * semantic-compatibility gate (semantic-compatibility.ts) as a veto on the
+ * model's own proposal. A failing check does not drop the fact -- it is
+ * still returned (llmProposedFieldKey set) so the field is populated, but
+ * carries semanticVetoReason so fact-field-mapper.ts marks it needs_review
+ * instead of silently trusting it. This is defense in depth, not the
+ * decision-maker: the LLM already made the call; this only catches an
+ * obviously-incompatible pairing before it reaches a reviewer unflagged.
+ */
+function assignmentsToFacts(
+  domain: LlmCallDomain,
+  assignments: Record<string, FieldAssignment>,
+  chunkIndex: number,
+): Fact[] {
+  const facts: Fact[] = [];
+  for (const [fieldKey, assignment] of Object.entries(assignments)) {
+    const group = getFieldContract(fieldKey)?.group;
+    const category = (group && FIELD_GROUP_CLAUSE_CATEGORY[group]) || "clause:default";
+    const profile = inferSemanticProfile({
+      value: assignment.value,
+      sourceText: assignment.sourceText,
+      category,
+    });
+    const compatibility = checkFieldSemanticCompatibility(profile, fieldKey, {
+      value: assignment.value,
+      sourceText: assignment.sourceText,
+      category,
+    });
+    facts.push({
+      category,
+      value: assignment.value,
+      sourceText: assignment.sourceText ?? "",
+      sourcePage: assignment.sourcePage,
+      confidence: assignment.confidence,
+      chunkIndex,
+      llmProposedFieldKey: fieldKey,
+      semanticVetoReason: compatibility.compatible ? null : compatibility.reason,
+    });
+  }
+  return facts;
+}
+
+async function callDomainLlmForFieldAssignment(args: {
+  domain: LlmCallDomain;
+  evidenceText: string;
+  fields: Array<[string, FieldDef]>;
+  moduleType: ModuleType;
+  provenance?: { supabaseAdmin: any; context: import("../provenance/types.ts").ProvenanceContext };
+}): Promise<{ assignments: Record<string, FieldAssignment>; promptTokens: number | null; completionTokens: number | null; error: string | null }> {
+  const { domain, evidenceText, fields, moduleType, provenance } = args;
+  const validFieldKeys = new Set(fields.map(([key]) => key));
+  try {
+    const callOpts = {
+      systemPrompt: buildDomainFieldAssignmentPrompt(domain, moduleType, fields),
+      userPrompt: evidenceText,
+      temperature: 0,
+      promptVersion: "llm-primary-mapping-v1",
+    };
+    const response = provenance
+      ? await callLLMJSONWithProvenance(
+        provenance.supabaseAdmin,
+        { ...provenance.context, operation: `llm_primary_mapping_domain_${domain}` },
+        callOpts,
+      )
+      : await callLLMJSON(callOpts);
+    const assignments = response.data == null ? {} : parseFieldAssignmentResponse(response.data, validFieldKeys);
+    return {
+      assignments,
+      promptTokens: (response as any)?.promptTokens ?? null,
+      completionTokens: (response as any)?.completionTokens ?? null,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      assignments: {},
+      promptTokens: null,
+      completionTokens: null,
+      error: `LLM-primary field assignment failed for domain=${domain}: ${(error as Error)?.message ?? error}`,
+    };
+  }
+}
+
 function buildDomainEvidenceText(
   domain: LlmCallDomain,
   routing: SectionRoutingResult,
@@ -141,6 +329,16 @@ export interface DomainCallInstrumentation {
   promptTokens: number | null;
   factsReturned: number;
   cacheHit: boolean;
+  /** True when this domain's fields were assigned by the schema-aware
+   *  LLM-primary mapper (LLM_PRIMARY_MAPPING_MODE=active), false when it
+   *  used the legacy broad-category extraction path (mode="off", or the
+   *  primary call failed and this domain fell back). */
+  primaryMappingUsed?: boolean;
+  /** Set only when primaryMappingUsed is false because the schema-aware call
+   *  itself failed and this domain fell back to the legacy path. */
+  primaryMappingFallbackReason?: string | null;
+  fieldsAssignedByPrimaryMapping?: number;
+  fieldsFlaggedBySemanticVeto?: number;
 }
 
 export interface AdaptiveExtractionInstrumentation {
@@ -333,20 +531,61 @@ export async function extractFactLedgerAdaptive(args: ExtractFactLedgerAdaptiveA
     }
 
     domainsEscalated.push(domain);
-    const callResult = await callDomainLlm({
-      domain,
-      evidenceText,
-      moduleType,
-      deadlineAt: args.deadlineAt,
-      provenance: args.provenance,
-    });
-    if (callResult.warning) warnings.push(callResult.warning);
-    if (!callResult.cacheHit) llmCallsMade += 1;
-    const taggedFacts = callResult.facts.map((fact) => ({ ...fact, chunkIndex: LLM_CALL_DOMAINS.indexOf(domain) }));
-    llmFacts.push(...taggedFacts);
     const inputTokensEstimate = estimateTokens(evidenceText);
     totalInputTokensEstimate += inputTokensEstimate;
-    totalOutputTokens += callResult.completionTokens ?? 0;
+
+    let callResult: { facts: Fact[]; promptTokens: number | null; completionTokens: number | null; cacheHit: boolean; warning: string | null };
+    let primaryMappingUsed = false;
+    let primaryMappingFallbackReason: string | null = null;
+
+    const domainFieldDefs = fieldsForDomain(domain, moduleType);
+    if (isLlmPrimaryMappingActive() && domainFieldDefs.length > 0) {
+      const primaryResult = await callDomainLlmForFieldAssignment({
+        domain,
+        evidenceText,
+        fields: domainFieldDefs,
+        moduleType,
+        provenance: args.provenance,
+      });
+      if (!primaryResult.error) {
+        primaryMappingUsed = true;
+        llmCallsMade += 1;
+        totalOutputTokens += primaryResult.completionTokens ?? 0;
+        callResult = {
+          facts: assignmentsToFacts(domain, primaryResult.assignments, LLM_CALL_DOMAINS.indexOf(domain)),
+          promptTokens: primaryResult.promptTokens,
+          completionTokens: primaryResult.completionTokens,
+          cacheHit: false,
+          warning: null,
+        };
+      } else {
+        // Schema-aware call failed outright (network/parse error) -- fall
+        // back to the legacy broad-category extraction for this domain
+        // rather than leaving it silently empty. This is the one case where
+        // two calls genuinely happen for the same domain, and only because
+        // the first one didn't produce a usable result.
+        primaryMappingFallbackReason = primaryResult.error;
+        warnings.push(primaryResult.error);
+        callResult = await callDomainLlm({ domain, evidenceText, moduleType, deadlineAt: args.deadlineAt, provenance: args.provenance });
+        if (callResult.warning) warnings.push(callResult.warning);
+        if (!callResult.cacheHit) llmCallsMade += 1;
+        totalOutputTokens += callResult.completionTokens ?? 0;
+      }
+    } else {
+      callResult = await callDomainLlm({
+        domain,
+        evidenceText,
+        moduleType,
+        deadlineAt: args.deadlineAt,
+        provenance: args.provenance,
+      });
+      if (callResult.warning) warnings.push(callResult.warning);
+      if (!callResult.cacheHit) llmCallsMade += 1;
+      totalOutputTokens += callResult.completionTokens ?? 0;
+    }
+
+    const taggedFacts = callResult.facts.map((fact) => ({ ...fact, chunkIndex: LLM_CALL_DOMAINS.indexOf(domain) }));
+    llmFacts.push(...taggedFacts);
 
     perDomain.push({
       domain,
@@ -358,6 +597,14 @@ export async function extractFactLedgerAdaptive(args: ExtractFactLedgerAdaptiveA
       promptTokens: callResult.promptTokens,
       factsReturned: taggedFacts.length,
       cacheHit: callResult.cacheHit,
+      primaryMappingUsed,
+      primaryMappingFallbackReason,
+      fieldsAssignedByPrimaryMapping: primaryMappingUsed
+        ? taggedFacts.filter((f) => f.llmProposedFieldKey && !f.semanticVetoReason).length
+        : 0,
+      fieldsFlaggedBySemanticVeto: primaryMappingUsed
+        ? taggedFacts.filter((f) => f.llmProposedFieldKey && f.semanticVetoReason).length
+        : 0,
     });
   }
 
@@ -393,4 +640,9 @@ export const __test__ = {
   buildDomainSystemPrompt,
   buildDomainEvidenceText,
   domainCallCache,
+  fieldsForDomain,
+  buildDomainFieldReference,
+  buildDomainFieldAssignmentPrompt,
+  parseFieldAssignmentResponse,
+  assignmentsToFacts,
 };

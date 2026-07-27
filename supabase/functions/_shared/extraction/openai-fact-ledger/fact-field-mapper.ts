@@ -614,6 +614,24 @@ export function mapFactsToStandardFields(args: {
     bestByField.set(fieldName, { fact, score: MIN_LABEL_SCORE });
   }
 
+  // LLM-primary schema-aware mapping (adaptive-extractor.ts,
+  // LLM_PRIMARY_MAPPING_MODE=active): a fact carrying llmProposedFieldKey was
+  // assigned to that exact field by a model that saw the field's own schema
+  // description, not guessed via keyword overlap. It wins that field
+  // outright -- seeded here at a score no keyword match can ever exceed,
+  // same pre-seeding pattern resolveLeaseTermDatePair already uses above.
+  // The fact still passes through the ordinary scoring loop below (nothing
+  // skips it), so its own candidacy is recorded in the usual bookkeeping;
+  // this seed just guarantees it cannot lose to a lower-fidelity guess.
+  const LLM_PRIMARY_MAPPING_SCORE = Number.MAX_SAFE_INTEGER;
+  for (const fact of facts) {
+    const proposedField = fact.llmProposedFieldKey;
+    if (!proposedField || !fieldNames.includes(proposedField)) continue;
+    const existingSeed = bestByField.get(proposedField);
+    if (existingSeed && existingSeed.score === LLM_PRIMARY_MAPPING_SCORE) continue; // keep the first (or higher-confidence) proposal if a domain call somehow double-assigns
+    bestByField.set(proposedField, { fact, score: LLM_PRIMARY_MAPPING_SCORE });
+  }
+
   for (const fact of facts) {
     if (leaseTermPair.consumed.has(fact)) continue; // already assigned by the date-pair resolver above
     let bestField: string | null = null;
@@ -692,12 +710,26 @@ export function mapFactsToStandardFields(args: {
 
   const fields: Record<string, ExtractedField> = {};
   for (const [fieldName, { fact }] of bestByField.entries()) {
+    const wonByPrimaryMapping = fact.llmProposedFieldKey === fieldName;
     fields[fieldName] = {
       value: fact.value,
       source: "llm",
       confidence: fact.confidence,
       sourceText: fact.sourceText,
       sourcePage: fact.sourcePage,
+      // Semantic-compatibility vetoed the model's own proposed assignment
+      // (semantic-compatibility.ts, called from adaptive-extractor.ts's
+      // assignmentsToFacts()) -- the value still populates the field (never
+      // silently blanked) but is flagged for reviewer attention instead of
+      // presented as a plain, unqualified "extracted" result.
+      ...(wonByPrimaryMapping && fact.semanticVetoReason
+        ? { extractionStatus: "needs_review", requiresReview: true }
+        : {}),
+      // Non-standard marker (additive, not part of the shared ExtractedField
+      // type) so the verification pass in orchestrator.ts can find exactly
+      // the fields this run's LLM-primary mapper set, without reviewing
+      // every field indiscriminately or fields carried over from a prior run.
+      ...(wonByPrimaryMapping ? { llmPrimaryMapped: true, semanticVetoReason: fact.semanticVetoReason ?? null } : {}),
     };
   }
 

@@ -62,6 +62,21 @@ export interface Fact {
   confidence: number;
   chunkIndex?: number;
   sourceOffset?: number | null;
+  /** Set only by the LLM-primary schema-aware mapper (adaptive-extractor.ts,
+   *  LLM_PRIMARY_MAPPING_MODE=active) -- the exact LEASE_SCHEMA field key the
+   *  model directly assigned this fact to, having seen that field's own
+   *  description. When present and semanticVetoReason is absent,
+   *  fact-field-mapper.ts gives this fact top priority for that field
+   *  instead of competing on keyword score. Never set by the legacy
+   *  broad-category extraction path. */
+  llmProposedFieldKey?: string | null;
+  /** Set alongside llmProposedFieldKey when checkFieldSemanticCompatibility()
+   *  (semantic-compatibility.ts) rejected the model's own proposed
+   *  assignment. The fact still wins its proposed field (never silently
+   *  dropped) but the resulting ExtractedField is flagged
+   *  extractionStatus="needs_review" with this reason attached, instead of
+   *  a plain "extracted" status. */
+  semanticVetoReason?: string | null;
 }
 
 export interface FactLedgerResult {

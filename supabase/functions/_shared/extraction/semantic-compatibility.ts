@@ -184,6 +184,16 @@ function inferMonetaryRole(sourceText: string): MonetaryRole {
   }
   if (/application\s+fee|move[\s-]?in\s+fee|one[\s-]?time\s+charge|administrative\s+fee\b/.test(s)) return "one_time_charge";
   if (/\badditional\s+rent\b/.test(s)) return "additional_rent";
+  // A charge described as being ADDED TO / ON TOP OF / IN ADDITION TO the
+  // rent is a separate surcharge, not the rent itself -- even when the
+  // sentence also contains "monthly rent"/"base rent" and would otherwise
+  // fall through to the generic base_rent pattern below. This is the exact
+  // adversarial pattern this session traced end-to-end (a maintenance
+  // surcharge sentence contaminating monthly_rent): "a $174.55 charge will
+  // be added to the monthly rent" must classify as additional_rent, not
+  // base_rent, checked BEFORE the generic base-rent fallback for that
+  // reason.
+  if (/\b(?:be\s+)?added\s+to\s+(?:the\s+)?(?:monthly\s+|base\s+|annual\s+)?rent\b|\bsurcharge\b|\bin\s+addition\s+to\s+(?:the\s+)?rent\b|\bon\s+top\s+of\s+(?:the\s+)?rent\b/.test(s)) return "additional_rent";
   // Base rent: covers both prose ("base rent", "monthly rent") and
   // underscore/field-name-joined phrasing that can appear when a candidate's
   // sourceText echoes a data-entry label ("base_rent_monthly equals $4,200"),
