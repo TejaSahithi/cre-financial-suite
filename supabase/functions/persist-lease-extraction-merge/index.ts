@@ -1,6 +1,20 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { assertPageAccess, getUserOrgId, verifyUser } from "../_shared/supabase.ts";
+import { createLogger } from "../_shared/logger.ts";
+
+async function resolveSourceFileId(supabaseAdmin: any, leaseId: string): Promise<string | null> {
+  try {
+    const { data } = await supabaseAdmin
+      .from("leases")
+      .select("source_file_id")
+      .eq("id", leaseId)
+      .maybeSingle();
+    return data?.source_file_id ?? null;
+  } catch {
+    return null;
+  }
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ALLOWED_ACTIONS = new Set([
@@ -63,6 +77,14 @@ Deno.serve(async (req: Request) => {
 
     const body = await req.json().catch(() => ({}));
     const payload = validatePayload(body);
+    const sourceFileId = await resolveSourceFileId(supabaseAdmin, payload.leaseId);
+    const logger = sourceFileId ? createLogger(supabaseAdmin, sourceFileId, orgId) : null;
+    const uiContext = body?._uiContext ?? null;
+    await logger?.event("extraction_merge", "started", {
+      lease_id: payload.leaseId,
+      action: payload.action,
+      ui: uiContext,
+    });
 
     const { data, error } = await supabaseAdmin.rpc("persist_lease_extraction_merge", {
       p_org_id: orgId,
@@ -74,9 +96,19 @@ Deno.serve(async (req: Request) => {
     });
 
     if (error) {
+      await logger?.event("extraction_merge", "failed", {
+        lease_id: payload.leaseId,
+        action: payload.action,
+        reason: error.message,
+      });
       throw new Error(error.message || "persist_lease_extraction_merge failed");
     }
 
+    await logger?.event("extraction_merge", "succeeded", {
+      lease_id: payload.leaseId,
+      action: payload.action,
+      ui: uiContext,
+    });
     return jsonResponse({ error: false, ...data });
   } catch (err) {
     const message = err?.message || "Could not persist lease extraction merge";

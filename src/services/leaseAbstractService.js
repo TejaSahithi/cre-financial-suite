@@ -623,9 +623,9 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
  * (Phase 2 shape) and upserts lease_field_reviews so the audit table mirrors
  * the draft.
  */
-export async function saveAbstractDraft({ lease, fieldReviews, reviewer }) {
+export async function saveAbstractDraft({ lease, fieldReviews, reviewer, action }) {
   if (!lease?.id) throw new Error("saveAbstractDraft: lease.id is required");
-  const data = await saveLeaseReviewDraftWorkflow({ leaseId: lease.id, fieldReviews });
+  const data = await saveLeaseReviewDraftWorkflow({ leaseId: lease.id, fieldReviews, ...(action ? { action } : {}) });
   const merged = {
     ...lease,
     ...(data || {}),

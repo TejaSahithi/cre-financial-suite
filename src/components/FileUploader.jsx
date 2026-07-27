@@ -369,7 +369,10 @@ export default function FileUploader({
         formData.append("unit_id", safeUnitId);
       }
 
-      const data = await invokeEdgeFunctionFormData("upload-handler", formData);
+      const data = await invokeEdgeFunctionFormData("upload-handler", formData, {}, {
+        page: "LeaseUpload",
+        action: "file_upload",
+      });
 
       // Extraction does NOT start here. upload-handler only stores the file
       // and runs cheap preflight checks; the file now sits at
@@ -424,7 +427,10 @@ export default function FileUploader({
     setConfirmationActionState((prev) => ({ ...prev, [fileId]: "confirming" }));
     try {
       const pending = pendingConfirmations.find((p) => p.file_id === fileId);
-      const result = await invokeEdgeFunction("confirm-upload", { file_id: fileId });
+      const result = await invokeEdgeFunction("confirm-upload", { file_id: fileId }, {}, {
+        page: "LeaseUpload",
+        action: "upload_confirm",
+      });
       if (result?.error) {
         throw new Error(result?.message || "Could not confirm upload");
       }
@@ -464,7 +470,10 @@ export default function FileUploader({
     setConfirmationActionState((prev) => ({ ...prev, [fileId]: "cancelling" }));
     try {
       const pending = pendingConfirmations.find((p) => p.file_id === fileId);
-      const result = await invokeEdgeFunction("cancel-upload", { file_id: fileId });
+      const result = await invokeEdgeFunction("cancel-upload", { file_id: fileId }, {}, {
+        page: "LeaseUpload",
+        action: "upload_cancel",
+      });
       if (result?.error) {
         throw new Error(result?.message || "Could not cancel upload");
       }
@@ -1002,7 +1011,10 @@ function ExtractionStatusRow({ fileId, fileName, fileType, onOpenReview }) {
   const handleCancelExtraction = async () => {
     setCancelling(true);
     try {
-      const result = await invokeEdgeFunction("cancel-upload", { file_id: fileId });
+      const result = await invokeEdgeFunction("cancel-upload", { file_id: fileId }, {}, {
+        page: "LeaseUpload",
+        action: "extraction_cancel",
+      });
       if (result?.error) throw new Error(result?.message || "Could not cancel extraction");
       toast.success(`${fileName || "File"}: extraction cancelled.`);
     } catch (error) {

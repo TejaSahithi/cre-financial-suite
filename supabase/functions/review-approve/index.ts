@@ -15,6 +15,7 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
+import { createLogger } from "../_shared/logger.ts";
 
 type Action = "approve" | "reject" | "save" | "prepare";
 
@@ -28,6 +29,11 @@ Deno.serve(async (req: Request) => {
       status,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
+
+  // Hoisted so the outer catch block can still log a failure even though
+  // it's constructed inside the try block below (needs file_id/orgId, which
+  // require a successful body parse + auth first).
+  let reviewGateLogger: ReturnType<typeof createLogger> | null = null;
 
   try {
     const { user, supabaseAdmin } = await verifyUser(req);
@@ -48,7 +54,12 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    const logger = createLogger(supabaseAdmin, file_id, orgId);
+    reviewGateLogger = logger;
+    await logger.event("review_gate", "started", { action, ui: body?._uiContext ?? null });
+
     if (!["approve", "reject", "save", "prepare"].includes(action)) {
+      await logger.event("review_gate", "failed", { action, reason: "invalid_action" });
       return jsonResponse(
         { error: true, message: `Invalid action: ${action}`, error_code: "INVALID_ACTION" },
         400,
@@ -56,6 +67,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "reject" && !reject_reason) {
+      await logger.event("review_gate", "failed", { action, reason: "missing_reject_reason" });
       return jsonResponse(
         {
           error: true,
@@ -204,6 +216,7 @@ Deno.serve(async (req: Request) => {
 
       if (prepareErr) throw new Error(`Prepare failed: ${prepareErr.message}`);
 
+      await logger.event("review_gate", "succeeded", { action, row_count: finalRows.length });
       return jsonResponse({
         error: false,
         file_id,
@@ -249,6 +262,7 @@ Deno.serve(async (req: Request) => {
 
       if (saveErr) throw new Error(`Save failed: ${saveErr.message}`);
 
+      await logger.event("review_gate", "succeeded", { action, row_count: finalRows.length });
       return jsonResponse({
         error: false,
         file_id,
@@ -293,6 +307,7 @@ Deno.serve(async (req: Request) => {
         60,
       );
 
+      await logger.event("review_gate", "succeeded", { action, reject_reason });
       return jsonResponse({
         error: false,
         file_id,
@@ -303,6 +318,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (!finalRows || finalRows.length === 0) {
+      await logger.event("review_gate", "failed", { action, reason: "empty_approval" });
       return jsonResponse(
         {
           error: true,
@@ -355,6 +371,11 @@ Deno.serve(async (req: Request) => {
       // replacement for it.
       const conflictingFields = findConflictingTruthAssemblyFields(fileRecord);
       if (conflictingFields.length > 0) {
+        await logger.event("review_gate", "blocked", {
+          action,
+          reason: "truth_assembly_conflict",
+          conflicting_fields: conflictingFields,
+        });
         return jsonResponse(
           {
             error: true,
@@ -382,6 +403,11 @@ Deno.serve(async (req: Request) => {
         throw new Error(`Approval finalization RPC call failed: ${finalizeRpcError.message}`);
       }
       if (!finalizeResult?.success) {
+        await logger.event("review_gate", "blocked", {
+          action,
+          reason: finalizeResult?.error_code || "APPROVAL_FINALIZATION_FAILED",
+          readiness: finalizeResult?.readiness ?? null,
+        });
         return jsonResponse(
           {
             error: true,
@@ -434,6 +460,12 @@ Deno.serve(async (req: Request) => {
         console.error(`[review-approve] mark_lease_artifact_sync_result call failed file_id=${file_id}:`, markRpcError.message);
       }
 
+      await logger.event("review_gate", "succeeded", {
+        action,
+        lease_module: true,
+        artifact_sync_succeeded: artifactSyncSucceeded,
+        row_count: finalRows.length,
+      });
       return jsonResponse({
         error: false,
         file_id,
@@ -518,6 +550,12 @@ Deno.serve(async (req: Request) => {
       storeResult = { error: true, message: chainErr.message };
     }
 
+    await logger.event("review_gate", storeOk ? "succeeded" : "failed", {
+      action,
+      lease_module: false,
+      store_triggered: storeOk,
+      row_count: finalRows.length,
+    });
     return jsonResponse({
       error: !storeOk,
       file_id,
@@ -534,6 +572,9 @@ Deno.serve(async (req: Request) => {
       },
     });
   } catch (err) {
+    if (reviewGateLogger) {
+      await reviewGateLogger.event("review_gate", "failed", { reason: err.message });
+    }
     console.error("[review-approve] Error:", err.message, err.stack);
     return new Response(
       JSON.stringify({

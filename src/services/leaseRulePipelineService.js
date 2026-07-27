@@ -575,7 +575,8 @@ export const leaseRulePipelineService = {
            source_text: sourceText,
            categories: [],
            full_scan: true,
-         });
+           file_id: fileId || null,
+         }, {}, { page: "LeaseReview", action: source || "expense_rules" });
          if (llmData?.rules) {
             llmRules = llmData.rules;
          }

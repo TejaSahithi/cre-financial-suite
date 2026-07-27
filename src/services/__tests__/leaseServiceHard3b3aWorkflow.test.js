@@ -35,7 +35,7 @@ describe('leaseService.persistLeaseExtractionMerge', () => {
       lease_id: 'lease-1',
       action: 'lease_extraction_merged',
       patch: { evidence_refreshed_at: '2026-07-10T00:00:00.000Z' },
-    });
+    }, {}, { page: 'LeaseReview', action: 'lease_extraction_merged' });
   });
 
   it('rejects a missing lease id without calling the edge function', async () => {
@@ -69,7 +69,7 @@ describe('leaseService.persistLeaseExtractionMerge', () => {
         lease_id: 'lease-1',
         action,
         patch: {},
-      });
+      }, {}, { page: 'LeaseReview', action });
     }
   });
 });

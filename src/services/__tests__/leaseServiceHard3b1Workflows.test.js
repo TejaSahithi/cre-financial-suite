@@ -45,7 +45,7 @@ describe('leaseService HARD-3B1 workflow wrappers', () => {
         action: 'field_evidence_edit',
         field_key: 'tenant_name',
         patch: { field: { value: 'Acme' }, field_evidence: { source_text: 'p.1' } },
-      });
+      }, {}, { page: 'LeaseReview', action: 'field_evidence_edit' });
     });
 
     it('calls update-lease-extraction-field with the source_link shape and null field_key', async () => {
@@ -64,7 +64,7 @@ describe('leaseService HARD-3B1 workflow wrappers', () => {
         action: 'source_file_manually_linked',
         field_key: null,
         patch: { source_file_id: 'file-1' },
-      });
+      }, {}, { page: 'LeaseReview', action: 'source_file_manually_linked' });
     });
 
     it('rejects a missing lease id without calling the edge function', async () => {
@@ -98,7 +98,7 @@ describe('leaseService HARD-3B1 workflow wrappers', () => {
       expect(invokeEdgeFunctionMock).toHaveBeenCalledWith('save-lease-review-draft', {
         lease_id: 'lease-1',
         field_reviews: { tenant_name: { status: 'accepted' } },
-      });
+      }, {}, { page: 'LeaseReview', action: 'field_action' });
     });
 
     it('rejects a missing lease id without calling the edge function', async () => {
@@ -117,7 +117,7 @@ describe('leaseService HARD-3B1 workflow wrappers', () => {
         lease_id: 'lease-1',
         reason: 'Missing signature page',
         rejected_by: 'Jane Doe',
-      });
+      }, {}, { page: 'LeaseReview', action: 'reject_abstract' });
     });
 
     it('defaults rejected_by to null when omitted', async () => {
@@ -127,7 +127,7 @@ describe('leaseService HARD-3B1 workflow wrappers', () => {
         lease_id: 'lease-1',
         reason: 'bad doc',
         rejected_by: null,
-      });
+      }, {}, { page: 'LeaseReview', action: 'reject_abstract' });
     });
 
     it('rejects a missing lease id without calling the edge function', async () => {
@@ -145,7 +145,7 @@ describe('leaseService HARD-3B1 workflow wrappers', () => {
       expect(invokeEdgeFunctionMock).toHaveBeenCalledWith('send-lease-back-for-reextraction', {
         lease_id: 'lease-1',
         reason: 'Blurry scan',
-      });
+      }, {}, { page: 'LeaseReview', action: 'send_back' });
     });
 
     it('rejects a missing lease id without calling the edge function', async () => {

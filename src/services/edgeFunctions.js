@@ -31,7 +31,7 @@ async function getActingOrgHeaders() {
   return actingOrgId ? { "x-acting-org-id": actingOrgId } : {};
 }
 
-export async function invokeEdgeFunction(fnName, body, customHeaders = {}) {
+export async function invokeEdgeFunction(fnName, body, customHeaders = {}, uiContext = null) {
   const accessToken = await getFreshAccessToken();
   const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
 
@@ -42,7 +42,13 @@ export async function invokeEdgeFunction(fnName, body, customHeaders = {}) {
   // pick an organization first.
   Object.assign(headers, await getActingOrgHeaders(), customHeaders);
 
-  const { data, error } = await supabase.functions.invoke(fnName, { body, headers });
+  // Optional: tag the request with which page/action triggered it, so
+  // server-side pipeline_logs rows can record not just what happened but
+  // what UI action caused it. Purely additive — omitted entirely when the
+  // caller doesn't pass uiContext, so every other call site is unaffected.
+  const requestBody = uiContext ? { ...body, _uiContext: uiContext } : body;
+
+  const { data, error } = await supabase.functions.invoke(fnName, { body: requestBody, headers });
 
   if (error) {
     const ctx = error?.context;
@@ -71,7 +77,7 @@ export async function invokeEdgeFunction(fnName, body, customHeaders = {}) {
   return data || {};
 }
 
-export async function invokeEdgeFunctionFormData(fnName, formData, customHeaders = {}) {
+export async function invokeEdgeFunctionFormData(fnName, formData, customHeaders = {}, uiContext = null) {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
   const accessToken = await getFreshAccessToken();
@@ -81,6 +87,12 @@ export async function invokeEdgeFunctionFormData(fnName, formData, customHeaders
   }
 
   const actingOrgHeaders = await getActingOrgHeaders();
+
+  // See invokeEdgeFunction's matching comment — same optional UI-action tag,
+  // just carried as a form field since this path sends multipart bodies.
+  if (uiContext) {
+    formData.set("_uiContext", JSON.stringify(uiContext));
+  }
 
   const response = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
     method: "POST",

@@ -37,7 +37,7 @@ export async function updateLeaseExtractionField({ leaseId, fieldArea, action, f
     action,
     field_key: fieldKey,
     patch,
-  });
+  }, {}, { page: "LeaseReview", action });
 }
 
 // Server-owned, audited replacement for the whole-field_reviews-map draft
@@ -49,7 +49,7 @@ export async function saveLeaseReviewDraft({ leaseId, fieldReviews }) {
   return invokeEdgeFunction("save-lease-review-draft", {
     lease_id: leaseId,
     field_reviews: fieldReviews,
-  });
+  }, {}, { page: "LeaseReview", action: "save_draft" });
 }
 
 // Server-owned, audited replacement for the "Reject Document" action
@@ -60,7 +60,7 @@ export async function rejectLeaseAbstract({ leaseId, reason, rejectedBy = null }
     lease_id: leaseId,
     reason,
     rejected_by: rejectedBy,
-  });
+  }, {}, { page: "LeaseReview", action: "reject_abstract" });
 }
 
 // Server-owned, audited replacement for the "Send Back" (for re-extraction)
@@ -72,7 +72,7 @@ export async function sendLeaseBackForReextraction({ leaseId, reason = null }) {
   return invokeEdgeFunction("send-lease-back-for-reextraction", {
     lease_id: leaseId,
     reason,
-  });
+  }, {}, { page: "LeaseReview", action: "send_back" });
 }
 
 // Server-owned, audited replacement for the post-approval building/unit
@@ -100,13 +100,16 @@ export async function linkLeaseSpaceAssignment({ leaseId, buildingId = null, uni
  * @param {Object} params
  * @param {string} params.leaseId
  * @param {Object} params.fieldReviews
+ * @param {string} [params.action] - UI action label for activity logging
+ *   (e.g. "accept"/"reject"/"mark_na"/"needs_legal"/"manual_required"/"reset"/
+ *   "save_draft"); purely diagnostic, defaults to a generic label.
  */
-export async function saveLeaseReviewDraftWorkflow({ leaseId, fieldReviews }) {
+export async function saveLeaseReviewDraftWorkflow({ leaseId, fieldReviews, action = "field_action" }) {
   if (!leaseId) throw new Error("Lease ID is required");
   return invokeEdgeFunction("save-lease-review-draft", {
     lease_id: leaseId,
     field_reviews: fieldReviews,
-  });
+  }, {}, { page: "LeaseReview", action });
 }
 
 /**
@@ -124,7 +127,7 @@ export async function rejectLeaseAbstractWorkflow({ leaseId, reason, rejectedBy 
     lease_id: leaseId,
     reason,
     rejected_by: rejectedBy,
-  });
+  }, {}, { page: "LeaseReview", action: "reject_abstract" });
 }
 
 /**
@@ -147,7 +150,7 @@ export async function updateLeaseFieldAndColumns({ leaseId, fieldKey, columnUpda
     field_key: fieldKey,
     column_updates: columnUpdates,
     patch,
-  });
+  }, {}, { page: "LeaseReview", action: "field_edit" });
 }
 
 /**
@@ -169,7 +172,7 @@ export async function backfillLeaseEvidence({ leaseId, fieldsPatch = {}, fieldEv
     fields_patch: fieldsPatch,
     field_evidence_patch: fieldEvidencePatch,
     workflow_output: workflowOutput,
-  });
+  }, {}, { page: "LeaseReview", action: "evidence_backfill" });
 }
 
 /**
@@ -194,12 +197,12 @@ export async function persistLeaseExtractionMerge({ leaseId, action, patch }) {
     lease_id: leaseId,
     action,
     patch,
-  });
+  }, {}, { page: "LeaseReview", action });
 }
 
 export async function deleteUploadedFile(fileId) {
   if (!fileId) throw new Error('File ID is required');
   return invokeEdgeFunction('delete-uploaded-file', {
     file_id: fileId,
-  });
+  }, {}, { page: "LeaseUpload", action: "file_delete" });
 }

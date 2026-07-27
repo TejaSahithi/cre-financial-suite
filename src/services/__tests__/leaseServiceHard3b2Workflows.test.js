@@ -41,7 +41,7 @@ describe('leaseService HARD-3B2 workflow wrappers', () => {
         field_key: 'monthly_rent',
         column_updates: { monthly_rent: 4500 },
         patch: { field: { value: 4500 } },
-      });
+      }, {}, { page: 'LeaseReview', action: 'field_edit' });
     });
 
     it('defaults columnUpdates/patch to empty objects when omitted', async () => {
@@ -52,7 +52,7 @@ describe('leaseService HARD-3B2 workflow wrappers', () => {
         field_key: 'tenant_name',
         column_updates: {},
         patch: {},
-      });
+      }, {}, { page: 'LeaseReview', action: 'field_edit' });
     });
 
     it('rejects a missing lease id without calling the edge function', async () => {
@@ -86,7 +86,7 @@ describe('leaseService HARD-3B2 workflow wrappers', () => {
         fields_patch: { tenant_name: { value: 'Acme' } },
         field_evidence_patch: { tenant_name: { source_text: 'p.1' } },
         workflow_output: { lease_fields: {} },
-      });
+      }, {}, { page: 'LeaseReview', action: 'evidence_backfill' });
     });
 
     it('defaults workflowOutput to null and patches to empty objects when omitted', async () => {
@@ -97,7 +97,7 @@ describe('leaseService HARD-3B2 workflow wrappers', () => {
         fields_patch: {},
         field_evidence_patch: {},
         workflow_output: null,
-      });
+      }, {}, { page: 'LeaseReview', action: 'evidence_backfill' });
     });
 
     it('rejects a missing lease id without calling the edge function', async () => {

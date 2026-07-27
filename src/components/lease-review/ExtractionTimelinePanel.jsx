@@ -55,8 +55,8 @@ function formatDuration(ms) {
 
 function statusBadgeClass(status) {
   const value = String(status || "unknown").toLowerCase();
-  if (["completed", "processed", "ready", "review_required", "success"].includes(value)) return "bg-emerald-100 text-emerald-700";
-  if (["running", "queued", "pending", "parsing", "normalizing"].includes(value)) return "bg-blue-100 text-blue-700";
+  if (["completed", "processed", "ready", "review_required", "success", "succeeded"].includes(value)) return "bg-emerald-100 text-emerald-700";
+  if (["running", "queued", "pending", "parsing", "normalizing", "started"].includes(value)) return "bg-blue-100 text-blue-700";
   if (["failed", "error", "blocked"].includes(value)) return "bg-red-100 text-red-700";
   if (["superseded", "retry_pending", "manual_review", "review_required"].includes(value)) return "bg-amber-100 text-amber-800";
   return "bg-slate-100 text-slate-700";

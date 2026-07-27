@@ -3,6 +3,25 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { assertPageAccess, getUserOrgId, verifyUser } from "../_shared/supabase.ts";
 import { getLeaseDocumentPackageMode } from "../_shared/extraction/document-package/feature-mode.ts";
 import { getLeaseFinancialScheduleMode } from "../_shared/extraction/lease-financial-schedule/feature-mode.ts";
+import { createLogger } from "../_shared/logger.ts";
+
+// This route is lease_id-scoped, not file_id-scoped, but pipeline_logs is
+// keyed on the source uploaded_files row. Resolve it best-effort so review
+// actions land in the same activity log as the rest of the pipeline; a
+// lease with no resolvable source file (or any lookup failure) simply skips
+// logging rather than blocking the save.
+async function resolveSourceFileId(supabaseAdmin: any, leaseId: string): Promise<string | null> {
+  try {
+    const { data } = await supabaseAdmin
+      .from("leases")
+      .select("source_file_id")
+      .eq("id", leaseId)
+      .maybeSingle();
+    return data?.source_file_id ?? null;
+  } catch {
+    return null;
+  }
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -46,6 +65,15 @@ Deno.serve(async (req: Request) => {
 
     const body = await req.json().catch(() => ({}));
     const payload = validatePayload(body);
+    const sourceFileId = await resolveSourceFileId(supabaseAdmin, payload.leaseId);
+    const logger = sourceFileId ? createLogger(supabaseAdmin, sourceFileId, orgId) : null;
+    const uiContext = body?._uiContext ?? null;
+    await logger?.event("review_draft", "started", {
+      lease_id: payload.leaseId,
+      field_count: Object.keys(payload.fieldReviews).length,
+      ui: uiContext,
+    });
+
     if (getLeaseDocumentPackageMode() === "active") {
       throw new Error("package-active review draft saves must use package reviewer decision routes");
     }
@@ -62,9 +90,11 @@ Deno.serve(async (req: Request) => {
     });
 
     if (error) {
+      await logger?.event("review_draft", "failed", { lease_id: payload.leaseId, reason: error.message });
       throw new Error(error.message || "save_lease_review_draft failed");
     }
 
+    await logger?.event("review_draft", "succeeded", { lease_id: payload.leaseId, ui: uiContext });
     return jsonResponse({ error: false, ...data });
   } catch (err) {
     const message = err?.message || "Could not save lease review draft";

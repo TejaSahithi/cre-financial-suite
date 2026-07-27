@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { callLLMJSON } from "../_shared/llm.ts";
+import { createLogger } from "../_shared/logger.ts";
 
 
 const FULL_SCAN_SYSTEM_PROMPT = `You are an expert commercial real estate (CRE) lease abstraction AI performing a COMPREHENSIVE PARAGRAPH-BY-PARAGRAPH SCAN.
@@ -276,6 +277,19 @@ serve(async (req: Request) => {
     const categories = Array.isArray(body.categories) ? body.categories : [];
     const fullScan = body.full_scan === true;
 
+    // This route is a stateless text-in/rules-out call with no required
+    // file/lease identifier of its own. The caller (leaseRulePipelineService)
+    // already knows the source file, so it passes it optionally purely for
+    // activity logging — never required, never used for authorization.
+    const logFileId = typeof body.file_id === "string" ? body.file_id : null;
+    const logger = logFileId ? createLogger(supabaseAdmin, logFileId, orgId) : null;
+    const uiContext = body?._uiContext ?? null;
+    await logger?.event("expense_rules", "started", {
+      full_scan: fullScan,
+      source_text_length: sourceText?.length ?? 0,
+      ui: uiContext,
+    });
+
     if (!sourceText) {
       throw new Error("source_text is required.");
     }
@@ -301,6 +315,7 @@ Return a JSON object with a "rules" array of expense rules found. Each rule must
     } catch (aiError) {
       const message = aiError instanceof Error ? aiError.message : String(aiError);
       console.error("[extract-lease-expense-rules] AI extraction failed:", message);
+      await logger?.event("expense_rules", "failed", { reason: message });
       return new Response(JSON.stringify({
         rules: [],
         warning: `AI expense rule extraction failed: ${message}`,
@@ -311,6 +326,7 @@ Return a JSON object with a "rules" array of expense rules found. Each rule must
     }
 
     if (!rules || rules.length === 0) {
+      await logger?.event("expense_rules", "succeeded", { rule_count: 0, warning: "no_rules_found" });
       return new Response(JSON.stringify({
         rules: [],
         warning: "AI expense rule extraction returned no rules.",
@@ -363,6 +379,7 @@ Return a JSON object with a "rules" array of expense rules found. Each rule must
       });
     });
 
+    await logger?.event("expense_rules", "succeeded", { rule_count: mappedRules.length, ui: uiContext });
     return new Response(JSON.stringify({ rules: mappedRules }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
       status: 200,

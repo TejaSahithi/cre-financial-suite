@@ -1474,7 +1474,7 @@ export default function LeaseReview() {
     };
     setFieldReviews(next);
     try {
-      await saveAbstractDraft({ lease, fieldReviews: next, reviewer: lease?.signed_by || null });
+      await saveAbstractDraft({ lease, fieldReviews: next, reviewer: lease?.signed_by || null, action: status });
       await logAudit({
         entityType: "LeaseFieldReview",
         entityId: lease.id,
@@ -1638,7 +1638,7 @@ export default function LeaseReview() {
     delete next[field.key];
     setFieldReviews(next);
     try {
-      await saveAbstractDraft({ lease, fieldReviews: next, reviewer: lease?.signed_by || null });
+      await saveAbstractDraft({ lease, fieldReviews: next, reviewer: lease?.signed_by || null, action: "reset" });
       await logAudit({
         entityType: "LeaseFieldReview",
         entityId: lease.id,
@@ -1751,6 +1751,7 @@ export default function LeaseReview() {
         lease,
         fieldReviews,
         reviewer: lease?.signed_by || null,
+        action: "save_draft",
       });
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["leases"] });
@@ -3597,7 +3598,7 @@ export default function LeaseReview() {
           };
           setFieldReviews(next);
           try {
-            await saveAbstractDraft({ lease, fieldReviews: next, reviewer: lease?.signed_by || null });
+            await saveAbstractDraft({ lease, fieldReviews: next, reviewer: lease?.signed_by || null, action: "override_reason" });
             await logAudit({
               entityType: "LeaseFieldReview",
               entityId: lease.id,

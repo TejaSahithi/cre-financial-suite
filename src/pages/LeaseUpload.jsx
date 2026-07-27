@@ -522,7 +522,7 @@ export default function LeaseUpload() {
       invokeEdgeFunction("ingest-file", {
         file_id: fileId,
         module_type: "leases",
-      })
+      }, {}, { page: "LeaseUpload", action: "auto_retry" })
         .then((data) => {
           if (data?.error) {
             toast.error(data?.message || "Could not start lease extraction.");
@@ -576,7 +576,7 @@ export default function LeaseUpload() {
         file_id: fileId,
         module_type: "leases",
         force_reextract: true,
-      });
+      }, {}, { page: "LeaseUpload", action: "manual_retry" });
 
       if (data?.error) {
         toast.error(data?.message || "Could not restart extraction.");
@@ -607,7 +607,10 @@ export default function LeaseUpload() {
         fileRecord,
         linkedLeaseId,
         findLeaseByFileId,
-        prepareLeaseReviewDraft: (body) => invokeEdgeFunction("review-approve", body),
+        prepareLeaseReviewDraft: (body) => invokeEdgeFunction("review-approve", body, {}, {
+          page: "LeaseUpload",
+          action: "prepare_review_draft",
+        }),
         linkLeaseToUploadedFile,
       });
 

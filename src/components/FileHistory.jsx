@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { supabase } from "@/services/supabaseClient";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { createPageUrl } from "@/utils";
 import useOrgId from "@/hooks/useOrgId";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -191,14 +192,15 @@ export default function FileHistory() {
   const handleRetry = async (fileId, moduleType) => {
     setRetryingId(fileId);
     try {
-      const { data, error } = await supabase.functions.invoke("ingest-file", {
-        body: { file_id: fileId, force_reextract: true, module_type: moduleType || "leases" },
-      });
-
-      if (error) {
-        toast.error(`Retry failed: ${error.message || "Unknown error"}`);
-        return;
-      }
+      // Routed through invokeEdgeFunction (was a direct supabase.functions.invoke
+      // call) so this action gets the same session-refresh and acting-org-header
+      // handling every other retry path already has, plus UI-action logging.
+      const data = await invokeEdgeFunction(
+        "ingest-file",
+        { file_id: fileId, force_reextract: true, module_type: moduleType || "leases" },
+        {},
+        { page: "FileHistory", action: "retry" },
+      );
 
       toast.success(data?.message || "Extraction restarted");
       setTimeout(() => fetchFiles(true), 2000);

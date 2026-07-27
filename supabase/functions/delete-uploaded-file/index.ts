@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { assertPageAccess, getUserOrgId, verifyUser } from "../_shared/supabase.ts";
+import { createLogger } from "../_shared/logger.ts";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -45,6 +46,15 @@ Deno.serve(async (req: Request) => {
 
     const body = await req.json().catch(() => ({}));
     const payload = validatePayload(body);
+    // pipeline_logs.file_id CASCADEs when the file row is deleted, so a
+    // "succeeded" event here would vanish along with the file it describes.
+    // Log the attempt (survives on failure) via pipeline_logs, and log the
+    // durable "this file was deleted" fact via audit_logs (org-scoped, not
+    // file-FK'd) instead — the same table Lease/Expense/Budget lifecycle
+    // events already use for exactly this reason.
+    const logger = createLogger(supabaseAdmin, payload.fileId, orgId);
+    const uiContext = body?._uiContext ?? null;
+    await logger.event("file_delete", "started", { ui: uiContext });
 
     const { data, error } = await supabaseAdmin.rpc("delete_uploaded_file_workflow", {
       p_org_id: orgId,
@@ -54,8 +64,19 @@ Deno.serve(async (req: Request) => {
     });
 
     if (error) {
+      await logger.event("file_delete", "failed", { reason: error.message });
       throw new Error(error.message || "delete_uploaded_file_workflow failed");
     }
+
+    await supabaseAdmin.from("audit_logs").insert({
+      org_id: orgId,
+      entity_type: "UploadedFile",
+      entity_id: payload.fileId,
+      action: "delete",
+      user_email: user.email ?? null,
+    }).then(({ error: auditErr }: any) => {
+      if (auditErr) console.warn(`[delete-uploaded-file] audit_logs write skipped: ${auditErr.message}`);
+    });
 
     return jsonResponse({ error: false, ...data });
   } catch (err) {

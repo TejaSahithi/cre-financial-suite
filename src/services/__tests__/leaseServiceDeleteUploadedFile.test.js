@@ -33,7 +33,7 @@ describe('leaseService.deleteUploadedFile', () => {
 
     expect(invokeEdgeFunctionMock).toHaveBeenCalledWith('delete-uploaded-file', {
       file_id: 'file-1',
-    });
+    }, {}, { page: 'LeaseUpload', action: 'file_delete' });
     expect(result.deleted_id).toBe('file-1');
     expect(result.deleted_count).toBe(1);
   });

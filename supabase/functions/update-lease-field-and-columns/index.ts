@@ -1,6 +1,23 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { assertPageAccess, getUserOrgId, verifyUser } from "../_shared/supabase.ts";
+import { createLogger } from "../_shared/logger.ts";
+
+// Lease-scoped route; pipeline_logs is keyed on the source uploaded_files
+// row. Resolve best-effort — a lease with no resolvable source file simply
+// skips logging rather than blocking the update.
+async function resolveSourceFileId(supabaseAdmin: any, leaseId: string): Promise<string | null> {
+  try {
+    const { data } = await supabaseAdmin
+      .from("leases")
+      .select("source_file_id")
+      .eq("id", leaseId)
+      .maybeSingle();
+    return data?.source_file_id ?? null;
+  } catch {
+    return null;
+  }
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -58,6 +75,14 @@ Deno.serve(async (req: Request) => {
 
     const body = await req.json().catch(() => ({}));
     const payload = validatePayload(body);
+    const sourceFileId = await resolveSourceFileId(supabaseAdmin, payload.leaseId);
+    const logger = sourceFileId ? createLogger(supabaseAdmin, sourceFileId, orgId) : null;
+    const uiContext = body?._uiContext ?? null;
+    await logger?.event("field_edit", "started", {
+      lease_id: payload.leaseId,
+      field_key: payload.fieldKey,
+      ui: uiContext,
+    });
 
     const { data, error } = await supabaseAdmin.rpc("update_lease_field_and_columns", {
       p_org_id: orgId,
@@ -70,9 +95,19 @@ Deno.serve(async (req: Request) => {
     });
 
     if (error) {
+      await logger?.event("field_edit", "failed", {
+        lease_id: payload.leaseId,
+        field_key: payload.fieldKey,
+        reason: error.message,
+      });
       throw new Error(error.message || "update_lease_field_and_columns failed");
     }
 
+    await logger?.event("field_edit", "succeeded", {
+      lease_id: payload.leaseId,
+      field_key: payload.fieldKey,
+      ui: uiContext,
+    });
     return jsonResponse({ error: false, ...data });
   } catch (err) {
     const message = err?.message || "Could not update lease field";
