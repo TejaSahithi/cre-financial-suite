@@ -70,8 +70,10 @@ function makeMockSupabase({ rows, selectQueue = {}, alwaysErrorTables = [], upda
       _filters: {} as Record<string, any>,
       _patch: null as any,
       _isUpdate: false,
+      _selectCalled: false,
 
       select(_cols?: string) {
+        builder._selectCalled = true;
         return builder;
       },
       update(patch: any) {
@@ -91,10 +93,31 @@ function makeMockSupabase({ rows, selectQueue = {}, alwaysErrorTables = [], upda
       },
     };
 
+    function filtersMatch(row: any): boolean {
+      if (!row) return false;
+      for (const [col, val] of Object.entries(builder._filters)) {
+        if (row[col] !== val) return false;
+      }
+      return true;
+    }
+
     function applyUpdateAndRecord() {
-      updates.push({ table, patch: builder._patch, filters: { ...builder._filters } });
-      rows[table] = { ...(rows[table] || {}), ...builder._patch };
-      return { data: rows[table], error: null };
+      // A real Supabase compare-and-set only applies (and only returns
+      // rows for a chained .select()) when every .eq() filter actually
+      // matches the stored row -- e.g. persistEnrichmentTerminalState's
+      // generation-scoped CAS. Chaining .select() after .update() also
+      // makes the response an ARRAY of affected rows in real supabase-js,
+      // not a bare object -- both are required for row-count checks like
+      // `Array.isArray(data) ? data.length : 0` to behave correctly.
+      const isMatch = filtersMatch(rows[table]);
+      if (isMatch) {
+        updates.push({ table, patch: builder._patch, filters: { ...builder._filters } });
+        rows[table] = { ...(rows[table] || {}), ...builder._patch };
+      }
+      if (builder._selectCalled) {
+        return { data: isMatch ? [rows[table]] : [], error: null };
+      }
+      return { data: isMatch ? rows[table] : null, error: null };
     }
 
     function runQuery(): Promise<{ data: any; error: any }> {

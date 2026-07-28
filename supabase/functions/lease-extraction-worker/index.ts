@@ -13,6 +13,7 @@ import { firstEnrichBoundedStage, isEnrichBoundedStageName } from "../_shared/ex
 import { resolveExtractionRunId } from "../_shared/extraction/provenance/recorder.ts";
 import { getLeaseDocumentPackageMode } from "../_shared/extraction/document-package/feature-mode.ts";
 import { getLeaseFinancialScheduleMode } from "../_shared/extraction/lease-financial-schedule/feature-mode.ts";
+import { classifyEnrichmentFailure, persistEnrichmentTerminalState } from "../_shared/extraction/enrichment-terminal-state.ts";
 import {
   buildInternalFunctionHeaders,
   classifyDownstreamError,
@@ -636,27 +637,27 @@ async function completeEnrichmentWithWarning(
     })
     .eq("id", job.id);
 
-  const { data: currentFile } = await supabaseAdmin
-    .from("uploaded_files")
-    .select("ui_review_payload, active_generation_id")
-    .eq("id", fileId)
-    .maybeSingle();
+  // Reliability Phase R1: a single generation-fenced compare-and-set
+  // replaces the old re-fetch + conditional update + silent no-op-on-
+  // mismatch. Real column lands as "completed" (this path is always
+  // review-ready); the friendlier "completed_with_warnings" string is
+  // preserved exactly as before, but only in the ui_review_payload mirror.
+  const persistResult = await persistEnrichmentTerminalState({
+    supabaseAdmin,
+    organizationId: orgId,
+    fileId,
+    generationId: job.generation_id,
+    status: "completed",
+    uiReviewPayloadStatus: "completed_with_warnings",
+    errorCode,
+    errorMessage: String(message || "Evidence enrichment did not complete").slice(0, 1000),
+    classification: "transport_error",
+    retryable: true,
+    stage: "enrich",
+    logger: createLogger(supabaseAdmin, fileId, orgId),
+  });
 
-  if (currentFile?.active_generation_id === job.generation_id) {
-    const currentPayload = currentFile.ui_review_payload || {};
-    await supabaseAdmin
-      .from("uploaded_files")
-      .update({
-        ui_review_payload: {
-          ...currentPayload,
-          enrichment_status: "completed_with_warnings",
-          enrichment_warning: String(message || "Evidence enrichment did not complete").slice(0, 1000),
-          enrichment_warning_code: errorCode,
-        },
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", fileId);
-
+  if (persistResult.persisted) {
     try {
       const { error: finalizeRpcError } = await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
         p_org_id: orgId,
@@ -1567,27 +1568,31 @@ Deno.serve(async (req: Request) => {
         // payload with uploaded_files.status="failed". Only fail the job row
         // and patch enrichment_status.
         await failJob(supabaseAdmin, job, "MAX_ATTEMPTS_EXCEEDED", message);
-        // P0.3: generation fencing — this job may already have been
-        // superseded by a newer explicit re-extraction generation. Failing
-        // the job row itself is always safe (it's this job's own row), but
-        // patching uploaded_files.ui_review_payload for a stale generation
-        // would clobber the active generation's state with this exhausted
-        // job's stale "failed" status.
-        const { data: fileForGenerationCheck } = await supabaseAdmin
-          .from("uploaded_files")
-          .select("active_generation_id, ui_review_payload")
-          .eq("id", fileId)
-          .maybeSingle();
-        if (fileForGenerationCheck && fileForGenerationCheck.active_generation_id === job.generation_id) {
-          const currentPayload = fileForGenerationCheck.ui_review_payload || {};
-          await supabaseAdmin
-            .from("uploaded_files")
-            .update({
-              ui_review_payload: { ...currentPayload, enrichment_status: "failed", enrichment_error: message },
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", fileId);
-          console.log(`[${WORKER_NAME}] enrichment_failed_preserved_core_payload file_id=${fileId} reason=max_attempts_exceeded`);
+        // Reliability Phase R1: classify using the LAST ATTEMPT's error
+        // code/message (already on this in-memory `job` row, fetched
+        // before failJob's own DB-level overwrite above) rather than the
+        // literal "MAX_ATTEMPTS_EXCEEDED" string -- a run of repeated 546
+        // resource-exhaustion crashes hitting the attempt budget is
+        // plausibly the single most common real path to this branch, and
+        // only the underlying per-attempt error code can reveal that.
+        const { classification, retryable } = classifyEnrichmentFailure(job.error_code, job.error_message, null);
+        const terminalStatus = classification === "resource_exhausted" ? "partial" : "failed";
+        const persistResult = await persistEnrichmentTerminalState({
+          supabaseAdmin,
+          organizationId: orgId,
+          fileId,
+          generationId: job.generation_id,
+          status: terminalStatus,
+          errorCode: job.error_code ?? "MAX_ATTEMPTS_EXCEEDED",
+          errorMessage: message,
+          classification,
+          retryable,
+          stage: "enrich",
+          completedStages: ["parse", "normalize"],
+          logger: createLogger(supabaseAdmin, fileId, orgId),
+        });
+        if (persistResult.persisted) {
+          console.log(`[${WORKER_NAME}] enrichment_${terminalStatus}_preserved_core_payload file_id=${fileId} reason=max_attempts_exceeded`);
           // P0.5: terminal enrichment outcome — re-evaluate readiness.
           try {
             const { error: finalizeRpcError } = await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
@@ -1603,8 +1608,6 @@ Deno.serve(async (req: Request) => {
           } catch (finalizeError: any) {
             console.error(`[${WORKER_NAME}] finalize_lease_extraction_for_review call threw file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
           }
-        } else {
-          console.log(`[${WORKER_NAME}] enrich_stale_generation_skipped file_id=${fileId} job_id=${job.id} — superseded, not patching ui_review_payload`);
         }
       } else {
         await failJobAndUpload(supabaseAdmin, job, fileId, "MAX_ATTEMPTS_EXCEEDED", message, job.stage ?? "parse", 15);
@@ -2326,51 +2329,65 @@ Deno.serve(async (req: Request) => {
         // enrichment_status failed. The core minimal payload this job was
         // meant to enhance must remain exactly as it was.
         await failJob(supabaseAdmin, job, errorCode, message);
-        // P0.3: generation fencing — only patch ui_review_payload if this
-        // job's generation is still the file's active one; a stale worker
-        // whose internal call to normalize-pdf-output failed/timed out must
-        // not overwrite a newer generation's state with its own failure.
-        const { data: currentFile } = await supabaseAdmin
-          .from("uploaded_files")
-          .select("ui_review_payload, active_generation_id")
-          .eq("id", fileId)
-          .maybeSingle();
-        const currentPayload = currentFile?.ui_review_payload || {};
-        if (
-          currentFile?.active_generation_id === job.generation_id &&
-          currentPayload.enrichment_status !== "completed"
-        ) {
-          await supabaseAdmin
+
+        // Defensive, best-effort only: never downgrade a row that a racing
+        // completion already marked "completed" -- a failed read here must
+        // not abandon the compare-and-set below (Reliability Phase R1,
+        // point 4), it only skips this specific courtesy check.
+        let alreadyCompleted = false;
+        try {
+          const { data: currentFile } = await supabaseAdmin
             .from("uploaded_files")
-            .update({
-              ui_review_payload: { ...currentPayload, enrichment_status: "failed", enrichment_error: message },
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", fileId);
-          // P0.5: terminal enrichment outcome — re-evaluate readiness.
-          try {
-            const { error: finalizeRpcError } = await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
-              p_org_id: orgId,
-              p_uploaded_file_id: fileId,
-              p_generation_id: job.generation_id,
-              p_package_mode: getLeaseDocumentPackageMode(),
-              p_financial_mode: getLeaseFinancialScheduleMode(),
-            });
-            if (finalizeRpcError) {
-              console.error(`[${WORKER_NAME}] finalize_lease_extraction_for_review RPC returned an error (review_readiness NOT updated) file_id=${fileId}:`, finalizeRpcError.message);
-            }
-          } catch (finalizeError: any) {
-            console.error(`[${WORKER_NAME}] finalize_lease_extraction_for_review call threw file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
-          }
-        } else if (currentFile?.active_generation_id !== job.generation_id) {
-          console.log(`[${WORKER_NAME}] enrich_stale_generation_skipped file_id=${fileId} job_id=${job.id} — superseded, not patching ui_review_payload`);
+            .select("enrichment_status")
+            .eq("id", fileId)
+            .maybeSingle();
+          alreadyCompleted = currentFile?.enrichment_status === "completed";
+        } catch {
+          // Unknown; proceed with the compare-and-set below.
         }
-        console.log(`[${WORKER_NAME}] enrichment_failed_preserved_core_payload file_id=${fileId}: ${message}`);
-        await logger.event("enrich", "failed", {
-          error_code: errorCode,
-          error_message: message,
-          metadata: { job_id: job.id, status: enrichResult.status },
-        });
+
+        if (!alreadyCompleted) {
+          const { classification, retryable } = classifyEnrichmentFailure(errorCode, message, enrichResult.status);
+          // Reaching this branch structurally requires normalize to have
+          // already completed (the worker would not have dispatched an
+          // enrich job otherwise) -- core fields already exist, so a
+          // resource-exhaustion classification safely resolves to
+          // "partial" rather than "failed" without needing a fresh
+          // core-ready read.
+          const terminalStatus = classification === "resource_exhausted" ? "partial" : "failed";
+          const persistResult = await persistEnrichmentTerminalState({
+            supabaseAdmin,
+            organizationId: orgId,
+            fileId,
+            generationId: job.generation_id,
+            status: terminalStatus,
+            errorCode,
+            errorMessage: message,
+            classification,
+            retryable,
+            stage: "enrich",
+            completedStages: ["parse", "normalize"],
+            logger,
+          });
+          if (persistResult.persisted) {
+            console.log(`[${WORKER_NAME}] enrichment_${terminalStatus}_preserved_core_payload file_id=${fileId}: ${message}`);
+            // P0.5: terminal enrichment outcome — re-evaluate readiness.
+            try {
+              const { error: finalizeRpcError } = await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
+                p_org_id: orgId,
+                p_uploaded_file_id: fileId,
+                p_generation_id: job.generation_id,
+                p_package_mode: getLeaseDocumentPackageMode(),
+                p_financial_mode: getLeaseFinancialScheduleMode(),
+              });
+              if (finalizeRpcError) {
+                console.error(`[${WORKER_NAME}] finalize_lease_extraction_for_review RPC returned an error (review_readiness NOT updated) file_id=${fileId}:`, finalizeRpcError.message);
+              }
+            } catch (finalizeError: any) {
+              console.error(`[${WORKER_NAME}] finalize_lease_extraction_for_review call threw file_id=${fileId}:`, finalizeError?.message ?? finalizeError);
+            }
+          }
+        }
         return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: "enrich", message }, 200);
       }
 
