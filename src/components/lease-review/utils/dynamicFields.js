@@ -106,7 +106,13 @@ function isGenericSummaryPreambleSource(sourceText) {
 
 function shouldSuppressDynamicReviewItem(key, item, value, sourceText, staticKeys) {
   const normalizedKey = key.startsWith("clause_") ? key.slice(7) : key;
-  if (item?.possible_canonical_match) return true;
+  // A possible_canonical_match is a USEFUL signal ("this near-miss might
+  // belong to an existing field") for a reviewer to see, not a reason to
+  // hide the row entirely -- this previously suppressed unconditionally,
+  // which meant the backend's near-miss diagnostics (dynamic-fact-surfacer.ts)
+  // could never actually reach a reviewer once they fired. See where this
+  // row is built below: possible_canonical_match now surfaces as a
+  // requires_review flag + review_reason instead of a suppression.
   if (CLAUSE_RECORD_ONLY_DYNAMIC_KEYS.has(normalizedKey)) {
     const operativeClauseOnly = key.startsWith("clause_")
       && (value === null || value === undefined || value === "")
@@ -452,8 +458,12 @@ export function buildDynamicDocumentFieldsByTab(lease) {
       }),
       source_field_keys: item?.source_field_keys ?? item?.sourceFieldKeys ?? [],
       derivation_trace: item?.derivation_trace ?? item?.derivationTrace ?? null,
-      requires_review: Boolean(item?.requires_review ?? item?.requiresReview ?? false),
-      review_reason: item?.review_reason ?? item?.reviewReason ?? item?.requires_review_reason ?? item?.requiresReviewReason ?? null,
+      requires_review: Boolean(item?.requires_review ?? item?.requiresReview ?? item?.possible_canonical_match ?? false),
+      review_reason: item?.review_reason ?? item?.reviewReason ?? item?.requires_review_reason ?? item?.requiresReviewReason
+        ?? (item?.possible_canonical_match
+          ? `Possible match for existing field "${titleizeFieldKey(item.possible_canonical_match)}" -- review before treating as a separate item.`
+          : null),
+      possible_canonical_match: item?.possible_canonical_match ?? null,
       approval_blocking_reason: item?.approval_blocking_reason ?? item?.approvalBlockingReason ?? null,
     });
   }

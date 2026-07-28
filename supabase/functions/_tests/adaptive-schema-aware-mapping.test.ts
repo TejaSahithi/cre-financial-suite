@@ -236,6 +236,29 @@ Deno.test("applyValidationCorrections: a 'confirm' decision leaves the field unt
   assertEquals(records[0].fields.monthly_rent.value, 2100);
 });
 
+Deno.test("applyValidationCorrections: an 'uncertain' decision fails closed -- keeps the value but flags it, never silently confirms it", () => {
+  // The exact bug this review found: the original version treated anything
+  // that wasn't literally "null" as "confirm", including ambiguous or
+  // missing decisions. "uncertain" must neither destroy a possibly-correct
+  // value (that's what "null" is for) nor silently pass it through as clean.
+  const records: ExtractedRecord[] = [{
+    rowIndex: 0,
+    fields: {
+      monthly_rent: { value: 2100, source: "llm", confidence: 0.7, llmPrimaryMapped: true },
+    },
+  }];
+  const { confirmed, cleared, uncertain } = applyValidationCorrections({
+    records,
+    results: [{ field: "monthly_rent", decision: "uncertain", reason: "quote is ambiguous on a second read" }],
+  });
+  assertEquals(confirmed, 0);
+  assertEquals(cleared, 0);
+  assertEquals(uncertain, 1);
+  assertEquals(records[0].fields.monthly_rent.value, 2100, "an uncertain verdict must not clear a value");
+  assertEquals(records[0].fields.monthly_rent.extractionStatus, "needs_review");
+  assertEquals(records[0].fields.monthly_rent.requiresReview, true);
+});
+
 Deno.test("applyValidationCorrections: a decision targeting a field NOT set by this run's primary mapper is refused, not applied blindly", () => {
   // This is the exact gap the original (pre-rework) validator had: acting on
   // a field it had no history with. The narrowed contract only trusts

@@ -186,6 +186,7 @@ export type LLMFailureClassification =
   | "invalid_response"
   | "context_length_exceeded"
   | "content_filter"
+  | "schema_validation"
   | "unknown";
 
 export interface LLMProviderErrorExtra {
@@ -339,8 +340,21 @@ async function postToOpenAI(config: LLMConfig, body: Record<string, unknown>): P
   return { response, responseBody, responseId, requestUrl: url };
 }
 
-async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
+/** A JSON Schema to enforce via OpenAI/Azure OpenAI's strict structured-outputs
+ * mode (`response_format: {type:"json_schema", json_schema:{..., strict:true}}`),
+ * distinct from the looser `json_object` mode `jsonMode` below selects. */
+export interface StructuredOutputSchema {
+  name: string;
+  schema: Record<string, unknown>;
+}
+
+async function openAICall(
+  opts: LLMCallOpts,
+  jsonMode: boolean,
+  structuredSchema?: StructuredOutputSchema,
+): Promise<{
   content: string;
+  refusal: string | null;
   model: string;
   promptTokens: number;
   completionTokens: number;
@@ -370,7 +384,16 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
     max_completion_tokens: maxTokens,
   };
 
-  if (jsonMode) {
+  if (structuredSchema) {
+    // Strict structured outputs -- the model MUST either produce JSON
+    // conforming exactly to `schema` or populate message.refusal instead of
+    // content (checked below). Distinct from, and takes priority over, the
+    // looser json_object mode.
+    body.response_format = {
+      type: "json_schema",
+      json_schema: { name: structuredSchema.name, strict: true, schema: structuredSchema.schema },
+    };
+  } else if (jsonMode) {
     // Enforce valid JSON output — prevents truncated or prose responses
     body.response_format = { type: "json_object" };
   }
@@ -426,11 +449,18 @@ async function openAICall(opts: LLMCallOpts, jsonMode: boolean): Promise<{
   }
 
   const content = choice?.message?.content ?? "";
+  // Only ever populated instead of content, under strict structured-outputs
+  // mode, when the model declines to produce a schema-conforming answer
+  // (safety refusal) -- never present for json_object/plain-text calls.
+  const refusal = typeof choice?.message?.refusal === "string" && choice.message.refusal.length > 0
+    ? choice.message.refusal
+    : null;
   const finishReason = choice?.finish_reason ?? "unknown";
   const usage = responseBody?.usage ?? {};
 
   return {
     content,
+    refusal,
     model: responseBody?.model ?? effectiveModel,
     promptTokens: usage.prompt_tokens ?? 0,
     completionTokens: usage.completion_tokens ?? 0,
@@ -489,4 +519,134 @@ export async function callLLMText(opts: LLMCallOpts): Promise<LLMTextResponse> {
     finishReason: raw.finishReason,
     responseId: raw.responseId,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Strict structured outputs (Phase 1 pilot, shadow-mode only)
+// ---------------------------------------------------------------------------
+
+export type StructuredLlmStatus = "success" | "refusal" | "truncated" | "schema_error" | "provider_error";
+
+/**
+ * One exhaustive result type for a strict structured-outputs call -- no
+ * separate exception contract a caller also has to catch. A known provider
+ * failure (LLMProviderError) is caught inside callLLMStructured and reported
+ * as status "provider_error"; only a genuinely unexpected programming error
+ * (not an LLMProviderError) still throws, since that is a bug rather than a
+ * provider outcome to model.
+ */
+export interface StructuredLlmResult<T = unknown> {
+  status: StructuredLlmStatus;
+  data: T | null;
+  refusalReason: string | null;
+  errorClassification: LLMFailureClassification | null;
+  errorMessage: string | null;
+  model: string | null;
+  responseId: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  finishReason: string | null;
+}
+
+export interface LLMStructuredCallOpts extends LLMCallOpts {
+  /** Short identifier for the schema (OpenAI's json_schema.name field). */
+  schemaName: string;
+  /** The JSON Schema itself -- top-level object, additionalProperties:false,
+   *  every property required (Azure/OpenAI strict mode's own rule). */
+  schema: Record<string, unknown>;
+}
+
+/**
+ * Call the LLM under strict `json_schema` structured-outputs mode. Never
+ * repairs, retries with a looser mode, or regex-extracts on a non-"success"
+ * result -- the returned status is the complete, final answer for the call.
+ * Shadow-mode caller (adaptive-extractor.ts's expenses_and_cam pilot) treats
+ * every status uniformly: only "success" data is compared against the
+ * authoritative result, everything else is recorded and otherwise ignored.
+ */
+export async function callLLMStructured<T = unknown>(opts: LLMStructuredCallOpts): Promise<StructuredLlmResult<T>> {
+  try {
+    const raw = await openAICall(opts, false, { name: opts.schemaName, schema: opts.schema });
+
+    if (raw.refusal) {
+      return {
+        status: "refusal",
+        data: null,
+        refusalReason: raw.refusal,
+        errorClassification: null,
+        errorMessage: null,
+        model: raw.model,
+        responseId: raw.responseId,
+        inputTokens: raw.promptTokens,
+        outputTokens: raw.completionTokens,
+        finishReason: raw.finishReason,
+      };
+    }
+
+    if (raw.finishReason === "length") {
+      return {
+        status: "truncated",
+        data: null,
+        refusalReason: null,
+        errorClassification: null,
+        errorMessage: "Structured output truncated (finish_reason=length) before completing.",
+        model: raw.model,
+        responseId: raw.responseId,
+        inputTokens: raw.promptTokens,
+        outputTokens: raw.completionTokens,
+        finishReason: raw.finishReason,
+      };
+    }
+
+    let data: T;
+    try {
+      data = JSON.parse(raw.content) as T;
+    } catch {
+      // Should be near-impossible under real strict mode -- checked rather
+      // than assumed, since "the provider claims strict mode" and "the
+      // provider's strict mode actually behaves as documented" are different
+      // claims, and this pilot exists partly to find out which is true.
+      return {
+        status: "schema_error",
+        data: null,
+        refusalReason: null,
+        errorClassification: "schema_validation",
+        errorMessage: `Structured output was not valid JSON despite strict json_schema mode. Content preview: ${raw.content.slice(0, 200)}`,
+        model: raw.model,
+        responseId: raw.responseId,
+        inputTokens: raw.promptTokens,
+        outputTokens: raw.completionTokens,
+        finishReason: raw.finishReason,
+      };
+    }
+
+    return {
+      status: "success",
+      data,
+      refusalReason: null,
+      errorClassification: null,
+      errorMessage: null,
+      model: raw.model,
+      responseId: raw.responseId,
+      inputTokens: raw.promptTokens,
+      outputTokens: raw.completionTokens,
+      finishReason: raw.finishReason,
+    };
+  } catch (error) {
+    if (error instanceof LLMProviderError) {
+      return {
+        status: "provider_error",
+        data: null,
+        refusalReason: null,
+        errorClassification: error.classification,
+        errorMessage: error.message,
+        model: null,
+        responseId: error.requestId ?? null,
+        inputTokens: null,
+        outputTokens: null,
+        finishReason: null,
+      };
+    }
+    throw error;
+  }
 }

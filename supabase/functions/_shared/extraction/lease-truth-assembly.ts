@@ -90,6 +90,16 @@ interface RawFieldEvidence {
   confidence: number | null;
   sourceText: string | null;
   sourcePage: number | null;
+  /** Set when the upstream mapper (fact-field-mapper.ts) already ran this
+   *  exact candidate through checkFieldSemanticCompatibility and chose to
+   *  KEEP the value with a review flag rather than drop it (see
+   *  assignmentsToFacts()'s semanticVetoReason handling), or when a later
+   *  self-consistency verification pass flagged it "uncertain". Read by
+   *  the semantic/obligation-direction gates below so a redundant re-check
+   *  failing here can fall back to "flag, don't delete" -- the same
+   *  graceful degradation the upstream mapper already chose -- instead of
+   *  silently destroying a value no upstream stage ever actually rejected. */
+  requiresReview: boolean;
 }
 
 // ── Duplicate-concept publish groups ─────────────────────────────────────────
@@ -151,6 +161,8 @@ function normalizeEvidence(mergedFieldSources: Record<string, any> | null | unde
       confidence: typeof (entry as any).confidence === "number" ? (entry as any).confidence : null,
       sourceText: (entry as any).source_text ?? (entry as any).sourceText ?? null,
       sourcePage: (entry as any).source_page ?? (entry as any).sourcePage ?? null,
+      requiresReview: (entry as any).requires_review === true || (entry as any).requiresReview === true
+        || (entry as any).extraction_status === "needs_review" || (entry as any).extractionStatus === "needs_review",
     });
   }
   return out;
@@ -356,6 +368,45 @@ export interface AssembleCanonicalFieldsResult {
   canonicalFields: Record<string, CanonicalFieldResult>;
 }
 
+interface CandidateForFallback {
+  rawKey: string;
+  value: unknown;
+  sourceText: string | null;
+  sourcePage: number | null;
+  confidence: number | null;
+  source: string | null;
+  requiresReview: boolean;
+}
+
+/**
+ * When EVERY remaining candidate for a field fails a redundant re-check in
+ * this module (semantic compatibility or obligation direction), the
+ * upstream mapper may have already run the identical judgment call and
+ * chosen to KEEP the value with a review flag rather than drop it
+ * (fact-field-mapper.ts's semanticVetoReason handling sets
+ * extraction_status="needs_review" on exactly this situation, and a later
+ * self-consistency verification pass can independently confirm the value
+ * without clearing that flag). A confirmed real-world bug this fixes:
+ * "8.1 Utilities... Tenant does pay for all electricity..." gets classified
+ * monetaryRole="cam" (because the same sentence also lists CAM among
+ * several bundled costs), which fails electric_responsibility's
+ * monetaryRole=utility_charge requirement -- even though the sentence is
+ * unambiguous grounded evidence and the field's own verifier independently
+ * confirmed it. A gate re-deriving a check the upstream pipeline ALREADY
+ * made this exact call on must not have MORE destructive power than that
+ * upstream stage: it may keep flagging the value for review, but it must
+ * not delete a value nothing upstream ever actually rejected.
+ *
+ * Only a candidate carrying the upstream review flag AND real, grounded
+ * evidence qualifies here -- an ungrounded or never-reviewed candidate
+ * still gets this module's existing value:null/needs_review treatment,
+ * since Truth Assembly may be the ONLY check it has ever seen (e.g. the
+ * legacy keyword-mapping path, which never sets requiresReview at all).
+ */
+function findAlreadyReviewedFallback(candidates: CandidateForFallback[]): CandidateForFallback | null {
+  return candidates.find((c) => c.requiresReview && c.value != null && !!c.sourceText) ?? null;
+}
+
 /**
  * The ONLY function that may publish canonical review field values. Consumes
  * whichever pipeline ran's already-produced rows[0] + the shared
@@ -399,6 +450,7 @@ export function assembleCanonicalFields(input: AssembleCanonicalFieldsInput): As
           sourcePage: evidence?.sourcePage ?? null,
           confidence: evidence?.confidence ?? null,
           source: evidence?.source ?? null,
+          requiresReview: evidence?.requiresReview ?? false,
         };
       })
       .filter((c) => c.value !== null && c.value !== undefined && c.value !== "");
@@ -444,15 +496,29 @@ export function assembleCanonicalFields(input: AssembleCanonicalFieldsInput): As
       .map((c) => c.rawKey);
 
     if (semanticEligible.length === 0) {
-      canonicalFields[publishId] = {
-        fieldId: publishId,
-        value: null,
-        status: "needs_review",
-        rejectedCandidateKeys,
-        resolver: "SemanticCompatibilityResolver",
-        validationResults,
-        confidenceComponents: computeConfidence({ extractionConfidence: null, sourceAuthority: 0, semanticPassed: false, crossFieldPassed: null }),
-      };
+      const fallback = findAlreadyReviewedFallback(candidates);
+      canonicalFields[publishId] = fallback
+        ? {
+          fieldId: publishId,
+          value: fallback.value,
+          status: "needs_review",
+          selectedCandidateKey: fallback.rawKey,
+          sourcePage: fallback.sourcePage,
+          sourceText: fallback.sourceText,
+          rejectedCandidateKeys,
+          resolver: "SemanticCompatibilityResolver",
+          validationResults,
+          confidenceComponents: computeConfidence({ extractionConfidence: fallback.confidence, sourceAuthority: 0, semanticPassed: false, crossFieldPassed: null }),
+        }
+        : {
+          fieldId: publishId,
+          value: null,
+          status: "needs_review",
+          rejectedCandidateKeys,
+          resolver: "SemanticCompatibilityResolver",
+          validationResults,
+          confidenceComponents: computeConfidence({ extractionConfidence: null, sourceAuthority: 0, semanticPassed: false, crossFieldPassed: null }),
+        };
       continue;
     }
 
@@ -472,15 +538,29 @@ export function assembleCanonicalFields(input: AssembleCanonicalFieldsInput): As
         }
       }
       if (semanticEligible.length === 0) {
-        canonicalFields[publishId] = {
-          fieldId: publishId,
-          value: null,
-          status: "needs_review",
-          rejectedCandidateKeys,
-          resolver,
-          validationResults,
-          confidenceComponents: computeConfidence({ extractionConfidence: null, sourceAuthority: 0, semanticPassed: false, crossFieldPassed: false }),
-        };
+        const fallback = findAlreadyReviewedFallback(candidates);
+        canonicalFields[publishId] = fallback
+          ? {
+            fieldId: publishId,
+            value: fallback.value,
+            status: "needs_review",
+            selectedCandidateKey: fallback.rawKey,
+            sourcePage: fallback.sourcePage,
+            sourceText: fallback.sourceText,
+            rejectedCandidateKeys,
+            resolver,
+            validationResults,
+            confidenceComponents: computeConfidence({ extractionConfidence: fallback.confidence, sourceAuthority: 0, semanticPassed: false, crossFieldPassed: false }),
+          }
+          : {
+            fieldId: publishId,
+            value: null,
+            status: "needs_review",
+            rejectedCandidateKeys,
+            resolver,
+            validationResults,
+            confidenceComponents: computeConfidence({ extractionConfidence: null, sourceAuthority: 0, semanticPassed: false, crossFieldPassed: false }),
+          };
         continue;
       }
     } else if (publishId.includes("date") || publishId === "commencement_date" || publishId === "expiration_date") {

@@ -30,6 +30,7 @@ import { getFieldContract } from "../field-contract.ts";
 import { getSchemaEntriesForDomain } from "../enrich-bounded-stage/domain-fields.ts";
 import { checkFieldSemanticCompatibility, inferSemanticProfile } from "../semantic-compatibility.ts";
 import { isLlmPrimaryMappingActive } from "./llm-primary-mapping-mode.ts";
+import { runExpensesAndCamStrictOutputsShadow, type StrictOutputsShadowRecord } from "./strict-outputs-shadow.ts";
 import type { ModuleType } from "../types.ts";
 import type { CanonicalDocumentIndex, DocumentProfileClassification, Fact, FactLedgerResult } from "./types.ts";
 
@@ -409,24 +410,29 @@ export interface AdaptiveExtractionInstrumentation {
   totalInputTokensEstimate: number;
   totalOutputTokens: number;
   deterministicFieldsCovered: string[];
+  /** Strict Structured Outputs pilot (Phase 1, LEASE_STRICT_OUTPUTS_V1) --
+   *  populated only for expenses_and_cam, only when the canary gate admits
+   *  this (org, generation), and only when a provenance context was
+   *  available to attach the call to. Never affects any field above. */
+  strictOutputsShadow: StrictOutputsShadowRecord[];
 }
 
 export type AdaptiveFactLedgerResult = FactLedgerResult & {
   adaptiveInstrumentation: AdaptiveExtractionInstrumentation;
 };
 
-// Simple in-memory cache: identical (domain, evidence-text) pairs within the
-// same process never issue a second Azure OpenAI call. Real cross-invocation
-// caching (by document hash) is a documented follow-up (see
-// LEASE_TRUTH_ASSEMBLY_IMPLEMENTATION.md) -- this in-process cache exists so
-// a canonical-only rebuild that re-runs this module against unchanged inputs
-// within the same run never re-calls the LLM.
-const domainCallCache = new Map<string, Fact[]>();
-
-function domainCacheKey(domain: LlmCallDomain, evidenceText: string, moduleType: ModuleType): string {
-  return `${moduleType}:${domain}:${evidenceText.length}:${evidenceText.slice(0, 64)}`;
-}
-
+// A process-level cache used to live here, keyed only on
+// (moduleType, domain, evidenceText.length, evidenceText.slice(0,64)) -- no
+// org_id, file_id, or generation_id. Supabase Edge Functions reuse warm
+// isolates across requests from different callers, so two different
+// documents (potentially from two different organizations) that happened to
+// share the same evidence-text length and opening 64 characters for a given
+// domain (plausible for boilerplate lease preambles) could receive each
+// other's cached extraction. Removed outright rather than re-keyed: this
+// was a same-run dedup optimization only, never a correctness requirement,
+// and the cost concern it existed for is explicitly not a priority here.
+// `cacheHit` stays in the return shape (always false now) since
+// DomainCallInstrumentation and its consumers still read it.
 async function callDomainLlm(args: {
   domain: LlmCallDomain;
   evidenceText: string;
@@ -435,12 +441,6 @@ async function callDomainLlm(args: {
   provenance?: { supabaseAdmin: any; context: import("../provenance/types.ts").ProvenanceContext };
 }): Promise<{ facts: Fact[]; promptTokens: number | null; completionTokens: number | null; cacheHit: boolean; warning: string | null }> {
   const { domain, evidenceText, moduleType, provenance } = args;
-  const cacheKey = domainCacheKey(domain, evidenceText, moduleType);
-  const cached = domainCallCache.get(cacheKey);
-  if (cached) {
-    return { facts: cached, promptTokens: 0, completionTokens: 0, cacheHit: true, warning: null };
-  }
-
   try {
     const callOpts = {
       systemPrompt: buildDomainSystemPrompt(domain, moduleType),
@@ -455,7 +455,6 @@ async function callDomainLlm(args: {
       )
       : await callLLMJSON(callOpts);
     const facts = response.data == null ? [] : parseFactsResponse(response.data);
-    domainCallCache.set(cacheKey, facts);
     return {
       facts,
       promptTokens: (response as any)?.promptTokens ?? null,
@@ -524,6 +523,7 @@ export async function extractFactLedgerAdaptive(args: ExtractFactLedgerAdaptiveA
         totalInputTokensEstimate: 0,
         totalOutputTokens: 0,
         deterministicFieldsCovered: [],
+        strictOutputsShadow: [],
       },
     };
   }
@@ -536,6 +536,7 @@ export async function extractFactLedgerAdaptive(args: ExtractFactLedgerAdaptiveA
   const domainsEscalated: LlmCallDomain[] = [];
   const llmFacts: Fact[] = [];
   const warnings: string[] = [];
+  const strictOutputsShadowRecords: StrictOutputsShadowRecord[] = [];
   let totalInputTokensEstimate = 0;
   let totalOutputTokens = 0;
   let llmCallsMade = 0;
@@ -593,6 +594,7 @@ export async function extractFactLedgerAdaptive(args: ExtractFactLedgerAdaptiveA
     let callResult: { facts: Fact[]; promptTokens: number | null; completionTokens: number | null; cacheHit: boolean; warning: string | null };
     let primaryMappingUsed = false;
     let primaryMappingFallbackReason: string | null = null;
+    let assignmentsForShadow: Record<string, { value: unknown; sourceText: string | null }> | null = null;
 
     const domainFieldDefs = fieldsForDomain(domain, moduleType);
     if (isLlmPrimaryMappingActive() && domainFieldDefs.length > 0) {
@@ -615,6 +617,7 @@ export async function extractFactLedgerAdaptive(args: ExtractFactLedgerAdaptiveA
           cacheHit: false,
           warning: null,
         };
+        if (domain === "expenses_and_cam") assignmentsForShadow = primaryResult.assignments;
       } else {
         // Schema-aware call failed outright (network/parse error) -- fall
         // back to the legacy broad-category extraction for this domain
@@ -643,6 +646,30 @@ export async function extractFactLedgerAdaptive(args: ExtractFactLedgerAdaptiveA
 
     const taggedFacts = callResult.facts.map((fact) => ({ ...fact, chunkIndex: LLM_CALL_DOMAINS.indexOf(domain) }));
     llmFacts.push(...taggedFacts);
+
+    // Strict Structured Outputs pilot (Phase 1) -- canary-gated, additive
+    // only, fires after the authoritative call above has already completed.
+    // Never awaited into the authoritative facts/warnings path beyond a
+    // best-effort try/catch: a bug here must never affect this domain's
+    // real extraction result.
+    if (domain === "expenses_and_cam" && assignmentsForShadow && args.provenance) {
+      try {
+        const shadowRecord = await runExpensesAndCamStrictOutputsShadow({
+          orgId: args.provenance.context.orgId,
+          generationId: args.provenance.context.generationId,
+          moduleType,
+          evidenceText,
+          domainFieldDefs,
+          authoritativeAssignments: assignmentsForShadow,
+          provenance: args.provenance,
+        });
+        if (shadowRecord) strictOutputsShadowRecords.push(shadowRecord);
+      } catch (shadowError) {
+        warnings.push(
+          `Strict-outputs shadow call threw unexpectedly for domain=${domain}: ${(shadowError as Error)?.message ?? shadowError}`,
+        );
+      }
+    }
 
     perDomain.push({
       domain,
@@ -689,6 +716,7 @@ export async function extractFactLedgerAdaptive(args: ExtractFactLedgerAdaptiveA
       totalInputTokensEstimate,
       totalOutputTokens,
       deterministicFieldsCovered: [...deterministic.fieldKeysCovered],
+      strictOutputsShadow: strictOutputsShadowRecords,
     },
   };
 }
@@ -696,7 +724,6 @@ export async function extractFactLedgerAdaptive(args: ExtractFactLedgerAdaptiveA
 export const __test__ = {
   buildDomainSystemPrompt,
   buildDomainEvidenceText,
-  domainCallCache,
   fieldsForDomain,
   buildDomainFieldReference,
   buildDomainFieldAssignmentPrompt,

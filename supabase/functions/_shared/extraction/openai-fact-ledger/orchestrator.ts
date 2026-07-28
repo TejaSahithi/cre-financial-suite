@@ -52,6 +52,7 @@ function adaptiveExtractionDisabled(): boolean {
 import { mapFactsToStandardFields } from "./fact-field-mapper.ts";
 import { surfaceDynamicFacts, rescueNearMissedFacts } from "./dynamic-fact-surfacer.ts";
 import { validateFieldAssignments, applyValidationCorrections } from "./llm-field-validator.ts";
+import { enrichFieldDiffsWithPostVerification, mergePostVerificationMetrics } from "./strict-outputs-shadow.ts";
 import { isLlmPrimaryMappingActive } from "./llm-primary-mapping-mode.ts";
 import { computeProfileApprovalBlockers } from "./approval-blockers.ts";
 import type { OpenAIFactLedgerInput, OpenAIFactLedgerOptions } from "./types.ts";
@@ -251,6 +252,7 @@ export async function runOpenAIFactLedgerPipeline(
 
     let validationConfirmed = 0;
     let validationCleared = 0;
+    let validationUncertain = 0;
     let validationDetails: string[] = [];
 
     if (validationResult.llmCallSucceeded && validationResult.results.length > 0) {
@@ -260,8 +262,28 @@ export async function runOpenAIFactLedgerPipeline(
       });
       validationConfirmed = result.confirmed;
       validationCleared = result.cleared;
+      validationUncertain = result.uncertain;
       validationDetails = result.details;
     }
+
+    // Strict Structured Outputs pilot (Phase 1) -- the shadow diff computed
+    // in adaptive-extractor.ts only knows the mapper's PRE-verification
+    // proposal (verification hasn't run yet at that point). Enrich it now,
+    // with the fields object exactly as the self-consistency pass above
+    // left it, so the pilot's numbers reflect what the authoritative
+    // pipeline actually concluded -- not its first draft. See
+    // strict-outputs-shadow.ts's FieldDiff docstring for why this
+    // distinction matters (a real production bug was found by conflating
+    // the two during this pilot's own first canary run).
+    const explicitlyNulledFields = new Set(
+      validationResult.results.filter((r) => r.decision === "null").map((r) => r.field),
+    );
+    const postVerificationFields = (mapped.records[0]?.fields ?? {}) as Record<string, { value: unknown } | undefined>;
+    const rawShadowRecords: any[] = (factLedger as any).adaptiveInstrumentation?.strictOutputsShadow ?? [];
+    const enrichedShadowRecords = rawShadowRecords.map((record) => {
+      const enrichedDiffs = enrichFieldDiffsWithPostVerification(record.fieldDiffs, postVerificationFields, explicitlyNulledFields);
+      return { ...record, fieldDiffs: enrichedDiffs, metrics: mergePostVerificationMetrics(record.metrics, enrichedDiffs) };
+    });
 
     const dynamicItems = surfaceDynamicFacts({
       unmappedFacts: mapped.unmappedFacts,
@@ -367,6 +389,13 @@ export async function runOpenAIFactLedgerPipeline(
             // DISABLE_ADAPTIVE_FACT_LEDGER_EXTRACTION forced the legacy
             // whole-document chunking path instead.
             adaptive_extraction: (factLedger as any).adaptiveInstrumentation ?? null,
+            // Strict Structured Outputs pilot (Phase 1, LEASE_STRICT_OUTPUTS_V1) --
+            // expenses_and_cam-only shadow-mode calls + evidence-aware diffs
+            // against the authoritative mapping above. `[]` (not this call's
+            // fault) whenever the flag is off, the canary gate didn't admit
+            // this org/generation, or the domain wasn't escalated at all --
+            // never affects any field elsewhere in this diagnostics object.
+            strict_outputs_shadow: enrichedShadowRecords,
             // Self-consistency verification pass diagnostics — how many of
             // THIS run's llmPrimaryMapped fields were confirmed vs. cleared
             // on a second read. mode tells a reviewer which mapping
@@ -381,6 +410,7 @@ export async function runOpenAIFactLedgerPipeline(
               fields_reviewed: validationResult.results.length,
               fields_confirmed: validationConfirmed,
               fields_cleared: validationCleared,
+              fields_uncertain: validationUncertain,
               model: validationResult.model,
               prompt_tokens: validationResult.promptTokens,
               completion_tokens: validationResult.completionTokens,

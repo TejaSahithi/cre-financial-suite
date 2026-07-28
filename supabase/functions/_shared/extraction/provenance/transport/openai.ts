@@ -10,8 +10,8 @@
  * there is only ever one LLM provider.
  */
 
-import { callLLMJSON, callLLMText, LLMProviderError } from "../../../llm.ts";
-import type { LLMCallOpts, LLMJSONResponse } from "../../../llm.ts";
+import { callLLMJSON, callLLMStructured, callLLMText, LLMProviderError } from "../../../llm.ts";
+import type { LLMCallOpts, LLMJSONResponse, LLMStructuredCallOpts, StructuredLlmResult } from "../../../llm.ts";
 import { isExtractionProvenanceEnabled } from "../feature-flag.ts";
 import { persistArtifact, ProvenancePersistenceError, sanitizeErrorMessage } from "../recorder.ts";
 import type { ProvenanceContext } from "../types.ts";
@@ -219,4 +219,81 @@ export async function callLLMJSONWithProvenance(
     };
   });
   return (wrapped as any).__raw ?? wrapped;
+}
+
+/**
+ * Internal-only plumbing error: carries a non-"success" StructuredLlmResult
+ * across callOpenAIWithProvenance's try/catch so its EXISTING
+ * settle/artifact logic (which only knows how to record a thrown
+ * LLMProviderError as a failed invocation) records refusal/truncated/
+ * schema_error/provider_error outcomes as real failed provider_invocations
+ * rows -- rather than the misleading "completed, success:true" a returned
+ * (never-thrown) non-success result would otherwise produce. callLLMStructured
+ * itself never throws for these cases (its entire point is one exhaustive
+ * result type); this class exists only so this one wrapper can reuse
+ * callOpenAIWithProvenance unchanged, and it never escapes
+ * callLLMStructuredWithProvenance's own catch block below.
+ */
+class NonSuccessStructuredResultError extends LLMProviderError {
+  constructor(public readonly structuredResult: StructuredLlmResult<unknown>) {
+    super(
+      structuredResult.errorMessage ?? structuredResult.refusalReason ?? `Structured output call returned status=${structuredResult.status}`,
+      structuredResult.errorClassification ?? "schema_validation",
+    );
+  }
+}
+
+/**
+ * Structured-outputs counterpart of callLLMJSONWithProvenance -- the
+ * transport used by the strict-outputs shadow pilot (adaptive-extractor.ts,
+ * expenses_and_cam only). Same no-op-when-flag-off/no-stage-identity
+ * guarantee as callOpenAIWithProvenance. Always returns the full
+ * StructuredLlmResult (never throws for a data-shaped outcome) -- a thrown
+ * error here means something outside the structured-call contract itself
+ * failed (e.g. ProvenancePersistenceError from a start-provenance failure),
+ * and is propagated, not swallowed.
+ */
+export async function callLLMStructuredWithProvenance<T = unknown>(
+  supabaseAdmin: any,
+  context: ProvenanceContext,
+  opts: LLMStructuredCallOpts,
+): Promise<StructuredLlmResult<T>> {
+  try {
+    const wrapped = await callOpenAIWithProvenance(supabaseAdmin, context, opts, async (o: LLMStructuredCallOpts) => {
+      const structured = await callLLMStructured<T>(o);
+      if (structured.status !== "success") {
+        throw new NonSuccessStructuredResultError(structured);
+      }
+      return {
+        content: JSON.stringify(structured.data ?? null),
+        model: structured.model,
+        inputTokens: structured.inputTokens,
+        outputTokens: structured.outputTokens,
+        finishReason: structured.finishReason,
+        responseId: structured.responseId,
+        __raw: structured,
+      };
+    });
+    return ((wrapped as any).__raw ?? wrapped) as StructuredLlmResult<T>;
+  } catch (error) {
+    if (error instanceof NonSuccessStructuredResultError) {
+      return error.structuredResult as StructuredLlmResult<T>;
+    }
+    if (error instanceof ProvenancePersistenceError) throw error;
+    if (error instanceof LLMProviderError) {
+      return {
+        status: "provider_error",
+        data: null,
+        refusalReason: null,
+        errorClassification: error.classification,
+        errorMessage: error.message,
+        model: null,
+        responseId: null,
+        inputTokens: null,
+        outputTokens: null,
+        finishReason: null,
+      };
+    }
+    throw error;
+  }
 }

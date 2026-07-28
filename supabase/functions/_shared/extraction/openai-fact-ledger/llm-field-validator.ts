@@ -20,6 +20,15 @@
  * belongs somewhere else, that is a mapping decision, which is
  * adaptive-extractor.ts's job, not this pass's.
  *
+ * FAILS CLOSED, not open: only a literal "confirm" response counts as
+ * confirmed. A malformed decision, an unrecognized value, or a field the
+ * model's response never mentions at all is treated as "uncertain" --
+ * flagged extractionStatus="needs_review" rather than either cleared or
+ * silently trusted as verified. The original version of this pass defaulted
+ * anything that wasn't literally "null" to "confirm", including responses
+ * that never addressed the field at all -- ambiguity was being upgraded into
+ * confidence. See applyValidationCorrections() for where this is enforced.
+ *
  * Design constraints (unchanged from the original):
  *   - Single LLM call (compact JSON in, compact JSON out)
  *   - Temperature 0 for deterministic output
@@ -66,14 +75,17 @@ RULES:
 1. Output ONLY valid JSON -- no explanation, no markdown.
 2. Base your decision only on the field's meaning and the cited quote -- do not use outside
    knowledge about what a typical lease contains.
-3. Temperature is 0. Be precise and conservative -- when genuinely unsure, "confirm" (do not null a
-   plausible answer just because a stronger citation might theoretically exist elsewhere).
+3. Temperature is 0. Be precise. If the quote is genuinely ambiguous -- it could plausibly support
+   the value but you are not confident -- use "uncertain" rather than guessing either way. Do NOT
+   null a plausible answer just because a stronger citation might theoretically exist elsewhere,
+   and do NOT confirm a citation you are not actually confident about merely to avoid saying
+   "uncertain".
 4. Every field below MUST appear exactly once in your response.
 
 OUTPUT FORMAT:
 {
   "results": [
-    { "field": "<field_key>", "decision": "confirm" | "null", "reason": "<brief explanation>" }
+    { "field": "<field_key>", "decision": "confirm" | "null" | "uncertain", "reason": "<brief explanation>" }
   ]
 }`;
 
@@ -81,7 +93,7 @@ OUTPUT FORMAT:
 
 export interface FieldVerificationResult {
   field: string;
-  decision: "confirm" | "null";
+  decision: "confirm" | "null" | "uncertain";
   reason: string;
 }
 
@@ -111,8 +123,9 @@ function buildUserPrompt(candidates: ReviewCandidate[]): string {
   return `FIELDS TO VERIFY (${payload.length}):
 ${JSON.stringify(payload, null, 2)}
 
-For each field above, decide "confirm" or "null" per the rules. Return a "results" entry for every
-field listed, in any order.`;
+For each field above, decide "confirm", "null", or "uncertain" per the rules. Return a "results"
+entry for every field listed, in any order. A field with no entry in your response will be treated
+as unverified and flagged for human review -- it will NOT be treated as confirmed.`;
 }
 
 /**
@@ -174,16 +187,34 @@ export async function validateFieldAssignments(args: {
     const data = response.data as any;
     const results: FieldVerificationResult[] = [];
     const validFieldKeys = new Set(candidates.map((c) => c.field));
+    const seenFieldKeys = new Set<string>();
 
     if (data?.results && Array.isArray(data.results)) {
       for (const r of data.results) {
         if (!r?.field || !validFieldKeys.has(r.field)) continue;
-        const decision = r.decision === "null" ? "null" : "confirm"; // unrecognized/missing decision defaults to the conservative "confirm"
+        if (seenFieldKeys.has(r.field)) continue; // first decision for a field wins if the model repeats one
+        seenFieldKeys.add(r.field);
+        // FAIL CLOSED: only a literal "confirm" or "null" is trusted as a real
+        // decision. Anything else the model returns (typo, unexpected value,
+        // missing field on the object) becomes "uncertain" -- never silently
+        // upgraded to "confirm".
+        const rawDecision = typeof r.decision === "string" ? r.decision.toLowerCase() : "";
+        const decision: FieldVerificationResult["decision"] =
+          rawDecision === "confirm" ? "confirm" : rawDecision === "null" ? "null" : "uncertain";
         results.push({ field: r.field, decision, reason: String(r.reason ?? "") });
       }
     }
 
-    console.log(`[llm-verification] LLM returned ${results.length}/${candidates.length} verification results`);
+    // FAIL CLOSED: a field this pass sent for review but that never appears
+    // anywhere in the model's response (despite the prompt requiring every
+    // field to appear exactly once) is unverified, not confirmed by default.
+    for (const candidate of candidates) {
+      if (!seenFieldKeys.has(candidate.field)) {
+        results.push({ field: candidate.field, decision: "uncertain", reason: "model returned no decision for this field" });
+      }
+    }
+
+    console.log(`[llm-verification] LLM returned ${seenFieldKeys.size}/${candidates.length} explicit verification results (${results.length - seenFieldKeys.size} defaulted to uncertain)`);
 
     return {
       results,
@@ -205,21 +236,28 @@ export async function validateFieldAssignments(args: {
 // ── Apply verification results ───────────────────────────────────────────────
 
 /**
- * Apply verification decisions to the extraction records. Only "null"
- * decisions change anything (clear the field, preserving nothing else about
- * it); "confirm" is a no-op by design -- the field already carries its own
- * evidence and confidence from the mapper, this pass does not re-score it.
+ * Apply verification decisions to the extraction records.
+ * - "confirm": no-op -- the field already carries its own evidence and
+ *   confidence from the mapper, this pass does not re-score it.
+ * - "null": the citation didn't hold up -- clear the field entirely.
+ * - "uncertain" (fail-closed default for anything not explicitly "confirm"
+ *   or "null", including a field the model's response never addressed):
+ *   the value is NOT cleared (an uncertain verifier is not grounds to
+ *   destroy a possibly-correct value) but it is never silently treated as
+ *   clean either -- flagged extractionStatus="needs_review" so a reviewer
+ *   sees this field was not actually confirmed.
  */
 export function applyValidationCorrections(args: {
   records: ExtractedRecord[];
   results: FieldVerificationResult[];
-}): { cleared: number; confirmed: number; details: string[] } {
+}): { cleared: number; confirmed: number; uncertain: number; details: string[] } {
   const { records, results } = args;
   const fields = records[0]?.fields;
-  if (!fields) return { cleared: 0, confirmed: 0, details: [] };
+  if (!fields) return { cleared: 0, confirmed: 0, uncertain: 0, details: [] };
 
   let cleared = 0;
   let confirmed = 0;
+  let uncertain = 0;
   const details: string[] = [];
 
   for (const result of results) {
@@ -233,12 +271,20 @@ export function applyValidationCorrections(args: {
       details.push(`CONFIRM ${result.field} = "${existing.value}" (${result.reason})`);
       continue;
     }
-    const previousValue = existing.value;
-    delete fields[result.field];
-    cleared++;
-    details.push(`NULL ${result.field} (was "${previousValue}") — ${result.reason}`);
+    if (result.decision === "null") {
+      const previousValue = existing.value;
+      delete fields[result.field];
+      cleared++;
+      details.push(`NULL ${result.field} (was "${previousValue}") — ${result.reason}`);
+      continue;
+    }
+    // "uncertain" -- fail closed: keep the value, flag it, never confirm it silently.
+    existing.extractionStatus = "needs_review";
+    existing.requiresReview = true;
+    uncertain++;
+    details.push(`UNCERTAIN ${result.field} = "${existing.value}" -- flagged for review, not auto-confirmed (${result.reason})`);
   }
 
-  console.log(`[llm-verification] confirmed ${confirmed}, cleared ${cleared}`);
-  return { cleared, confirmed, details };
+  console.log(`[llm-verification] confirmed ${confirmed}, cleared ${cleared}, uncertain ${uncertain}`);
+  return { cleared, confirmed, uncertain, details };
 }
