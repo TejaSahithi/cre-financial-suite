@@ -23,6 +23,15 @@
  */
 
 import type { DoclingOutput, DoclingTextBlock } from "./types.ts";
+import { getEnabledDomainIdsInOrder, DOMAIN_REGISTRY } from "./domains/domain-registry.ts";
+// Transitional re-export (Phase 4): LlmCallDomain now lives in
+// domains/domain-registry.ts (derived from DOMAIN_REGISTRY, not the other
+// way around -- see that file's docstring). Re-exported here so the many
+// files across this codebase that already `import type { LlmCallDomain }
+// from "./section-router.ts"` keep working unchanged. New code should
+// import the type from domains/domain-registry.ts directly; existing
+// imports can migrate incrementally, not as part of this change.
+export type { LlmCallDomain } from "./domains/domain-registry.ts";
 
 export type SectionDomain =
   | "parties"
@@ -44,18 +53,16 @@ export type SectionDomain =
   | "amendment"
   | "other";
 
-/** The 5 bounded domains that receive at most ONE Azure OpenAI call each
- *  (see domain-readiness.ts / adaptive-extractor.ts). Every SectionDomain
- *  above maps to exactly one of these (or null, for "other", which never by
- *  itself triggers an LLM call). */
-export const LLM_CALL_DOMAINS = [
-  "core_terms",
-  "rent_and_charges",
-  "expenses_and_cam",
-  "operating_obligations",
-  "legal_rights_and_dates",
-] as const;
-export type LlmCallDomain = typeof LLM_CALL_DOMAINS[number];
+/** The bounded domains that receive at most ONE Azure OpenAI call each (see
+ *  domain-readiness.ts / adaptive-extractor.ts). Every SectionDomain above
+ *  maps to exactly one of these (or null, for "other", which never by
+ *  itself triggers an LLM call). Phase 4: sourced from the domain registry
+ *  (domains/domain-registry.ts) instead of a hand-written literal -- same
+ *   5 domains, same order, verified in
+ *  _tests/domain-registry-byte-compatibility.test.ts. LlmCallDomain itself
+ *  is now defined (and re-exported) from the registry; see the transitional
+ *  re-export near the top of this file. */
+export const LLM_CALL_DOMAINS = getEnabledDomainIdsInOrder();
 
 export const SECTION_DOMAIN_TO_LLM_CALL_DOMAIN: Record<SectionDomain, LlmCallDomain | null> = {
   parties: "core_terms",
@@ -181,6 +188,19 @@ export interface RoutedBlock {
    *  evidence packages (adaptive-extractor.ts) can include heading context
    *  even when a body block's own text has no domain keyword of its own. */
   headingContext: string | null;
+  /** Multi-label routing shadow (Phase 3, LEASE_MULTILABEL_ROUTING_V1) --
+   *  only populated by routeSectionsMultiLabel(), undefined from plain
+   *  routeSections(). See that function's docstring below. */
+  llmDomainScores?: Partial<Record<LlmCallDomain, number>>;
+  targetLlmCallDomains?: LlmCallDomain[];
+  /** Phase 5 expense-specialist shadow routing -- only populated by
+   *  routeSectionsWithSpecialists(). A SEPARATE field from
+   *  targetLlmCallDomains, never merged into it: MAX_TARGET_DOMAINS's flat
+   *  3-cap is a single module constant with no domain-class partitioning,
+   *  so feeding specialist scores into the same selection would let them
+   *  crowd out the original 5 domains and risk the locked Phase 3
+   *  "never more than 3" test. See selectSpecialistTargetDomains below. */
+  targetSpecialistDomains?: LlmCallDomain[];
 }
 
 export interface SectionRoutingResult {
@@ -242,4 +262,250 @@ export function routeSections(docling: DoclingOutput): SectionRoutingResult {
   }
 
   return { blocks: routed, byDomain, byLlmCallDomain };
+}
+
+// ── Multi-label routing shadow (Phase 3, LEASE_MULTILABEL_ROUTING_V1) ───────
+//
+// A block already legitimately scores for MULTIPLE SectionDomains today
+// (scoreBlockDomains above) -- routeSections() just throws that away by
+// keeping only topDomain(). This section surfaces the scores that already
+// exist rather than computing new ones: llmDomainScores sums each matching
+// SectionDomain's score into its mapped LlmCallDomain (SECTION_DOMAIN_TO_LLM_CALL_DOMAIN),
+// so a block matching both "cam" and "insurance" patterns (both -> expenses_and_cam)
+// naturally scores higher there than a block matching only one.
+//
+// Thresholds are in the SAME raw integer scale DOMAIN_PATTERNS' weights use
+// (1-3 per matching pattern, additive) -- not a 0-1 normalized scale. A
+// single strong heading-shaped match (weight 3) or two weaker body matches
+// clears a threshold of 2-3. expenses_and_cam starts lower than the others
+// because CAM/expense/tax/insurance/utility clauses are routed here via 4
+// different SectionDomains that are individually easy to under-match (see
+// adaptive-extractor.ts's DOMAIN_CONCEPTS.expenses_and_cam comment on this
+// same under-recall pattern). These are initial values for shadow
+// observation, not tuned production thresholds.
+// Phase 4: sourced from the domain registry's routingThreshold field
+// instead of a hand-written literal -- same 5 values, verified in
+// _tests/domain-registry-byte-compatibility.test.ts.
+export const DOMAIN_THRESHOLDS: Record<LlmCallDomain, number> = Object.fromEntries(
+  DOMAIN_REGISTRY.map((d) => [d.id, d.routingThreshold]),
+) as Record<LlmCallDomain, number>;
+
+const MAX_TARGET_DOMAINS = 3;
+
+function aggregateLlmDomainScores(sectionScores: Partial<Record<SectionDomain, number>>): Partial<Record<LlmCallDomain, number>> {
+  const out: Partial<Record<LlmCallDomain, number>> = {};
+  for (const [sectionDomain, score] of Object.entries(sectionScores) as Array<[SectionDomain, number]>) {
+    const llmDomain = SECTION_DOMAIN_TO_LLM_CALL_DOMAIN[sectionDomain];
+    if (!llmDomain) continue;
+    out[llmDomain] = (out[llmDomain] ?? 0) + score;
+  }
+  return out;
+}
+
+function selectTargetDomains(
+  llmDomainScores: Partial<Record<LlmCallDomain, number>>,
+  thresholds: Record<LlmCallDomain, number>,
+): LlmCallDomain[] {
+  return (Object.entries(llmDomainScores) as Array<[LlmCallDomain, number]>)
+    .filter(([domain, score]) => score >= (thresholds[domain] ?? Infinity))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, MAX_TARGET_DOMAINS)
+    .map(([domain]) => domain);
+}
+
+/**
+ * Shadow-only multi-label variant of routeSections(): calls it internally
+ * and adds llmDomainScores/targetLlmCallDomains to each block -- primaryDomain
+ * and byLlmCallDomain (built from primaryDomain alone) are untouched, so
+ * this is purely additive. Nothing in the authoritative extraction path
+ * calls this function; adaptive-extractor.ts's domain-escalation loop keeps
+ * using plain routeSections()/byLlmCallDomain exactly as before.
+ */
+export function routeSectionsMultiLabel(
+  docling: DoclingOutput,
+  thresholds: Record<LlmCallDomain, number> = DOMAIN_THRESHOLDS,
+): SectionRoutingResult {
+  const result = routeSections(docling);
+  const blocks = result.blocks.map((block) => {
+    const llmDomainScores = aggregateLlmDomainScores(block.domainScores);
+    const targetLlmCallDomains = selectTargetDomains(llmDomainScores, thresholds);
+    return { ...block, llmDomainScores, targetLlmCallDomains };
+  });
+  return { ...result, blocks };
+}
+
+export interface RoutingShadowDiagnostic {
+  blockIndex: number;
+  primaryDomain: SectionDomain;
+  /** The single LlmCallDomain primaryDomain alone would have routed to,
+   *  today's authoritative behavior -- null for "other" (never escalated). */
+  authoritativeLlmDomain: LlmCallDomain | null;
+  targetLlmCallDomains: LlmCallDomain[];
+  /** targetLlmCallDomains minus authoritativeLlmDomain -- the domains this
+   *  block would ADDITIONALLY reach under multi-label routing. Empty when
+   *  multi-label selection agrees with today's single-label routing. */
+  addedDomains: LlmCallDomain[];
+}
+
+/**
+ * Diagnostic-only comparison between today's single-label routing and the
+ * multi-label shadow selection, for a human to review -- never consumed by
+ * the extraction pipeline itself.
+ */
+export function buildRoutingShadowDiagnostics(multiLabelBlocks: RoutedBlock[]): RoutingShadowDiagnostic[] {
+  return multiLabelBlocks.map((block) => {
+    const authoritativeLlmDomain = SECTION_DOMAIN_TO_LLM_CALL_DOMAIN[block.primaryDomain] ?? null;
+    const targetLlmCallDomains = block.targetLlmCallDomains ?? [];
+    const addedDomains = targetLlmCallDomains.filter((domain) => domain !== authoritativeLlmDomain);
+    return {
+      blockIndex: block.blockIndex,
+      primaryDomain: block.primaryDomain,
+      authoritativeLlmDomain,
+      targetLlmCallDomains,
+      addedDomains,
+    };
+  });
+}
+
+export interface MultiLabelRoutingMetrics {
+  totalBlocks: number;
+  /** Blocks where multi-label selection chose more than one domain. */
+  multiLabelBlocks: number;
+  averageTargetsPerBlock: number;
+  maximumTargetsPerBlock: number;
+  /** Blocks with zero selected domains -- normal/expected for boilerplate,
+   *  signatures, definitions, etc.; not itself a failure signal. Reported
+   *  for a human to spot-check, not to gate on automatically. */
+  blocksWithNoTargets: number;
+  /** How many blocks would ADD each domain beyond today's single-label
+   *  routing (RoutingShadowDiagnostic.addedDomains, aggregated by domain). */
+  addedTargetCountsByDomain: Record<string, number>;
+  /** Sum of added blocks' own text length per domain -- an approximation
+   *  of extra evidence volume (this block's raw text only, not the full
+   *  assembled evidence package with heading/neighbor context
+   *  adaptive-extractor.ts would add), not an exact token count. */
+  evidenceCharacterGrowthByDomain: Record<string, number>;
+}
+
+export function buildMultiLabelRoutingMetrics(
+  blocks: RoutedBlock[],
+  diagnostics: RoutingShadowDiagnostic[],
+): MultiLabelRoutingMetrics {
+  const totalBlocks = blocks.length;
+  const targetCounts = diagnostics.map((d) => d.targetLlmCallDomains.length);
+  const multiLabelBlocks = targetCounts.filter((n) => n > 1).length;
+  const averageTargetsPerBlock = totalBlocks > 0 ? targetCounts.reduce((a, b) => a + b, 0) / totalBlocks : 0;
+  const maximumTargetsPerBlock = targetCounts.length > 0 ? Math.max(...targetCounts) : 0;
+  const blocksWithNoTargets = targetCounts.filter((n) => n === 0).length;
+
+  const addedTargetCountsByDomain: Record<string, number> = {};
+  const evidenceCharacterGrowthByDomain: Record<string, number> = {};
+  const blocksByIndex = new Map(blocks.map((b) => [b.blockIndex, b]));
+  for (const diagnostic of diagnostics) {
+    const block = blocksByIndex.get(diagnostic.blockIndex);
+    for (const domain of diagnostic.addedDomains) {
+      addedTargetCountsByDomain[domain] = (addedTargetCountsByDomain[domain] ?? 0) + 1;
+      evidenceCharacterGrowthByDomain[domain] = (evidenceCharacterGrowthByDomain[domain] ?? 0) + (block?.text.length ?? 0);
+    }
+  }
+
+  return { totalBlocks, multiLabelBlocks, averageTargetsPerBlock, maximumTargetsPerBlock, blocksWithNoTargets, addedTargetCountsByDomain, evidenceCharacterGrowthByDomain };
+}
+
+// ── Phase 5: expense-specialist shadow routing ──────────────────────────────
+//
+// SECTION_DOMAIN_TO_LLM_CALL_DOMAIN above is ONE-TO-ONE (cam/taxes/insurance/
+// utilities all resolve to the single bucket expenses_and_cam, repairs to
+// operating_obligations) -- aggregateLlmDomainScores() and selectTargetDomains()
+// both assume that shape and MUST stay untouched (byte-identical Phase 3
+// behavior). This section is a separate, additive, ONE-TO-MANY layer: each
+// SectionDomain can route to its own specialist LlmCallDomain, scored and
+// selected independently of the original 5's routing entirely.
+
+const SECTION_DOMAIN_TO_SPECIALIST_DOMAINS: Partial<Record<SectionDomain, LlmCallDomain[]>> = {
+  cam: ["cam_and_operating_expenses"],
+  taxes: ["taxes"],
+  insurance: ["insurance"],
+  utilities: ["utilities"],
+  repairs: ["repairs_and_maintenance"],
+};
+
+export interface SpecialistRoutingBudget {
+  maximumSpecialistsPerBlock: number;
+  maximumEvidenceCharactersPerSpecialist: number;
+  maximumTotalShadowEvidenceCharacters: number;
+}
+
+/** Initial, tunable safety values -- not permanent production thresholds
+ *  (same framing as DOMAIN_THRESHOLDS' own comment above). */
+export const DEFAULT_SPECIALIST_ROUTING_BUDGET: SpecialistRoutingBudget = {
+  maximumSpecialistsPerBlock: 5,
+  maximumEvidenceCharactersPerSpecialist: 24_000,
+  maximumTotalShadowEvidenceCharacters: 80_000,
+};
+
+export interface SpecialistRoutingResult {
+  blocks: RoutedBlock[];
+  bySpecialistDomain: Partial<Record<LlmCallDomain, RoutedBlock[]>>;
+}
+
+function aggregateSpecialistDomainScores(
+  sectionScores: Partial<Record<SectionDomain, number>>,
+): Partial<Record<LlmCallDomain, number>> {
+  const out: Partial<Record<LlmCallDomain, number>> = {};
+  for (const [sectionDomain, score] of Object.entries(sectionScores) as Array<[SectionDomain, number]>) {
+    const specialistDomains = SECTION_DOMAIN_TO_SPECIALIST_DOMAINS[sectionDomain];
+    if (!specialistDomains) continue;
+    for (const specialistDomain of specialistDomains) {
+      out[specialistDomain] = (out[specialistDomain] ?? 0) + score;
+    }
+  }
+  return out;
+}
+
+/** Same sort-by-score-descending shape as selectTargetDomains, but sliced to
+ *  budget.maximumSpecialistsPerBlock instead of the hardcoded module
+ *  constant MAX_TARGET_DOMAINS -- a genuinely separate selection, never
+ *  merged with or competing against the original 5's targetLlmCallDomains. */
+function selectSpecialistTargetDomains(
+  specialistScores: Partial<Record<LlmCallDomain, number>>,
+  thresholds: Record<LlmCallDomain, number>,
+  budget: SpecialistRoutingBudget,
+): LlmCallDomain[] {
+  return (Object.entries(specialistScores) as Array<[LlmCallDomain, number]>)
+    .filter(([domain, score]) => score >= (thresholds[domain] ?? Infinity))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, budget.maximumSpecialistsPerBlock)
+    .map(([domain]) => domain);
+}
+
+/**
+ * Shadow-only specialist variant of routeSections(): calls it internally
+ * and adds targetSpecialistDomains to each block plus a bySpecialistDomain
+ * lookup (each specialist's own routed blocks, for building its own
+ * evidence text -- see expense-specialist-shadow.ts's
+ * buildSpecialistEvidenceText). primaryDomain, byLlmCallDomain,
+ * targetLlmCallDomains, and every existing consumer of routeSections()/
+ * routeSectionsMultiLabel() are untouched -- this is a new, separate
+ * function. Runs directly off routeSections()'s own per-block domainScores
+ * (already computed regardless of any flag) -- cheap and pure; only the LLM
+ * calls this evidence feeds are flag-gated (expense-specialists-mode.ts).
+ */
+export function routeSectionsWithSpecialists(
+  docling: DoclingOutput,
+  thresholds: Record<LlmCallDomain, number> = DOMAIN_THRESHOLDS,
+  budget: SpecialistRoutingBudget = DEFAULT_SPECIALIST_ROUTING_BUDGET,
+): SpecialistRoutingResult {
+  const result = routeSections(docling);
+  const bySpecialistDomain: Partial<Record<LlmCallDomain, RoutedBlock[]>> = {};
+  const blocks = result.blocks.map((block) => {
+    const specialistScores = aggregateSpecialistDomainScores(block.domainScores);
+    const targetSpecialistDomains = selectSpecialistTargetDomains(specialistScores, thresholds, budget);
+    const withTargets: RoutedBlock = { ...block, targetSpecialistDomains };
+    for (const domain of targetSpecialistDomains) {
+      (bySpecialistDomain[domain] ??= []).push(withTargets);
+    }
+    return withTargets;
+  });
+  return { blocks, bySpecialistDomain };
 }

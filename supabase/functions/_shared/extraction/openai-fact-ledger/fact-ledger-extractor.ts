@@ -239,11 +239,31 @@ export function dedupeFacts(facts: Fact[]): Fact[] {
     // 31, 2023" must survive as two same-category, same-source facts whose
     // only distinguishing feature is the value. Include page and source text
     // so overlapping chunks cannot inflate candidate scores with duplicates.
+    //
+    // Fixed (real production bug, found while investigating a confirmed-
+    // value-loss trace during the strict-outputs pilot): a single clause
+    // routinely supports SEVERAL distinct field claims with the identical
+    // value and the identical quoted text -- "Tenant does pay for all
+    // electricity, HVAC, water, sewer... together with all taxes..." is one
+    // sourceText/value("tenant") pair that legitimately grounds
+    // electric_responsibility, water_sewer_responsibility, AND
+    // tax_responsibility as three separate semantic claims. The original key
+    // (category/page/sourceText/value only) could not tell those apart --
+    // whichever of the three sorted first silently ate the other two before
+    // they ever reached field-mapping or verification. llmProposedFieldKey
+    // (set only by adaptive-extractor.ts's schema-aware mapping path, see
+    // assignmentsToFacts()) is the field-specific identity that distinguishes
+    // them; appended here, not replacing the original key. Facts with NO
+    // proposed field (the legacy broad-category extraction path, not yet
+    // tied to any one field) keep the exact original, field-blind behavior --
+    // deduping identical category+text+value facts BEFORE keyword-scoring is
+    // still intentional there.
     const key = [
       fact.category,
       Number.isFinite(Number(fact.sourcePage)) ? Number(fact.sourcePage) : "unknown_page",
       normalizeForPageMatch(fact.sourceText),
       normalizeForPageMatch(String(fact.value ?? "")),
+      fact.llmProposedFieldKey ?? "",
     ].join("|");
     if (seen.has(key)) continue;
     seen.add(key);

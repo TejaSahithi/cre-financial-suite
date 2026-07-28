@@ -15,6 +15,7 @@
 import { mapFactsToStandardFields } from "./openai-fact-ledger/fact-field-mapper.ts";
 import type { Fact } from "./openai-fact-ledger/types.ts";
 import type { LlmCallDomain } from "./section-router.ts";
+import { getDomainDefinition } from "./domains/domain-registry.ts";
 import type { ModuleType } from "./types.ts";
 
 export interface DomainReadiness {
@@ -30,15 +31,17 @@ export interface DomainReadiness {
 
 // Fields whose absence alone is enough to call a domain "not ready."
 // expenses_and_cam and legal_rights_and_dates deliberately have no entry
-// here -- many leases legitimately have no CAM recovery or renewal-option
-// provisions at all, so "nothing found" must not by itself force an LLM
-// call; only "content was routed here but didn't resolve cleanly" does (see
-// evaluateDomainReadiness's empty-facts branch below).
-const CRITICAL_FIELDS_BY_DOMAIN: Partial<Record<LlmCallDomain, string[]>> = {
-  core_terms: ["tenant_name", "landlord_name", "commencement_date", "expiration_date", "square_footage"],
-  rent_and_charges: ["monthly_rent"],
-  operating_obligations: ["responsibility_repairs"],
-};
+// (empty array) -- many leases legitimately have no CAM recovery or
+// renewal-option provisions at all, so "nothing found" must not by itself
+// force an LLM call; only "content was routed here but didn't resolve
+// cleanly" does (see evaluateDomainReadiness's empty-facts branch below).
+//
+// Phase 4: sourced from the domain registry's criticalFields field instead
+// of a hand-written lookup table -- same 5 entries (2 empty), verified in
+// _tests/domain-registry-byte-compatibility.test.ts.
+function criticalFieldsForDomain(domain: LlmCallDomain): string[] {
+  return [...getDomainDefinition(domain).criticalFields];
+}
 
 /**
  * Evaluates whether `domain` can skip its Azure OpenAI call, using only the
@@ -84,7 +87,7 @@ export function evaluateDomainReadiness(args: {
 
   const mapped = mapFactsToStandardFields({ facts: deterministicFacts, moduleType });
   const fields = mapped.records[0]?.fields ?? {};
-  const criticalFieldKeys = CRITICAL_FIELDS_BY_DOMAIN[domain] ?? [];
+  const criticalFieldKeys = criticalFieldsForDomain(domain);
 
   const missingCritical = criticalFieldKeys.filter((key) => fields[key]?.value == null);
   const criticalFactsPresent = missingCritical.length === 0;

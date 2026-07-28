@@ -34,6 +34,7 @@ import {
 import { getSchema } from "../_shared/extraction/schemas.ts";
 import { getSchemaEntriesForDomain, getSchemaEntriesWithNoDomain, reorderStandardFieldsBySchema } from "../_shared/extraction/enrich-bounded-stage/domain-fields.ts";
 import { assembleCanonicalFields, publishIdFor } from "../_shared/extraction/lease-truth-assembly.ts";
+import { getDomainForEnrichStage } from "../_shared/extraction/domains/domain-stage-registry.ts";
 
 const {
   runLeaseWorkflowStage1Clauses,
@@ -47,7 +48,7 @@ const realServe = Deno.serve;
 const { __test__: normalizeTest } = await import("../normalize-pdf-output/index.ts");
 (Deno as any).serve = realServe;
 
-const { buildStandardFieldsForEntries, buildReviewPayload, handleBoundedEnrichStage, extractCamNoteFromText, isBlank } = normalizeTest;
+const { buildStandardFieldsForEntries, buildReviewPayload, handleBoundedEnrichStage, handleEnrichEvidenceDomainStage, extractCamNoteFromText, isBlank } = normalizeTest;
 
 const ORG_ID = "org-1";
 const FILE_ID = "file-1";
@@ -514,4 +515,130 @@ Deno.test("enrich-bounded-stages: reconstructing the canonical payload from alre
     spy.restore();
   }
   assertEquals(spy.calls.length, 0);
+});
+
+// ===========================================================================
+// 20. Phase 4.5: dynamic bounded-enrich dispatch. The 5 static
+// `case "enrich_evidence_<domain>":` labels were replaced by a generic
+// isEnrichEvidenceDomainStage()/handleEnrichEvidenceDomainStage() branch --
+// these tests prove the replacement is behaviorally invisible: same
+// stageData per domain, same idempotency/retry behavior, same rejection of
+// stage names the registry doesn't recognize.
+// ===========================================================================
+
+Deno.test("enrich-bounded-stages (Phase 4.5): handleEnrichEvidenceDomainStage produces the SAME stageData as a direct buildStandardFieldsForEntries call, for every domain", () => {
+  const schema = getSchema("lease");
+  const allSchemaEntries = Object.entries(schema).filter(([, def]) => !(def as any).derived);
+  const truthAssemblyCanonicalFields = assembleCanonicalFields({
+    rows: LEASE_RESULT.rows as Array<Record<string, unknown>>,
+    extractionDebug: (LEASE_RESULT.metadata as any)?.extractionDebug ?? {},
+    moduleType: "lease",
+  }).canonicalFields;
+  const effectiveRow: Record<string, unknown> = { ...LEASE_ROW };
+  for (const [fieldKey] of allSchemaEntries) {
+    const canonicalResult = truthAssemblyCanonicalFields[publishIdFor(fieldKey)];
+    if (!canonicalResult || canonicalResult.status === "not_stated") continue;
+    effectiveRow[fieldKey] = canonicalResult.status === "conflicting" ? null : canonicalResult.value;
+  }
+  const stage1 = runLeaseWorkflowStage1Clauses({ doclingRaw: LEASE_DOCLING_RAW });
+  const stage2 = runLeaseWorkflowStage2Fields({ row: effectiveRow, doclingRaw: LEASE_DOCLING_RAW, stage1 });
+  const stage3 = runLeaseWorkflowStage3Items({ row: effectiveRow, doclingRaw: LEASE_DOCLING_RAW, stage1, stage2 });
+  const derivation = runLeaseWorkflowStage4Derivation({ row: effectiveRow, doclingRaw: LEASE_DOCLING_RAW, stage1, stage2, stage3 });
+
+  const { _field_confidences, ...values } = LEASE_ROW as any;
+  if (isBlank(values.notes)) {
+    const camNote = extractCamNoteFromText(LEASE_DOCLING_RAW);
+    if (camNote) values.notes = camNote;
+  }
+  const baseArgs = {
+    index: 0, values, workflowOutput: derivation,
+    fieldConfidences: LEASE_ROW._field_confidences, fieldSources: {}, fieldEvidence: {},
+    calculatorDerivationTraces: {}, calculatorDerivationSourceFields: {},
+    doclingRaw: LEASE_DOCLING_RAW, extractionModuleType: "lease", truthAssemblyCanonicalFields,
+    source: "llm", rowConfidence: null,
+  };
+
+  for (const stage of ENRICH_EVIDENCE_DOMAIN_STAGES) {
+    const domain = getDomainForEnrichStage(stage as any);
+    const reference = buildStandardFieldsForEntries({ ...baseArgs, schemaEntries: getSchemaEntriesForDomain(allSchemaEntries, domain as any) });
+    const viaExtractedHandler = handleEnrichEvidenceDomainStage({
+      domain, derivation, extractionModuleType: "lease", row: LEASE_ROW, moduleType: "leases",
+      doclingRaw: LEASE_DOCLING_RAW, truthAssemblyCanonicalFields,
+      fileRecord: { extraction_method: null }, normalizedOutput: LEASE_RESULT,
+    });
+    assertEquals(viaExtractedHandler, reference, `mismatch for domain ${domain} (stage ${stage})`);
+  }
+});
+
+function seedNormalizedOutputThroughDerivation(): any {
+  let normalizedOutput: any = { rows: [LEASE_ROW], method: "llm_only", warnings: [], validationErrors: [], metadata: {} };
+  const stage1 = runLeaseWorkflowStage1Clauses({ doclingRaw: LEASE_DOCLING_RAW });
+  normalizedOutput = mergeBoundedStageResult({ normalizedOutput, stage: "enrich_clauses", generationId: GEN_ID, status: "completed", data: stage1 });
+  const stage2 = runLeaseWorkflowStage2Fields({ row: LEASE_ROW, doclingRaw: LEASE_DOCLING_RAW, stage1 });
+  normalizedOutput = mergeBoundedStageResult({ normalizedOutput, stage: "enrich_fields", generationId: GEN_ID, status: "completed", data: stage2 });
+  const stage3 = runLeaseWorkflowStage3Items({ row: LEASE_ROW, doclingRaw: LEASE_DOCLING_RAW, stage1, stage2 });
+  normalizedOutput = mergeBoundedStageResult({ normalizedOutput, stage: "enrich_items", generationId: GEN_ID, status: "completed", data: stage3 });
+  const derivation = runLeaseWorkflowStage4Derivation({ row: LEASE_ROW, doclingRaw: LEASE_DOCLING_RAW, stage1, stage2, stage3 });
+  normalizedOutput = mergeBoundedStageResult({ normalizedOutput, stage: "enrich_derivation", generationId: GEN_ID, status: "completed", data: derivation });
+  return normalizedOutput;
+}
+
+Deno.test("enrich-bounded-stages (Phase 4.5): a domain-stage retry (same generation/version) is reused_from_cache via the new dispatch path, not recomputed", async () => {
+  const seeded = seedNormalizedOutputThroughDerivation();
+  const supabaseAdmin = makeMockSupabase({
+    rows: { uploaded_files: { id: FILE_ID, org_id: ORG_ID, active_generation_id: GEN_ID, module_type: "lease", docling_raw: LEASE_DOCLING_RAW, normalized_output: seeded } },
+  });
+  const call = () => handleBoundedEnrichStage({
+    supabaseAdmin, orgId: ORG_ID, fileId: FILE_ID, pipelineJobId: JOB_ID, generationId: GEN_ID, stage: "enrich_evidence_core_terms",
+    jsonResponse: (body: any, status = 200) => new Response(JSON.stringify(body), { status }),
+  });
+
+  const first = await (await call()).json();
+  assertEquals(first.status, "completed");
+  assert(!first.reused_from_cache);
+  const updatesAfterFirst = supabaseAdmin.__updates.filter((u: any) => u.table === "uploaded_files").length;
+  assert(updatesAfterFirst >= 1, "the first call must persist a result");
+
+  const second = await (await call()).json();
+  assertEquals(second.reused_from_cache, true);
+  const updatesAfterSecond = supabaseAdmin.__updates.filter((u: any) => u.table === "uploaded_files").length;
+  assertEquals(updatesAfterSecond, updatesAfterFirst, "a reused stage must not persist again");
+});
+
+Deno.test("enrich-bounded-stages (Phase 4.5): a domain stage still returns PRIOR_STAGE_MISSING when enrich_derivation hasn't completed, via the new dispatch path", async () => {
+  const supabaseAdmin = makeMockSupabase({
+    rows: {
+      uploaded_files: {
+        id: FILE_ID, org_id: ORG_ID, active_generation_id: GEN_ID, module_type: "lease", docling_raw: LEASE_DOCLING_RAW,
+        normalized_output: { rows: [LEASE_ROW], method: "llm_only", warnings: [], validationErrors: [], metadata: {} },
+      },
+    },
+  });
+  const response = await handleBoundedEnrichStage({
+    supabaseAdmin, orgId: ORG_ID, fileId: FILE_ID, pipelineJobId: JOB_ID, generationId: GEN_ID, stage: "enrich_evidence_rent_and_charges",
+    jsonResponse: (body: any, status = 200) => new Response(JSON.stringify(body), { status }),
+  });
+  assertEquals(response.status, 422);
+  const body = await response.json();
+  assertEquals(body.error_code, "PRIOR_STAGE_MISSING");
+});
+
+Deno.test("enrich-bounded-stages (Phase 4.5): an unrecognized stage name is still rejected as UNKNOWN_BOUNDED_STAGE end to end", async () => {
+  const supabaseAdmin = makeMockSupabase({
+    rows: { uploaded_files: { id: FILE_ID, org_id: ORG_ID, active_generation_id: GEN_ID } },
+  });
+  const response = await handleBoundedEnrichStage({
+    supabaseAdmin, orgId: ORG_ID, fileId: FILE_ID, pipelineJobId: JOB_ID, generationId: GEN_ID,
+    // One character off from the real "expenses_and_cam" -- the exact
+    // typo danger the registry-membership dispatch check must reject.
+    stage: "enrich_evidence_expense_and_cam" as any,
+    jsonResponse: (body: any, status = 200) => new Response(JSON.stringify(body), { status }),
+  });
+  assertEquals(response.status, 400);
+  const body = await response.json();
+  assertEquals(body.error_code, "UNKNOWN_BOUNDED_STAGE");
+});
+
+Deno.test("enrich-bounded-stages (Phase 4.5): ENRICH_STAGE_SEQUENCE has no duplicate stage names", () => {
+  assertEquals(new Set(ENRICH_STAGE_SEQUENCE).size, ENRICH_STAGE_SEQUENCE.length);
 });

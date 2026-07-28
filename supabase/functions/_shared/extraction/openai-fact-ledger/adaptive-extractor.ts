@@ -21,7 +21,10 @@
 import { callLLMJSON, LLMProviderError } from "../../llm.ts";
 import { callLLMJSONWithProvenance } from "../provenance/transport/openai.ts";
 import { resolveVerifiedSourcePage } from "../evidence-index.ts";
-import { routeSections, LLM_CALL_DOMAINS, type LlmCallDomain, type SectionRoutingResult } from "../section-router.ts";
+import { routeSections, routeSectionsMultiLabel, routeSectionsWithSpecialists, buildRoutingShadowDiagnostics, buildMultiLabelRoutingMetrics, LLM_CALL_DOMAINS, type LlmCallDomain, type SectionRoutingResult, type RoutingShadowDiagnostic, type MultiLabelRoutingMetrics } from "../section-router.ts";
+import { shouldComputeMultilabelRouting } from "./multilabel-routing-mode.ts";
+import { runAllExpenseSpecialistShadowOutputs, type ExpenseSpecialistShadowRecord } from "./expense-specialist-shadow.ts";
+import { shouldRunLeaseExpenseSpecialists } from "./expense-specialists-mode.ts";
 import { extractDeterministicCandidates, type DeterministicExtractionResult, FIELD_GROUP_CLAUSE_CATEGORY } from "../deterministic-candidates.ts";
 import { evaluateDomainReadiness, type DomainReadiness } from "../domain-readiness.ts";
 import { extractFactLedger, parseFactsResponse, dedupeFacts } from "./fact-ledger-extractor.ts";
@@ -31,6 +34,7 @@ import { getSchemaEntriesForDomain } from "../enrich-bounded-stage/domain-fields
 import { checkFieldSemanticCompatibility, inferSemanticProfile } from "../semantic-compatibility.ts";
 import { isLlmPrimaryMappingActive } from "./llm-primary-mapping-mode.ts";
 import { runExpensesAndCamStrictOutputsShadow, type StrictOutputsShadowRecord } from "./strict-outputs-shadow.ts";
+import { getDomainDefinition } from "../domains/domain-registry.ts";
 import type { ModuleType } from "../types.ts";
 import type { CanonicalDocumentIndex, DocumentProfileClassification, Fact, FactLedgerResult } from "./types.ts";
 
@@ -42,53 +46,22 @@ function estimateTokens(text: string): number {
 // system prompt so the model is never asked to consider the whole 88-field
 // registry or the whole document for a domain that only needs a handful of
 // concepts resolved.
-const DOMAIN_CONCEPTS: Record<LlmCallDomain, string> = {
-  core_terms:
-    "tenant legal name, landlord legal name, property/premises address, unit or suite number, " +
-    "rentable square footage, lease commencement date, lease expiration date, lease term length",
-  rent_and_charges:
-    "monthly base rent amount, annual base rent amount, security deposit amount, late fee amount, " +
-    "rent escalation rate/type, billing frequency -- NEVER additional rent, CAM, reimbursements, or " +
-    "amortized charges as if they were base rent",
-  // This domain carries the widest concept spread of the five (4 distinct
-  // sub-areas -- expense recovery, CAM, taxes, insurance -- routed here by
-  // section-router.ts and covering 23 schema fields, more than any domain
-  // except core_terms). Listed as 4 explicit, separately-labeled checklists
-  // rather than one paragraph specifically so the model cannot silently
-  // satisfy "CAM" and stop reading before reaching taxes/insurance later in
-  // the excerpt -- the flat single-paragraph version of this concept list
-  // was the confirmed cause of expense/CAM/tax fields under-recalling
-  // relative to other domains.
-  expenses_and_cam:
-    "FOUR separate sub-areas -- treat each as its own checklist, do not stop after finding one:\n" +
-    "  (1) EXPENSE RECOVERY / CAM: recovery structure (net/gross/modified gross), CAM amount, " +
-    "base year, expense stop, cap type and percentage, admin/management fee basis and percentage, " +
-    "gross-up provisions and threshold.\n" +
-    "  (2) TAXES: who is responsible for real-estate/property tax (tenant/landlord/shared), any " +
-    "tax-specific cap or base year distinct from the general CAM one.\n" +
-    "  (3) INSURANCE: who is responsible for the insurance premium/cost (distinct from who is " +
-    "required to CARRY a policy), minimum general liability coverage amount, whether tenant " +
-    "insurance is required, additional-insured requirements, waiver of subrogation.\n" +
-    "  (4) UTILITY/REIMBURSEMENT CHARGES: electric, water/sewer, and other utility responsibility " +
-    "and reimbursement amounts.\n" +
-    "Report the NORMALIZED responsibility answer (tenant/landlord/shared) for each responsibility " +
-    "field, with the supporting clause as evidence. A lease's expense/CAM/tax/insurance terms are " +
-    "very often stated across SEVERAL separate paragraphs or an exhibit, not one -- read the ENTIRE " +
-    "excerpt for each of the four sub-areas above, not just the first paragraph that matches one.",
-  operating_obligations:
-    "repair and maintenance responsibility (structural, HVAC, interior, exterior) and utility " +
-    "payment responsibility -- distinguish who PAYS for a utility/system from who merely maintains " +
-    "or repairs it; a repair-only clause does not by itself establish payment responsibility",
-  legal_rights_and_dates:
-    "renewal/extension options, right of first refusal or offer, early termination rights, " +
-    "termination or renewal notice periods -- only an actual GRANT of a right, never a heading, " +
-    "defined term, guaranty recital, or surrender/holdover/default clause",
-};
+//
+// Phase 4: this used to be a hand-written Record<LlmCallDomain,string>
+// here; the text itself (character-identical) now lives on each domain's
+// registry definition (domains/definitions/*.ts) as promptConcepts, copied
+// verbatim and checked in
+// _tests/domain-registry-byte-compatibility.test.ts. getDomainDefinition()
+// throws on an unrecognized domain rather than silently building a
+// prompt with no concepts in it.
+function domainConcepts(domain: LlmCallDomain): string {
+  return getDomainDefinition(domain).promptConcepts;
+}
 
 function buildDomainSystemPrompt(domain: LlmCallDomain, moduleType: ModuleType): string {
   return `You are a commercial real estate (${moduleType}) fact extraction tool, focused ONLY on the following topic area for this call:
 
-${DOMAIN_CONCEPTS[domain]}
+${domainConcepts(domain)}
 
 Extract every discrete, verifiable FACT stated in the provided document excerpt that relates to this
 topic area ONLY. Do not extract facts about unrelated topics even if they appear in the excerpt.
@@ -143,7 +116,7 @@ function buildDomainFieldReference(fields: Array<[string, FieldDef]>): string {
 function buildDomainFieldAssignmentPrompt(domain: LlmCallDomain, moduleType: ModuleType, fields: Array<[string, FieldDef]>): string {
   return `You are a commercial real estate (${moduleType}) data mapping tool, focused ONLY on the following topic area for this call:
 
-${DOMAIN_CONCEPTS[domain]}
+${domainConcepts(domain)}
 
 You will be given an excerpt of a real lease document. Your task has TWO parts, and both are
 mandatory:
@@ -205,7 +178,7 @@ Never omit the "fields" key. Only include keys from the schema field list above 
 "additional_facts" may be an empty array when nothing in the excerpt falls outside the field list.`;
 }
 
-interface FieldAssignment {
+export interface FieldAssignment {
   value: unknown;
   sourceText: string | null;
   sourcePage: number | null;
@@ -415,6 +388,17 @@ export interface AdaptiveExtractionInstrumentation {
    *  this (org, generation), and only when a provenance context was
    *  available to attach the call to. Never affects any field above. */
   strictOutputsShadow: StrictOutputsShadowRecord[];
+  /** Multi-label routing shadow (Phase 3, LEASE_MULTILABEL_ROUTING_V1) --
+   *  [] whenever the flag is off. Diagnostic only; the domain-escalation
+   *  loop above always uses single-label routing regardless. */
+  routingShadow: RoutingShadowDiagnostic[];
+  routingShadowMetrics: MultiLabelRoutingMetrics | null;
+  /** Phase 5 expense-specialist shadow (LEASE_EXPENSE_SPECIALISTS_V1) --
+   *  [] whenever the flag is off (the default) or admission fails. Always
+   *  exactly 5 records when it does run, one per specialist (see
+   *  expense-specialist-shadow.ts's correction-C contract). Diagnostic
+   *  only; never read by mapFactsToStandardFields/Truth Assembly. */
+  expenseSpecialistShadow: ExpenseSpecialistShadowRecord[];
 }
 
 export type AdaptiveFactLedgerResult = FactLedgerResult & {
@@ -524,11 +508,29 @@ export async function extractFactLedgerAdaptive(args: ExtractFactLedgerAdaptiveA
         totalOutputTokens: 0,
         deterministicFieldsCovered: [],
         strictOutputsShadow: [],
+        routingShadow: [],
+        routingShadowMetrics: null,
+        expenseSpecialistShadow: [],
       },
     };
   }
 
   const routing = routeSections(doclingRaw as any);
+  // Multi-label routing shadow (Phase 3, LEASE_MULTILABEL_ROUTING_V1) --
+  // computed alongside, never in place of, the routing above. The
+  // domain-escalation loop below always reads `routing.byLlmCallDomain`
+  // (single-label, unchanged); this diagnostic is purely for inspection.
+  const multilabelRoutingAdmitted = !!args.provenance && shouldComputeMultilabelRouting({
+    orgId: args.provenance.context.orgId,
+    generationId: args.provenance.context.generationId,
+  });
+  const multiLabelBlocksForMetrics = multilabelRoutingAdmitted ? routeSectionsMultiLabel(doclingRaw as any).blocks : null;
+  const routingShadow: RoutingShadowDiagnostic[] = multiLabelBlocksForMetrics
+    ? buildRoutingShadowDiagnostics(multiLabelBlocksForMetrics)
+    : [];
+  const routingShadowMetrics = multiLabelBlocksForMetrics
+    ? buildMultiLabelRoutingMetrics(multiLabelBlocksForMetrics, routingShadow)
+    : null;
   const deterministic = extractDeterministicCandidates(doclingRaw as any, moduleType);
 
   const perDomain: DomainCallInstrumentation[] = [];
@@ -692,6 +694,30 @@ export async function extractFactLedgerAdaptive(args: ExtractFactLedgerAdaptiveA
     });
   }
 
+  // Phase 5: expense-specialist shadow calls -- fire only AFTER the main
+  // domain-escalation loop above has finished entirely, which trivially
+  // satisfies every specialist's registry-declared shadowRunsAfter (every
+  // authoritative domain has run by this point). Never awaited into the
+  // authoritative facts/warnings path beyond a best-effort try/catch: a bug
+  // here must never affect the real extraction result (same isolation
+  // contract as the expenses_and_cam strict-outputs shadow hook above).
+  let expenseSpecialistShadowRecords: ExpenseSpecialistShadowRecord[] = [];
+  if (args.provenance && shouldRunLeaseExpenseSpecialists({
+    orgId: args.provenance.context.orgId,
+    generationId: args.provenance.context.generationId,
+  })) {
+    try {
+      const specialistRouting = routeSectionsWithSpecialists(doclingRaw as any);
+      expenseSpecialistShadowRecords = await runAllExpenseSpecialistShadowOutputs({
+        specialistRouting, moduleType, provenance: args.provenance,
+      });
+    } catch (specialistError) {
+      warnings.push(
+        `Expense-specialist shadow calls threw unexpectedly: ${(specialistError as Error)?.message ?? specialistError}`,
+      );
+    }
+  }
+
   const groundedLlmFacts = llmFacts.map((fact) => ({
     ...fact,
     sourcePage: fact.sourcePage ?? resolveVerifiedSourcePage(doclingRaw, fact.sourceText, null),
@@ -717,6 +743,9 @@ export async function extractFactLedgerAdaptive(args: ExtractFactLedgerAdaptiveA
       totalOutputTokens,
       deterministicFieldsCovered: [...deterministic.fieldKeysCovered],
       strictOutputsShadow: strictOutputsShadowRecords,
+      routingShadow,
+      routingShadowMetrics,
+      expenseSpecialistShadow: expenseSpecialistShadowRecords,
     },
   };
 }

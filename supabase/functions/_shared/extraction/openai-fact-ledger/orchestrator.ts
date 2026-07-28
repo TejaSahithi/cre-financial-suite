@@ -53,6 +53,18 @@ import { mapFactsToStandardFields } from "./fact-field-mapper.ts";
 import { surfaceDynamicFacts, rescueNearMissedFacts } from "./dynamic-fact-surfacer.ts";
 import { validateFieldAssignments, applyValidationCorrections } from "./llm-field-validator.ts";
 import { enrichFieldDiffsWithPostVerification, mergePostVerificationMetrics } from "./strict-outputs-shadow.ts";
+import { shouldBuildCanonicalClaims } from "./canonical-claims-mode.ts";
+import { legacyFieldsToClaims, verifierResultToClaims } from "../canonical/claim-converters.ts";
+import { applyEvidenceVerification } from "../canonical/claim-validation.ts";
+import { computeCanonicalClaimMetrics } from "../canonical/claim-metrics.ts";
+import { buildExpenseSpecialistShadowMetrics } from "./expense-specialist-metrics.ts";
+import { shouldBuildCanonicalExpenseObligations, isLeaseCanonicalExpenseObligationsActive } from "./canonical-expense-obligations-mode.ts";
+import { OBLIGATION_CONVERTERS_BY_DOMAIN } from "../canonical/financial/expense-obligation-converters.ts";
+import { applyStructuralValidation, applyExpenseObligationEvidenceVerification } from "../canonical/financial/expense-obligation-validation.ts";
+import { dedupeExpenseObligations } from "../canonical/financial/expense-obligation-dedup.ts";
+import { proposeExpenseObligationPlacements } from "../canonical/financial/expense-obligation-projection.ts";
+import { computeCanonicalExpenseMetrics, emptyCanonicalExpenseMetrics, stableCanonicalize, deepEqual, countChangedPaths } from "../canonical/financial/expense-obligation-metrics.ts";
+import type { ExpenseObligation } from "../canonical/financial/expense-obligation.ts";
 import { isLlmPrimaryMappingActive } from "./llm-primary-mapping-mode.ts";
 import { computeProfileApprovalBlockers } from "./approval-blockers.ts";
 import type { OpenAIFactLedgerInput, OpenAIFactLedgerOptions } from "./types.ts";
@@ -238,6 +250,34 @@ export async function runOpenAIFactLedgerPipeline(
       currentFields[key] = value as any;
     }
 
+    // Canonical Claim/Evidence Layer (Phase 2, LEASE_CANONICAL_CLAIMS_V1) --
+    // snapshot claims from the fields object BEFORE applyValidationCorrections
+    // mutates it below. A field the verifier explicitly nulls is DELETED from
+    // `currentFields` by that call (same object reference) -- if claims were
+    // built afterward, a rejected field would never even become a claim,
+    // losing exactly the history this layer exists to preserve. See
+    // claim-converters.ts's verifierResultToClaims for how the verifier's
+    // decision gets folded back in once it's available, further below.
+    const canonicalClaimsContext = options.provenance?.context
+      ? {
+        organizationId: options.provenance.context.orgId,
+        fileId: options.provenance.context.uploadedFileId,
+        generationId: options.provenance.context.generationId,
+        extractionRunId: options.provenance.context.extractionRunId,
+      }
+      : null;
+    const canonicalClaimsAdmitted = !!canonicalClaimsContext && shouldBuildCanonicalClaims({
+      orgId: canonicalClaimsContext.organizationId,
+      generationId: canonicalClaimsContext.generationId,
+    });
+    // Shallow copy -- protects computeCanonicalClaimMetrics' originalFields
+    // snapshot from applyValidationCorrections' later delete(fields[key]),
+    // which mutates `currentFields` (same object reference) in place below.
+    const originalFieldsSnapshot = canonicalClaimsAdmitted ? { ...currentFields } : {};
+    const preVerificationClaims = canonicalClaimsAdmitted
+      ? legacyFieldsToClaims({ fields: currentFields, context: canonicalClaimsContext })
+      : [];
+
     // ── Self-consistency verification pass ──────────────────────────────
     // Reviews only the fields THIS run's LLM-primary schema-aware mapper
     // itself set (records[0].fields entries tagged llmPrimaryMapped=true by
@@ -285,6 +325,23 @@ export async function runOpenAIFactLedgerPipeline(
       return { ...record, fieldDiffs: enrichedDiffs, metrics: mergePostVerificationMetrics(record.metrics, enrichedDiffs) };
     });
 
+    // Canonical Claim/Evidence Layer (Phase 2), continued: fold the
+    // verifier's confirm/null/uncertain decisions into the pre-verification
+    // claim snapshot, then run evidence verification (reusing
+    // resolveVerifiedSourcePage via claim-validation.ts -- no document-node
+    // graph exists yet) on every claim. Purely additive: attached to
+    // diagnostics only, never read by rows/validationErrors/method above.
+    const canonicalClaims = preVerificationClaims.length > 0
+      ? verifierResultToClaims(preVerificationClaims, validationResult.results).map((claim) =>
+        applyEvidenceVerification(claim, doclingRaw as Record<string, unknown>),
+      )
+      : [];
+    // MLB shadow-canary gate (required before Phase 4 starts): all three
+    // must read 0/0/[] -- see claim-metrics.ts's docstring.
+    const canonicalClaimMetrics = canonicalClaimsAdmitted
+      ? computeCanonicalClaimMetrics({ originalFields: originalFieldsSnapshot, claims: canonicalClaims })
+      : null;
+
     const dynamicItems = surfaceDynamicFacts({
       unmappedFacts: mapped.unmappedFacts,
       docIndex,
@@ -310,6 +367,97 @@ export async function runOpenAIFactLedgerPipeline(
     const method: ExtractionPipelineResult["method"] =
       flatRows.length > 0 && llmFieldsExtracted > 0 ? "llm_only" : "fallback";
     const fieldSnapshot = snapshotFieldMap(mapped.records as any[]);
+
+    // Phase 5: expense-specialist shadow (LEASE_EXPENSE_SPECIALISTS_V1) --
+    // convert this run's specialist obligations into claims + comparison
+    // metrics against the SAME post-verification authoritative field
+    // snapshot every other diagnostic above compares against.
+    // expenseSpecialistShadowRecords is [] whenever the flag is off, no
+    // provenance context was available, or nothing routed to a specialist
+    // -- claims/metrics degrade to []/null the same way canonicalClaims
+    // does above. Diagnostics only; never read by rows/method/
+    // validationErrors above. originalFieldsSnapshot is gated by the
+    // CANONICAL CLAIMS flag (canonicalClaimsAdmitted), not this one -- when
+    // that flag is off, authoritativeDroppedDownstreamCount degrades to 0
+    // ("nothing to compare"), which is its own documented, honest default.
+    const expenseSpecialistShadowRecords: any[] = (factLedger as any).adaptiveInstrumentation?.expenseSpecialistShadow ?? [];
+    const { claims: expenseSpecialistClaims, metrics: expenseSpecialistMetrics } =
+      expenseSpecialistShadowRecords.length > 0 && canonicalClaimsContext
+        ? buildExpenseSpecialistShadowMetrics({
+          records: expenseSpecialistShadowRecords,
+          context: canonicalClaimsContext,
+          doclingRaw: doclingRaw as Record<string, unknown>,
+          authoritativeFields: fieldSnapshot,
+          authoritativeRawFields: originalFieldsSnapshot,
+          explicitlyNulledFields,
+        })
+        : { claims: [], metrics: null };
+
+    // Phase 6A: canonical expense obligations
+    // (LEASE_CANONICAL_EXPENSE_OBLIGATIONS_V1) -- converts this run's
+    // expense-specialist shadow output (if any) into the unified
+    // ExpenseObligation model: structural validation, evidence
+    // verification, subject-vs-value-fingerprint deduplication (NOT
+    // dedupeFacts()'s flat key -- see expense-obligation-dedup.ts), and
+    // safe-mapping/dynamic-row projection. Independent flag from Phase 5's
+    // own -- this layer can be off while specialists run, or on while
+    // specialists produced nothing (runStatus records which).
+    // authoritativeMutationCount is MEASURED via a before/after snapshot
+    // diff of the same authoritative objects this whole diagnostics block
+    // reads, taken unconditionally around every branch below (including
+    // the flag-off/not-admitted paths) so a future edit here can't
+    // silently skip the tripwire.
+    const authoritativeSnapshotBefore = stableCanonicalize({ fieldSnapshot, records: mapped.records });
+    let canonicalExpenseObligations: ExpenseObligation[] = [];
+    let canonicalExpenseObligationMetrics = emptyCanonicalExpenseMetrics("flag_off");
+
+    if (!canonicalClaimsContext) {
+      canonicalExpenseObligationMetrics = emptyCanonicalExpenseMetrics("flag_off");
+    } else if (!shouldBuildCanonicalExpenseObligations({ orgId: canonicalClaimsContext.organizationId, generationId: canonicalClaimsContext.generationId })) {
+      canonicalExpenseObligationMetrics = emptyCanonicalExpenseMetrics(
+        isLeaseCanonicalExpenseObligationsActive() ? "organization_not_admitted" : "flag_off",
+      );
+    } else if (expenseSpecialistShadowRecords.length === 0) {
+      canonicalExpenseObligationMetrics = emptyCanonicalExpenseMetrics("specialist_output_missing");
+    } else {
+      try {
+        const rawObligations: ExpenseObligation[] = [];
+        for (const record of expenseSpecialistShadowRecords) {
+          if (record.technicalStatus !== "success") continue;
+          const converter = OBLIGATION_CONVERTERS_BY_DOMAIN[record.domain];
+          if (!converter) continue;
+          rawObligations.push(...converter(record.obligations, canonicalClaimsContext, record.schemaVersion));
+        }
+        const specialistObligationCount = expenseSpecialistShadowRecords.reduce((sum: number, r: any) => sum + (r.obligations?.length ?? 0), 0);
+
+        const { valid: structurallyValid, invalidCount } = applyStructuralValidation(rawObligations);
+        const evidenceVerified = structurallyValid.map((o) => applyExpenseObligationEvidenceVerification(o, doclingRaw as Record<string, unknown>));
+        const dedupResult = dedupeExpenseObligations(evidenceVerified);
+        const { canonicalMappings, dynamicRows } = proposeExpenseObligationPlacements(dedupResult.deduped);
+
+        canonicalExpenseObligations = dedupResult.deduped;
+        canonicalExpenseObligationMetrics = computeCanonicalExpenseMetrics({
+          runStatus: dedupResult.deduped.length > 0 ? "success" : "no_obligations",
+          specialistObligationCount,
+          invalidObligationCount: invalidCount,
+          dedupResult,
+          finalObligations: dedupResult.deduped,
+          canonicalMappings,
+          dynamicRows,
+          authoritativeMutationCount: 0, // overwritten below once the real diff is known
+        });
+      } catch (conversionError) {
+        console.error(`[canonical-expense-obligations] conversion threw unexpectedly: ${(conversionError as Error)?.message ?? conversionError}`);
+        canonicalExpenseObligationMetrics = emptyCanonicalExpenseMetrics("conversion_failed");
+      }
+    }
+
+    const authoritativeSnapshotAfter = stableCanonicalize({ fieldSnapshot, records: mapped.records });
+    const authoritativeMutationCount = deepEqual(authoritativeSnapshotBefore, authoritativeSnapshotAfter)
+      ? 0
+      : countChangedPaths(authoritativeSnapshotBefore, authoritativeSnapshotAfter);
+    canonicalExpenseObligationMetrics = { ...canonicalExpenseObligationMetrics, authoritativeMutationCount };
+
     const processingTimeMs = Date.now() - startTime;
 
     return withOpenAIFactLedgerDebug({
@@ -396,6 +544,32 @@ export async function runOpenAIFactLedgerPipeline(
             // this org/generation, or the domain wasn't escalated at all --
             // never affects any field elsewhere in this diagnostics object.
             strict_outputs_shadow: enrichedShadowRecords,
+            // Canonical Claim/Evidence Layer (Phase 2, LEASE_CANONICAL_CLAIMS_V1)
+            // -- [] whenever the flag is off or no provenance context was
+            // available to stamp claim identity. Diagnostics only; never
+            // read by rows/method/validationErrors above.
+            canonical_claims: canonicalClaims,
+            canonical_claim_metrics: canonicalClaimMetrics,
+            // Multi-label routing shadow (Phase 3, LEASE_MULTILABEL_ROUTING_V1)
+            // -- [] whenever the flag is off. Never affects which domains
+            // actually get an LLM call; see section-router.ts's
+            // routeSectionsMultiLabel docstring.
+            routing_shadow: (factLedger as any).adaptiveInstrumentation?.routingShadow ?? [],
+            routing_shadow_metrics: (factLedger as any).adaptiveInstrumentation?.routingShadowMetrics ?? null,
+            // Phase 5 expense-specialist shadow (LEASE_EXPENSE_SPECIALISTS_V1)
+            // -- [] / [] / null whenever the flag is off. Never affects
+            // rows/method/validationErrors above; specialists never become
+            // authoritative in this phase.
+            expense_specialist_shadow: expenseSpecialistShadowRecords,
+            expense_specialist_claims: expenseSpecialistClaims,
+            expense_specialist_metrics: expenseSpecialistMetrics,
+            // Phase 6A (LEASE_CANONICAL_EXPENSE_OBLIGATIONS_V1) -- []/metrics
+            // with runStatus explaining why whenever the layer didn't
+            // produce obligations. Never affects rows/method/
+            // validationErrors above; see authoritativeMutationCount for
+            // the measured (not assumed) no-mutation guarantee.
+            canonical_expense_obligations: canonicalExpenseObligations,
+            canonical_expense_obligation_metrics: canonicalExpenseObligationMetrics,
             // Self-consistency verification pass diagnostics — how many of
             // THIS run's llmPrimaryMapped fields were confirmed vs. cleared
             // on a second read. mode tells a reviewer which mapping

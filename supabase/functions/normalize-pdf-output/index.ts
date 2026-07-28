@@ -57,6 +57,7 @@ import {
 } from "../_shared/extraction/enrich-bounded-stage/stage-persistence.ts";
 import { startBoundedStageTelemetry } from "../_shared/extraction/enrich-bounded-stage/telemetry.ts";
 import { getSchemaEntriesForDomain, getSchemaEntriesWithNoDomain, reorderStandardFieldsBySchema, type LlmCallDomain } from "../_shared/extraction/enrich-bounded-stage/domain-fields.ts";
+import { isEnrichEvidenceDomainStage, getDomainForEnrichStage } from "../_shared/extraction/domains/domain-stage-registry.ts";
 import { cleanEvidenceSnippet, findPageForSnippet, resolveVerifiedSourcePage } from "../_shared/extraction/evidence-index.ts";
 import { detectFileMagic } from "../_shared/file-magic.ts";
 import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
@@ -2673,18 +2674,67 @@ async function handleEnrichMode(args: {
 // remains completely unchanged and is what still runs when it is "off".
 // ---------------------------------------------------------------------------
 
-const STAGE_TO_LLM_CALL_DOMAIN: Partial<Record<EnrichBoundedStageName, LlmCallDomain>> = {
-  enrich_evidence_core_terms: "core_terms",
-  enrich_evidence_rent_and_charges: "rent_and_charges",
-  enrich_evidence_expenses_and_cam: "expenses_and_cam",
-  enrich_evidence_operating_obligations: "operating_obligations",
-  enrich_evidence_legal_rights_and_dates: "legal_rights_and_dates",
-};
-
 /** Reads a prior stage's persisted output, but ONLY if it actually completed -- never reuses a failed/incomplete/missing entry. */
 function getCompletedStageData(results: Record<string, BoundedStageResultEntry>, stage: EnrichBoundedStageName): any | null {
   const entry = results[stage];
   return entry && entry.status === "completed" ? entry.data : null;
+}
+
+/**
+ * Phase 4.5: the shared body of what used to be 5 fallthrough
+ * `case "enrich_evidence_<domain>":` labels inside handleBoundedEnrichStage's
+ * switch, extracted verbatim (only `stage`/`STAGE_TO_LLM_CALL_DOMAIN[stage]!`
+ * became the passed-in `domain` parameter -- no other line changed). Returns
+ * `stageData` exactly like every other stage's case body does; the caller
+ * still owns the shared post-switch fence-check/telemetry/persistence tail,
+ * which is untouched by this extraction (see the Phase 4.5 plan's grounding
+ * note on why this is not a self-returning Response handler).
+ */
+function handleEnrichEvidenceDomainStage(args: {
+  domain: LlmCallDomain;
+  derivation: unknown;
+  extractionModuleType: ExtractionModuleType;
+  row: Record<string, unknown>;
+  moduleType: string;
+  doclingRaw: Record<string, unknown> | null;
+  truthAssemblyCanonicalFields: ReturnType<typeof assembleCanonicalFields>["canonicalFields"];
+  fileRecord: any;
+  normalizedOutput: any;
+}): any {
+  const { domain, derivation, extractionModuleType, row, moduleType, doclingRaw, truthAssemblyCanonicalFields, fileRecord, normalizedOutput } = args;
+  const schema = getSchema(extractionModuleType);
+  const allSchemaEntries = Object.entries(schema).filter(([, def]) => !(def as any).derived);
+  const domainEntries = getSchemaEntriesForDomain(allSchemaEntries, domain);
+  // Deliberately the RAW row here, matching buildReviewPayload's own
+  // evidence loop exactly -- its per-field Lease Truth Assembly
+  // override happens later, inside buildStandardFieldsForEntries,
+  // directly from truthAssemblyCanonicalFields (see that function's
+  // own comment) -- NOT via a pre-overridden row like the workflow-
+  // abstraction stages above need.
+  const values = stripInternalKeys(row);
+  // Mirrors buildReviewPayload's own rows.map() exactly (see its
+  // extractCamNoteFromText call): a blank "notes" field on a lease row
+  // falls back to a CAM sentence pulled from the document text itself.
+  // Omitting this here silently regresses "notes" for lease documents
+  // in the bounded path (caught by _tests/enrich-bounded-stages.test.ts's
+  // byte-equivalence gate).
+  if ((moduleType === "leases" || moduleType === "lease") && isBlank(values.notes)) {
+    const camNote = extractCamNoteFromText(doclingRaw);
+    if (camNote) values.notes = camNote;
+  }
+  const fieldConfidencesRow = (row._field_confidences ?? {}) as Record<string, number>;
+  const fieldSourcesRow = (row._field_sources ?? {}) as Record<string, string>;
+  const fieldEvidenceRow = (row._field_evidence ?? {}) as Record<string, any>;
+  const calculatorDerivationTraces = (row._derivation_traces ?? {}) as Record<string, string>;
+  const calculatorDerivationSourceFields = (row._derivation_source_fields ?? {}) as Record<string, string[]>;
+  const rowConfidence = normalizeConfidence((row as any).confidence_score ?? normalizedOutput.metadata?.avgConfidence);
+  const source = sourceFromMethod(fileRecord.extraction_method ?? normalizedOutput.method);
+  return buildStandardFieldsForEntries({
+    schemaEntries: domainEntries, index: 0, values, workflowOutput: derivation,
+    fieldConfidences: fieldConfidencesRow, fieldSources: fieldSourcesRow, fieldEvidence: fieldEvidenceRow,
+    calculatorDerivationTraces, calculatorDerivationSourceFields, doclingRaw, extractionModuleType,
+    truthAssemblyCanonicalFields, source, rowConfidence,
+  });
 }
 
 async function handleBoundedEnrichStage(args: {
@@ -2823,6 +2873,20 @@ async function handleBoundedEnrichStage(args: {
   let stageData: any = null;
 
   try {
+    if (isEnrichEvidenceDomainStage(stage)) {
+      // Phase 4.5: dynamic dispatch replacing what used to be 5 fallthrough
+      // `case "enrich_evidence_<domain>":` labels -- isEnrichEvidenceDomainStage
+      // is a registry-membership check (not a stage.startsWith(...) guess),
+      // so a typo'd or unregistered stage name falls through to the switch's
+      // `default` below and is rejected as UNKNOWN_BOUNDED_STAGE, same as today.
+      const derivation = getCompletedStageData(boundedResults, "enrich_derivation");
+      if (!derivation) return jsonResponse({ error: true, error_code: "PRIOR_STAGE_MISSING", message: "enrich_derivation must complete before evidence-domain stages" }, 422);
+      stageData = handleEnrichEvidenceDomainStage({
+        domain: getDomainForEnrichStage(stage),
+        derivation, extractionModuleType, row, moduleType, doclingRaw,
+        truthAssemblyCanonicalFields, fileRecord, normalizedOutput,
+      });
+    } else {
     switch (stage) {
       case "enrich_clauses": {
         stageData = runLeaseWorkflowStage1Clauses({ doclingRaw });
@@ -2847,49 +2911,6 @@ async function handleBoundedEnrichStage(args: {
         const stage3 = getCompletedStageData(boundedResults, "enrich_items");
         if (!stage1 || !stage2 || !stage3) return jsonResponse({ error: true, error_code: "PRIOR_STAGE_MISSING", message: "prior workflow stages must complete before enrich_derivation" }, 422);
         stageData = runLeaseWorkflowStage4Derivation({ row: effectiveRow, doclingRaw, documentSubtype, stage1, stage2, stage3 });
-        break;
-      }
-      case "enrich_evidence_core_terms":
-      case "enrich_evidence_rent_and_charges":
-      case "enrich_evidence_expenses_and_cam":
-      case "enrich_evidence_operating_obligations":
-      case "enrich_evidence_legal_rights_and_dates": {
-        const derivation = getCompletedStageData(boundedResults, "enrich_derivation");
-        if (!derivation) return jsonResponse({ error: true, error_code: "PRIOR_STAGE_MISSING", message: "enrich_derivation must complete before evidence-domain stages" }, 422);
-        const domain = STAGE_TO_LLM_CALL_DOMAIN[stage]!;
-        const schema = getSchema(extractionModuleType);
-        const allSchemaEntries = Object.entries(schema).filter(([, def]) => !(def as any).derived);
-        const domainEntries = getSchemaEntriesForDomain(allSchemaEntries, domain);
-        // Deliberately the RAW row here, matching buildReviewPayload's own
-        // evidence loop exactly -- its per-field Lease Truth Assembly
-        // override happens later, inside buildStandardFieldsForEntries,
-        // directly from truthAssemblyCanonicalFields (see that function's
-        // own comment) -- NOT via a pre-overridden row like the workflow-
-        // abstraction stages above need.
-        const values = stripInternalKeys(row);
-        // Mirrors buildReviewPayload's own rows.map() exactly (see its
-        // extractCamNoteFromText call): a blank "notes" field on a lease row
-        // falls back to a CAM sentence pulled from the document text itself.
-        // Omitting this here silently regresses "notes" for lease documents
-        // in the bounded path (caught by _tests/enrich-bounded-stages.test.ts's
-        // byte-equivalence gate).
-        if ((moduleType === "leases" || moduleType === "lease") && isBlank(values.notes)) {
-          const camNote = extractCamNoteFromText(doclingRaw);
-          if (camNote) values.notes = camNote;
-        }
-        const fieldConfidencesRow = (row._field_confidences ?? {}) as Record<string, number>;
-        const fieldSourcesRow = (row._field_sources ?? {}) as Record<string, string>;
-        const fieldEvidenceRow = (row._field_evidence ?? {}) as Record<string, any>;
-        const calculatorDerivationTraces = (row._derivation_traces ?? {}) as Record<string, string>;
-        const calculatorDerivationSourceFields = (row._derivation_source_fields ?? {}) as Record<string, string[]>;
-        const rowConfidence = normalizeConfidence((row as any).confidence_score ?? normalizedOutput.metadata?.avgConfidence);
-        const source = sourceFromMethod(fileRecord.extraction_method ?? normalizedOutput.method);
-        stageData = buildStandardFieldsForEntries({
-          schemaEntries: domainEntries, index: 0, values, workflowOutput: derivation,
-          fieldConfidences: fieldConfidencesRow, fieldSources: fieldSourcesRow, fieldEvidence: fieldEvidenceRow,
-          calculatorDerivationTraces, calculatorDerivationSourceFields, doclingRaw, extractionModuleType,
-          truthAssemblyCanonicalFields, source, rowConfidence,
-        });
         break;
       }
       case "enrich_truth_assembly": {
@@ -2969,6 +2990,7 @@ async function handleBoundedEnrichStage(args: {
       default: {
         return jsonResponse({ error: true, error_code: "UNKNOWN_BOUNDED_STAGE", message: `No handler for stage ${stage}` }, 400);
       }
+    }
     }
   } catch (computeError: any) {
     const message = computeError?.message ?? String(computeError);
@@ -4411,6 +4433,7 @@ export const __test__ = {
   buildReviewPayload,
   buildStandardFieldsForEntries,
   handleBoundedEnrichStage,
+  handleEnrichEvidenceDomainStage,
   extractCamNoteFromText,
   isBlank,
   rejectMarkupValue,
