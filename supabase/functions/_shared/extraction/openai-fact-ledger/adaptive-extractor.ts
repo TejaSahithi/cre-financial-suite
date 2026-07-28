@@ -49,10 +49,31 @@ const DOMAIN_CONCEPTS: Record<LlmCallDomain, string> = {
     "monthly base rent amount, annual base rent amount, security deposit amount, late fee amount, " +
     "rent escalation rate/type, billing frequency -- NEVER additional rent, CAM, reimbursements, or " +
     "amortized charges as if they were base rent",
+  // This domain carries the widest concept spread of the five (4 distinct
+  // sub-areas -- expense recovery, CAM, taxes, insurance -- routed here by
+  // section-router.ts and covering 23 schema fields, more than any domain
+  // except core_terms). Listed as 4 explicit, separately-labeled checklists
+  // rather than one paragraph specifically so the model cannot silently
+  // satisfy "CAM" and stop reading before reaching taxes/insurance later in
+  // the excerpt -- the flat single-paragraph version of this concept list
+  // was the confirmed cause of expense/CAM/tax fields under-recalling
+  // relative to other domains.
   expenses_and_cam:
-    "CAM/common-area-maintenance recovery structure and amount, real-estate-tax responsibility, " +
-    "insurance-cost responsibility, base year or expense stop, gross-up provisions -- each as the " +
-    "NORMALIZED responsibility answer (tenant/landlord/shared), with the supporting clause as evidence",
+    "FOUR separate sub-areas -- treat each as its own checklist, do not stop after finding one:\n" +
+    "  (1) EXPENSE RECOVERY / CAM: recovery structure (net/gross/modified gross), CAM amount, " +
+    "base year, expense stop, cap type and percentage, admin/management fee basis and percentage, " +
+    "gross-up provisions and threshold.\n" +
+    "  (2) TAXES: who is responsible for real-estate/property tax (tenant/landlord/shared), any " +
+    "tax-specific cap or base year distinct from the general CAM one.\n" +
+    "  (3) INSURANCE: who is responsible for the insurance premium/cost (distinct from who is " +
+    "required to CARRY a policy), minimum general liability coverage amount, whether tenant " +
+    "insurance is required, additional-insured requirements, waiver of subrogation.\n" +
+    "  (4) UTILITY/REIMBURSEMENT CHARGES: electric, water/sewer, and other utility responsibility " +
+    "and reimbursement amounts.\n" +
+    "Report the NORMALIZED responsibility answer (tenant/landlord/shared) for each responsibility " +
+    "field, with the supporting clause as evidence. A lease's expense/CAM/tax/insurance terms are " +
+    "very often stated across SEVERAL separate paragraphs or an exhibit, not one -- read the ENTIRE " +
+    "excerpt for each of the four sub-areas above, not just the first paragraph that matches one.",
   operating_obligations:
     "repair and maintenance responsibility (structural, HVAC, interior, exterior) and utility " +
     "payment responsibility -- distinguish who PAYS for a utility/system from who merely maintains " +
@@ -123,9 +144,19 @@ function buildDomainFieldAssignmentPrompt(domain: LlmCallDomain, moduleType: Mod
 
 ${DOMAIN_CONCEPTS[domain]}
 
-You will be given an excerpt of a real lease document. For EACH of the schema fields listed
-below, decide whether the excerpt states a value for it, and if so, extract that value grounded
-in exact verbatim source text.
+You will be given an excerpt of a real lease document. Your task has TWO parts, and both are
+mandatory:
+  A. For EACH of the schema fields listed below, decide whether the excerpt states a value for
+     it, and if so, extract that value grounded in exact verbatim source text.
+  B. Independently of part A, read the excerpt for anything else real and relevant to this topic
+     area that the field list does not capture, and report it as an additional fact (part B is
+     explained fully in rule 7 below -- it is not optional or secondary to part A).
+
+MANDATORY READING DISCIPLINE: this excerpt commonly runs several paragraphs, an itemized list, or
+a table -- lease terms for a single topic area are very often split across more than one place in
+the document (a general clause early, then a specific dollar amount or exception later, then a
+schedule/exhibit at the end). Read the excerpt from its first character to its last before
+answering. Finding one relevant sentence early is not a reason to stop looking for the rest.
 
 SCHEMA FIELDS FOR THIS CALL:
 ${buildDomainFieldReference(fields)}
@@ -134,7 +165,8 @@ RULES:
 1. "not_stated" is the CORRECT and EXPECTED answer whenever the excerpt does not address a
    field -- never guess, infer, calculate, or fill a field just to avoid leaving it empty. A
    field left "not_stated" because the document is genuinely silent on it is a successful,
-   accurate result, not a failure.
+   accurate result, not a failure. This never excuses skipping part of the excerpt -- check the
+   WHOLE excerpt before deciding a field is not_stated, not just the first paragraph.
 2. "source_text" MUST be exact verbatim text from the excerpt -- a complete sentence, a
    complete table row, or a single "Label: value" line. Never paraphrase, never truncate
    mid-sentence, never fabricate a quote.
@@ -147,11 +179,15 @@ RULES:
 6. If a value is already listed below under "Already resolved deterministically", confirm it
    (re-report the same value) unless the excerpt reveals a genuine conflict -- in which case
    report the excerpt's own version so a human reviewer can compare.
-7. Read every sentence and paragraph of the excerpt, not just the ones that map to a listed
-   field. If the excerpt states a real, verifiable fact in this topic area that does NOT fit any
-   field above (e.g. a specific clause provision, a per-item obligation, a schedule row), report
-   it in "additional_facts" instead of forcing it into the wrong field or dropping it. This is
-   how information reaches its business tab even when the schema has no dedicated field for it.
+7. This is part B from above, and it is NOT optional: after finishing the field list, go back
+   through the excerpt once more specifically looking for real, verifiable facts in this topic
+   area that do NOT fit any field above -- a specific clause provision, a per-item obligation, one
+   row of an itemized list or schedule, an exception or carve-out, a cap or condition on something
+   you already reported. Report EACH one as its own entry in "additional_facts" rather than
+   forcing it into the wrong field or leaving it out. This is the ONLY way this kind of detail
+   reaches its business tab, since the schema has no dedicated field for it -- an excerpt that
+   discusses several distinct provisions should typically produce several additional_facts
+   entries, not zero and not one.
 
 Output ONLY a valid JSON object of this exact shape:
   {
