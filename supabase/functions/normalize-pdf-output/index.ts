@@ -213,6 +213,11 @@ function buildPipelineLayoutInput(
     fields: (doclingRaw as any)?.fields,
     warnings: (doclingRaw as any)?.warnings,
     _metadata: (doclingRaw as any)?._metadata,
+    // Full, semantically compact Azure artifact for the whole-document LLM
+    // experiment. Undefined for rows parsed before the experiment was
+    // enabled; the extractor then uses the available capped layout and emits
+    // an explicit diagnostic warning.
+    _whole_document_llm_compact: (doclingRaw as any)?._whole_document_llm_compact,
   };
 }
 
@@ -3709,6 +3714,14 @@ Deno.serve(async (req: Request) => {
       }
 
       const meaningfulValueCount = countMeaningfulRowValues(result.rows as Array<Record<string, unknown>>);
+      // Compute this immediately after extraction so the default deferred
+      // enrichment return persists the truth. Previously it was computed
+      // only hundreds of lines later in the inline-only path, causing rows
+      // with real OpenAI facts to report openai_extraction_attempted=false.
+      const openaiExtractionAttempted =
+        Number((result.metadata as any)?.provenance?.openai_attempt_count ?? 0) > 0 ||
+        Boolean((result.metadata as any)?.extractionDebug?.llm_call_attempted) ||
+        envFlagEnabled("ALLOW_RULE_ONLY_EXTRACTION");
 
       // Verification (persisted into extractionDebug, not just logged, so it
       // survives past the function's log retention and is inspectable from
@@ -3837,6 +3850,7 @@ Deno.serve(async (req: Request) => {
           error_message: reason,
           failed_step: "normalize",
           processing_completed_at: new Date().toISOString(),
+          openai_extraction_attempted: openaiExtractionAttempted,
         });
         await logger.event("normalize", "blocked", {
           normalize_status: NORMALIZE_STATUSES.FAILED,
@@ -3893,6 +3907,7 @@ Deno.serve(async (req: Request) => {
           error_count: result.validationErrors?.length ?? 0,
           validation_errors: result.validationErrors ?? [],
           error_message: null,
+          openai_extraction_attempted: openaiExtractionAttempted,
           ...(reviewRequired ? { review_status: "pending" } : {}),
         },
       );
@@ -4301,11 +4316,6 @@ Deno.serve(async (req: Request) => {
       // &gt; 0); legacy_hybrid's own internal LLM step (llm-extractor.ts) sets
       // extractionDebug.llm_call_attempted when IT makes a real call. Only
       // an explicit emergency override bypasses this.
-      const openaiExtractionAttempted =
-        Number((result.metadata as any)?.provenance?.openai_attempt_count ?? 0) > 0 ||
-        Boolean((result.metadata as any)?.extractionDebug?.llm_call_attempted) ||
-        envFlagEnabled("ALLOW_RULE_ONLY_EXTRACTION");
-
       const { error: validatedErr } = await setStatus(
         supabaseAdmin,
         file_id,

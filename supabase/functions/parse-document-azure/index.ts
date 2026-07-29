@@ -36,6 +36,11 @@ import {
 import { withExtractionStage } from "../_shared/extraction/provenance/recorder.ts";
 import type { StageHandle } from "../_shared/extraction/provenance/types.ts";
 import { extractPdfPageCountFromBytes } from "../_shared/extraction/pdf-metadata.ts";
+import { isWholeDocumentLlmActive } from "../_shared/extraction/whole-document-llm/feature-mode.ts";
+import {
+  buildCompactLeaseDocument,
+  PERSISTED_COMPACT_DOCUMENT_KEY,
+} from "../_shared/extraction/whole-document-llm/compact-document.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -544,6 +549,13 @@ Deno.serve(async (req: Request) => {
       const rawBlockCount = Array.isArray(doclingOutput.text_blocks) ? doclingOutput.text_blocks.length : 0;
       const rawTableCount = Array.isArray(doclingOutput.tables) ? doclingOutput.tables.length : 0;
       const rawFieldCount = Array.isArray(doclingOutput.fields) ? doclingOutput.fields.length : 0;
+      // Build this BEFORE any persistence caps. It contains complete page
+      // text/tables/key-values without Azure geometry or duplicated markdown,
+      // and is the reading surface for LEASE_WHOLE_DOCUMENT_LLM_V1.
+      const wholeDocumentLlmActive = isWholeDocumentLlmActive();
+      const wholeDocumentCompact = wholeDocumentLlmActive
+        ? buildCompactLeaseDocument(doclingOutput, "azure_full_layout")
+        : null;
 
       const cappedFullText = capLongText(doclingOutput.full_text);
       const cappedMarkdown = capLongText((doclingOutput as any).markdown);
@@ -590,6 +602,7 @@ Deno.serve(async (req: Request) => {
         extraction_timestamp: new Date().toISOString(),
         text_truncated: typeof doclingOutput.full_text === "string" && doclingOutput.full_text.length > MAX_STORED_TEXT_CHARS,
         blocks_truncated: rawBlockCount > MAX_STORED_BLOCKS,
+        whole_document_llm_compact_present: wholeDocumentCompact != null,
       };
       const parserStatus = parserStatusForTextLength(fullTextChars);
       const parserPipeline = buildPipelineMetadata({
@@ -631,6 +644,9 @@ Deno.serve(async (req: Request) => {
         warnings: cappedWarnings,
         raw_response: shouldPersistFullRaw ? (doclingOutput as any).raw_response : null,
         raw_response_summary: (doclingOutput as any).raw_response_summary ?? null,
+        ...(wholeDocumentCompact
+          ? { [PERSISTED_COMPACT_DOCUMENT_KEY]: wholeDocumentCompact }
+          : {}),
         _metadata: {
           ...extractionMetadata,
           ...parserPipeline,

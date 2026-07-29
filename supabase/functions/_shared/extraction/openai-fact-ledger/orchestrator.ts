@@ -70,6 +70,8 @@ import { computeProfileApprovalBlockers } from "./approval-blockers.ts";
 import type { OpenAIFactLedgerInput, OpenAIFactLedgerOptions } from "./types.ts";
 import { LLMProviderError } from "../../llm.ts";
 import { EXTRACTION_CONTRACT_VERSION } from "../contract-version.ts";
+import { isWholeDocumentLlmActive } from "../whole-document-llm/feature-mode.ts";
+import { runWholeDocumentLlmPipeline } from "../whole-document-llm/extractor.ts";
 
 
 function emptyMetadata(processingTimeMs: number) {
@@ -181,6 +183,20 @@ export async function runOpenAIFactLedgerPipeline(
 
   try {
     const doclingRaw = await resolveDocling(input);
+    // Whole-document LLM experiment: the model receives the complete compact
+    // Azure document and writes directly to LEASE_SCHEMA. This branch
+    // deliberately runs before profile classification, deterministic
+    // extraction, section routing, and fact-field mapping so none of those
+    // layers can constrain or reinterpret its evidence selection.
+    if (input.moduleType === "lease" && isWholeDocumentLlmActive()) {
+      const result = await runWholeDocumentLlmPipeline({
+        document: doclingRaw,
+        moduleType: input.moduleType,
+        ...(options.provenance ? { provenance: options.provenance } : {}),
+      });
+      return withOpenAIFactLedgerDebug(result);
+    }
+
     // Phase 6: opt-in canonical-layout-backed index (ENABLE_DOCUMENT_INTELLIGENCE_V3
     // only), falling straight back to the existing legacy_evidence_index path
     // (document-index.ts, untouched) on any failure. Default/flag-off

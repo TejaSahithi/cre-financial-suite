@@ -24,6 +24,7 @@ import { runOpenAIFactLedgerPipeline } from "./openai-fact-ledger/orchestrator.t
 import type { ExtractionPipelineResult, DoclingOutput } from "./types.ts";
 import { evaluateExtractionAcceptance } from "./business-extraction-acceptance.ts";
 import { buildProvenance, attachProvenance, normalizeBusinessExtractionMode, type BusinessExtractionMode } from "./business-extraction-provenance.ts";
+import { isWholeDocumentLlmActive } from "./whole-document-llm/feature-mode.ts";
 
 export type { BusinessExtractionMode } from "./business-extraction-provenance.ts";
 
@@ -315,6 +316,35 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
   // openai_primary_legacy_fallback
   const openaiResult = await runOpenAIOnce();
   const openaiAcceptance = evaluateExtractionAcceptance(openaiResult, { provider: "openai_fact_ledger", documentProfile: opts.documentSubtype });
+
+  // When the whole-document experiment is active, its result must remain
+  // observable as-is. Falling back to legacy here would erase the comparison
+  // and could make a failed experiment look like a successful new extractor.
+  // Operators can turn the flag off to restore the prior fallback behavior.
+  if (opts.moduleType === "lease" && isWholeDocumentLlmActive()) {
+    return attachProvenance(
+      openaiResult,
+      buildProvenance({
+        attemptId,
+        requestedProvider: "openai_primary_legacy_fallback",
+        effectiveProvider: "openai_fact_ledger",
+        acceptanceState:
+          openaiAcceptance.state === "accepted" || openaiAcceptance.state === "accepted_needs_review"
+            ? openaiAcceptance.state
+            : "extraction_failed_manual_review",
+        fallbackUsed: false,
+        fallbackReason: openaiAcceptance.state === "accepted" || openaiAcceptance.state === "accepted_needs_review"
+          ? null
+          : openaiAcceptance.reason,
+        openaiAttemptCount: 1,
+        canonicalLayoutSchemaVersion: opts.canonicalLayoutSchemaVersion,
+        sourceContentHash,
+        correlationId: opts.correlationId,
+        providerMocked,
+        mockScenario: mockOpenAIScenario,
+      }),
+    );
+  }
 
   if (openaiAcceptance.state === "accepted" || openaiAcceptance.state === "accepted_needs_review") {
     return attachProvenance(

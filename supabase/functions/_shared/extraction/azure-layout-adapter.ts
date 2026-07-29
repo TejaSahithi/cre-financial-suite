@@ -85,6 +85,10 @@ export function normalizeAzureLayoutToDoclingOutput(
 
     return {
       table_index: tableIndex,
+      // Keep the table's first Azure bounding page in the normalized layout.
+      // The whole-document LLM path uses this as a deterministic evidence
+      // anchor; older consumers ignore the additive property.
+      page: firstBoundingPage(table),
       headers,
       rows,
       markdown: matrix.map((row) => row.join("\t")).join("\n"),
