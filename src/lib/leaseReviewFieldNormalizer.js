@@ -95,6 +95,47 @@ function compactText(value) {
   return text || null;
 }
 
+function isParagraphLikeReviewValue(value) {
+  const text = compactText(value);
+  if (!text) return false;
+  if (text.length > 220) return true;
+  if ((text.match(/[.!?]\s+/g) || []).length >= 2) return true;
+  return text.length > 120 && /\b(?:this lease|tenant shall|landlord shall|hereby|provided however|notwithstanding|subject to|pursuant to)\b/i.test(text);
+}
+
+function clauseValueLabel(row) {
+  const title = compactText(row?.title || row?.clauseType);
+  if (title && !/^extracted clause$/i.test(title)) return title;
+  const text = compactText(row?.summary || row?.sourceText);
+  if (!text) return "Supporting clause";
+  const sentence = text.match(/^[^.!?]{1,180}[.!?]?/)?.[0] || text;
+  return sentence.length > 96 ? `${sentence.slice(0, 95).trimEnd()}...` : sentence;
+}
+
+const CLAUSE_DOMAIN_TAB_RULES = [
+  { tabKey: "parties_premises", pattern: /premises|demised|suite|unit|floor|parking|signage|use|exclusive use|common area description/i },
+  { tabKey: "rent_charges", pattern: /rent|minimum rent|base rent|additional rent|deposit|fee|charge|allowance|abatement|holdover|late/i },
+  { tabKey: "expenses_recoveries", pattern: /expense|recover|reimburse|gross|net|triple|pro rata|operating/i },
+  { tabKey: "cam_rules", pattern: /\bcam\b|common area maintenance|management fee|admin fee|gross.?up|cap|expense stop|base year/i },
+  { tabKey: "taxes", pattern: /tax|assessment|levy|appeal|protest/i },
+  { tabKey: "insurance", pattern: /insurance|insured|liability|subrogation|certificate|deductible/i },
+  { tabKey: "utilities", pattern: /utilit|electric|water|sewer|gas|hvac|trash|meter/i },
+  { tabKey: "repairs_maintenance", pattern: /repair|maintenance|hvac|roof|structural|janitorial|landscap|snow|pest/i },
+  { tabKey: "legal_options", pattern: /assign|sublet|sublease|consent|option|renewal|termination|default|remed|surrender|exclusive|estoppel|snda|subordination|indemn|casualty|condemnation|alteration|hazardous/i },
+  { tabKey: "critical_dates", pattern: /deadline|critical date|commencement|expiration|notice period|must open/i },
+  { tabKey: "notices", pattern: /notice|mail|courier|address|copy to|email/i },
+  { tabKey: "signatures", pattern: /signature|signatory|signed|execution|counterpart/i },
+  { tabKey: "documents_exhibits", pattern: /exhibit|document|guaranty|work letter|site plan|attached|schedule/i },
+];
+
+function routeClauseRecordToDomainTab(row) {
+  const explicit = row?.businessArea || row?.business_area || row?.display_tab || row?.tabKey;
+  if (explicit && LEASE_REVIEW_CANONICAL_TABS.some((tab) => tab.key === explicit) && explicit !== "clause_records") return explicit;
+  const text = [row?.title, row?.clauseType, row?.summary, row?.sourceText].filter(Boolean).join(" ");
+  const matched = CLAUSE_DOMAIN_TAB_RULES.find((rule) => rule.pattern.test(text));
+  return matched?.tabKey || null;
+}
+
 function normalizeComparableText(value) {
   return String(value ?? "")
     .toLowerCase()
@@ -555,6 +596,18 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
         reviewReason: evidenceOverrideReason,
       };
     }
+    if (!evidenceOverrideReason && isParagraphLikeReviewValue(value)) {
+      const preservedSourceText = evidence?.sourceText || value;
+      evidenceOverrideReason =
+        "Extracted value looked like a source paragraph instead of a normalized field answer. The paragraph is preserved as evidence and the field needs review.";
+      value = null;
+      evidence = {
+        ...(evidence || {}),
+        sourceText: preservedSourceText,
+        requiresReview: true,
+        reviewReason: evidenceOverrideReason,
+      };
+    }
     const extractionStatus = resolveExtractionStatus(lease, canonicalKey, { value, confidence, evidence });
     let evidenceVerified = invalidValueRejected ? false : hasValidSourceEvidence(evidence);
 
@@ -572,13 +625,15 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
         "Source text describes when the original lease was entered into, not this document's signature date. Needs manual verification.";
     }
     const hasValue = isMeaningfulValue(value);
-    const status = computeFieldStatus({
-      hasValue,
-      evidenceVerified,
-      confidenceBucket: classifyConfidence(confidence),
-      reviewStatus: review?.status,
-      extractionStatus,
-    });
+    const status = evidenceOverrideReason && !hasValue && evidence?.sourceText
+      ? "needs_review"
+      : computeFieldStatus({
+        hasValue,
+        evidenceVerified,
+        confidenceBucket: classifyConfidence(confidence),
+        reviewStatus: review?.status,
+        extractionStatus,
+      });
     const extractionMode = resolveLeaseReviewExtractionMode({
       hasValue,
       extractionStatus,
@@ -1536,16 +1591,22 @@ export function buildRowsByTab({ standardFields, dynamicFindings, expenseRules, 
   for (const row of camRules) tabs.cam_rules.push(row);
 
   for (const row of clauseRecords) {
-    tabs.clause_records.push({
+    const baseKey = `${row.clauseType}-${row.sourcePage ?? "unknown"}-${String(row.summary || "").slice(0, 24)}`;
+    const valueLabel = clauseValueLabel(row);
+    const makeClauseRow = (tabKey, suffix = "") => ({
       rowType: "clause",
       typeLabel: "Clause",
-      key: `${row.clauseType}-${row.sourcePage ?? "unknown"}-${String(row.summary || "").slice(0, 24)}`,
+      key: `${baseKey}${suffix}`,
       label: row.title || row.clauseType,
-      tabKey: "clause_records",
+      fieldKey: row.clauseType || null,
+      field_key: row.clauseType || null,
+      category: row.businessArea || row.clauseType || "clause_records",
+      tabKey,
       editable: false,
-      value: row.summary,
-      normalizedValue: row.summary,
-      normalized_value: row.summary,
+      value: valueLabel,
+      normalizedValue: valueLabel,
+      normalized_value: valueLabel,
+      display_value: valueLabel,
       status: row.reviewStatus || "pending",
       confidence: row.confidence,
       confidencePercent: normalizeConfidencePercent(row.confidence),
@@ -1561,6 +1622,16 @@ export function buildRowsByTab({ standardFields, dynamicFindings, expenseRules, 
       extraction_mode: EXTRACTION_MODES.UNKNOWN,
       defaultVisible: true,
     });
+    tabs.clause_records.push(makeClauseRow("clause_records"));
+
+    const domainTab = routeClauseRecordToDomainTab(row);
+    if (domainTab && tabs[domainTab]) {
+      const duplicateInDomain = tabs[domainTab].some((existing) =>
+        normalizeComparableText(existing.sourceText || existing.source_text) === normalizeComparableText(row.sourceText)
+        && normalizeComparableText(existing.label) === normalizeComparableText(row.title || row.clauseType),
+      );
+      if (!duplicateInDomain) tabs[domainTab].push(makeClauseRow(domainTab, `-${domainTab}-supporting`));
+    }
   }
 
   for (const row of criticalDates) {

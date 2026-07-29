@@ -321,14 +321,32 @@ function correctSuspiciousExpiration(commencement: string | null, expiration: st
   return corrected.toISOString().slice(0, 10);
 }
 
+function deriveExpirationFromTerm(startIso: string | null, lease: Record<string, unknown>) {
+  if (!startIso) return null;
+  const termMonths = toTermMonths(lease);
+  if (!termMonths || termMonths <= 0) return null;
+  const start = new Date(`${startIso}T00:00:00Z`);
+  if (Number.isNaN(start.getTime())) return null;
+  const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + termMonths, start.getUTCDate()));
+  end.setUTCDate(end.getUTCDate() - 1);
+  return end.toISOString().slice(0, 10);
+}
+
 export function buildCriticalDateRows(approvedLease: Record<string, unknown>, today = new Date().toISOString().slice(0, 10)) {
+  const leaseDate = toIsoDate(
+    getApprovedValue(approvedLease, "lease_date", ["lease_execution_date", "signed_date"])
+  );
   const commencement = toIsoDate(
-    getApprovedValue(approvedLease, "commencement_date", ["start_date", "lease_start_date", "term_start_date"])
+    getApprovedValue(approvedLease, "commencement_date", ["start_date", "lease_start_date", "term_start_date", "rent_commencement_date"])
   );
   const rawExpiration = toIsoDate(
     getApprovedValue(approvedLease, "expiration_date", ["end_date", "lease_end_date", "term_end_date"])
   );
-  const expiration = correctSuspiciousExpiration(commencement, rawExpiration, approvedLease);
+  const expiration = correctSuspiciousExpiration(
+    commencement,
+    rawExpiration ?? deriveExpirationFromTerm(commencement, approvedLease),
+    approvedLease,
+  );
   const optionDeadline = toIsoDate(
     getApprovedValue(approvedLease, "option_exercise_deadline", ["renewal_exercise_deadline", "option_deadline"])
   );
@@ -342,6 +360,14 @@ export function buildCriticalDateRows(approvedLease: Record<string, unknown>, to
   };
   const rows = [];
 
+  if (leaseDate) {
+    rows.push({
+      ...baseRow,
+      date_type: "lease_date",
+      due_date: leaseDate,
+      status: leaseDate <= today ? "completed" : "open",
+    });
+  }
   if (commencement) {
     rows.push({
       ...baseRow,

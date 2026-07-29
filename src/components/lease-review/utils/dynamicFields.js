@@ -338,24 +338,37 @@ export function inferDynamicItemTab(item, key) {
     "rent_charges",
     "expenses_recoveries",
     "cam_rules",
+    "taxes",
     "insurance",
+    "utilities",
+    "repairs_maintenance",
     "legal_options",
+    "critical_dates",
+    "notices",
+    "signatures",
+    "documents_exhibits",
+    "clause_records",
   ]);
   if (knownTabs.has(businessArea)) return businessArea;
-  if (businessArea === "critical_dates") return "dates_term";
   if (/(tenant|landlord|property|premises|address|suite|unit|floor|rsf|sqft|square|footage|signatory|contact|building|use_permitted|permitted_use)/i.test(key)) return "parties_premises";
-  if (/(date|term|expiration|commencement|effective|start_date|end_date|renewal_notice|signature|lease_date)/i.test(key)) return "dates_term";
+  if (/(signature|signatory|signed|execution|counterpart)/i.test(key)) return "signatures";
+  if (/(date|term|expiration|commencement|effective|start_date|end_date|renewal_notice|lease_date)/i.test(key)) return "dates_term";
   // Insurance - must come before rent_charges so "liability" and "certificate"
   // are not swallowed by the generic "fee/charge" pattern.
   if (/(insurance|insured|deductible|liability|subrogation|waiver_of_sub|additional_insured|certificate)/i.test(key)) return "insurance";
   // CAM - must come before rent_charges so "admin_fee" / "management_fee" /
   // "gross_up" are not swallowed by the generic "fee/percent" pattern.
   if (/(gross_up|cam_|admin_fee|management_fee|base_year|reconciliation|controllable|cam.cap|cam.pool)/i.test(key)) return "cam_rules";
+  if (/(tax|assessment|levy|appeal|protest|refund)/i.test(key)) return "taxes";
+  if (/(utilit|electric|water|sewer|gas|trash|telecom|meter)/i.test(key)) return "utilities";
+  if (/(maintenance|repair|hvac|roof|structural|janitorial|landscap|snow|pest|glass)/i.test(key)) return "repairs_maintenance";
   // Rent & charges: rent, deposit, allowance, late fees, holdover, etc.
   if (/(rent|fee|deposit|allowance|charge|amount|payment|holdover|interest|premium|breakpoint|percentage|consideration|security)/i.test(key)) return "rent_charges";
   // Expense / recovery terms: taxes, utilities, maintenance, repairs, janitorial,
   // full-service/gross/NNN/net lease structure, operating expenses, reimbursements.
-  if (/(tax|utilit|maintenance|repair|expense|operating|reimburs|recovery|recoveries|janitorial|cleaning|sanitation|full.service|gross.lease|full_service|nnn|triple.net|net.lease|modified.gross|lease.structure|lease.type|expense.structure|responsibility)/i.test(key)) return "expenses_recoveries";
+  if (/(expense|operating|reimburs|recovery|recoveries|cleaning|sanitation|full.service|gross.lease|full_service|nnn|triple.net|net.lease|modified.gross|lease.structure|lease.type|expense.structure|responsibility)/i.test(key)) return "expenses_recoveries";
+  if (/(notice|mail|courier|copy_to|email|address_for_notice)/i.test(key)) return "notices";
+  if (/(exhibit|document|guaranty|guarantee|work_letter|site_plan|attached|schedule)/i.test(key)) return "documents_exhibits";
   if (/(assign|consent|assumption|default|remed|surrender|alteration|sublet|subletting|broker|estoppel|subordination|snda|notice|rofr|termination|exclusive|noncompete|non_compete|co_tenancy|relocation|force_majeure|force majeure|casualty|condemnation|compliance|quiet_enjoyment|quiet enjoyment|signage|signs|guaranty|guarantee|indemnity|jury|governing_law|governing law|successors|hazardous|environmental|waiver|holdover)/i.test(key)) return "legal_options";
   return null;
 }

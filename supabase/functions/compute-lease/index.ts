@@ -450,10 +450,19 @@ Deno.serve(async (req: Request) => {
     const leaseStatusFilter = body?.status ?? body?.lease_status ?? "active";
 
     const approvedLeases = sourceLeases.filter((lease) => {
-      const matchApproval = approvalStatusFilter === "all" ||
-        String(lease.abstract_status || "").toLowerCase() === String(approvalStatusFilter).toLowerCase();
-      const matchStatus = leaseStatusFilter === "all" ||
-        String(lease.status || "").toLowerCase() === String(leaseStatusFilter).toLowerCase();
+      const normalizedApprovalFilter = String(approvalStatusFilter || "approved").toLowerCase();
+      const abstractStatus = String(lease.abstract_status || "").toLowerCase();
+      const leaseStatus = String(lease.status || "").toLowerCase();
+      const matchApproval = normalizedApprovalFilter === "all" ||
+        abstractStatus === normalizedApprovalFilter ||
+        (normalizedApprovalFilter === "approved" && leaseStatus === "approved");
+      const normalizedStatusFilter = String(leaseStatusFilter || "active").toLowerCase();
+      const matchStatus = normalizedStatusFilter === "all" ||
+        leaseStatus === normalizedStatusFilter ||
+        (
+          normalizedStatusFilter === "active" &&
+          leaseStatus === "approved"
+        );
       return matchApproval && matchStatus;
     });
 
@@ -500,6 +509,9 @@ Deno.serve(async (req: Request) => {
       unit_id: unitId,
       fiscal_year: fiscalYear,
       projection_mode: projectionMode,
+      approval_status: approvalStatusFilter,
+      status: leaseStatusFilter,
+      lease_status: leaseStatusFilter,
       scope_level: scope.scopeLevel,
       scope_id: scope.scopeId,
       approved_lease_count: approvedLeases.length,

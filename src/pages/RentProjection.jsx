@@ -98,6 +98,19 @@ function isApprovedLease(lease) {
   return String(lease?.status || "").toLowerCase() === "approved";
 }
 
+function isLeaseStatusMatch(lease, filter) {
+  const normalized = String(filter || "active").toLowerCase();
+  if (normalized === "all") return true;
+  const status = String(lease?.status || "").toLowerCase();
+  if (normalized === "active") {
+    // Historical approved-abstract workflow stored the lifecycle status as
+    // "approved". Treat that as active for projection scope so approval does
+    // not immediately hide the lease from this page.
+    return status === "active" || (status === "approved" && isApprovedLease(lease));
+  }
+  return status === normalized;
+}
+
 function approvedFieldValue(lease, keys) {
   const candidates = (Array.isArray(keys) ? keys : [keys]).flatMap((key) => (
     APPROVED_FIELD_ALIASES[key] || [key]
@@ -200,9 +213,12 @@ export default function RentProjection() {
     return leases
       .filter((lease) => {
         const matchApproval = approvalStatus === "all" ||
-          String(lease.abstract_status || "").toLowerCase() === approvalStatus.toLowerCase();
-        const matchStatus = leaseStatus === "all" ||
-          String(lease.status || "").toLowerCase() === leaseStatus.toLowerCase();
+          (
+            approvalStatus.toLowerCase() === "approved"
+              ? isApprovedLease(lease)
+              : String(lease.abstract_status || "").toLowerCase() === approvalStatus.toLowerCase()
+          );
+        const matchStatus = isLeaseStatusMatch(lease, leaseStatus);
         return matchApproval && matchStatus;
       })
       .filter((lease) =>
@@ -286,6 +302,36 @@ export default function RentProjection() {
       return haystack.includes(needle);
     });
   }, [outputs, search]);
+
+  const liveLeaseSummaryRows = useMemo(() => {
+    const rows = filteredApprovedLeases.map((lease) => {
+      const annualizedRent = approvedLeaseAnnualRent(lease);
+      const rsf = approvedLeaseRsf(lease);
+      return {
+        lease_id: lease.id,
+        tenant_name: approvedFieldValue(lease, ["tenant_name"]) || lease.tenant_name || "Unknown",
+        property_id: lease.property_id ?? null,
+        building_id: lease.building_id ?? null,
+        unit_id: lease.unit_id ?? null,
+        lease_type: approvedFieldValue(lease, ["lease_type"]) || lease.lease_type || null,
+        lease_start: approvedFieldValue(lease, ["commencement_date", "start_date"]) || "",
+        rent_commencement_date: approvedFieldValue(lease, ["rent_commencement_date"]) || "",
+        lease_end: approvedFieldValue(lease, ["expiration_date", "end_date"]) || "",
+        rsf,
+        fy_scheduled_rent: annualizedRent,
+        annualized_rent: annualizedRent,
+        rent_psf: rsf > 0 && annualizedRent > 0 ? annualizedRent / rsf : null,
+        next_fy_scheduled_rent: 0,
+        next_fy_zero_explanation: "Run Engine for authoritative monthly schedule.",
+        rent_provenance: "Approved abstract",
+      };
+    });
+    if (!search) return rows;
+    const needle = search.toLowerCase();
+    return rows.filter((row) => [row.tenant_name, row.lease_type].filter(Boolean).join(" ").toLowerCase().includes(needle));
+  }, [filteredApprovedLeases, search]);
+
+  const displayedLeaseRows = hasSnapshot ? leaseSummaryRows : liveLeaseSummaryRows;
 
   const projectedAnnual = authoritativeChart.reduce((sum, row) => sum + Number(row.projected || 0), 0);
   const projectedMonthlyAvg = projectedAnnual / 12;
@@ -614,20 +660,20 @@ export default function RentProjection() {
                     <Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" />
                   </TableCell>
                 </TableRow>
-              ) : !hasSnapshot ? (
+              ) : !hasSnapshot && displayedLeaseRows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={13} className="text-center py-12 text-sm text-slate-400">
-                    Authoritative projection rows appear here after the engine runs for the selected scope.
+                    No approved leases match the current scope. Approved abstracts appear here immediately; run the engine for authoritative monthly schedule rows.
                   </TableCell>
                 </TableRow>
-              ) : leaseSummaryRows.length === 0 ? (
+              ) : displayedLeaseRows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={13} className="text-center py-12 text-sm text-slate-400">
                     No approved leases match the current scope.
                   </TableCell>
                 </TableRow>
               ) : (
-                leaseSummaryRows.map((row) => {
+                displayedLeaseRows.map((row) => {
                   const property = row.property_id ? hierarchy.propertyById.get(row.property_id) : null;
                   const unit = row.unit_id ? hierarchy.unitById.get(row.unit_id) : null;
                   return (

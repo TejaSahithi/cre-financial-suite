@@ -211,6 +211,8 @@ export function approvedFieldValue(
     APPROVED_FIELD_ALIASES[key] ?? [key]
   ));
   const snapshot = snapshotFields(lease);
+  const extraction = extractionFields(lease);
+  const extracted = extractedFields(lease);
 
   for (const key of candidates) {
     const snapshotField = safeObject(snapshot[key]);
@@ -221,19 +223,47 @@ export function approvedFieldValue(
       return lease[key];
     }
   }
+  for (const key of candidates) {
+    const extractionField = safeObject(extraction[key]);
+    if (extractionField.value != null && extractionField.value !== "") return extractionField.value;
+    if (extraction[key] != null && extraction[key] !== "" && typeof extraction[key] !== "object") return extraction[key];
+    const extractedField = safeObject(extracted[key]);
+    if (extractedField.value != null && extractedField.value !== "") return extractedField.value;
+    if (extracted[key] != null && extracted[key] !== "" && typeof extracted[key] !== "object") return extracted[key];
+  }
+  return null;
+}
+
+function approvedLeaseTermMonths(lease: Record<string, any>): number | null {
+  const direct = asInteger(approvedFieldValue(lease, ["lease_term_months", "term_months"]));
+  if (direct && direct > 0) return direct;
+
+  const raw = String(approvedFieldValue(lease, ["lease_term", "term", "initial_term"]) || "").toLowerCase();
+  if (!raw) return null;
+  const years = raw.match(/(\d+(?:\.\d+)?)\s*(?:year|yr)/);
+  if (years) return Math.round(Number(years[1]) * 12);
+  const months = raw.match(/(\d+(?:\.\d+)?)\s*(?:month|mo)/);
+  if (months) return Math.round(Number(months[1]));
   return null;
 }
 
 export function normalizedLeaseDates(lease: Record<string, any>): NormalizedLeaseDates {
   const leaseStart = parseDateUtc(
-    approvedFieldValue(lease, ["commencement_date", "start_date"]),
+    approvedFieldValue(lease, ["commencement_date", "start_date", "rent_commencement_date", "lease_date"]),
   );
   const rentStart = parseDateUtc(
-    approvedFieldValue(lease, ["rent_commencement_date", "commencement_date", "start_date"]),
+    approvedFieldValue(lease, ["rent_commencement_date", "commencement_date", "start_date", "lease_date"]),
   );
-  const leaseEnd = parseDateUtc(
+  let leaseEnd = parseDateUtc(
     approvedFieldValue(lease, ["expiration_date", "end_date"]),
   );
+  if (!leaseEnd && leaseStart) {
+    const termMonths = approvedLeaseTermMonths(lease);
+    if (termMonths && termMonths > 0) {
+      leaseEnd = addMonthsUtc(leaseStart, termMonths);
+      leaseEnd.setUTCDate(leaseEnd.getUTCDate() - 1);
+    }
+  }
   return {
     leaseStart,
     rentStart: rentStart ?? leaseStart,

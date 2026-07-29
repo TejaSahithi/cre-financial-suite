@@ -105,6 +105,20 @@ Deno.serve(async (req: Request) => {
       throw new Error(error.message || "approve_lease_workflow failed");
     }
 
+    if (data?.already_approved && criticalDates.length > 0) {
+      const { error: criticalDateBackfillError } = await supabaseAdmin
+        .from("lease_critical_dates")
+        .upsert(criticalDates, {
+          onConflict: "lease_id,date_type,due_date",
+          ignoreDuplicates: true,
+        });
+      if (criticalDateBackfillError) {
+        console.warn(
+          `[approve-lease-workflow] already-approved critical-date backfill skipped: ${criticalDateBackfillError.message}`,
+        );
+      }
+    }
+
     // Generate the approved rent schedule synchronously, in the same request,
     // instead of relying on the client to fire-and-forget a compute-lease
     // call after redirecting. Reuses compute-lease's existing

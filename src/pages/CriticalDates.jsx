@@ -93,10 +93,97 @@ const URGENCY_LABEL = {
   unknown: "—",
 };
 
+function isApprovedLease(lease) {
+  return String(lease?.abstract_status || "").toLowerCase() === "approved" ||
+    String(lease?.status || "").toLowerCase() === "approved";
+}
+
+function fieldValue(lease, keys) {
+  const candidates = Array.isArray(keys) ? keys : [keys];
+  const snapshot = lease?.abstract_snapshot?.fields || {};
+  const extraction = lease?.extraction_data?.fields || {};
+  const extracted = lease?.extracted_fields || {};
+  for (const key of candidates) {
+    const snapshotValue = snapshot?.[key]?.value;
+    if (snapshotValue !== undefined && snapshotValue !== null && snapshotValue !== "") return snapshotValue;
+    if (lease?.[key] !== undefined && lease?.[key] !== null && lease?.[key] !== "") return lease[key];
+    const extractionValue = extraction?.[key]?.value ?? extraction?.[key];
+    if (extractionValue !== undefined && extractionValue !== null && extractionValue !== "") return extractionValue;
+    const extractedValue = extracted?.[key]?.value ?? extracted?.[key];
+    if (extractedValue !== undefined && extractedValue !== null && extractedValue !== "") return extractedValue;
+  }
+  return null;
+}
+
+function isoDate(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  const iso = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (iso) return iso[1];
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString().slice(0, 10);
+}
+
+function termMonths(lease) {
+  const direct = Number(String(fieldValue(lease, ["lease_term_months", "term_months"]) || "").replace(/[^\d.]/g, ""));
+  if (Number.isFinite(direct) && direct > 0) return Math.round(direct);
+  const raw = String(fieldValue(lease, ["lease_term", "term", "initial_term"]) || "").toLowerCase();
+  const years = raw.match(/(\d+(?:\.\d+)?)\s*(?:year|yr)/);
+  if (years) return Math.round(Number(years[1]) * 12);
+  const months = raw.match(/(\d+(?:\.\d+)?)\s*(?:month|mo)/);
+  if (months) return Math.round(Number(months[1]));
+  return null;
+}
+
+function deriveExpiration(startIso, lease) {
+  const months = termMonths(lease);
+  if (!startIso || !months) return null;
+  const start = new Date(`${startIso}T00:00:00Z`);
+  if (Number.isNaN(start.getTime())) return null;
+  const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + months, start.getUTCDate()));
+  end.setUTCDate(end.getUTCDate() - 1);
+  return end.toISOString().slice(0, 10);
+}
+
+function previewCriticalDatesForLease(lease) {
+  if (!isApprovedLease(lease)) return [];
+  const today = new Date().toISOString().slice(0, 10);
+  const leaseDate = isoDate(fieldValue(lease, ["lease_date", "lease_execution_date", "signed_at"]));
+  const commencement = isoDate(fieldValue(lease, ["commencement_date", "start_date", "rent_commencement_date", "lease_date"]));
+  const rentCommencement = isoDate(fieldValue(lease, ["rent_commencement_date"]));
+  const expiration = isoDate(fieldValue(lease, ["expiration_date", "end_date"])) || deriveExpiration(commencement, lease);
+  const optionDeadline = isoDate(fieldValue(lease, ["option_exercise_deadline", "renewal_exercise_deadline"]));
+  const rows = [
+    ["lease_date", leaseDate],
+    ["commencement", commencement],
+    ["rent_commencement", rentCommencement && rentCommencement !== commencement ? rentCommencement : null],
+    ["expiration", expiration],
+    ["option_exercise", optionDeadline],
+  ];
+  return rows
+    .filter(([, dueDate]) => dueDate)
+    .map(([dateType, dueDate]) => ({
+      id: `approved-preview-${lease.id}-${dateType}-${dueDate}`,
+      org_id: lease.org_id,
+      lease_id: lease.id,
+      property_id: lease.property_id || null,
+      date_type: dateType,
+      due_date: dueDate,
+      owner_email: null,
+      owner_name: null,
+      status: dueDate < today ? "completed" : "open",
+      reminder_days_before: null,
+      note: "Derived from approved abstract. Persisted on next approval/backfill.",
+      source: "approved_abstract_preview",
+      preview_only: true,
+    }));
+}
+
 export default function CriticalDates() {
   const location = useLocation();
   const queryClient = useQueryClient();
-  const [filter, setFilter] = useState("active"); // active | overdue | due_soon | completed | all
+  const [filter, setFilter] = useState("all"); // active | overdue | due_soon | completed | all
   const [showAdd, setShowAdd] = useState(false);
   const [showAssign, setShowAssign] = useState(false);
   const [assignTarget, setAssignTarget] = useState(null);
@@ -147,7 +234,16 @@ export default function CriticalDates() {
     return m;
   }, [leases]);
 
-  const scopedDates = criticalDates.filter((row) => {
+  const displayedCriticalDates = useMemo(() => {
+    const existing = new Set(
+      criticalDates.map((row) => `${row.lease_id}|${row.date_type}|${row.due_date}`),
+    );
+    const previewRows = leases.flatMap(previewCriticalDatesForLease)
+      .filter((row) => !existing.has(`${row.lease_id}|${row.date_type}|${row.due_date}`));
+    return [...criticalDates, ...previewRows];
+  }, [criticalDates, leases]);
+
+  const scopedDates = displayedCriticalDates.filter((row) => {
     const lease = leaseById.get(row.lease_id);
     if (!lease) return true; // keep orphans visible
     return matchesHierarchyScope(lease, scope, { propertyKey: "property_id", unitKey: "unit_id" });
@@ -191,8 +287,8 @@ export default function CriticalDates() {
   }, [propertyScopedDates]);
 
   const subtitle = getScopeSubtitle(scope, {
-    default: `${filteredDates.length} critical date${filteredDates.length === 1 ? "" : "s"} tracked`,
-    property: (property) => `${filteredDates.length} dates for ${property.name}`,
+    default: `${propertyScopedDates.length} critical date${propertyScopedDates.length === 1 ? "" : "s"} tracked`,
+    property: (property) => `${propertyScopedDates.length} dates for ${property.name}`,
   });
 
   // Mutations -----------------------------------------------------------
@@ -378,6 +474,9 @@ export default function CriticalDates() {
                       {row.source === "derived" && (
                         <span className="ml-1 text-[10px] text-slate-400">(derived)</span>
                       )}
+                      {row.preview_only && (
+                        <span className="ml-1 text-[10px] text-slate-400">(approved abstract)</span>
+                      )}
                     </TableCell>
                     <TableCell className="text-sm">
                       {row.due_date}
@@ -431,10 +530,12 @@ export default function CriticalDates() {
                           variant="ghost"
                           className="h-7 px-2 text-xs"
                           onClick={() => openAssign(row)}
+                          disabled={row.preview_only}
+                          title={row.preview_only ? "Persisted on next approval/backfill before assignment." : "Assign owner"}
                         >
                           Assign
                         </Button>
-                        {row.status !== "completed" && (
+                        {row.status !== "completed" && !row.preview_only && (
                           <Button
                             size="sm"
                             variant="ghost"
@@ -451,7 +552,8 @@ export default function CriticalDates() {
                           variant="ghost"
                           className="h-7 px-2 text-xs text-red-600 hover:text-red-700"
                           onClick={() => deleteMutation.mutate({ id: row.id, leaseId: row.lease_id })}
-                          disabled={deleteMutation.isPending}
+                          disabled={deleteMutation.isPending || row.preview_only}
+                          title={row.preview_only ? "Preview rows cannot be deleted until persisted." : "Delete reminder"}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>

@@ -1973,6 +1973,9 @@ export default function LeaseReview() {
                 unit_id: approvedLease.unit_id || undefined,
                 fiscal_year: fy,
                 projection_mode: mode,
+                approval_status: "approved",
+                status: "active",
+                lease_status: "active",
               },
               { silent: true },
             ).catch(() => {});
@@ -1981,7 +1984,7 @@ export default function LeaseReview() {
         queryClient.invalidateQueries({ queryKey: ["snapshot", "lease"] });
       }
 
-      queryClient.invalidateQueries({ queryKey: ["lease_critical_dates"] });
+      queryClient.invalidateQueries({ queryKey: ["lease-critical-dates"] });
 
       let approvedExpenseRuleSet = null;
       // Persist expense rules using the new leaseRulePipelineService
