@@ -3,7 +3,10 @@ import {
   buildCompactLeaseDocument,
   compactDocumentEvidenceMap,
 } from "../../../supabase/functions/_shared/extraction/whole-document-llm/compact-document.ts";
-import { buildWholeDocumentJsonSchema } from "../../../supabase/functions/_shared/extraction/whole-document-llm/whole-document-schema.ts";
+import {
+  buildWholeDocumentJsonSchema,
+  buildWholeDocumentSystemPrompt,
+} from "../../../supabase/functions/_shared/extraction/whole-document-llm/whole-document-schema.ts";
 
 describe("whole-document LLM experiment", () => {
   it("preserves complete page and table evidence without the legacy 3K page cap", () => {
@@ -64,12 +67,33 @@ describe("whole-document LLM experiment", () => {
     ] as any;
     const schema = buildWholeDocumentJsonSchema(fields) as any;
 
-    expect(schema.required).toEqual(["claims"]);
+    expect(schema.required).toEqual(["claims", "notStatedFieldKeys", "dynamicFindings"]);
     expect(schema.properties.claims.type).toBe("array");
     expect(schema.properties.claims.items.properties.fieldKey.enum).toEqual([
       "tenant_name",
       "monthly_rent",
     ]);
+    expect(schema.properties.notStatedFieldKeys.items.enum).toEqual([
+      "tenant_name",
+      "monthly_rent",
+    ]);
+    expect(schema.properties.dynamicFindings.type).toBe("array");
+    expect(schema.properties.dynamicFindings.items.properties.suggestedFieldKey.enum).toBeUndefined();
     expect(schema.properties).not.toHaveProperty("tenant_name");
+  });
+
+  it("requires a professional multi-pass review and unrestricted grounded dynamic discovery", () => {
+    const fields = [
+      ["tenant_name", { type: "string", labels: [], description: "Tenant legal entity" }],
+    ] as any;
+    const prompt = buildWholeDocumentSystemPrompt(fields);
+
+    expect(prompt).toContain("more than forty years");
+    expect(prompt).toContain("Build and apply the document's defined-term dictionary");
+    expect(prompt).toContain("second, independent completeness sweep");
+    expect(prompt).toContain("dynamicFindings is mandatory and may contain ANY NUMBER");
+    expect(prompt).toContain("Do not place a fact in a fixed field merely because similar words appear");
+    expect(prompt).toContain("ONLY status found may contain a non-null value");
+    expect(prompt).toContain("Do not confuse monthly base rent");
   });
 });

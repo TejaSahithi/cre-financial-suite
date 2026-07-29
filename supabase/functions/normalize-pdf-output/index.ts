@@ -1168,6 +1168,17 @@ function buildMinimalReviewPayload(opts: {
         status = "needs_review";
       } else if (serverExtractionStatus === "conflict" || serverExtractionStatus === "conflict_detected") {
         status = "conflict_detected";
+      } else if (
+        serverExtractionStatus === "needs_review" ||
+        serverExtractionStatus === "manual_review" ||
+        serverExtractionStatus === "ambiguous" ||
+        serverExtractionStatus === "illegible"
+      ) {
+        // Whole-document v2 deliberately publishes uncertain fixed claims
+        // with value=null so they cannot masquerade as auto-filled facts.
+        // Preserve the model's review state instead of collapsing the row to
+        // a generic "missing" field merely because the safe value is null.
+        status = "needs_review";
       } else if (value == null || value === "") {
         status = "missing";
       } else if (hasEvidence && typeof effectiveConfidence === "number" && effectiveConfidence >= 0.9) {

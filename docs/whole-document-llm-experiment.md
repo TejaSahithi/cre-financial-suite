@@ -11,13 +11,19 @@ When `LEASE_WHOLE_DOCUMENT_LLM_V1=active` for a lease:
    complete Azure layout before the legacy persistence caps are applied.
 2. The OpenAI fact-ledger orchestrator calls one strict-schema model request
    with the complete compact document.
-3. The model selects its own pages and table rows and assigns values directly
-   to `LEASE_SCHEMA` field keys.
-4. TypeScript checks only schema types, duplicate/missing field keys, evidence
+3. The model performs a professional multi-pass lease review, selects its own
+   pages and table rows, and assigns values directly to `LEASE_SCHEMA` fields.
+4. A mandatory second sweep emits any number of evidence-grounded
+   `dynamicFindings` with arbitrary suggested keys; these flow into the
+   existing Lease Review dynamic-row and clause-record path.
+5. TypeScript checks only schema types, duplicate/missing field keys, evidence
    node existence, and verbatim quote containment.
-5. The section router, deterministic readiness gate, fact-field mapper, and
+6. Only fixed claims with `status=found` may populate a value. Ambiguous,
+   conflicting, or illegible claims retain evidence/alternatives but publish
+   `value=null` for review safety.
+7. The section router, deterministic readiness gate, fact-field mapper, and
    dynamic rescue mapper are bypassed.
-6. Legacy semantic fallback is suppressed while the experiment is active so
+8. Legacy semantic fallback is suppressed while the experiment is active so
    the result remains measurable.
 
 The flag defaults off.
@@ -32,11 +38,18 @@ supabase secrets set LEASE_WHOLE_DOCUMENT_LLM_V1=active
 ```
 
 The path never silently truncates an oversized model input. The default
-serialized compact-document ceiling is 400,000 characters; override it only
+combined system-prompt plus compact-document ceiling is 400,000 characters; override it only
 after validating the selected deployment's context budget:
 
 ```sh
 supabase secrets set LEASE_WHOLE_DOCUMENT_LLM_MAX_INPUT_CHARS=400000
+```
+
+For leases with many dynamic findings, use a deployment that supports a
+larger structured response and set:
+
+```sh
+supabase secrets set LEASE_WHOLE_DOCUMENT_LLM_MAX_OUTPUT_TOKENS=32768
 ```
 
 Deploy the changed parse, normalize, and worker dependencies, then upload a
@@ -49,7 +62,7 @@ The result is identifiable at:
 
 ```text
 normalized_output.metadata.extractionDebug.openai_fact_ledger.extraction_mode
-  = "whole_document_llm_v1"
+  = "whole_document_llm_v2"
 ```
 
 The same diagnostic object records schema/model versions, token usage,
