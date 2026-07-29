@@ -7,6 +7,10 @@
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { runBusinessExtraction } from "../_shared/extraction/business-extraction-orchestrator.ts";
 
+// This suite verifies the explicit legacy rollback/fallback behavior. The
+// production lease architecture defaults to whole-document direct-schema.
+Deno.env.set("LEASE_WHOLE_DOCUMENT_LLM_V1", "off");
+
 function baseOpts(overrides: Record<string, unknown> = {}) {
   return {
     requestedProvider: "legacy_hybrid" as const,

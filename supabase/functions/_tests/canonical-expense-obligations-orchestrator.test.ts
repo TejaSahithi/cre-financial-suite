@@ -13,6 +13,8 @@
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { runOpenAIFactLedgerPipeline } from "../_shared/extraction/openai-fact-ledger/orchestrator.ts";
 
+Deno.env.set("LEASE_WHOLE_DOCUMENT_LLM_V1", "off");
+
 if (!Deno.env.get("OPENAI_API_KEY")) {
   Deno.env.set("OPENAI_API_KEY", "sk-fake-openai-key-for-testing");
 }

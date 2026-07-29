@@ -28,6 +28,7 @@ import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
 import { runBusinessExtraction } from "../_shared/extraction/business-extraction-orchestrator.ts";
 import { isLLMProviderConfigured } from "../_shared/llm.ts";
 import { normalizeBusinessExtractionMode, type CanonicalBusinessExtractionMode } from "../_shared/extraction/business-extraction-provenance.ts";
+import { isWholeDocumentLlmActive } from "../_shared/extraction/whole-document-llm/feature-mode.ts";
 import { isAzureLayoutOutput } from "../_shared/extraction/extraction-provider.ts";
 import { getFieldGroups, getSchema, getEvidencePolicyCoverage } from "../_shared/extraction/schemas.ts";
 import { evaluateCandidateForField } from "../_shared/extraction/candidate-decision.ts";
@@ -247,6 +248,43 @@ function resolveBusinessExtractionProvider(
     envValue && envValue.trim() ? envValue : DEFAULT_LIVE_BUSINESS_EXTRACTION_PROVIDER,
     { source: "env" },
   );
+}
+
+/**
+ * Lease architecture boundary.
+ *
+ * When direct whole-document extraction is active, no independent provider
+ * setting (including an old persisted BUSINESS_EXTRACTION_PROVIDER secret)
+ * may route a lease around it. The one supported rollback is the architecture
+ * flag itself: LEASE_WHOLE_DOCUMENT_LLM_V1=off.
+ */
+function enforceLeaseExtractionArchitecture(
+  moduleType: string,
+  configuredProvider: CanonicalBusinessExtractionMode,
+): CanonicalBusinessExtractionMode {
+  return moduleType === "lease" && isWholeDocumentLlmActive()
+    ? "openai_fact_ledger"
+    : configuredProvider;
+}
+
+function wholeDocumentExtractionMode(result: Record<string, any>): string | null {
+  return result?.metadata?.extractionDebug?.openai_fact_ledger?.extraction_mode
+    ?? result?.metadata?.extractionDebug?.vertex_fact_ledger?.extraction_mode
+    ?? null;
+}
+
+function assertAuthoritativeLeaseExtractionResult(
+  moduleType: string,
+  result: Record<string, any>,
+): void {
+  if (moduleType !== "lease" || !isWholeDocumentLlmActive()) return;
+  const actualMode = wholeDocumentExtractionMode(result);
+  if (actualMode !== "whole_document_llm_v2") {
+    throw new Error(
+      `LEASE_EXTRACTION_ARCHITECTURE_VIOLATION: expected whole_document_llm_v2 but received ${actualMode ?? "no extraction_mode"}. ` +
+      `Legacy fact-ledger/TypeScript field mapping is not permitted while LEASE_WHOLE_DOCUMENT_LLM_V1 is active.`,
+    );
+  }
 }
 /**
  * Azure+OpenAI Phase 4E (local implementation): local-only, test-only mock
@@ -3186,8 +3224,11 @@ Deno.serve(async (req: Request) => {
         // without touching the BUSINESS_EXTRACTION_PROVIDER project secret.
         // No uploaded_files row exists in this branch, so there is nothing to
         // write — this is the zero-DB-write comparison path.
-        const dryRunProvider = resolveBusinessExtractionProvider(
-          isInternalCall(req) ? (body as any)?.debug_business_extraction_provider : null,
+        const dryRunProvider = enforceLeaseExtractionArchitecture(
+          "lease",
+          resolveBusinessExtractionProvider(
+            isInternalCall(req) ? (body as any)?.debug_business_extraction_provider : null,
+          ),
         );
         try {
           const dryRunDocling = {
@@ -3210,6 +3251,7 @@ Deno.serve(async (req: Request) => {
             documentSubtype: null,
             correlationId: "dry_run",
           });
+          assertAuthoritativeLeaseExtractionResult("lease", result as Record<string, any>);
           stampBusinessExtractionPersistedAt(result, new Date().toISOString());
           extraction = {
             rows: result.rows?.length ?? 0,
@@ -3640,8 +3682,11 @@ Deno.serve(async (req: Request) => {
     }
 
     try {
-      const businessExtractionProvider = resolveBusinessExtractionProvider(
-        isInternalCall(req) ? (body as any)?.debug_business_extraction_provider : null,
+      const businessExtractionProvider = enforceLeaseExtractionArchitecture(
+        extractionModuleType,
+        resolveBusinessExtractionProvider(
+          isInternalCall(req) ? (body as any)?.debug_business_extraction_provider : null,
+        ),
       );
       console.log(`[normalize-pdf-output] STAGE pipeline_start file_id=${file_id} fileBase64=${!!fileBase64} azureLayoutMode=${azureLayoutMode} provider=${businessExtractionProvider}`);
       // Run the canonical extraction pipeline.
@@ -3691,6 +3736,7 @@ Deno.serve(async (req: Request) => {
           }
           : {}),
       });
+      assertAuthoritativeLeaseExtractionResult(extractionModuleType, result as Record<string, any>);
       stampBusinessExtractionPersistedAt(result, new Date().toISOString());
       console.log(`[normalize-pdf-output] STAGE pipeline_done file_id=${file_id} rows=${result.rows?.length ?? 0} method=${result.method} provider=${businessExtractionProvider}`);
       console.log(
@@ -3808,12 +3854,21 @@ Deno.serve(async (req: Request) => {
         // reviewer can still see exactly what failed and why via
         // error_code/error_message, rather than a payload that looks like a
         // normal, genuinely-empty document.
-        const errorCode = factsExtractedCount > 0 && factsMappedCount === 0
-          ? "FIELD_MAPPING_FAILED"
-          : "AI_EMPTY_EXTRACTION";
-        const reason = errorCode === "FIELD_MAPPING_FAILED"
-          ? `OpenAI extracted ${factsExtractedCount} fact(s) from the document, but none mapped to a standard lease field.`
-          : `Extraction produced no usable lease values. Warnings: ${(result.warnings ?? []).join("; ")}`;
+        const wholeDocumentFailureClassification =
+          openaiDebugForVerification?.extraction_mode === "whole_document_llm_v2"
+            ? String(openaiDebugForVerification?.failure_classification ?? "").trim()
+            : "";
+        const errorCode = wholeDocumentFailureClassification
+          ? "WHOLE_DOCUMENT_LLM_FAILED"
+          : factsExtractedCount > 0 && factsMappedCount === 0
+            ? "FIELD_MAPPING_FAILED"
+            : "AI_EMPTY_EXTRACTION";
+        const reason = errorCode === "WHOLE_DOCUMENT_LLM_FAILED"
+          ? `Authoritative whole-document LLM extraction failed (${wholeDocumentFailureClassification}). ` +
+            `Warnings: ${(result.warnings ?? []).join("; ")}`
+          : errorCode === "FIELD_MAPPING_FAILED"
+            ? `OpenAI extracted ${factsExtractedCount} fact(s) from the document, but none mapped to a standard lease field.`
+            : `Extraction produced no usable lease values. Warnings: ${(result.warnings ?? []).join("; ")}`;
         const pipeline = buildPipelineMetadata({
           parser_status: parserStatus ?? PARSER_STATUSES.COMPLETED,
           normalize_status: NORMALIZE_STATUSES.FAILED,
@@ -4424,11 +4479,16 @@ Deno.serve(async (req: Request) => {
     const isUnsupportedProvider = /Unsupported (extraction provider|business extraction mode)/i.test(
       String(err.message ?? ""),
     );
+    const isArchitectureViolation = /LEASE_EXTRACTION_ARCHITECTURE_VIOLATION/i.test(
+      String(err.message ?? ""),
+    );
     const outerErrorCode = isAuthError
       ? "UNAUTHORIZED_NORMALIZE_CALL"
-      : isUnsupportedProvider
-        ? "UNSUPPORTED_EXTRACTION_PROVIDER"
-        : "NORMALIZATION_FAILED";
+      : isArchitectureViolation
+        ? "LEASE_EXTRACTION_ARCHITECTURE_VIOLATION"
+        : isUnsupportedProvider
+          ? "UNSUPPORTED_EXTRACTION_PROVIDER"
+          : "NORMALIZATION_FAILED";
     // Idempotent with the inner catch's stage.fail() when re-thrown from
     // there; the only path for errors before the inner try (auth, status
     // transitions) or truly unexpected exceptions.
@@ -4460,6 +4520,9 @@ export const __test__ = {
   rejectMarkupValue,
   buildReviewField,
   resolveBusinessExtractionProvider,
+  enforceLeaseExtractionArchitecture,
+  wholeDocumentExtractionMode,
+  assertAuthoritativeLeaseExtractionResult,
   resolveMockOpenAIScenario,
   isLocalSupabaseUrl,
   localProviderMocksEnabled,

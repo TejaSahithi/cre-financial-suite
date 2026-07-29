@@ -285,9 +285,16 @@ function formatFileRecord(record: Record<string, any>, extras: Record<string, an
     openai_fact_ledger_debug: openaiFactLedgerDebug
       ? {
         document_profile: openaiFactLedgerDebug.document_profile ?? null,
+        extraction_mode: openaiFactLedgerDebug.extraction_mode ?? null,
+        architecture: openaiFactLedgerDebug.architecture ?? null,
+        authoritative: openaiFactLedgerDebug.authoritative ?? null,
+        typescript_field_mapping_used: openaiFactLedgerDebug.typescript_field_mapping_used ?? null,
+        llm_call_count: openaiFactLedgerDebug.llm_call_count ?? null,
         facts_extracted_count: openaiFactLedgerDebug.facts_extracted_count ?? null,
         facts_mapped_count: openaiFactLedgerDebug.facts_mapped_count ?? null,
         facts_unmapped_count: openaiFactLedgerDebug.facts_unmapped_count ?? null,
+        mapped_non_null_field_count: openaiFactLedgerDebug.mapped_non_null_field_count ?? null,
+        invalid_or_omitted_claim_count: openaiFactLedgerDebug.invalid_or_omitted_claim_count ?? null,
         failure_classification: openaiFactLedgerDebug.failure_classification ?? null,
         failure_http_status: openaiFactLedgerDebug.failure_http_status ?? null,
         document_index_source: openaiFactLedgerDebug.document_index_source ?? null,

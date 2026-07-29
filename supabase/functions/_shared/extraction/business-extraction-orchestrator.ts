@@ -89,10 +89,18 @@ export interface RunBusinessExtractionOptions {
 }
 
 function factLedgerDebug(debug: Record<string, unknown>): Record<string, unknown> {
+  const directSchemaDebug = {
+    extraction_mode: "whole_document_llm_v2",
+    architecture: "llm_direct_schema",
+    authoritative: true,
+    typescript_field_mapping_used: false,
+    llm_call_count: 1,
+    ...debug,
+  };
   return {
-    openai_fact_ledger: debug,
+    openai_fact_ledger: directSchemaDebug,
     /** @deprecated Compatibility mirror for existing consumers. */
-    vertex_fact_ledger: debug,
+    vertex_fact_ledger: directSchemaDebug,
   };
 }
 

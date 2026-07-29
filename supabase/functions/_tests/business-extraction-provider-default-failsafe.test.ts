@@ -53,3 +53,38 @@ Deno.test("resolveBusinessExtractionProvider: an internal debug override still t
     assertEquals(normalizeTest.resolveBusinessExtractionProvider("legacy_hybrid"), "legacy_hybrid");
   });
 });
+
+Deno.test("enforceLeaseExtractionArchitecture: active lease mode overrides every configured provider to direct OpenAI", () => {
+  withEnvVar("LEASE_WHOLE_DOCUMENT_LLM_V1", undefined, () => {
+    assertEquals(normalizeTest.enforceLeaseExtractionArchitecture("lease", "legacy_hybrid"), "openai_fact_ledger");
+    assertEquals(normalizeTest.enforceLeaseExtractionArchitecture("lease", "openai_primary_legacy_fallback"), "openai_fact_ledger");
+  });
+});
+
+Deno.test("enforceLeaseExtractionArchitecture: only explicit off permits the legacy rollback", () => {
+  withEnvVar("LEASE_WHOLE_DOCUMENT_LLM_V1", "off", () => {
+    assertEquals(normalizeTest.enforceLeaseExtractionArchitecture("lease", "legacy_hybrid"), "legacy_hybrid");
+  });
+});
+
+Deno.test("assertAuthoritativeLeaseExtractionResult: rejects a legacy-shaped result while direct-schema mode is active", () => {
+  withEnvVar("LEASE_WHOLE_DOCUMENT_LLM_V1", "active", () => {
+    let message = "";
+    try {
+      normalizeTest.assertAuthoritativeLeaseExtractionResult("lease", {
+        metadata: { extractionDebug: { openai_fact_ledger: { facts_extracted_count: 56, facts_mapped_count: 24 } } },
+      });
+    } catch (error) {
+      message = String(error?.message ?? error);
+    }
+    assertEquals(message.includes("LEASE_EXTRACTION_ARCHITECTURE_VIOLATION"), true);
+  });
+});
+
+Deno.test("assertAuthoritativeLeaseExtractionResult: accepts whole_document_llm_v2", () => {
+  withEnvVar("LEASE_WHOLE_DOCUMENT_LLM_V1", "active", () => {
+    normalizeTest.assertAuthoritativeLeaseExtractionResult("lease", {
+      metadata: { extractionDebug: { openai_fact_ledger: { extraction_mode: "whole_document_llm_v2" } } },
+    });
+  });
+});

@@ -2,11 +2,8 @@
 /**
  * Bounded per-domain enrich stage mode flag.
  *
- * Direct structural copy of document-package/feature-mode.ts /
- * claims/feature-mode.ts -- same injectable EnvLike, default-closed on
- * anything unrecognized, three real values:
- *   - "off":    today's single monolithic "enrich" pipeline_jobs stage runs
- *               unchanged. Zero behavior change, zero risk. Default.
+ * Three real values:
+ *   - "off":    explicit rollback to the single monolithic "enrich" stage.
  *   - "shadow": the old single-shot "enrich" stage stays authoritative (its
  *               result is what's persisted and shown) -- the new bounded
  *               10-stage chain ALSO runs afterward, purely to record its own
@@ -14,8 +11,9 @@
  *               real documents (including ones that 546 today) before it is
  *               ever trusted to be authoritative.
  *   - "active": the new bounded 10-stage chain is authoritative; the old
- *               monolithic "enrich" stage is not dispatched.
- * Invalid or unset resolves to "off" -- never throws, never defaults open.
+ *               monolithic "enrich" stage is not dispatched. Default.
+ * Invalid or unset resolves to "active" so a missing or misspelled secret
+ * cannot silently restore the resource-exhausting monolithic function.
  *
  * Read only server-side -- never accept a mode value from the request body.
  */
@@ -32,7 +30,7 @@ export interface EnvLike {
 
 export function getEnrichBoundedStageMode(env: EnvLike = Deno.env): EnrichBoundedStageMode {
   const raw = String(env.get(FLAG_NAME) ?? "").trim().toLowerCase();
-  return VALID_MODES.has(raw) ? (raw as EnrichBoundedStageMode) : "off";
+  return VALID_MODES.has(raw) ? (raw as EnrichBoundedStageMode) : "active";
 }
 
 export function isEnrichBoundedStageAtLeastShadow(env: EnvLike = Deno.env): boolean {

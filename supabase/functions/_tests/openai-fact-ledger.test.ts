@@ -10,6 +10,10 @@ import type { Fact } from "../_shared/extraction/openai-fact-ledger/types.ts";
 import { chunkDocument } from "../_shared/extraction/chunker.ts";
 import { parseDate } from "../_shared/extraction/rule-extractor.ts";
 
+// This suite exercises the retired fact-ledger implementation as an explicit
+// rollback path. Production lease extraction defaults to direct-schema mode.
+Deno.env.set("LEASE_WHOLE_DOCUMENT_LLM_V1", "off");
+
 const realServeForNormalizeImport = Deno.serve;
 (Deno as any).serve = (..._args: unknown[]) => ({ finished: Promise.resolve(), shutdown: () => {} });
 const { __test__: normalizeTest } = await import("../normalize-pdf-output/index.ts");

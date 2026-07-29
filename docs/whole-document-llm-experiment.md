@@ -1,11 +1,12 @@
-# Whole-document LLM extraction experiment
+# Authoritative whole-document LLM extraction
 
 This path tests whether TypeScript evidence routing and field remapping are
 the dominant causes of lease-extraction errors.
 
 ## Runtime behavior
 
-When `LEASE_WHOLE_DOCUMENT_LLM_V1=active` for a lease:
+For leases this architecture is active by default. `LEASE_WHOLE_DOCUMENT_LLM_V1`
+may be omitted or set to `active`:
 
 1. `parse-document-azure` builds and persists a compact document from the
    complete Azure layout before the legacy persistence caps are applied.
@@ -26,15 +27,22 @@ When `LEASE_WHOLE_DOCUMENT_LLM_V1=active` for a lease:
 8. Legacy semantic fallback is suppressed while the experiment is active so
    the result remains measurable.
 
-The flag defaults off.
+The flag defaults active. Only the exact value `off` enables the legacy
+fact-ledger/TypeScript mapper rollback.
+
+Evidence/clause enrichment also defaults to the bounded ten-stage chain.
+Only `ENRICH_BOUNDED_STAGE_MODE=off` restores the monolithic enrichment
+function that is susceptible to Edge Function compute exhaustion.
 
 ## Scoped staging activation
 
-Set both server-side secrets:
+The provider is selected automatically. These explicit settings are optional
+but document the intended production state:
 
 ```sh
 supabase secrets set BUSINESS_EXTRACTION_PROVIDER=openai_fact_ledger
 supabase secrets set LEASE_WHOLE_DOCUMENT_LLM_V1=active
+supabase secrets set ENRICH_BOUNDED_STAGE_MODE=active
 ```
 
 The path never silently truncates an oversized model input. The default

@@ -79,8 +79,13 @@ function failureResult(
         extraction_contract_version: EXTRACTION_CONTRACT_VERSION,
         openai_fact_ledger: {
           extraction_mode: "whole_document_llm_v2",
+          architecture: "llm_direct_schema",
+          authoritative: true,
+          typescript_field_mapping_used: false,
+          llm_call_count: 1,
           facts_extracted_count: 0,
           facts_mapped_count: 0,
+          facts_unmapped_count: 0,
           ...diagnostics,
         },
       },
@@ -589,6 +594,9 @@ export async function runWholeDocumentLlmPipeline(
   computeDerivedFields(rows, args.moduleType);
   const fieldSnapshot = snapshotFieldMap([record]);
   const confidences = Object.values(extractedFields).map((field) => field.confidence);
+  const nonNullFieldCount = Object.values(extractedFields)
+    .filter((field) => field.value !== null && field.value !== undefined && field.value !== "")
+    .length;
   const avgConfidence = confidences.length
     ? Math.round((confidences.reduce((sum, value) => sum + value, 0) / confidences.length) * 100)
     : 0;
@@ -623,6 +631,10 @@ export async function runWholeDocumentLlmPipeline(
         validated_field_values: fieldSnapshot,
         openai_fact_ledger: {
           extraction_mode: "whole_document_llm_v2",
+          architecture: "llm_direct_schema",
+          authoritative: true,
+          typescript_field_mapping_used: false,
+          llm_call_count: 1,
           schema_version: WHOLE_DOCUMENT_SCHEMA_VERSION,
           lease_schema_version: LEASE_SCHEMA_VERSION,
           model: response.model,
@@ -632,6 +644,10 @@ export async function runWholeDocumentLlmPipeline(
           max_output_tokens: maxWholeDocumentOutputTokens(),
           facts_extracted_count: Object.keys(extractedFields).length,
           facts_mapped_count: Object.keys(extractedFields).length,
+          facts_unmapped_count: 0,
+          mapped_non_null_field_count: nonNullFieldCount,
+          invalid_or_omitted_claim_count: validationErrors.length,
+          schema_field_count: fields.length,
           evidence_verified_count: evidenceVerifiedCount,
           needs_review_count: needsReviewCount,
           field_statuses: fieldStatuses,

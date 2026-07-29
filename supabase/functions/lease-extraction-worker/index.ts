@@ -2221,10 +2221,10 @@ Deno.serve(async (req: Request) => {
     // whatever pipeline_jobs status it was last set to, and a stale/duplicate
     // dispatch of the SAME stage is made safe by handleBoundedEnrichStage's
     // own idempotency check (isStageAlreadyCompleted), not by anything in
-    // this branch. When ENRICH_BOUNDED_STAGE_MODE is "off" (default), this
-    // stage name is never enqueued in the first place -- see the two
-    // enqueue call sites gated on getEnrichBoundedStageMode() -- so the
-    // existing "enrich" branch below remains the only path taken, unchanged.
+    // this branch. When ENRICH_BOUNDED_STAGE_MODE is explicitly "off", this
+    // stage name is never enqueued in the first place -- see the two enqueue
+    // call sites gated on getEnrichBoundedStageMode() -- so the existing
+    // "enrich" branch below remains the rollback path.
     if (isEnrichBoundedStageName(currentStage)) {
       if (await isCancelRequested(supabaseAdmin, job.id)) {
         return await stopForCancellation(supabaseAdmin, job, fileId, logger, `before_${currentStage}`);

@@ -998,8 +998,16 @@ export default function LeaseUpload() {
                 {fileRecord?.openai_fact_ledger_debug && (
                   <>
                     <p>openai_document_profile: {fileRecord.openai_fact_ledger_debug.document_profile ?? "—"}</p>
+                    <p>openai_extraction_mode: {fileRecord.openai_fact_ledger_debug.extraction_mode ?? "—"}</p>
+                    <p>openai_architecture: {fileRecord.openai_fact_ledger_debug.architecture ?? "—"}</p>
+                    <p>openai_authoritative: {String(fileRecord.openai_fact_ledger_debug.authoritative ?? "—")}</p>
+                    <p>typescript_field_mapping_used: {String(fileRecord.openai_fact_ledger_debug.typescript_field_mapping_used ?? "—")}</p>
+                    <p>openai_llm_call_count: {fileRecord.openai_fact_ledger_debug.llm_call_count ?? "—"}</p>
                     <p>openai_facts_extracted_count: {fileRecord.openai_fact_ledger_debug.facts_extracted_count ?? "—"}</p>
                     <p>openai_facts_mapped_count: {fileRecord.openai_fact_ledger_debug.facts_mapped_count ?? "—"}</p>
+                    <p>openai_mapped_non_null_field_count: {fileRecord.openai_fact_ledger_debug.mapped_non_null_field_count ?? "—"}</p>
+                    <p>openai_facts_unmapped_count: {fileRecord.openai_fact_ledger_debug.facts_unmapped_count ?? "—"}</p>
+                    <p>openai_invalid_or_omitted_claim_count: {fileRecord.openai_fact_ledger_debug.invalid_or_omitted_claim_count ?? "—"}</p>
                     <p>openai_failure_classification: {fileRecord.openai_fact_ledger_debug.failure_classification ?? "—"}</p>
                     <p>openai_failure_http_status: {fileRecord.openai_fact_ledger_debug.failure_http_status ?? "—"}</p>
                   </>
