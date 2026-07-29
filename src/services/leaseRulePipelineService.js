@@ -212,8 +212,28 @@ function hasReadableExpenseRuleText(sourceText) {
   return typeof sourceText === "string" && sourceText.trim().length >= 500;
 }
 
+function stableEvidenceFingerprint(value) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+  let hash = 2166136261;
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash ^= normalized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function expenseRuleCandidateIdentity(rule, canonicalKey = canonicalRuleKey(rule)) {
+  const evidence = String(
+    firstPresent(rule?.exact_source_text, rule?.source_clause, rule?.source_text, rule?.source) || "",
+  );
+  return VALID_EVIDENCE(evidence)
+    ? `${canonicalKey}::${stableEvidenceFingerprint(evidence)}`
+    : canonicalKey;
+}
+
 function extractSourceTextFromFilePayload(file, lease) {
   const candidates = [
+    file?.docling_raw,
     file?.docling_raw?.full_text,
     file?.docling_raw?.markdown,
     file?.docling_raw?.text,
@@ -902,10 +922,14 @@ export const leaseRulePipelineService = {
 
   mapLlmRule(rule, leaseId) {
     const normalizedKey = canonicalRuleKey(rule);
+    const evidenceFingerprint = stableEvidenceFingerprint(
+      firstPresent(rule?.exact_source_text, rule?.source_clause, rule?.source_text, rule?.source),
+    );
     return {
       ...rule,
       lease_id: leaseId,
       normalized_key: normalizedKey,
+      source_field_key: rule.source_field_key || `llm_clause_${evidenceFingerprint}`,
       source_type: "llm_extraction",
       generation_source: "llm_extraction",
       confidence_score: rule.confidence_score || rule.confidence || 0.7,
@@ -971,19 +995,20 @@ export const leaseRulePipelineService = {
            insurance_base_amount: key === "property_insurance" ? firstPresent(c.insurance_base_amount, structuredTermsRule.insurance_base_amount) : c.insurance_base_amount
         };
 
-        if (!mergedMap.has(key)) {
-           mergedMap.set(key, c);
+        const candidateIdentity = expenseRuleCandidateIdentity(c, key);
+        if (!mergedMap.has(candidateIdentity)) {
+           mergedMap.set(candidateIdentity, c);
         } else {
-           const existing = mergedMap.get(key);
+           const existing = mergedMap.get(candidateIdentity);
            const scoreMap = { workflow_output: 5, llm_extraction: 4, text_fallback: 3, structured: 2, deterministic_template: 1 };
            const evidenceBonus = (row) => VALID_EVIDENCE(row?.exact_source_text) ? 2 : 0;
            const existingScore = (scoreMap[existing.source_type] || 0) + evidenceBonus(existing);
            const newScore = (scoreMap[c.source_type] || 0) + evidenceBonus(c);
            
            if (newScore > existingScore) {
-              mergedMap.set(key, { ...existing, ...c, confidence_score: Math.max(existing.confidence_score||0, c.confidence_score||0) });
+              mergedMap.set(candidateIdentity, { ...existing, ...c, confidence_score: Math.max(existing.confidence_score||0, c.confidence_score||0) });
            } else {
-              mergedMap.set(key, { ...c, ...existing, confidence_score: Math.max(existing.confidence_score||0, c.confidence_score||0) });
+              mergedMap.set(candidateIdentity, { ...c, ...existing, confidence_score: Math.max(existing.confidence_score||0, c.confidence_score||0) });
            }
         }
      }
@@ -993,5 +1018,11 @@ export const leaseRulePipelineService = {
 };
 
 // Named export for golden regression tests; keep service facade unchanged.
-export { applyLeaseEvidenceRules, isPersistableExpenseRule };
+export {
+  applyLeaseEvidenceRules,
+  isPersistableExpenseRule,
+  extractSourceTextFromFilePayload,
+  stableEvidenceFingerprint,
+  expenseRuleCandidateIdentity,
+};
 export default leaseRulePipelineService;

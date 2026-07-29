@@ -87,26 +87,28 @@ Map each rule to the most appropriate standard expense category. If none fit per
 - confidence: number (0.0 to 1.0)
 - source: exact lease clause text snippet
 
-Return a JSON array of objects representing these rules. The output MUST be valid JSON.
+Return a JSON object with a "rules" array containing these rules. The output MUST be valid JSON.
 Format:
-[
-  {
-    "category_name": "Real Estate Taxes",
-    "row_status": "mapped",
-    "mentioned_in_lease": true,
-    "exact_source_text": "Tenant shall pay its pro rata share of real estate taxes...",
-    "review_status": "needs_review",
-    "approval_status": "draft"
-  },
-  {
-    "category_name": "After-Hours HVAC",
-    "row_status": "missing_value",
-    "mentioned_in_lease": true,
-    "exact_source_text": "Tenant shall pay for after-hours HVAC services at the rate established by Landlord from time to time.",
-    "review_status": "needs_review",
-    "approval_status": "draft"
-  }
-]`;
+{
+  "rules": [
+    {
+      "category_name": "Real Estate Taxes",
+      "row_status": "mapped",
+      "mentioned_in_lease": true,
+      "exact_source_text": "Tenant shall pay its pro rata share of real estate taxes...",
+      "review_status": "needs_review",
+      "approval_status": "draft"
+    },
+    {
+      "category_name": "After-Hours HVAC",
+      "row_status": "missing_value",
+      "mentioned_in_lease": true,
+      "exact_source_text": "Tenant shall pay for after-hours HVAC services at the rate established by Landlord from time to time.",
+      "review_status": "needs_review",
+      "approval_status": "draft"
+    }
+  ]
+}`;
 
 const SYSTEM_PROMPT = `You are an expert commercial real estate (CRE) lease abstraction AI.
 Your task is to analyze lease text and extract explicit expense and CAM (Common Area Maintenance) recovery rules.
@@ -171,12 +173,17 @@ Map each rule to the most appropriate standard expense category. If none fit per
 - published_to_cam: false
 - notes: string
 
-Return a JSON array of objects representing these rules. The output MUST be valid JSON.`;
+Return a JSON object with a "rules" array containing these rules. The output MUST be valid JSON.`;
 
-// Chunk threshold: ~100k tokens at ~3.5 chars/token. Above this we split the
-// document into overlapping chunks, extract from each, then deduplicate rules.
-const CHUNK_THRESHOLD_CHARS = 350_000;
-const CHUNK_OVERLAP_CHARS = 5_000;
+// Expense-rule output grows much faster than input because each relevant
+// clause expands into a structured rule plus verbatim evidence. Chunk on
+// output risk, not only model context capacity. A normal 80-120k character
+// lease must therefore use several bounded calls instead of one response that
+// can be cut off at max_completion_tokens.
+const INITIAL_CHUNK_CHARS = 40_000;
+const CHUNK_OVERLAP_CHARS = 2_000;
+const MIN_RETRY_CHUNK_CHARS = 6_000;
+const MAX_TRUNCATION_SPLIT_DEPTH = 6;
 
 function normalizePromptText(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -184,8 +191,8 @@ function normalizePromptText(value: unknown) {
 
 /**
  * Returns the full normalized document text.
- * gpt-4o supports a 128k context window — no keyword filtering, no size
- * gating, no sentences dropped. Every clause reaches the model.
+ * No keyword filtering and no sentence dropping. Bounded chunking happens
+ * afterward so every clause reaches at least one model call.
  */
 function buildExpenseFocusedText(sourceText: unknown): string {
   return normalizePromptText(sourceText);
@@ -202,6 +209,42 @@ function splitIntoChunks(text: string, chunkSize: number, overlap: number): stri
   return chunks;
 }
 
+function expenseRulesMaxOutputTokens(): number {
+  const configured = Number(
+    Deno.env.get("EXPENSE_RULES_MAX_OUTPUT_TOKENS") ??
+    Deno.env.get("OPENAI_MAX_OUTPUT_TOKENS"),
+  );
+  return Number.isFinite(configured) && configured >= 4_096
+    ? Math.floor(configured)
+    : 16_384;
+}
+
+function isTruncationFailure(error: unknown): boolean {
+  return /finish_reason=length|response truncated|output truncated/i.test(
+    String((error as any)?.message ?? error ?? ""),
+  );
+}
+
+function splitTruncatedChunk(text: string): [string, string] {
+  const midpoint = Math.floor(text.length / 2);
+  const searchStart = Math.max(0, midpoint - 1_500);
+  const searchEnd = Math.min(text.length, midpoint + 1_500);
+  const window = text.slice(searchStart, searchEnd);
+  const relativeBoundary = Math.max(
+    window.lastIndexOf(". "),
+    window.lastIndexOf("; "),
+    window.lastIndexOf(": "),
+  );
+  const boundary = relativeBoundary >= 0
+    ? searchStart + relativeBoundary + 1
+    : midpoint;
+  const overlap = Math.min(500, Math.floor(text.length / 10));
+  return [
+    text.slice(0, Math.min(text.length, boundary + overlap)).trim(),
+    text.slice(Math.max(0, boundary - overlap)).trim(),
+  ];
+}
+
 function deduplicateRules(rules: unknown[]): unknown[] {
   const seen = new Set<string>();
   const deduped: unknown[] = [];
@@ -215,45 +258,61 @@ function deduplicateRules(rules: unknown[]): unknown[] {
   return deduped;
 }
 
-async function extractRulesFromText(text: string, systemPrompt: string, userPromptBuilder: (t: string) => string): Promise<unknown[]> {
-  const chunks = splitIntoChunks(text, CHUNK_THRESHOLD_CHARS, CHUNK_OVERLAP_CHARS);
-  if (chunks.length === 1) {
-    // Common case: lease fits in a single request
+async function extractRulesFromChunk(
+  text: string,
+  systemPrompt: string,
+  userPromptBuilder: (t: string) => string,
+  label: string,
+  splitDepth = 0,
+): Promise<unknown[]> {
+  try {
     const result = await callLLMJSON({
       systemPrompt,
-      userPrompt: userPromptBuilder(chunks[0]),
+      userPrompt: userPromptBuilder(text),
       temperature: 0.1,
-      promptVersion: "expense-rules-v3",
+      maxOutputTokens: expenseRulesMaxOutputTokens(),
+      promptVersion: splitDepth === 0 ? "expense-rules-v4-chunk" : "expense-rules-v4-adaptive-split",
     });
-    const rules = Array.isArray(result.data) ? result.data : ((result.data as any)?.rules ?? []);
-    // Log truncation — finish_reason="length" means the JSON was cut off
     if (result.finishReason === "length") {
-      console.warn(
-        `[extract-lease-expense-rules] finish_reason=length — response truncated. ` +
-        `model=${result.model}, tokens=${result.completionTokens}. Consider raising OPENAI_MAX_OUTPUT_TOKENS.`,
+      throw new Error(
+        `Expense-rule response truncated: finish_reason=length, ` +
+        `completion_tokens=${result.completionTokens}, model=${result.model}.`,
       );
     }
+    const rules = Array.isArray(result.data) ? result.data : ((result.data as any)?.rules ?? []);
+    console.log(
+      `[extract-lease-expense-rules] ${label}: ${rules.length} rules extracted, ` +
+      `finish_reason=${result.finishReason}, completion_tokens=${result.completionTokens}`,
+    );
     return rules;
-  }
+  } catch (error) {
+    const canSplit =
+      isTruncationFailure(error) &&
+      text.length > MIN_RETRY_CHUNK_CHARS &&
+      splitDepth < MAX_TRUNCATION_SPLIT_DEPTH;
+    if (!canSplit) throw error;
 
-  // Large lease: parallel chunk extraction → merge → deduplicate
+    const [left, right] = splitTruncatedChunk(text);
+    if (!left || !right || left.length >= text.length || right.length >= text.length) throw error;
+    console.warn(
+      `[extract-lease-expense-rules] ${label} truncated at ${text.length} chars; ` +
+      `retrying as ${left.length}+${right.length} chars (depth=${splitDepth + 1}).`,
+    );
+    const nested = await Promise.all([
+      extractRulesFromChunk(left, systemPrompt, userPromptBuilder, `${label}.1`, splitDepth + 1),
+      extractRulesFromChunk(right, systemPrompt, userPromptBuilder, `${label}.2`, splitDepth + 1),
+    ]);
+    return deduplicateRules(nested.flat());
+  }
+}
+
+async function extractRulesFromText(text: string, systemPrompt: string, userPromptBuilder: (t: string) => string): Promise<unknown[]> {
+  const chunks = splitIntoChunks(text, INITIAL_CHUNK_CHARS, CHUNK_OVERLAP_CHARS);
   console.log(`[extract-lease-expense-rules] Document is ${text.length} chars — splitting into ${chunks.length} chunks for extraction.`);
   const chunkResults = await Promise.all(
     chunks.map((chunk, i) =>
-      callLLMJSON({
-        systemPrompt,
-        userPrompt: userPromptBuilder(chunk),
-        temperature: 0.1,
-        promptVersion: "expense-rules-v3-chunk",
-      }).then(r => {
-        const rules = Array.isArray(r.data) ? r.data : ((r.data as any)?.rules ?? []);
-        console.log(`[extract-lease-expense-rules] Chunk ${i + 1}/${chunks.length}: ${rules.length} rules extracted, finish_reason=${r.finishReason}`);
-        return rules;
-      }).catch(err => {
-        console.error(`[extract-lease-expense-rules] Chunk ${i + 1} failed: ${err?.message}`);
-        return [];
-      })
-    )
+      extractRulesFromChunk(chunk, systemPrompt, userPromptBuilder, `chunk ${i + 1}/${chunks.length}`)
+    ),
   );
 
   const allRules = chunkResults.flat();
@@ -315,13 +374,18 @@ Return a JSON object with a "rules" array of expense rules found. Each rule must
     } catch (aiError) {
       const message = aiError instanceof Error ? aiError.message : String(aiError);
       console.error("[extract-lease-expense-rules] AI extraction failed:", message);
-      await logger?.event("expense_rules", "failed", { reason: message });
+      const errorCode = isTruncationFailure(aiError)
+        ? "EXPENSE_RULES_OUTPUT_TRUNCATED"
+        : "EXPENSE_RULES_LLM_FAILED";
+      await logger?.event("expense_rules", "failed", { reason: message, error_code: errorCode });
       return new Response(JSON.stringify({
+        error: true,
+        error_code: errorCode,
         rules: [],
         warning: `AI expense rule extraction failed: ${message}`,
       }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
-        status: 200,
+        status: 502,
       });
     }
 
@@ -336,7 +400,10 @@ Return a JSON object with a "rules" array of expense rules found. Each rule must
       });
     }
 
-    const mappedRules = rules.map((rule: Record<string, unknown>) => {
+    const mappedRules = rules.map((rawRule) => {
+      const rule = (rawRule && typeof rawRule === "object"
+        ? rawRule
+        : {}) as Record<string, unknown>;
 
       const normalizedRecoverable = normalizeDecision(rule.recoverable_from_tenant, rule.is_recoverable === true ? "yes" : "no");
       const paymentTreatmentText = normalizeText(rule.payment_treatment);

@@ -17,6 +17,7 @@ import {
   isProtectedHumanRule,
   deriveRuleSetStatusFromRules
 } from "./utils/leaseExpenseRuleStatus";
+import { extractDocumentTextCandidate } from "./utils/leaseRulePipelineText";
 
 import {
   deriveRuleCamEligible,
@@ -1288,6 +1289,7 @@ export const leaseExpenseRuleService = {
     // and the fallback extractor silently failed. We now check every known
     // key so the extractor always finds the text when it exists.
     const candidates = [
+      uploadedFile?.docling_raw,
       uploadedFile?.normalized_output?.raw_text,
       uploadedFile?.normalized_output?.text,
       uploadedFile?.parsed_data?.raw_text,
@@ -1299,7 +1301,7 @@ export const leaseExpenseRuleService = {
       uploadedFile?.docling_raw?.body,
     ];
     for (const candidate of candidates) {
-      const trimmed = String(candidate || "").trim();
+      const trimmed = extractDocumentTextCandidate(candidate);
       if (trimmed) return trimmed;
     }
     return "";
@@ -1533,6 +1535,9 @@ export const leaseExpenseRuleService = {
         uploadedFile = data || null;
         if (uploadedFile) {
           const candidates = [
+            ...(uploadedFile?.docling_raw?._whole_document_llm_compact
+              ? [["docling_raw._whole_document_llm_compact", uploadedFile.docling_raw]]
+              : []),
             ["normalized_output.raw_text", uploadedFile?.normalized_output?.raw_text],
             ["normalized_output.text", uploadedFile?.normalized_output?.text],
             ["parsed_data.raw_text", uploadedFile?.parsed_data?.raw_text],
@@ -1544,7 +1549,7 @@ export const leaseExpenseRuleService = {
             ["docling_raw.body", uploadedFile?.docling_raw?.body],
           ];
           for (const [field, value] of candidates) {
-            const trimmed = String(value || "").trim();
+            const trimmed = extractDocumentTextCandidate(value);
             if (trimmed) {
               sourceTextLength = trimmed.length;
               sourceTextField = field;

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { applyLeaseEvidenceRules, isPersistableExpenseRule } from '../leaseRulePipelineService';
+import leaseRulePipelineService, {
+  applyLeaseEvidenceRules,
+  expenseRuleCandidateIdentity,
+  isPersistableExpenseRule,
+  stableEvidenceFingerprint,
+} from '../leaseRulePipelineService';
 import { MOCK_APPROVED_CAM_RULE } from './fixtures/camFixtures';
 
 describe('leaseRulePipelineService - Evidence Rules', () => {
@@ -36,5 +41,26 @@ describe('leaseRulePipelineService - Evidence Rules', () => {
     const result = applyLeaseEvidenceRules(rule, sourceText);
     expect(result.extraction_status).toBe("extracted");
     expect(isPersistableExpenseRule(result)).toBe(true);
+  });
+
+  it('preserves distinct clauses in the same expense category', () => {
+    const first = {
+      expense_category: 'common_area_maintenance',
+      exact_source_text: 'Tenant shall pay its proportionate share of Common Area Maintenance expenses.',
+    };
+    const second = {
+      expense_category: 'common_area_maintenance',
+      exact_source_text: 'Common Area Maintenance shall exclude debt service and leasing commissions.',
+    };
+
+    expect(expenseRuleCandidateIdentity(first)).not.toBe(expenseRuleCandidateIdentity(second));
+    expect(stableEvidenceFingerprint(first.exact_source_text))
+      .toBe(stableEvidenceFingerprint(first.exact_source_text));
+
+    const merged = leaseRulePipelineService.mergeAndScoreCandidates([
+      { ...first, normalized_key: 'common_area_maintenance', source_type: 'llm_extraction' },
+      { ...second, normalized_key: 'common_area_maintenance', source_type: 'llm_extraction' },
+    ]);
+    expect(merged).toHaveLength(2);
   });
 });

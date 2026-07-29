@@ -488,7 +488,9 @@ export async function callLLMJSON(opts: LLMCallOpts): Promise<LLMJSONResponse> {
     data = JSON.parse(raw.content);
   } catch {
     throw new LLMProviderError(
-      `LLM returned invalid JSON despite json_object mode. finish_reason=${raw.finishReason}. Content preview: ${raw.content.slice(0, 200)}`,
+      `LLM returned invalid JSON despite json_object mode. finish_reason=${raw.finishReason}, ` +
+      `completion_tokens=${raw.completionTokens}, response_id=${raw.responseId}. ` +
+      `Content preview: ${raw.content.slice(0, 200)}`,
       "invalid_response",
     );
   }

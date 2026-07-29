@@ -5,7 +5,8 @@ import {
   firstPresent,
   asNumber,
   normalizeKey,
-  compactSnippet
+  compactSnippet,
+  extractDocumentTextCandidate
 } from './leaseRulePipelineText';
 
 describe('leaseRulePipelineText', () => {
@@ -44,5 +45,24 @@ describe('leaseRulePipelineText', () => {
     expect(compactSnippet("   hello    world  ")).toBe("hello world");
     const longString = "A".repeat(1500);
     expect(compactSnippet(longString, 1200).length).toBe(1203);
+  });
+
+  it('prefers the complete Azure compact artifact over capped full_text', () => {
+    const result = extractDocumentTextCandidate({
+      full_text: 'capped text [truncated]',
+      _whole_document_llm_compact: {
+        version: 'lease-compact-document-v1',
+        nodes: [
+          { id: 'page:1', text: 'Complete opening lease text.' },
+          { id: 'page:2', text: 'Expense clause from the final page.' },
+        ],
+        tables: [],
+        keyValues: [],
+      },
+    });
+
+    expect(result).toContain('Complete opening lease text.');
+    expect(result).toContain('Expense clause from the final page.');
+    expect(result).not.toContain('[truncated]');
   });
 });

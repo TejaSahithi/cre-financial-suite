@@ -423,6 +423,38 @@ export function extractDocumentTextCandidate(candidate) {
   }
   if (typeof candidate !== "object") return "";
 
+  // The Azure parser persists this compact artifact before applying the
+  // 80,000-character cap to docling_raw.full_text. Expense extraction must
+  // prefer it or long leases silently lose their final pages before the LLM
+  // call. Keep tables/key-values because financial schedules frequently live
+  // outside the page-text reading order.
+  const compact = candidate._whole_document_llm_compact
+    ?? (candidate.version === "lease-compact-document-v1" ? candidate : null);
+  if (compact && Array.isArray(compact.nodes)) {
+    const pageText = compact.nodes
+      .map((node) => String(node?.text || "").trim())
+      .filter(Boolean);
+    const tableText = (Array.isArray(compact.tables) ? compact.tables : [])
+      .flatMap((table) => {
+        const header = Array.isArray(table?.headers) ? table.headers.join("\t").trim() : "";
+        const rows = Array.isArray(table?.rows)
+          ? table.rows.map((row) =>
+            Array.isArray(row?.cells) ? row.cells.join("\t").trim() : ""
+          ).filter(Boolean)
+          : [];
+        return [header, ...rows].filter(Boolean);
+      });
+    const keyValueText = (Array.isArray(compact.keyValues) ? compact.keyValues : [])
+      .map((field) => {
+        const key = String(field?.key || "").trim();
+        const value = String(field?.value || "").trim();
+        return key || value ? `${key}: ${value}`.trim() : "";
+      })
+      .filter(Boolean);
+    const completeText = [...pageText, ...tableText, ...keyValueText].join("\n\n").trim();
+    if (completeText) return completeText;
+  }
+
   const direct = firstPresent(
     candidate.full_text,
     candidate.raw_text,
