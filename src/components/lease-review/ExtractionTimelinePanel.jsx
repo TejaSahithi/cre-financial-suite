@@ -241,8 +241,13 @@ function architectureSummary(uploadedFile) {
   const architecture = firstPresent(openaiDebug.architecture, uploadedFile?.business_extraction_debug?.architecture, "pending");
   const extractionMode = firstPresent(openaiDebug.extraction_mode, uploadedFile?.business_extraction_debug?.extraction_mode, "pending");
   const parser = firstPresent(uploadedFile?.extraction_method, uploadedFile?.business_extraction_debug?.parser_method, "azure_layout");
-  const effectiveProvider = firstPresent(provenance?.effective_provider, uploadedFile?.business_extraction_debug?.effective_provider, "openai_fact_ledger");
   const fallbackUsed = firstPresent(provenance?.fallback_used, uploadedFile?.business_extraction_debug?.fallback_used, false);
+  const rawProvider = firstPresent(provenance?.effective_provider, uploadedFile?.business_extraction_debug?.effective_provider, "openai_fact_ledger");
+  const effectiveProvider = fallbackUsed
+    ? "legacy_hybrid_fallback"
+    : extractionMode === "whole_document_llm_v2"
+      ? "whole_document_llm_primary"
+      : rawProvider;
   const sectionCount = firstPresent(openaiDebug.section_count, openaiDebug.compact_document?.section_count, null);
   return {
     parser,

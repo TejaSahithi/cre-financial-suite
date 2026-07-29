@@ -312,9 +312,9 @@ Deno.test("enrich-bounded-stages: an oversized stage input fails explicitly with
 });
 
 // ===========================================================================
-// 10. Bounded enrichment is authoritative unless explicitly disabled
+// 10. Bounded enrichment is mandatory
 // ===========================================================================
-Deno.test("enrich-bounded-stages: ENRICH_BOUNDED_STAGE_MODE defaults to active and off is explicit rollback", () => {
+Deno.test("enrich-bounded-stages: ENRICH_BOUNDED_STAGE_MODE stays active even when env is off", () => {
   const originalValue = Deno.env.get("ENRICH_BOUNDED_STAGE_MODE");
   try {
     Deno.env.delete("ENRICH_BOUNDED_STAGE_MODE");
@@ -322,7 +322,7 @@ Deno.test("enrich-bounded-stages: ENRICH_BOUNDED_STAGE_MODE defaults to active a
     Deno.env.set("ENRICH_BOUNDED_STAGE_MODE", "bogus-value");
     assertEquals(getEnrichBoundedStageMode(), "active");
     Deno.env.set("ENRICH_BOUNDED_STAGE_MODE", "off");
-    assertEquals(getEnrichBoundedStageMode(), "off");
+    assertEquals(getEnrichBoundedStageMode(), "active");
     Deno.env.set("ENRICH_BOUNDED_STAGE_MODE", "active");
     assertEquals(getEnrichBoundedStageMode(), "active");
   } finally {

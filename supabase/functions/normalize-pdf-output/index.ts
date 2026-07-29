@@ -2596,9 +2596,9 @@ async function handleEnrichMode(args: {
 // handleBoundedEnrichStage below -- one stage, one Edge Function invocation,
 // memory released before the next stage's invocation starts. This is the
 // active wiring: lease-extraction-worker dispatches these stages instead of
-// the single monolithic "enrich" mode when ENRICH_BOUNDED_STAGE_MODE is
-// "active" (see feature-mode.ts) -- the monolithic handleEnrichMode() above
-// remains completely unchanged and is what still runs when it is "off".
+// the single monolithic "enrich" mode. Bounded mode is mandatory for new
+// lease extraction (see feature-mode.ts); the monolithic handleEnrichMode()
+// above remains only as a compatibility handler for already-queued legacy jobs.
 // ---------------------------------------------------------------------------
 
 /** Reads a prior stage's persisted output, but ONLY if it actually completed -- never reuses a failed/incomplete/missing entry. */

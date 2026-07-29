@@ -60,5 +60,7 @@ export function isMonolithicEnrichUnsafeForSize(size: EnrichInputSize): boolean 
 }
 
 export function shouldUseBoundedEnrich(mode: EnrichBoundedStageMode, size: EnrichInputSize): boolean {
-  return mode === "active" || isMonolithicEnrichUnsafeForSize(size);
+  void mode;
+  void size;
+  return true;
 }

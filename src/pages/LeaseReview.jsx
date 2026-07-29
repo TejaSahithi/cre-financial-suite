@@ -201,6 +201,19 @@ function readReviewExtractionSummary(uploadedFile) {
   };
 }
 
+function hasLeaseArchitectureMismatch(extractionSummary) {
+  if (!extractionSummary) return false;
+  if (extractionSummary.fallbackUsed) return false;
+  return extractionSummary.extractionMode !== "whole_document_llm_v2";
+}
+
+function leaseExtractionProviderLabel(extractionSummary) {
+  if (!extractionSummary) return "unknown";
+  if (extractionSummary.fallbackUsed) return "legacy fallback";
+  if (extractionSummary.extractionMode === "whole_document_llm_v2") return "whole-document LLM primary";
+  return humanizeExtractionToken(extractionSummary.effectiveProvider || extractionSummary.requestedProvider);
+}
+
 export default function LeaseReview() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -1050,6 +1063,7 @@ export default function LeaseReview() {
     () => readReviewExtractionSummary(uploadedFile),
     [uploadedFile],
   );
+  const leaseArchitectureMismatch = hasLeaseArchitectureMismatch(extractionSummary);
 
   // Evidence-first contract: if raw parsed_data/normalized_output exists
   // before ui_review_payload lands, show a status warning only. Do not render
@@ -2825,8 +2839,7 @@ export default function LeaseReview() {
             Mode: {humanizeExtractionToken(extractionSummary.extractionMode)}
           </Badge>
           <Badge className={extractionSummary.fallbackUsed ? "bg-amber-50 text-amber-800" : "bg-slate-100 text-slate-700"}>
-            Provider: {humanizeExtractionToken(extractionSummary.effectiveProvider || extractionSummary.requestedProvider)}
-            {extractionSummary.fallbackUsed ? " fallback" : ""}
+            Provider: {leaseExtractionProviderLabel(extractionSummary)}
           </Badge>
           <Badge className="bg-slate-100 text-slate-700">
             Generation: {extractionSummary.activeGenerationId ? String(extractionSummary.activeGenerationId).slice(0, 8) : "none"}
@@ -2842,6 +2855,21 @@ export default function LeaseReview() {
           <p className="mt-2 text-amber-700">Fallback reason: {extractionSummary.fallbackReason}</p>
         )}
       </div>
+
+      {leaseArchitectureMismatch && (
+        <div className="mx-4 mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <div className="font-semibold">Target lease extractor did not run for this payload.</div>
+              <div className="mt-1">
+                Expected <code>whole_document_llm_v2</code>; received <code>{extractionSummary.extractionMode || "unknown"}</code>.
+                Re-extract after deploying the latest edge functions so Azure Document Intelligence feeds the strict whole-document LLM path before any fallback.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Post-approval banner: guides user to review extracted expense rules */}
       {showPostApprovalBanner && (

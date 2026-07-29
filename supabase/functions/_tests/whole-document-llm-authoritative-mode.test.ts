@@ -22,10 +22,10 @@ Deno.test("whole-document lease extraction stays active for blank, active, and i
   }
 });
 
-Deno.test("legacy lease mapping requires the explicit off rollback value", () => {
-  assertEquals(getWholeDocumentLlmMode(env("off")), "off");
-  assertEquals(getWholeDocumentLlmMode(env(" OFF ")), "off");
-  assertEquals(isWholeDocumentLlmActive(env("off")), false);
+Deno.test("whole-document lease extraction ignores the old off rollback value", () => {
+  assertEquals(getWholeDocumentLlmMode(env("off")), "active");
+  assertEquals(getWholeDocumentLlmMode(env(" OFF ")), "active");
+  assertEquals(isWholeDocumentLlmActive(env("off")), true);
 });
 
 Deno.test("whole-document LLM splits oversize compact documents into bounded sections", () => {

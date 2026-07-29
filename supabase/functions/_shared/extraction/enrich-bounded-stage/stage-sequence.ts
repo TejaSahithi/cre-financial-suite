@@ -1,8 +1,8 @@
 // @ts-nocheck
 /**
  * The ordered sequence of bounded enrich sub-stages that replace the single
- * monolithic "enrich" pipeline_jobs stage when ENRICH_BOUNDED_STAGE_MODE is
- * "shadow" or "active" (see docs/lease-extraction-architecture-audit-2026-07-29.md and the
+ * monolithic "enrich" pipeline_jobs stage. Bounded mode is mandatory at
+ * runtime (see docs/lease-extraction-architecture-audit-2026-07-29.md and the
  * "Bounded Per-Domain Enrich Refactor" plan).
  *
  * One shared array, rather than each stage hardcoding its own successor --
