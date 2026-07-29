@@ -36,6 +36,92 @@ describe("leaseReviewFieldNormalizer smoke test", () => {
     expect(tenantRow.value).toBe("Acme Inc");
     expect(tenantRow.group).toBe("parties");
   });
+
+  it("derives recurring month/day expiration candidates from commencement-backed evidence", () => {
+    const lease = {
+      id: "recurring-expiration-lease",
+      extraction_data: {
+        fields: {
+          commencement_date: "2024-02-01",
+          expiration_date: null,
+        },
+        field_evidence: {
+          commencement_date: {
+            value: "2024-02-01",
+            source_text: "(b) Commencement Date: February 1, 2024",
+            source_page: 1,
+            extraction_status: "extracted",
+          },
+          expiration_date: {
+            value: null,
+            source_text: "(c) Expiration Date: January 31st of each year",
+            source_page: 1,
+            extraction_status: "not_found",
+          },
+        },
+      },
+    };
+
+    const rows = normalizeStandardFields(lease);
+    const expiration = rows.find((r) => r.canonicalKey === "expiration_date");
+    const termMonths = rows.find((r) => r.canonicalKey === "lease_term_months");
+
+    expect(expiration.value).toBe("2025-01-31");
+    expect(expiration.status).toBe("needs_review");
+    expect(expiration.extractionMode).toBe(EXTRACTION_MODES.CALCULATED);
+    expect(expiration.validationMessage).toMatch(/recurring expiration/i);
+    expect(termMonths.value).toBe(12);
+    expect(termMonths.status).toBe("needs_review");
+  });
+
+  it("keeps consent fields when cited transfer language semantically supports the value", () => {
+    const lease = {
+      id: "consent-lease",
+      extraction_data: {
+        fields: {
+          landlord_consent_for_transfer: "prior written landlord consent required",
+        },
+        field_evidence: {
+          landlord_consent_for_transfer: {
+            value: "prior written landlord consent required",
+            source_text: "Tenant shall not make any Transfer without the prior consent of Landlord, which Landlord shall not unreasonably withhold or delay.",
+            source_page: 7,
+            extraction_status: "extracted",
+          },
+        },
+      },
+    };
+
+    const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "landlord_consent_for_transfer");
+    expect(row.value).toBe("prior written landlord consent required");
+    expect(row.validationMessage).toBeFalsy();
+  });
+
+  it("marks separate gross lease CAM economics as display-only not applicable instead of missing", () => {
+    const lease = {
+      id: "gross-lease",
+      extraction_data: {
+        fields: {
+          lease_type: "gross",
+          cam_amount: null,
+        },
+        field_evidence: {
+          lease_type: {
+            value: "gross",
+            source_text: "This is a Gross Lease.",
+            source_page: 5,
+            extraction_status: "extracted",
+          },
+        },
+      },
+    };
+
+    const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "cam_amount");
+    expect(row.value).toBeNull();
+    expect(row.displayValue).toMatch(/N\/A/i);
+    expect(row.status).toBe("not_applicable");
+    expect(row.sourceText).toBe("This is a Gross Lease.");
+  });
 });
 
 describe("normalizeStandardFields: grouping", () => {

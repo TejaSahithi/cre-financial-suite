@@ -258,8 +258,9 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
               const fKey = row.key || row.fieldKey;
               const reviewField = reviewFields?.[fKey] ?? null;
               const rawRowValue = row.value ?? row.normalized_value ?? row.normalizedValue;
-              const fullRowValue = formatValue(rawRowValue, row);
-              const rowValue = valuePreview(rawRowValue, row); // valuePreview(rawRowValue)
+              const displayRowValue = row.displayValue ?? row.display_value ?? rawRowValue;
+              const fullRowValue = formatValue(displayRowValue, row);
+              const rowValue = valuePreview(displayRowValue, row);
               const reviewValue = reviewField ? formatValue(reviewField.displayValue ?? reviewField.value, row) : "-";
               const isMismatch = reviewField && fullRowValue !== "Not extracted" && reviewValue !== "Not extracted" && fullRowValue.trim().toLowerCase() !== reviewValue.trim().toLowerCase();
 

@@ -166,6 +166,103 @@ function sourceSnippet(text, index = 0, radius = 520) {
   return compactText(raw.slice(start, end));
 }
 
+const MONTH_NAME_TO_NUMBER = {
+  january: 1,
+  jan: 1,
+  february: 2,
+  feb: 2,
+  march: 3,
+  mar: 3,
+  april: 4,
+  apr: 4,
+  may: 5,
+  june: 6,
+  jun: 6,
+  july: 7,
+  jul: 7,
+  august: 8,
+  aug: 8,
+  september: 9,
+  sep: 9,
+  october: 10,
+  oct: 10,
+  november: 11,
+  nov: 11,
+  december: 12,
+  dec: 12,
+};
+
+function toIsoDate(value) {
+  if (!isMeaningfulValue(value)) return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const iso = text.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (iso) return iso[1];
+  const us = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  if (us) {
+    const [, month, day, year] = us;
+    const yyyy = year.length === 2 ? (Number(year) > 50 ? `19${year}` : `20${year}`) : year;
+    return `${yyyy}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Date(Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate())).toISOString().slice(0, 10);
+}
+
+function parseLeaseTermMonths(value) {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.round(value);
+  const text = String(value ?? "").toLowerCase();
+  if (!text) return null;
+  const numeric = moneyNumber(text);
+  if (numeric && /^\s*\d{1,3}\s*$/.test(text)) return Math.round(numeric);
+  const years = text.match(/(\d+(?:\.\d+)?)\s*(?:years?|yrs?)\b/);
+  if (years) return Math.round(Number(years[1]) * 12);
+  const months = text.match(/(\d+(?:\.\d+)?)\s*(?:months?|mos?)\b/);
+  if (months) return Math.round(Number(months[1]));
+  const writtenMonths = text.match(/\b(?:initial\s+|base\s+)?(?:term|period)[\s\S]{0,80}?\((\d{1,3})\)\s*months?\b/);
+  if (writtenMonths) return Number(writtenMonths[1]);
+  if (/\byear\s*to\s*year\b|\bannual(?:ly)?\b|\bone\s+year\b/.test(text)) return 12;
+  return null;
+}
+
+function parseRecurringMonthDay(value) {
+  const text = String(value ?? "");
+  const match = text.match(/\b([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,)?\s*(?:of\s+each\s+year|each\s+year|annually|every\s+year)\b/i);
+  if (!match) return null;
+  const month = MONTH_NAME_TO_NUMBER[match[1].toLowerCase()];
+  const day = Number(match[2]);
+  if (!month || !Number.isFinite(day) || day < 1 || day > 31) return null;
+  return { month, day, text: compactText(match[0]) };
+}
+
+function nextRecurringDateAfter(startIso, recurring) {
+  if (!startIso || !recurring) return null;
+  const start = new Date(`${startIso}T00:00:00Z`);
+  if (Number.isNaN(start.getTime())) return null;
+  let year = start.getUTCFullYear();
+  let candidate = new Date(Date.UTC(year, recurring.month - 1, recurring.day));
+  if (candidate <= start) {
+    year += 1;
+    candidate = new Date(Date.UTC(year, recurring.month - 1, recurring.day));
+  }
+  return Number.isNaN(candidate.getTime()) ? null : candidate.toISOString().slice(0, 10);
+}
+
+function deriveTermMonthsFromDates(startIso, endIso) {
+  if (!startIso || !endIso) return null;
+  const start = new Date(`${startIso}T00:00:00Z`);
+  const end = new Date(`${endIso}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return null;
+  const inclusiveEnd = new Date(end);
+  inclusiveEnd.setUTCDate(inclusiveEnd.getUTCDate() + 1);
+  const months =
+    (inclusiveEnd.getUTCFullYear() - start.getUTCFullYear()) * 12 +
+    (inclusiveEnd.getUTCMonth() - start.getUTCMonth());
+  if (months <= 0) return null;
+  return Math.round(months);
+}
+
 function readDoclingPages(lease) {
   const candidates = [
     lease?.docling_raw,
@@ -291,6 +388,161 @@ function standardFieldFallback(lease, canonicalKey, { value, evidence, allowNoPr
   return null;
 }
 
+function deriveLeaseTermContext(lease) {
+  const commencement =
+    toIsoDate(readTypedLeaseColumnValue(lease, "commencement_date"))
+    || toIsoDate(readTypedLeaseColumnValue(lease, "start_date"))
+    || toIsoDate(readFieldValue(lease, "commencement_date"))
+    || toIsoDate(readFieldValue(lease, "start_date"));
+  const existingExpiration =
+    toIsoDate(readTypedLeaseColumnValue(lease, "expiration_date"))
+    || toIsoDate(readTypedLeaseColumnValue(lease, "end_date"))
+    || toIsoDate(readFieldValue(lease, "expiration_date"))
+    || toIsoDate(readFieldValue(lease, "end_date"));
+  const expirationEvidence = readFieldEvidence(lease, "expiration_date");
+  const endEvidence = readFieldEvidence(lease, "end_date");
+  const expirationText = [
+    expirationEvidence?.sourceText,
+    expirationEvidence?.sourceClause,
+    expirationEvidence?.rawValue,
+    endEvidence?.sourceText,
+    endEvidence?.sourceClause,
+    endEvidence?.rawValue,
+    readFieldValue(lease, "expiration_date"),
+    readFieldValue(lease, "end_date"),
+  ].filter(Boolean).join(" ");
+  const recurring = parseRecurringMonthDay(expirationText);
+  const derivedExpiration = !existingExpiration && commencement && recurring
+    ? nextRecurringDateAfter(commencement, recurring)
+    : null;
+
+  const termValue =
+    readTypedLeaseColumnValue(lease, "lease_term_months")
+    ?? readTypedLeaseColumnValue(lease, "lease_term")
+    ?? readFieldValue(lease, "lease_term_months")
+    ?? readFieldValue(lease, "lease_term");
+  const leaseTermEvidence = readFieldEvidence(lease, "lease_term_months");
+  const leaseTermTextEvidence = readFieldEvidence(lease, "lease_term");
+  const termText = [
+    termValue,
+    leaseTermEvidence?.sourceText,
+    leaseTermEvidence?.sourceClause,
+    leaseTermEvidence?.rawValue,
+    leaseTermTextEvidence?.sourceText,
+    leaseTermTextEvidence?.sourceClause,
+    leaseTermTextEvidence?.rawValue,
+  ].filter(Boolean).join(" ");
+  const existingTermMonths = parseLeaseTermMonths(termValue) || parseLeaseTermMonths(termText);
+  const effectiveExpiration = existingExpiration || derivedExpiration;
+  const derivedTermMonths = !existingTermMonths && commencement && effectiveExpiration
+    ? deriveTermMonthsFromDates(commencement, effectiveExpiration)
+    : null;
+
+  return {
+    commencement,
+    existingExpiration,
+    derivedExpiration,
+    recurring,
+    expirationEvidence: expirationEvidence?.sourceText || expirationEvidence?.sourceClause ? expirationEvidence : endEvidence,
+    existingTermMonths,
+    derivedTermMonths,
+  };
+}
+
+function derivedStandardField(lease, canonicalKey, value, termContext) {
+  if (isMeaningfulValue(value)) return null;
+  if ((canonicalKey === "expiration_date" || canonicalKey === "end_date") && termContext?.derivedExpiration) {
+    const evidence = termContext.expirationEvidence || {};
+    return {
+      value: termContext.derivedExpiration,
+      confidence: 0.82,
+      reviewReason: `Expiration date was derived from recurring expiration language (${termContext.recurring?.text || "month/day of each year"}) and commencement date. Verify the year before approval.`,
+      evidence: {
+        value: termContext.derivedExpiration,
+        rawValue: termContext.derivedExpiration,
+        sourcePage: evidence.sourcePage ?? null,
+        sourceText: evidence.sourceText ?? evidence.sourceClause ?? null,
+        sourceClause: evidence.sourceClause ?? evidence.sourceText ?? null,
+        extractionStatus: EXTRACTION_STATUSES.CALCULATED,
+        evidenceType: "derived",
+        sourceTextQuality: SOURCE_TEXT_QUALITIES.DERIVED,
+        sourceFieldKeys: ["commencement_date", "expiration_date"],
+        derivationTrace: `expiration_date = next ${termContext.recurring?.text || "recurring month/day"} after commencement_date ${termContext.commencement}`,
+        requiresReview: true,
+        reviewReason: `Derived from recurring expiration language and commencement date ${termContext.commencement}.`,
+      },
+    };
+  }
+  if (canonicalKey === "lease_term_months" && termContext?.derivedTermMonths) {
+    const evidence = termContext.expirationEvidence || {};
+    return {
+      value: termContext.derivedTermMonths,
+      confidence: 0.8,
+      reviewReason: "Lease term months were derived from commencement and expiration dates. Verify before approval.",
+      evidence: {
+        value: termContext.derivedTermMonths,
+        rawValue: String(termContext.derivedTermMonths),
+        sourcePage: evidence.sourcePage ?? null,
+        sourceText: evidence.sourceText ?? evidence.sourceClause ?? null,
+        sourceClause: evidence.sourceClause ?? evidence.sourceText ?? null,
+        extractionStatus: EXTRACTION_STATUSES.CALCULATED,
+        evidenceType: "derived",
+        sourceTextQuality: SOURCE_TEXT_QUALITIES.DERIVED,
+        sourceFieldKeys: ["commencement_date", "expiration_date"],
+        derivationTrace: `lease_term_months = months between ${termContext.commencement} and ${termContext.existingExpiration || termContext.derivedExpiration}`,
+        requiresReview: true,
+      },
+    };
+  }
+  return null;
+}
+
+const GROSS_INCLUDED_NO_SEPARATE_CHARGE_KEYS = new Set([
+  "base_year",
+  "expense_stop",
+  "cam_amount",
+  "cam_cap_type",
+  "cam_cap_pct",
+  "admin_fee_pct",
+  "management_fee_basis",
+  "gross_up_enabled",
+  "gross_up_threshold",
+]);
+
+function grossLeaseNoSeparateChargeField(lease, canonicalKey, value) {
+  if (isMeaningfulValue(value) || !GROSS_INCLUDED_NO_SEPARATE_CHARGE_KEYS.has(canonicalKey)) return null;
+  const leaseTypeValue = readFieldValue(lease, "lease_type") ?? readTypedLeaseColumnValue(lease, "lease_type");
+  const leaseTypeText = String(leaseTypeValue ?? "").toLowerCase();
+  if (!/\b(?:gross|full[_\s-]?service)\b/.test(leaseTypeText)) return null;
+  const leaseTypeEvidence = readFieldEvidence(lease, "lease_type") || {};
+  const camTreatmentEvidence = readFieldEvidence(lease, "cam_treatment") || {};
+  const sourceText = camTreatmentEvidence.sourceText
+    || camTreatmentEvidence.sourceClause
+    || leaseTypeEvidence.sourceText
+    || leaseTypeEvidence.sourceClause
+    || `Lease type is ${leaseTypeValue}; no separate ${titleize(canonicalKey)} was extracted.`;
+  return {
+    value: null,
+    displayValue: "N/A - included in rent / no separate charge extracted",
+    status: "not_applicable",
+    confidence: Math.max(readFieldConfidence(lease, "lease_type") ?? 0.7, 0.7),
+    reviewReason: "Gross/full-service lease: no separate numeric charge was extracted for this rule row.",
+    evidence: {
+      rawValue: null,
+      sourcePage: camTreatmentEvidence.sourcePage ?? leaseTypeEvidence.sourcePage ?? null,
+      sourceText,
+      sourceClause: sourceText,
+      extractionStatus: EXTRACTION_STATUSES.NOT_FOUND,
+      evidenceType: "derived",
+      sourceTextQuality: SOURCE_TEXT_QUALITIES.DERIVED,
+      sourceFieldKeys: ["lease_type", "cam_treatment"],
+      derivationTrace: `${canonicalKey} left null because lease_type=${leaseTypeValue || "gross/full-service"} and no separate charge was extracted`,
+      requiresReview: false,
+      reviewReason: "Not applicable unless reviewer identifies a separate charge, cap, base year, or expense stop.",
+    },
+  };
+}
+
 function readTypedLeaseColumnValue(lease, canonicalKey) {
   if (!lease || typeof lease !== "object") return undefined;
   for (const key of getFieldAliases(canonicalKey)) {
@@ -368,10 +620,21 @@ const STRICT_SOURCE_BACKED_VALUE_KEYS = new Set([
   "maintenance_responsibility",
 ]);
 
+function consentEvidenceSemanticallySupportsValue(canonicalKey, value, evidence) {
+  if (canonicalKey !== "landlord_consent" && canonicalKey !== "landlord_consent_for_transfer") return false;
+  if (!isMeaningfulValue(value)) return false;
+  const text = normalizeComparableText([evidence?.sourceText, evidence?.sourceClause].filter(Boolean).join(" "));
+  if (!text) return false;
+  return /\b(?:prior written )?consent\b/.test(text)
+    && /\blandlord\b/.test(text)
+    && /\b(?:transfer|assign|assignment|sublet|sublease)\b/.test(text);
+}
+
 function shouldBlankUnsupportedStandardValue(canonicalKey, value, evidence, review) {
   if (!STRICT_SOURCE_BACKED_VALUE_KEYS.has(canonicalKey)) return false;
   if (!isMeaningfulValue(value)) return false;
   if (review?.status === REVIEW_STATUSES.EDITED) return false;
+  if (consentEvidenceSemanticallySupportsValue(canonicalKey, value, evidence)) return false;
   const quality = resolveSourceTextQuality({ ...(evidence || {}), value });
   if (quality === SOURCE_TEXT_QUALITIES.INCONSISTENT || quality === SOURCE_TEXT_QUALITIES.MISSING) return true;
   return !hasValidSourceEvidence({ ...(evidence || {}), value });
@@ -539,6 +802,7 @@ function computeFieldStatus({ hasValue, evidenceVerified, confidenceBucket, revi
  */
 export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCoreFallbacks = false } = {}) {
   const effectiveFieldReviews = fieldReviews ?? lease?.extraction_data?.field_reviews ?? {};
+  const termContext = deriveLeaseTermContext(lease);
   const rows = [];
   for (const rawContract of LEASE_FIELD_CONTRACT) {
     const contract = getFieldContract(rawContract.canonicalKey) || rawContract;
@@ -571,6 +835,24 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
       confidence = fallback.confidence;
       fallbackReviewReason = fallback.reviewReason;
       fallbackSourceProvider = fallback.sourceProvider;
+    }
+    const derived = derivedStandardField(lease, canonicalKey, value, termContext);
+    if (derived) {
+      value = derived.value;
+      evidence = derived.evidence;
+      confidence = derived.confidence;
+      fallbackReviewReason = derived.reviewReason;
+    }
+    const grossNoSeparateCharge = grossLeaseNoSeparateChargeField(lease, canonicalKey, value);
+    let displayValueOverride = null;
+    let statusOverride = null;
+    if (grossNoSeparateCharge) {
+      value = grossNoSeparateCharge.value;
+      evidence = grossNoSeparateCharge.evidence;
+      confidence = grossNoSeparateCharge.confidence;
+      fallbackReviewReason = grossNoSeparateCharge.reviewReason;
+      displayValueOverride = grossNoSeparateCharge.displayValue;
+      statusOverride = grossNoSeparateCharge.status;
     }
 
     // Phase 39: reject layout/markup artifacts (e.g. "<figure>") before they
@@ -625,7 +907,7 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
         "Source text describes when the original lease was entered into, not this document's signature date. Needs manual verification.";
     }
     const hasValue = isMeaningfulValue(value);
-    const status = evidenceOverrideReason && !hasValue && evidence?.sourceText
+    const status = statusOverride || (evidenceOverrideReason && !hasValue && evidence?.sourceText
       ? "needs_review"
       : computeFieldStatus({
         hasValue,
@@ -633,7 +915,7 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
         confidenceBucket: classifyConfidence(confidence),
         reviewStatus: review?.status,
         extractionStatus,
-      });
+      }));
     const extractionMode = resolveLeaseReviewExtractionMode({
       hasValue,
       extractionStatus,
@@ -660,7 +942,8 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
       value,
       normalizedValue: value,
       normalized_value: value,
-      display_value: value,
+      displayValue: displayValueOverride ?? value,
+      display_value: displayValueOverride ?? value,
       confidence,
       confidencePercent: normalizeConfidencePercent(confidence),
       status,

@@ -908,7 +908,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
       // "expiring on" pattern
       /(?:expiring\s+(?:on|the))\s+([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
     ],
-    description: "Lease expiration / end date in YYYY-MM-DD. If text says 'January 31 of each year' with commencement YYYY, use YYYY+1.",
+    description:
+      "Lease expiration / end date in YYYY-MM-DD. If the document only gives a recurring month/day such as " +
+      "'January 31 of each year' with no year, return null for the date value but still cite that exact source_text; " +
+      "the deterministic normalizer will derive the review candidate from commencement date.",
     domain: "dates",
     evidencePolicy: "enforced",
     allowedClauseCategories: ["lease_term"],
@@ -1855,7 +1858,7 @@ const LEASE_GROUPS: FieldGroup[] = [
       "commencement_date and expiration_date are the term start/end. " +
       "Often the lease shows 'Commencement Date: February 1, 2024' and 'Expiration Date: January 31, 2025'. " +
       "If only month/day is given for expiration with no explicit year, return null for expiration_date/end_date " +
-      "— do not assume commencement_year + 1. " +
+      "but still cite the exact expiration source_text so deterministic post-processing can derive a review candidate. " +
       "CRITICAL: If commencement_date is defined FORMULAICALLY (e.g. 'one day after four months from the Effective " +
       "Date', 'upon Certificate of Occupancy', 'the later of X or Y') with NO explicit calendar date, return null " +
       "for commencement_date — do NOT use the lease_date or signing date as a substitute. " +
