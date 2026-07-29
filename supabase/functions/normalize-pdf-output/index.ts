@@ -8,10 +8,12 @@
  *         with `normalized_output`, `ui_review_payload`, and `parsed_data`
  *         populated so store-data / the reviewer can pick up from here.
  *
- * This function is now a THIN orchestrator over `runExtractionPipeline()`
- * — it no longer owns any extraction logic of its own. All rule/table/LLM
- * work happens inside `_shared/extraction/pipeline.ts`, which is the one
- * and only extraction engine in the system.
+ * For leases, this function is the architecture fence between Azure parsing
+ * and business extraction: it reads the persisted Azure layout/compact
+ * document, calls `runBusinessExtraction()`, and asserts that the result came
+ * from whole-document strict LLM mode while LEASE_WHOLE_DOCUMENT_LLM_V1 is
+ * active. `_shared/extraction/pipeline.ts` remains the legacy rollback path,
+ * not the authoritative lease path.
  *
  * Review gate:
  *   - If uploaded_files.review_required = TRUE  → status := 'review_required'

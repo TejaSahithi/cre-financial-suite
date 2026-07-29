@@ -19,6 +19,9 @@
 
 import { runExtractionPipeline } from "./pipeline.ts";
 import { runOpenAIFactLedgerPipeline } from "./openai-fact-ledger/orchestrator.ts";
+import { runWholeDocumentLlmPipeline } from "./whole-document-llm/extractor.ts";
+import { isWholeDocumentLlmActive } from "./whole-document-llm/feature-mode.ts";
+import { isLeaseModuleType } from "./lease-module.ts";
 import type { ExtractionPipelineResult, DoclingOutput } from "./types.ts";
 import { evaluateExtractionAcceptance } from "./business-extraction-acceptance.ts";
 import { buildProvenance, attachProvenance, normalizeBusinessExtractionMode, type BusinessExtractionMode } from "./business-extraction-provenance.ts";
@@ -37,10 +40,6 @@ function leaseLegacyFallbackEnabled(): boolean {
   return ["1", "true", "yes", "on"].includes(
     String(Deno.env.get("LEASE_ENABLE_TYPESCRIPT_LEGACY_FALLBACK") ?? "").trim().toLowerCase(),
   );
-}
-
-function isLeaseModule(moduleType: string): boolean {
-  return String(moduleType ?? "").trim().toLowerCase() === "lease";
 }
 
 function stampLegacyFallbackDisabled(result: ExtractionPipelineResult, reason: string): ExtractionPipelineResult {
@@ -288,6 +287,14 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
     if (mockOpenAIScenario) {
       return buildMockOpenAIResult(mockOpenAIScenario, startTime);
     }
+    if (isLeaseModuleType(opts.moduleType) && isWholeDocumentLlmActive()) {
+      return await runWholeDocumentLlmPipeline({
+        document: opts.document ?? opts.docling,
+        moduleType: opts.moduleType,
+        deadlineAt: startTime + OPENAI_TOTAL_BUDGET_MS,
+        ...(opts.provenance ? { provenance: opts.provenance } : {}),
+      });
+    }
     return await openaiRunner(
       {
         moduleType: opts.moduleType,
@@ -395,7 +402,7 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
     );
   }
 
-  if (isLeaseModule(opts.moduleType) && !leaseLegacyFallbackEnabled()) {
+  if (isLeaseModuleType(opts.moduleType) && !leaseLegacyFallbackEnabled()) {
     // For leases, "fallback eligible" no longer means "let regex/table code
     // publish commercial terms." The LLM path now owns oversize continuation;
     // provider/config/empty failures become explicit manual-review states unless

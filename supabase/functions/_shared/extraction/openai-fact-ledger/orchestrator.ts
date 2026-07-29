@@ -184,8 +184,8 @@ export async function runOpenAIFactLedgerPipeline(
 
   try {
     const doclingRaw = await resolveDocling(input);
-    // Whole-document LLM experiment: the model receives the complete compact
-    // Azure document and writes directly to LEASE_SCHEMA. This branch
+    // Authoritative lease whole-document LLM path: the model receives the
+    // complete compact Azure document and writes directly to LEASE_SCHEMA. This branch
     // deliberately runs before profile classification, deterministic
     // extraction, section routing, and fact-field mapping so none of those
     // layers can constrain or reinterpret its evidence selection.

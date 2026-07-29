@@ -174,7 +174,9 @@ function sanitizeDetail(value, depth = 0) {
   const out = {};
   for (const [key, entry] of Object.entries(value)) {
     if (isSensitiveTextKey(key)) {
-      out[key] = typeof entry === "string" ? `[omitted ${entry.length} chars]` : "[omitted]";
+      out[key] = typeof entry === "string"
+        ? `[redacted from timeline display, ${entry.length} chars preserved upstream]`
+        : "[redacted from timeline display]";
       continue;
     }
     out[key] = sanitizeDetail(entry, depth + 1);

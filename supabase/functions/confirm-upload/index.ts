@@ -10,7 +10,7 @@ import { createLogger } from "../_shared/logger.ts";
  * upload-handler stores the file and inserts a durable uploaded_files row
  * with confirmed_at left NULL ("awaiting confirmation"). Nothing downstream
  * of upload-handler runs until this function is called — no parse-document-azure,
- * no Azure Document Intelligence, no normalize-pdf-output, no Vertex, no
+ * no Azure Document Intelligence, no normalize-pdf-output, no OpenAI, no
  * lease-extraction-worker.
  *
  * Idempotent: a second call (double-click, retry) for an already-confirmed

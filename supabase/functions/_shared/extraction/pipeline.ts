@@ -1,8 +1,14 @@
 // @ts-nocheck
 /**
- * Extraction Pipeline — Main Orchestrator (v3)
+ * Legacy Extraction Pipeline — deterministic/table/LLM hybrid
  *
- * Responsibility split (enforced):
+ * This module is the rollback/compatibility extraction path. It is NOT the
+ * authoritative lease extraction path while LEASE_WHOLE_DOCUMENT_LLM_V1 is
+ * active. Live lease extraction is fenced in lease-extraction-strategy.ts and
+ * business-extraction-orchestrator.ts to use Azure Document Intelligence +
+ * whole-document strict OpenAI extraction first.
+ *
+ * Legacy responsibility split:
  *   Azure     → parsing only (text + table structure)
  *   Rule/Table → PRIMARY extraction (deterministic, highest confidence)
  *   LLM        → FALLBACK only for missing fields (never primary)
