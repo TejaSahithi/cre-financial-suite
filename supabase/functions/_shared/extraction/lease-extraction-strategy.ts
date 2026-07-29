@@ -22,7 +22,9 @@ export function resolveBusinessExtractionProvider(
  * Lease extraction has one live strategy while whole-document extraction is
  * active: primary whole-document OpenAI, with sectioned LLM continuation for
  * oversize documents. The provider name remains `openai_primary_legacy_fallback`
- * for compatibility, but legacy_hybrid is a rollback switch, not the default.
+ * for compatibility: the primary attempt must be whole-document LLM, and
+ * legacy_hybrid may publish only as a provenance-marked fallback after that
+ * primary attempt fails acceptance.
  */
 export function enforceLeaseExtractionArchitecture(
   moduleType: string,
@@ -39,23 +41,22 @@ export function wholeDocumentExtractionMode(result: Record<string, any>): string
     ?? null;
 }
 
-function leaseTypescriptLegacyFallbackEnabled(): boolean {
-  return ["1", "true", "yes", "on"].includes(
-    String(Deno.env.get("LEASE_ENABLE_TYPESCRIPT_LEGACY_FALLBACK") ?? "").trim().toLowerCase(),
-  );
-}
-
 export function assertAuthoritativeLeaseExtractionResult(
   moduleType: string,
   result: Record<string, any>,
 ): void {
   if (!isLeaseModuleType(moduleType) || !isWholeDocumentLlmActive()) return;
   const provenance = result?.metadata?.provenance ?? null;
-  if (
-    provenance?.fallback_used === true &&
-    provenance?.effective_provider === "legacy_hybrid" &&
-    leaseTypescriptLegacyFallbackEnabled()
-  ) return;
+  if (provenance?.fallback_used === true && provenance?.effective_provider === "legacy_hybrid") {
+    const primaryWasAttempted =
+      provenance?.requested_provider === "openai_primary_legacy_fallback" &&
+      Number(provenance?.openai_attempt_count ?? 0) > 0 &&
+      Boolean(provenance?.fallback_reason);
+    if (primaryWasAttempted) return;
+    throw new Error(
+      "LEASE_EXTRACTION_ARCHITECTURE_VIOLATION: legacy_hybrid may only run as a marked fallback after a primary whole-document LLM attempt fails.",
+    );
+  }
   const actualMode = wholeDocumentExtractionMode(result);
   if (actualMode !== "whole_document_llm_v2") {
     throw new Error(

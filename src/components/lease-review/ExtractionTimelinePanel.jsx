@@ -243,7 +243,6 @@ function architectureSummary(uploadedFile) {
   const parser = firstPresent(uploadedFile?.extraction_method, uploadedFile?.business_extraction_debug?.parser_method, "azure_layout");
   const effectiveProvider = firstPresent(provenance?.effective_provider, uploadedFile?.business_extraction_debug?.effective_provider, "openai_fact_ledger");
   const fallbackUsed = firstPresent(provenance?.fallback_used, uploadedFile?.business_extraction_debug?.fallback_used, false);
-  const legacyDisabled = openaiDebug.legacy_hybrid_fallback_disabled === true || fallbackUsed === false;
   const sectionCount = firstPresent(openaiDebug.section_count, openaiDebug.compact_document?.section_count, null);
   return {
     parser,
@@ -251,7 +250,6 @@ function architectureSummary(uploadedFile) {
     architecture,
     effectiveProvider,
     fallbackUsed,
-    legacyDisabled,
     llmCalls: firstPresent(openaiDebug.llm_call_count, uploadedFile?.business_extraction_debug?.openai_llm_call_count, null),
     sectionCount,
     generation: firstPresent(uploadedFile?.active_generation_id, provenance?.generation_id, "-"),
@@ -583,7 +581,7 @@ export default function ExtractionTimelinePanel({ uploadedFile, uploadedFileId, 
               Primary path: Azure Document Intelligence layout parser, compact Azure document, strict whole-document OpenAI/Azure OpenAI extraction with evidence validation.
             </div>
             <div className="rounded-md border border-amber-100 bg-amber-50 p-3">
-              Large-document path: if the compact prompt is over the model budget, it uses sectioned LLM continuation/reduce. TypeScript legacy fallback is {architecture.legacyDisabled ? "disabled by default" : "enabled by rollback env"}.
+              Large-document path: if the compact prompt is over the model budget, it uses sectioned LLM continuation/reduce. Legacy TypeScript extraction is allowed only as a marked fallback after primary LLM failure.
             </div>
           </div>
           <div className="flex flex-wrap gap-2 text-xs">

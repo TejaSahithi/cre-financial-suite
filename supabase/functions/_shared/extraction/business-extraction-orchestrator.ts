@@ -4,8 +4,8 @@
  * Returns one common ExtractionPipelineResult shape with additive
  * metadata.provenance. normalize-pdf-output owns the lease architecture fence:
  * live lease calls are forced to primary whole-document LLM. Oversize leases
- * continue through the sectioned LLM reducer; TypeScript legacy fallback is an
- * explicit rollback switch, not the default large-document path.
+ * continue through the sectioned LLM reducer; TypeScript legacy fallback is
+ * allowed only after that primary LLM path fails acceptance.
  *
  * legacy_hybrid            -> legacy pipeline only (unchanged behavior)
  * openai_fact_ledger       -> OpenAI pipeline only, retained for compatibility
@@ -13,8 +13,8 @@
  *                             legacy fallback here.
  * openai_primary_legacy_fallback -> OpenAI once (bounded by an absolute
  *                             deadline, no outer retry loop) -> acceptance
- *                             evaluation -> manual review unless
- *                             LEASE_ENABLE_TYPESCRIPT_LEGACY_FALLBACK=true.
+ *                             evaluation -> legacy_hybrid fallback only
+ *                             after the primary LLM result is fallback-eligible.
  */
 
 import { runExtractionPipeline } from "./pipeline.ts";
@@ -37,9 +37,11 @@ const OPENAI_TOTAL_BUDGET_MS = 100_000; // ~90-120s target, mid-point default
 const VERTEX_TOTAL_BUDGET_MS = OPENAI_TOTAL_BUDGET_MS;
 
 function leaseLegacyFallbackEnabled(): boolean {
-  return ["1", "true", "yes", "on"].includes(
-    String(Deno.env.get("LEASE_ENABLE_TYPESCRIPT_LEGACY_FALLBACK") ?? "").trim().toLowerCase(),
-  );
+  // Direct lease extraction never starts here; runBusinessExtraction() forces
+  // lease requests to the primary OpenAI strategy first. This flag only
+  // controls whether a fallback-eligible primary failure may then publish the
+  // legacy TypeScript/rule/table result.
+  return true;
 }
 
 function stampLegacyFallbackDisabled(result: ExtractionPipelineResult, reason: string): ExtractionPipelineResult {
@@ -275,7 +277,11 @@ async function sha256Hex(value: string): Promise<string> {
 export async function runBusinessExtraction(opts: RunBusinessExtractionOptions): Promise<ExtractionPipelineResult> {
   const startTime = Date.now();
   const attemptId = `${opts.correlationId}:${startTime}`;
-  const requestedProvider = normalizeBusinessExtractionMode(opts.requestedProvider);
+  const configuredProvider = normalizeBusinessExtractionMode(opts.requestedProvider);
+  const requestedProvider =
+    isLeaseModuleType(opts.moduleType) && isWholeDocumentLlmActive()
+      ? "openai_primary_legacy_fallback"
+      : configuredProvider;
   const document = opts.document ?? opts.docling;
   const sourceContentHash = await sha256Hex(contentForHash(document));
   const openaiRunner = opts.openaiRunner ?? opts.vertexRunner ?? runOpenAIFactLedgerPipeline;
@@ -405,8 +411,8 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
   if (isLeaseModuleType(opts.moduleType) && !leaseLegacyFallbackEnabled()) {
     // For leases, "fallback eligible" no longer means "let regex/table code
     // publish commercial terms." The LLM path now owns oversize continuation;
-    // provider/config/empty failures become explicit manual-review states unless
-    // the operator deliberately enables the rollback switch.
+    // provider/config/empty failures become explicit manual-review states
+    // only if legacy fallback is disabled by policy.
     const stampedOpenaiResult = stampLegacyFallbackDisabled(openaiResult, openaiAcceptance.reason);
     return attachProvenance(
       stampedOpenaiResult,
