@@ -79,6 +79,7 @@ function isClauseRecordOnlyDynamicItem(item) {
   const key = normalizeDynamicReviewKey(rawKey);
   const strippedKey = key.replace(/^clause_/, "");
   const sourceName = String(item?.extraction_method || item?.item_id || item?.id || "").toLowerCase();
+  if (sourceName === "whole_document_llm_v2") return false;
   if (sourceName.startsWith("clause:")) return true;
   if (!CLAUSE_RECORD_ONLY_DYNAMIC_KEYS.has(strippedKey)) return false;
   const value = item?.normalized_value ?? item?.normalizedValue ?? item?.value ?? item?.raw_value ?? item?.rawValue ?? null;
@@ -678,6 +679,20 @@ export function normalizeDynamicFindings(lease) {
 
     const tabKey = routeDynamicRowToTab(item);
     const confidence = typeof item.confidence === "number" ? item.confidence : null;
+    const declaredValueType = String(item.value_type ?? item.valueType ?? item.data_type ?? item.dataType ?? "").trim().toLowerCase();
+    const valueType = /(schedule|table|matrix|ledger)/i.test(declaredValueType)
+      ? "schedule"
+      : /(currency|money|amount|dollar)/i.test(declaredValueType)
+        ? "currency"
+        : /(date|deadline)/i.test(declaredValueType)
+          ? "date"
+          : /(boolean|bool|yes_no|yesno)/i.test(declaredValueType)
+            ? "boolean"
+            : /(number|numeric|percent|percentage|rate)/i.test(declaredValueType)
+              ? "number"
+              : /schedule|matrix|table|ledger/i.test(String(item.field_key || item.item_type || item.key || ""))
+                ? "schedule"
+                : null;
     rows.push({
       rowType: "dynamic",
       typeLabel: "Dynamic",
@@ -685,6 +700,10 @@ export function normalizeDynamicFindings(lease) {
       fieldKey: item.field_key || item.item_type || null,
       label: item.label || titleize(item.item_type || item.field_key || "Finding"),
       category: item.business_area || item.display_tab || item.item_type || "unknown_needs_review",
+      type: valueType || "text",
+      dataType: valueType || "text",
+      valueType: valueType || "text",
+      value_type: item.value_type ?? item.valueType ?? valueType ?? "text",
       tabKey,
       editable: false,
       value: item.normalized_value ?? item.value ?? null,
@@ -1244,6 +1263,10 @@ function normalizeRentScheduleFallbackRows(lease) {
         fieldKey: "rent_schedule",
         label: "Rent Addendum Months " + startMonth + "-" + endMonth,
         category: "rent_schedule",
+        type: "schedule",
+        dataType: "schedule",
+        valueType: "schedule",
+        value_type: "schedule",
         tabKey: "rent_charges",
         editable: false,
         value: moneyDisplay(monthly) + " per month / " + moneyDisplay(psf) + " PSF",

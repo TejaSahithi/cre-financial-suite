@@ -3,8 +3,10 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 function formatValue(value) {
-  if (value === null || value === undefined || value === "") return "—";
+  if (value === null || value === undefined || value === "") return "Not extracted";
   if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (Array.isArray(value)) return value.length ? value.map((item) => typeof item === "object" ? JSON.stringify(item) : String(item)).join("\n") : "Not extracted";
+  if (typeof value === "object") return JSON.stringify(value, null, 2);
   return String(value);
 }
 
@@ -50,7 +52,7 @@ export default function DynamicFindings({ dynamicFindings }) {
                 </div>
               </div>
               <div className="mt-1 flex items-center justify-between gap-2 text-xs text-slate-500">
-                <span className="truncate">{formatValue(row.value)}</span>
+                <span className="whitespace-pre-wrap break-words">{formatValue(row.value)}</span>
                 {row.sourcePage != null && <span className="shrink-0">p.{row.sourcePage}</span>}
               </div>
               {row.sourceText && (

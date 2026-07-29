@@ -47,11 +47,34 @@ function cleanDisplayText(value) {
   return cleaned || String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+function formatStructuredValue(value) {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "Not extracted";
+    if (value.every((item) => item && typeof item === "object" && !Array.isArray(item))) {
+      return value.map((item, index) => {
+        const label = item.period || item.months || item.term || item.label || `Row ${index + 1}`;
+        const amount = item.monthlyRent ?? item.monthly_rent ?? item.monthly_amount ?? item.amount ?? item.value ?? null;
+        const psf = item.rentPsf ?? item.rent_psf ?? item.baseRentPsf ?? item.base_rent_psf ?? null;
+        return [label, amount != null ? `monthly ${amount}` : null, psf != null ? `PSF ${psf}` : null]
+          .filter(Boolean)
+          .join(" - ");
+      }).join("\n");
+    }
+    return value.map((item) => typeof item === "object" ? JSON.stringify(item) : String(item)).join("\n");
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value).filter(([, itemValue]) => itemValue !== null && itemValue !== undefined && itemValue !== "");
+    return entries.length
+      ? entries.map(([key, itemValue]) => `${key}: ${typeof itemValue === "object" ? JSON.stringify(itemValue) : String(itemValue)}`).join("\n")
+      : "Not extracted";
+  }
+  return null;
+}
+
 export function formatValue(value, row = null) {
-  if (value === null || value === undefined || value === "") return "-";
+  if (value === null || value === undefined || value === "") return "Not extracted";
   if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (Array.isArray(value)) return value.length ? cleanDisplayText(value.join(", ")) : "-";
-  if (typeof value === "object") return "-";
+  if (Array.isArray(value) || typeof value === "object") return formatStructuredValue(value);
 
   const dataType = row?.dataType || row?.type;
   if (dataType === "currency" || dataType === "money") {
@@ -68,13 +91,14 @@ export function formatValue(value, row = null) {
     }
   }
 
-  return cleanDisplayText(value) || "-";
+  return cleanDisplayText(value) || "Not extracted";
 }
 
 export function valuePreview(value, row = null) {
   const formatted = formatValue(value, row);
-  if (formatted === "-") return formatted;
-  return formatted.length > 160 ? `${formatted.slice(0, 159).trimEnd()}...` : formatted;
+  if (formatted === "Not extracted") return formatted;
+  const maxLength = row?.type === "schedule" || row?.category === "schedule" || row?.category === "rent_schedule" ? 420 : 160;
+  return formatted.length > maxLength ? `${formatted.slice(0, maxLength - 1).trimEnd()}...` : formatted;
 }
 
 function simpleStripMarkup(value) {
@@ -134,8 +158,8 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [completenessFilter, setCompletenessFilter] = useState("filled");
+  const [showAdvanced, setShowAdvanced] = useState(true);
+  const [completenessFilter, setCompletenessFilter] = useState("all");
 
   const typeOptions = useMemo(() => {
     return Array.from(new Set(rows.map((row) => row.rowType).filter(Boolean))).sort();
@@ -145,6 +169,7 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
   }, [rows]);
 
   const completenessCounts = useMemo(() => ({
+    all: rows.filter((row) => shouldShowRow(row, showAdvanced)).length,
     filled: rows.filter((row) => shouldShowRow(row, showAdvanced) && rowMatchesCompletenessFilter(row, "filled")).length,
     missing: rows.filter((row) => shouldShowRow(row, showAdvanced) && rowMatchesCompletenessFilter(row, "missing")).length,
   }), [rows, showAdvanced]);
@@ -165,6 +190,10 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
     <div className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="inline-flex h-9 items-center rounded-md border border-slate-200 bg-white p-1 shadow-sm">
+          <Button type="button" variant={completenessFilter === "all" ? "secondary" : "ghost"} size="sm" className="h-7 gap-1.5 px-2 text-xs" onClick={() => setCompletenessFilter("all")}>
+            All
+            <Badge variant="outline" className="ml-1 border-slate-200 bg-slate-50 text-slate-700">{completenessCounts.all}</Badge>
+          </Button>
           <Button type="button" variant={completenessFilter === "filled" ? "secondary" : "ghost"} size="sm" className="h-7 gap-1.5 px-2 text-xs" onClick={() => setCompletenessFilter("filled")}>
             <Check className="h-3.5 w-3.5" />
             Filled
@@ -232,7 +261,7 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
               const fullRowValue = formatValue(rawRowValue, row);
               const rowValue = valuePreview(rawRowValue, row); // valuePreview(rawRowValue)
               const reviewValue = reviewField ? formatValue(reviewField.displayValue ?? reviewField.value, row) : "-";
-              const isMismatch = reviewField && fullRowValue !== "-" && reviewValue !== "-" && fullRowValue.trim().toLowerCase() !== reviewValue.trim().toLowerCase();
+              const isMismatch = reviewField && fullRowValue !== "Not extracted" && reviewValue !== "Not extracted" && fullRowValue.trim().toLowerCase() !== reviewValue.trim().toLowerCase();
 
               return (
                 <TableRow key={row.key || row.fieldKey || `${row.rowType}-${index}`} className="align-top hover:bg-slate-50/70">
@@ -240,8 +269,8 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
                     {row.label || row.fieldKey || "Untitled"}
                     {row.rowType === "read_only_reference" && <div className="mt-1 text-[10px] font-normal text-slate-500">Read-only reference</div>}
                   </TableCell>
-                  <TableCell className="max-w-[220px] text-xs text-slate-700" title={fullRowValue !== "-" ? fullRowValue : undefined}>
-                    <span className="block whitespace-normal break-words leading-relaxed">{rowValue}</span>
+                  <TableCell className="max-w-[220px] text-xs text-slate-700" title={fullRowValue !== "Not extracted" ? fullRowValue : undefined}>
+                    <span className="block whitespace-pre-wrap break-words leading-relaxed">{rowValue}</span>
                     {isMismatch && (
                       <div className="mt-1 flex items-center gap-1 text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5" title={`Canonical projection: ${reviewValue}`}>
                         <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />

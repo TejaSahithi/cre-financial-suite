@@ -106,6 +106,8 @@ function isGenericSummaryPreambleSource(sourceText) {
 
 function shouldSuppressDynamicReviewItem(key, item, value, sourceText, staticKeys) {
   const normalizedKey = key.startsWith("clause_") ? key.slice(7) : key;
+  const extractionMethod = String(item?.extraction_method || item?.extractionMethod || "").toLowerCase();
+  const isWholeDocumentDynamicItem = extractionMethod === "whole_document_llm_v2";
   // A possible_canonical_match is a USEFUL signal ("this near-miss might
   // belong to an existing field") for a reviewer to see, not a reason to
   // hide the row entirely -- this previously suppressed unconditionally,
@@ -113,7 +115,7 @@ function shouldSuppressDynamicReviewItem(key, item, value, sourceText, staticKey
   // could never actually reach a reviewer once they fired. See where this
   // row is built below: possible_canonical_match now surfaces as a
   // requires_review flag + review_reason instead of a suppression.
-  if (CLAUSE_RECORD_ONLY_DYNAMIC_KEYS.has(normalizedKey)) {
+  if (!isWholeDocumentDynamicItem && CLAUSE_RECORD_ONLY_DYNAMIC_KEYS.has(normalizedKey)) {
     const operativeClauseOnly = key.startsWith("clause_")
       && (value === null || value === undefined || value === "")
       && /\b(?:tenant|landlord)\s+(?:shall|must|will|agrees?|is\s+responsible)\b/i.test(String(sourceText || ""));
@@ -359,9 +361,18 @@ export function inferDynamicItemTab(item, key) {
 }
 
 export function inferDynamicItemType(item, key) {
+  const declaredType = String(item?.value_type ?? item?.valueType ?? item?.data_type ?? item?.dataType ?? "").trim().toLowerCase();
+  if (declaredType) {
+    if (/(schedule|table|matrix|ledger)/i.test(declaredType)) return "schedule";
+    if (/(currency|money|amount|dollar)/i.test(declaredType)) return "currency";
+    if (/(date|deadline)/i.test(declaredType)) return "date";
+    if (/(boolean|bool|yes_no|yesno)/i.test(declaredType)) return "boolean";
+    if (/(number|numeric|percent|percentage|rate)/i.test(declaredType)) return "number";
+  }
   const value = item?.normalized_value ?? item?.value ?? item?.raw_value;
   if (typeof value === "boolean") return "boolean";
   if (/date|deadline|expiration|commencement|effective/i.test(key)) return "date";
+  if (/schedule|matrix|table|ledger/i.test(key)) return "schedule";
   if (/rent|amount|fee|deposit|consideration|allowance|cost|charge/i.test(key)) return "currency";
   if (/percent|pct|share|rate|multiplier|months|days|sqft|rsf|square_footage|area/i.test(key)) return "number";
   return "text";
@@ -421,6 +432,7 @@ export function buildDynamicDocumentFieldsByTab(lease) {
     const count = (keyCounts.get(key) || 0) + 1;
     keyCounts.set(key, count);
     const uniqueKey = count === 1 ? key : `${key}_${count}`;
+    const valueType = inferDynamicItemType(item, key);
     if (!byTab[tab]) byTab[tab] = [];
     byTab[tab].push({
       key: uniqueKey,
@@ -431,7 +443,10 @@ export function buildDynamicDocumentFieldsByTab(lease) {
       field_label: item?.label || titleizeFieldKey(item?.section_title || item?.field_key || item?.item_type || key),
       tab,
       category: tab,
-      type: inferDynamicItemType(item, key),
+      type: valueType,
+      dataType: valueType,
+      valueType,
+      value_type: item?.value_type ?? item?.valueType ?? valueType,
       allowNA: true,
       allowCalculatedAccept: canAcceptCalculatedReviewField({ key }),
       dynamic_document_item: true,

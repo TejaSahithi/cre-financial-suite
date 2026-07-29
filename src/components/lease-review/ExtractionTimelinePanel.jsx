@@ -117,11 +117,18 @@ const STAGE_ROUTING = [
     output: "Evidence-backed fields, dynamic findings, conflicts, not-stated field list.",
   },
   {
-    match: /enrich_truth|enrich_clause|enrich_financial|enrich|clause|financial|domain/i,
+    match: /enrich_truth|enrich_clause|enrich_financial|clause|financial|domain/i,
     functionName: "lease-extraction-worker -> normalize-pdf-output bounded enrich mode",
     trigger: "Core review payload is persisted and optional enrichment is queued.",
     input: "Existing normalized output, compact evidence, stage-specific domain scope.",
     output: "Clause/evidence/financial enrichment or partial enrichment warning.",
+  },
+  {
+    match: /\benrich\b/i,
+    functionName: "lease-extraction-worker -> normalize-pdf-output optional enrich",
+    trigger: "Core review payload already exists; optional enrichment is trying to add clauses/evidence/detail.",
+    input: "Existing normalized output and parsed Azure layout.",
+    output: "Enrichment completion, partial enrichment warning, or retry. Core extracted fields should remain reviewable.",
   },
   {
     match: /review_handoff|review/i,
@@ -146,6 +153,15 @@ function firstPresent(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== "");
 }
 
+function isSensitiveTextKey(key) {
+  if (/(chars|char_count|length|count|page_count|table_count|paragraph_count|token|tokens)$/i.test(key)) {
+    return false;
+  }
+  return /source_text|sourceQuote|full_text|markdown|raw_response|fileBase64|clause_text/i.test(key) ||
+    /^content$/i.test(key) ||
+    /_content$/i.test(key);
+}
+
 function sanitizeDetail(value, depth = 0) {
   if (value == null) return value;
   if (depth > 3) return "[nested]";
@@ -157,7 +173,7 @@ function sanitizeDetail(value, depth = 0) {
   if (Array.isArray(value)) return value.slice(0, 12).map((item) => sanitizeDetail(item, depth + 1));
   const out = {};
   for (const [key, entry] of Object.entries(value)) {
-    if (/source_text|sourceQuote|full_text|markdown|raw_response|fileBase64|content|clause_text/i.test(key)) {
+    if (isSensitiveTextKey(key)) {
       out[key] = typeof entry === "string" ? `[omitted ${entry.length} chars]` : "[omitted]";
       continue;
     }

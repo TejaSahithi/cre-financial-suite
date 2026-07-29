@@ -281,6 +281,16 @@ indemnities, SNDA/estoppel deadlines, audit lookback periods, landlord-work mile
 improvement disbursement conditions, relocation rights, demolition rights, prohibited-use
 details, security requirements, and multi-step rent schedules.
 
+For any multi-row rent, CAM, option-rent, charge, allowance, or amortization schedule that cannot
+fit one fixed scalar field, create a dynamic finding with valueType="schedule". Because this
+strict schema stores dynamic values in one field, put value in a compact plain-text table string
+with every document row preserved. Example format:
+"Months | Base Rent PSF | Base Rent Per Month\n1-2 | $0.00 | $0.00\n3-12 | $24.00 | $6,004.00".
+Do not drop free-rent rows, partial final rows, option-term rows, CAM-estimate rows, TI allowance
+conditions, or amortized charge rows. Do not calculate missing dates or amounts; preserve the
+period labels exactly as stated and mark the finding ambiguous/conflicting if the document's
+own schedule conflicts.
+
 Do not create a dynamic duplicate of a fixed field. Do not hide a real term because no fixed field
 exists. Do not combine unrelated provisions into one generic finding. Every dynamic finding must
 have exact evidence and a concise businessMeaning explaining its operational or economic effect.
