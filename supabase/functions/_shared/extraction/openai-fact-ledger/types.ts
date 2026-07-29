@@ -144,7 +144,7 @@ export interface FactFieldMappingResult {
 }
 
 // ── Micro-step 0: field selection provenance (additive, diagnostic-only) ────
-// See LEASE_EXTRACTION_UI_PIPELINE_AUDIT.md Section 16.3 for the design this
+// See docs/lease-extraction-architecture-audit-2026-07-29.md for the design this
 // implements. Every type here is additive — nothing here changes what value
 // a field resolves to; it only explains the decision that already happened.
 

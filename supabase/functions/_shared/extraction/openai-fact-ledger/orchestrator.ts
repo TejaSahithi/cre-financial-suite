@@ -26,6 +26,7 @@ import { parseDocument } from "../parser.ts";
 import { flattenRecords } from "../validator.ts";
 import { computeDerivedFields } from "../calculator.ts";
 import { snapshotFieldMap } from "../pipeline.ts";
+import { isLeaseModuleType } from "../lease-module.ts";
 import { resolveDocumentIndex, enrichFactWithBlockEvidence } from "./document-index-v3.ts";
 import { classifyDocumentProfile } from "./profile-classifier.ts";
 import { extractFactLedger } from "./fact-ledger-extractor.ts";
@@ -188,7 +189,7 @@ export async function runOpenAIFactLedgerPipeline(
     // deliberately runs before profile classification, deterministic
     // extraction, section routing, and fact-field mapping so none of those
     // layers can constrain or reinterpret its evidence selection.
-    if (input.moduleType === "lease" && isWholeDocumentLlmActive()) {
+    if (isLeaseModuleType(input.moduleType) && isWholeDocumentLlmActive()) {
       const result = await runWholeDocumentLlmPipeline({
         document: doclingRaw,
         moduleType: input.moduleType,
@@ -541,7 +542,7 @@ export async function runOpenAIFactLedgerPipeline(
             rejected_candidates: mapped.rejectedCandidates,
             // Micro-step 0 (pipeline-audit provenance, additive/optional —
             // see openai-fact-ledger/types.ts's FieldSelectionProvenance and
-            // LEASE_EXTRACTION_UI_PIPELINE_AUDIT.md Section 16.3). Bounded to
+            // docs/lease-extraction-architecture-audit-2026-07-29.md). Bounded to
             // TRACKED_PROVENANCE_FIELDS in fact-field-mapper.ts, not all
             // fields. `?? {}` so an older mapper build (or a test fixture
             // built before this change) that doesn't return fieldProvenance

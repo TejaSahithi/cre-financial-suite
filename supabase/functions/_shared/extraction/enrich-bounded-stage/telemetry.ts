@@ -1,7 +1,7 @@
 // @ts-nocheck
 /**
  * Per-stage telemetry for the bounded enrich chain (see
- * FAILED_EXTRACTION_ROOT_CAUSE.md and the "Bounded Per-Domain Enrich
+ * docs/lease-extraction-architecture-audit-2026-07-29.md and the "Bounded Per-Domain Enrich
  * Refactor" plan). Pure data -- never secrets, never full LLM prompts --
  * intended for pipeline_jobs.metadata (an existing, legitimately-used-for-
  * bookkeeping column) and the bounded_stage_results entry itself.

@@ -14,7 +14,7 @@
  * Every v3-only section (claims, canonical_fields, clauses, ...) is left at
  * its Phase 1 empty default. Only identifiers and already-computed
  * parser/provider/debug metadata that already exists on the row are copied
- * in, per docs/document-intelligence-v3-baseline.md's Phase 1 scope.
+ * in, per docs/lease-extraction-architecture-audit-2026-07-29.md's Phase 1 scope.
  */
 
 import {

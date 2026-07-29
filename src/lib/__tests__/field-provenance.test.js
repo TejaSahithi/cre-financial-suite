@@ -3,7 +3,7 @@ import { getFieldDisplayProvenance, resolveLeaseField } from "../leaseFieldResol
 import { buildDerivedFieldEvidence } from "../../components/lease-review/utils/dynamicFields";
 
 // Micro-step 0 (pipeline-audit provenance) frontend tests. See
-// LEASE_EXTRACTION_UI_PIPELINE_AUDIT.md Section 16 for the design these
+// docs/lease-extraction-architecture-audit-2026-07-29.md for the design these
 // verify. getFieldDisplayProvenance is purely additive — every test here
 // also confirms resolveLeaseField's own resolved value is unaffected by
 // calling the new diagnostic alongside it.
@@ -80,6 +80,36 @@ describe("getFieldDisplayProvenance (Micro-step 0)", () => {
     expect(provenance.activeGenerationId).toBe("gen-123");
     expect(provenance.payloadGenerationId).toBeNull();
     expect(provenance.generationMatch).toBeNull();
+  });
+
+  it("reports generationMatch=true when the review payload generation matches the active generation", () => {
+    const lease = {
+      uploaded_files: {
+        active_generation_id: "gen-123",
+        ui_review_payload: { metadata: { generation_id: "gen-123" } },
+      },
+      extraction_data: { fields: { tenant_name: { value: "Acme LLC" } } },
+    };
+
+    const provenance = getFieldDisplayProvenance(lease, "tenant_name", { mode: "display" });
+
+    expect(provenance.payloadGenerationId).toBe("gen-123");
+    expect(provenance.generationMatch).toBe(true);
+  });
+
+  it("reports generationMatch=false when the review payload belongs to a superseded generation", () => {
+    const lease = {
+      uploaded_files: {
+        active_generation_id: "gen-2",
+        ui_review_payload: { metadata: { generation_id: "gen-1" } },
+      },
+      extraction_data: { fields: { tenant_name: { value: "Acme LLC" } } },
+    };
+
+    const provenance = getFieldDisplayProvenance(lease, "tenant_name", { mode: "display" });
+
+    expect(provenance.payloadGenerationId).toBe("gen-1");
+    expect(provenance.generationMatch).toBe(false);
   });
 
   it("legacy-payload compatibility: works without throwing on a lease object with none of the new fields", () => {

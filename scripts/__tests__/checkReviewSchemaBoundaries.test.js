@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { scanReviewSchemaBoundaries } from "../../../scripts/check-review-schema-boundaries.mjs";
+import { scanReviewSchemaBoundaries } from "../check-review-schema-boundaries.mjs";
 
 describe("review schema boundary scanner", () => {
   it("passes the checked active review components", () => {

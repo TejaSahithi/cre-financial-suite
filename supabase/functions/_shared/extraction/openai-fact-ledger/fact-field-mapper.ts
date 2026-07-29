@@ -40,7 +40,7 @@ const MIN_LABEL_SCORE = 3; // shortest meaningful label match (e.g. "by:" is too
 // ── Micro-step 0: provenance (additive, diagnostic-only — see types.ts) ─────
 // Bounded to a small, high-value field set so payload growth stays small and
 // predictable (~10 fields x up to 11 candidate summaries x a capped
-// sourceText each — see LEASE_EXTRACTION_UI_PIPELINE_AUDIT.md Section 16.3's
+// sourceText each — see docs/lease-extraction-architecture-audit-2026-07-29.md's
 // size estimate). Not "all 88 fields" — extending coverage is a deliberate,
 // separate decision, not a side effect of this change.
 const TRACKED_PROVENANCE_FIELDS = new Set([

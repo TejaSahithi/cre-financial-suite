@@ -6,7 +6,7 @@
  * below).
  *
  * Maps the openai_fact_ledger provider's already-computed output (per
- * docs/document-intelligence-v3-baseline.md Section 5) into v3
+ * docs/lease-extraction-architecture-audit-2026-07-29.md Section 5) into v3
  * document_claims / document_claim_evidence / document_validation_drops /
  * document_canonical_field_projections row shapes.
  *

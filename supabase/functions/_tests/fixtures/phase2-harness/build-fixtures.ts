@@ -279,7 +279,7 @@ function buildLargeLeaseScaleFixture() {
 
 // ── Fixture 5: current-persisted-docling-raw-azure-shape ────────────────────
 // Mirrors the REAL, confirmed docling_raw shape azure-layout-adapter.ts
-// actually persists today (per docs/document-intelligence-v3-baseline.md
+// actually persists today (per docs/lease-extraction-architecture-audit-2026-07-29.md
 // and Phase 1's azureLike3PageDoclingRaw() test helper) -- NOT an Azure
 // analyzeResult. STORE_FULL_AZURE_RAW_RESPONSE is off by default, so
 // raw_response is null here, matching the common-case durable row.

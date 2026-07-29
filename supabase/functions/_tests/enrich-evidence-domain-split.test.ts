@@ -2,7 +2,7 @@
 // Bounded Per-Domain Enrich Refactor -- correctness gate for splitting
 // buildReviewPayload's per-field evidence-verification loop
 // (buildStandardFieldsForEntries, extracted from normalize-pdf-output/index.ts)
-// along the existing 5 LlmCallDomain buckets (see FAILED_EXTRACTION_ROOT_CAUSE.md
+// along the existing 5 LlmCallDomain buckets (see docs/lease-extraction-architecture-audit-2026-07-29.md
 // and the "Bounded Per-Domain Enrich Refactor" plan).
 //
 // Unlike buildLeaseWorkflowAbstraction, this loop is genuinely a per-field-

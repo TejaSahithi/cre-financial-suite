@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   buildLeaseExtractionQueuedStatusPatch,
   normalizeLeaseExtractionGenerationResult,
@@ -49,4 +49,21 @@ Deno.test("lease extraction enqueue contract: queued lease uploads preserve revi
     failed_step: null,
     processing_completed_at: null,
   });
+});
+
+Deno.test("lease extraction enqueue contract: ingest-file always queues lease PDFs through the worker, even when run_synchronously is supplied", async () => {
+  const source = await Deno.readTextFile("supabase/functions/ingest-file/index.ts");
+
+  assert(source.includes("if (routing.route === \"parse-document-azure\" && isLeaseModule)"));
+  assert(source.includes("routed_to: \"lease-extraction-worker\""));
+  assert(source.includes("run_synchronously_ignored: run_synchronously === true"));
+  assertEquals(source.includes("isLeaseModule && run_synchronously !== true"), false);
+});
+
+Deno.test("lease extraction enqueue contract: direct user parse-document-azure calls are blocked for lease files", async () => {
+  const source = await Deno.readTextFile("supabase/functions/parse-document-azure/index.ts");
+
+  assert(source.includes("LEASE_PARSE_REQUIRES_WORKER_PIPELINE"));
+  assert(source.includes("isLeaseModule && !requestIsInternal"));
+  assert(source.includes("route: \"ingest-file\""));
 });

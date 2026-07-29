@@ -889,7 +889,7 @@ export function getFieldSourcePath(lease, fieldKey, options = {}) {
 // behavior, return shape, or fallback order in any way — it answers "why is
 // THIS particular value displayed?" (as distinct from fact-field-mapper.ts's
 // FieldSelectionProvenance, which answers "why did this candidate win on the
-// backend?"). See LEASE_EXTRACTION_UI_PIPELINE_AUDIT.md Section 16.3.
+// backend?"). See docs/lease-extraction-architecture-audit-2026-07-29.md.
 
 // Mirrors resolveLeaseField's own two fallbackHierarchy orderings (lines
 // ~791-840 above) so a resolved `sourcePath` string can be turned into a
@@ -1001,11 +1001,9 @@ function bestEffortRawKeyForField(lease, fieldKey) {
  * same field is safe (resolveLeaseField itself is side-effect-free).
  *
  * generationMatch is intentionally `null` (unknown, not "false") when
- * payloadGenerationId can't be determined -- ui_review_payload does not
- * currently carry its own generation-of-origin stamp (see
- * LEASE_EXTRACTION_UI_PIPELINE_AUDIT.md Section 16.3's known limitation);
- * this only diagnoses a mismatch when one is actually detectable, per the
- * guardrail that this step must not fabricate a comparison.
+ * payloadGenerationId can't be determined. Newer review payloads stamp
+ * metadata.generation_id; older rows may not, so this only diagnoses a
+ * mismatch when one is actually detectable and never fabricates a match.
  */
 export function getFieldDisplayProvenance(lease, fieldKey, options = {}) {
   const mode = options.mode || "display";
@@ -1015,10 +1013,12 @@ export function getFieldDisplayProvenance(lease, fieldKey, options = {}) {
   const { resolvedFieldKey, aliasUsed } = bestEffortRawKeyForField(lease, fieldKey);
   const activeGenerationId =
     lease?.uploaded_files?.active_generation_id ?? lease?.uploaded_file?.active_generation_id ?? null;
-  // Not currently stamped per-payload anywhere this resolver reads from —
-  // see the comment above. Kept as an explicit, honest null rather than
-  // reusing activeGenerationId, which would fabricate a guaranteed "match".
-  const payloadGenerationId = null;
+  const payloadGenerationId =
+    lease?.uploaded_files?.ui_review_payload?.metadata?.generation_id ??
+    lease?.uploaded_file?.ui_review_payload?.metadata?.generation_id ??
+    lease?.uploaded_files?.normalized_output?.metadata?.generation_id ??
+    lease?.uploaded_file?.normalized_output?.metadata?.generation_id ??
+    null;
 
   return {
     requestedFieldKey: normalizeLeaseFieldKey(fieldKey),

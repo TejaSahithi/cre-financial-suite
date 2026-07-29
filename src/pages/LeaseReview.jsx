@@ -155,6 +155,52 @@ const FieldSearchCommand = lazy(() => import("@/components/lease-review/FieldSea
 // considered "richer" than the previous one. Used only for debug diagnostics.
 const SOURCE_BACKED_MIN_THRESHOLD = 1;
 
+function humanizeExtractionToken(value, fallback = "unknown") {
+  const text = String(value ?? "").trim();
+  if (!text) return fallback;
+  return text.replace(/[_-]+/g, " ");
+}
+
+function readReviewExtractionSummary(uploadedFile) {
+  const payload = uploadedFile?.ui_review_payload || {};
+  const normalizedOutput = uploadedFile?.normalized_output || {};
+  const metadata = {
+    ...(normalizedOutput?.metadata || {}),
+    ...(payload?.metadata || {}),
+  };
+  const debug = metadata?.extractionDebug || metadata?.extraction_debug || {};
+  const openaiDebug = debug?.openai_fact_ledger || debug?.vertex_fact_ledger || {};
+  const provenance = metadata?.provenance || normalizedOutput?.metadata?.provenance || {};
+  const parserMetadata =
+    uploadedFile?.parsed_data?._metadata ||
+    uploadedFile?.parsed_data?.metadata ||
+    payload?.metadata?.parser ||
+    normalizedOutput?.metadata?.parser ||
+    {};
+
+  return {
+    activeGenerationId: uploadedFile?.active_generation_id ?? metadata?.generation_id ?? null,
+    parserProvider:
+      parserMetadata?.provider ||
+      parserMetadata?.parser_provider ||
+      parserMetadata?.parser ||
+      debug?.parser_provider ||
+      "azure_document_intelligence",
+    extractionMode:
+      openaiDebug?.extraction_mode ||
+      debug?.extraction_mode ||
+      metadata?.extraction_mode ||
+      "unknown",
+    requestedProvider: provenance?.requested_provider ?? null,
+    effectiveProvider: provenance?.effective_provider ?? null,
+    fallbackUsed: Boolean(provenance?.fallback_used),
+    fallbackReason: provenance?.fallback_reason ?? null,
+    acceptanceState: provenance?.acceptance_state ?? null,
+    reviewReadiness: uploadedFile?.review_readiness ?? payload?.review_readiness ?? null,
+    enrichmentStatus: uploadedFile?.enrichment_status ?? payload?.enrichment_status ?? null,
+  };
+}
+
 export default function LeaseReview() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -1000,29 +1046,26 @@ export default function LeaseReview() {
     ? uploadedFile.review_readiness_reasons
     : [];
   const isReviewReady = reviewReadiness === "ready";
+  const extractionSummary = useMemo(
+    () => readReviewExtractionSummary(uploadedFile),
+    [uploadedFile],
+  );
 
-  // Temporary read-only fallback: when ui_review_payload hasn't landed yet
-  // (or has none of the field-map shapes buildLeaseReviewRowsByTab knows
-  // about) but the pipeline already persisted raw rule/table/LLM output to
-  // parsed_data or normalized_output, surface those values directly instead
-  // of showing nothing. These are flat { field_key: value } objects, not the
-  // canonical field shape, so this is intentionally a lightweight key/value
-  // list rather than a full FieldReviewTable integration.
-  const fallbackParsedFields = useMemo(() => {
-    if (hasDisplayableExtractedFields) return [];
-    if (uploadedFile?.ui_review_payload) return [];
+  // Evidence-first contract: if raw parsed_data/normalized_output exists
+  // before ui_review_payload lands, show a status warning only. Do not render
+  // raw values without field-level source quotes/confidence/provenance.
+  const rawParsedFieldsStatus = useMemo(() => {
+    if (hasDisplayableExtractedFields) return { present: false, count: 0 };
+    if (uploadedFile?.ui_review_payload) return { present: false, count: 0 };
     const rawRow =
       (Array.isArray(uploadedFile?.normalized_output?.rows) && uploadedFile.normalized_output.rows[0]) ||
       (Array.isArray(uploadedFile?.parsed_data) && uploadedFile.parsed_data[0]) ||
       null;
-    if (!rawRow || typeof rawRow !== "object") return [];
-    return Object.entries(rawRow)
+    if (!rawRow || typeof rawRow !== "object") return { present: false, count: 0 };
+    const count = Object.entries(rawRow)
       .filter(([key, value]) => !key.startsWith("_") && value != null && value !== "")
-      .map(([key, value]) => ({
-        key,
-        label: key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-        value: typeof value === "object" ? JSON.stringify(value) : String(value),
-      }));
+      .length;
+    return { present: count > 0, count };
   }, [hasDisplayableExtractedFields, uploadedFile]);
 
   // P0.7: the mount-triggered auto-extract effect that used to live here has
@@ -2768,6 +2811,38 @@ export default function LeaseReview() {
         </div>
       </div>
 
+      <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs text-slate-600">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-semibold text-slate-800">Extraction truth</span>
+          <Badge className="bg-blue-50 text-blue-700">
+            Parser: {humanizeExtractionToken(extractionSummary.parserProvider, "azure document intelligence")}
+          </Badge>
+          <Badge className={
+            extractionSummary.extractionMode === "whole_document_llm_v2"
+              ? "bg-emerald-50 text-emerald-700"
+              : "bg-amber-50 text-amber-800"
+          }>
+            Mode: {humanizeExtractionToken(extractionSummary.extractionMode)}
+          </Badge>
+          <Badge className={extractionSummary.fallbackUsed ? "bg-amber-50 text-amber-800" : "bg-slate-100 text-slate-700"}>
+            Provider: {humanizeExtractionToken(extractionSummary.effectiveProvider || extractionSummary.requestedProvider)}
+            {extractionSummary.fallbackUsed ? " fallback" : ""}
+          </Badge>
+          <Badge className="bg-slate-100 text-slate-700">
+            Generation: {extractionSummary.activeGenerationId ? String(extractionSummary.activeGenerationId).slice(0, 8) : "none"}
+          </Badge>
+          <Badge className={isReviewReady ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}>
+            Readiness: {humanizeExtractionToken(extractionSummary.reviewReadiness || reviewReadiness || "pending")}
+          </Badge>
+          <Badge className="bg-slate-100 text-slate-700">
+            Enrichment: {humanizeExtractionToken(extractionSummary.enrichmentStatus || enrichmentStatus || "unknown")}
+          </Badge>
+        </div>
+        {extractionSummary.fallbackReason && (
+          <p className="mt-2 text-amber-700">Fallback reason: {extractionSummary.fallbackReason}</p>
+        )}
+      </div>
+
       {/* Post-approval banner: guides user to review extracted expense rules */}
       {showPostApprovalBanner && (
         <div className="mx-4 mt-3 flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm">
@@ -2913,22 +2988,14 @@ export default function LeaseReview() {
         </div>
       )}
 
-      {/* Temporary read-only fallback view - ui_review_payload hasn't landed yet
-          but raw parsed_data/normalized_output already has values */}
-      {!reextracting && fallbackParsedFields.length > 0 && (
+      {/* Evidence-first status view - ui_review_payload hasn't landed yet,
+          but raw parsed_data/normalized_output already has values. */}
+      {!reextracting && rawParsedFieldsStatus.present && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <p className="font-semibold">Detailed evidence is still being prepared.</p>
           <p className="mt-1 text-xs text-amber-700">
-            Showing preliminary extracted values below. Source evidence, confidence scores, and clause records will appear once processing finishes.
+            The parser has {rawParsedFieldsStatus.count} preliminary value{rawParsedFieldsStatus.count === 1 ? "" : "s"}, but Lease Review will not display them until the review payload includes source evidence, confidence, and provenance.
           </p>
-          <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
-            {fallbackParsedFields.map((field) => (
-              <div key={field.key} className="flex justify-between gap-3 border-b border-amber-100 pb-1 text-xs">
-                <dt className="text-amber-700">{field.label}</dt>
-                <dd className="text-right font-medium text-amber-950">{field.value}</dd>
-              </div>
-            ))}
-          </dl>
         </div>
       )}
 

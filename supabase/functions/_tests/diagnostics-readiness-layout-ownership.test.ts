@@ -3,7 +3,7 @@
 // tests. Their names deliberately say "architecture guard" -- they prove a
 // source-level absence (no import/call of a specific symbol), NOT runtime
 // authorization, NOT RLS enforcement, and NOT full behavioral correctness.
-// See docs/azure-vertex-migration-phase4d-diagnostics-readiness-review.md
+// See docs/lease-extraction-architecture-audit-2026-07-29.md
 // for the full investigation these guards were derived from, including the
 // (separately, manually traced -- not test-covered) authorization findings
 // that these source-scans do not and cannot prove anything about.

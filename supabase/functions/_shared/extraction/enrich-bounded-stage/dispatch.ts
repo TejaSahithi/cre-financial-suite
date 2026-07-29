@@ -1,7 +1,7 @@
 // @ts-nocheck
 /**
  * Shared enqueue + fire-and-forget dispatch for the bounded enrich
- * sub-stages (see FAILED_EXTRACTION_ROOT_CAUSE.md and the "Bounded
+ * sub-stages (see docs/lease-extraction-architecture-audit-2026-07-29.md and the "Bounded
  * Per-Domain Enrich Refactor" plan). Generalizes
  * enrichment-dispatch.ts's enqueueEnrichmentJob()/dispatchEnrichmentWorker()
  * -- the exact "new pipeline_jobs row, new Edge Function invocation,

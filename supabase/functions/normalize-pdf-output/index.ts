@@ -27,8 +27,6 @@ import { isInternalCall } from "../_shared/internal-auth.ts";
 import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
 import { runBusinessExtraction } from "../_shared/extraction/business-extraction-orchestrator.ts";
 import { isLLMProviderConfigured } from "../_shared/llm.ts";
-import { normalizeBusinessExtractionMode, type CanonicalBusinessExtractionMode } from "../_shared/extraction/business-extraction-provenance.ts";
-import { isWholeDocumentLlmActive } from "../_shared/extraction/whole-document-llm/feature-mode.ts";
 import { isAzureLayoutOutput } from "../_shared/extraction/extraction-provider.ts";
 import { getFieldGroups, getSchema, getEvidencePolicyCoverage } from "../_shared/extraction/schemas.ts";
 import { evaluateCandidateForField } from "../_shared/extraction/candidate-decision.ts";
@@ -78,6 +76,18 @@ import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/t
 import { resolveExtractionRunId, withExtractionStage } from "../_shared/extraction/provenance/recorder.ts";
 import type { StageHandle } from "../_shared/extraction/provenance/types.ts";
 import { EXTRACTION_CONTRACT_VERSION } from "../_shared/extraction/contract-version.ts";
+import { isLeaseModuleType } from "../_shared/extraction/lease-module.ts";
+import {
+  SOURCE_SNIPPET_MAX_CHARS,
+  expandSourceSnippetFromMatch,
+  isShortCompleteSourceRow,
+} from "../_shared/extraction/source-snippets.ts";
+import {
+  assertAuthoritativeLeaseExtractionResult,
+  enforceLeaseExtractionArchitecture,
+  resolveBusinessExtractionProvider,
+  wholeDocumentExtractionMode,
+} from "../_shared/extraction/lease-extraction-strategy.ts";
 import { assembleCanonicalFields, publishIdFor, LEASE_TRUTH_ASSEMBLY_VERSION } from "../_shared/extraction/lease-truth-assembly.ts";
 import {
   buildBlockedReviewPayload,
@@ -222,70 +232,6 @@ function buildPipelineLayoutInput(
   };
 }
 
-/**
- * Resolve which extraction/reasoning provider runs the pipeline.
- * New configuration should use openai_fact_ledger or
- * openai_primary_legacy_fallback. The old vertex_* values are accepted as
- * aliases so existing Supabase secrets and internal debug calls do not break.
- */
-// Fail-safe default for the LIVE routing decision only: an unset
-// BUSINESS_EXTRACTION_PROVIDER must never silently resolve to a rule-only
-// path (normalizeBusinessExtractionMode()'s own "!raw -> legacy_hybrid"
-// default is intentionally left alone -- it's also what a persisted_row
-// with no recorded provider correctly degrades to, since that row genuinely
-// ran legacy_hybrid historically; changing it there would misrepresent
-// history). This is the one place that decides what runs when nothing is
-// configured, so it defaults to an OpenAI-enabled mode instead.
-const DEFAULT_LIVE_BUSINESS_EXTRACTION_PROVIDER = "openai_primary_legacy_fallback";
-
-function resolveBusinessExtractionProvider(
-  internalDebugOverride?: string | null,
-): CanonicalBusinessExtractionMode {
-  const override = String(internalDebugOverride ?? "").trim().toLowerCase();
-  if (override) return normalizeBusinessExtractionMode(override, { source: "override" });
-  const envValue = Deno.env.get("BUSINESS_EXTRACTION_PROVIDER");
-  return normalizeBusinessExtractionMode(
-    envValue && envValue.trim() ? envValue : DEFAULT_LIVE_BUSINESS_EXTRACTION_PROVIDER,
-    { source: "env" },
-  );
-}
-
-/**
- * Lease architecture boundary.
- *
- * When direct whole-document extraction is active, no independent provider
- * setting (including an old persisted BUSINESS_EXTRACTION_PROVIDER secret)
- * may route a lease around it. The one supported rollback is the architecture
- * flag itself: LEASE_WHOLE_DOCUMENT_LLM_V1=off.
- */
-function enforceLeaseExtractionArchitecture(
-  moduleType: string,
-  configuredProvider: CanonicalBusinessExtractionMode,
-): CanonicalBusinessExtractionMode {
-  return moduleType === "lease" && isWholeDocumentLlmActive()
-    ? "openai_fact_ledger"
-    : configuredProvider;
-}
-
-function wholeDocumentExtractionMode(result: Record<string, any>): string | null {
-  return result?.metadata?.extractionDebug?.openai_fact_ledger?.extraction_mode
-    ?? result?.metadata?.extractionDebug?.vertex_fact_ledger?.extraction_mode
-    ?? null;
-}
-
-function assertAuthoritativeLeaseExtractionResult(
-  moduleType: string,
-  result: Record<string, any>,
-): void {
-  if (moduleType !== "lease" || !isWholeDocumentLlmActive()) return;
-  const actualMode = wholeDocumentExtractionMode(result);
-  if (actualMode !== "whole_document_llm_v2") {
-    throw new Error(
-      `LEASE_EXTRACTION_ARCHITECTURE_VIOLATION: expected whole_document_llm_v2 but received ${actualMode ?? "no extraction_mode"}. ` +
-      `Legacy fact-ledger/TypeScript field mapping is not permitted while LEASE_WHOLE_DOCUMENT_LLM_V1 is active.`,
-    );
-  }
-}
 /**
  * Azure+OpenAI Phase 4E (local implementation): local-only, test-only mock
  * injection for the business-extraction orchestrator's OpenAI call. Never a
@@ -528,67 +474,12 @@ function capSourceText(text: string | null | undefined, maxChars = 350): string 
   return slice.trimEnd() + "…";
 }
 
-const SOURCE_SNIPPET_MAX_CHARS = 900;
-const SOURCE_SNIPPET_LOOKBACK = 450;
-const SOURCE_SNIPPET_LOOKAHEAD = 650;
-const SOURCE_ABBREVIATIONS = new Set([
-  "co", "corp", "inc", "ltd", "llc", "lp", "llp", "mr", "mrs", "ms", "dr",
-  "jr", "sr", "st", "ave", "blvd", "rd", "ste", "suite", "no", "jan", "feb",
-  "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
-]);
-
-function skipSourceBoundaryPadding(text: string, index: number) {
-  let cursor = index;
-  while (cursor < text.length && /\s/.test(text[cursor])) cursor += 1;
-  return cursor;
-}
-
-function isSourceSentenceEnd(text: string, index: number) {
-  const char = text[index];
-  if (!".!?".includes(char)) return false;
-
-  if (char === ".") {
-    const before = text[index - 1] || "";
-    const after = text[index + 1] || "";
-    if (/\d/.test(before) && /\d/.test(after)) return false;
-
-    const wordMatch = text.slice(Math.max(0, index - 16), index).match(/([A-Za-z]+)$/);
-    if (wordMatch && SOURCE_ABBREVIATIONS.has(wordMatch[1].toLowerCase())) return false;
-  }
-
-  let cursor = index + 1;
-  while (cursor < text.length && /["')\]]/.test(text[cursor])) cursor += 1;
-  return cursor >= text.length || /\s/.test(text[cursor]);
-}
-
-function isCleanSnippetStart(snippet: string) {
-  return (
-    /^[A-Za-z][^:]{0,90}:\s\S/.test(snippet) ||
-    /^\d+(?:\.\d+)*[.)]?\s+[A-Z]/.test(snippet) ||
-    /^[A-Z0-9"'(]/.test(snippet) ||
-    /^(approximately|suite|unit|space|monthly|annual|base rent|rent|permitted use|broker|address|landlord|tenant)\b/i.test(snippet)
-  );
-}
-
-function isShortCompleteSourceRow(snippet: string) {
-  if (!snippet || snippet.length > 260) return false;
-  if (/\.{3}|…/.test(snippet)) return false;
-  const isLabeledRow = /^[A-Za-z][^:]{0,90}:\s\S/.test(snippet);
-  const isNumberedRow = /^\d+(?:\.\d+)*[.)]?\s+[A-Z]/.test(snippet);
-  const isShortValueRow =
-    /^(suite|unit|space|monthly|annual|base rent|rent|permitted use|broker|address|landlord|tenant)\b/i.test(snippet) &&
-    !/[.!?]\s+\S/.test(snippet);
-  if (!isLabeledRow && !isNumberedRow && !isShortValueRow) return false;
-  const partyMarkerCount = (snippet.match(/\b(?:landlord|tenant|lessee|lessor|address of landlord|address of tenant)\b/gi) || []).length;
-  return partyMarkerCount <= 2;
-}
-
 function boundedSourceSnippet(text: string, matchStart: number, matchLength: number) {
   const source = cleanEvidenceSnippet(text);
   if (!source) return "";
 
   const singleLine = source;
-  if (isShortCompleteSourceRow(singleLine)) {
+  if (isShortCompleteSourceRow(singleLine, { requireLabelOrNumbered: true })) {
     return singleLine;
   }
   if (singleLine.length <= SOURCE_SNIPPET_MAX_CHARS && /^[A-Za-z][^:]{0,90}:\s\S/.test(singleLine)) {
@@ -598,35 +489,10 @@ function boundedSourceSnippet(text: string, matchStart: number, matchLength: num
     return singleLine;
   }
 
-  const safeMatchStart = Math.max(0, Math.min(matchStart, source.length));
-  const safeMatchEnd = Math.max(safeMatchStart, Math.min(source.length, safeMatchStart + matchLength));
-  const searchStart = Math.max(0, safeMatchStart - SOURCE_SNIPPET_LOOKBACK);
-  const searchEnd = Math.min(source.length, safeMatchEnd + SOURCE_SNIPPET_LOOKAHEAD);
-
-  let start: number | null = safeMatchStart === 0 ? 0 : null;
-  for (let i = safeMatchStart - 1; i >= searchStart; i -= 1) {
-    if (isSourceSentenceEnd(source, i)) {
-      start = skipSourceBoundaryPadding(source, i + 1);
-      break;
-    }
-  }
-  if (start == null && searchStart === 0) start = 0;
-  if (start == null) return "";
-
-  let end: number | null = null;
-  for (let i = safeMatchEnd; i < searchEnd; i += 1) {
-    if (isSourceSentenceEnd(source, i)) {
-      end = i + 1;
-      break;
-    }
-  }
-  if (end == null && searchEnd === source.length) end = source.length;
-  if (end == null) return "";
-
-  const snippet = cleanEvidenceSnippet(source.slice(start, end));
-  if (!snippet || snippet.length > SOURCE_SNIPPET_MAX_CHARS || !isCleanSnippetStart(snippet)) return "";
-  if (!/[.!?]["')\]]?$/.test(snippet) && !/^[A-Za-z][^:]{0,90}:\s\S/.test(snippet)) return "";
-  return snippet;
+  return expandSourceSnippetFromMatch(source, matchStart, matchLength, {
+    clean: cleanEvidenceSnippet,
+    requireLabelOrNumberedShortRow: true,
+  }) ?? "";
 }
 
 function cleanPartyAddressValue(fieldKey: string, value: unknown) {
@@ -1346,7 +1212,7 @@ function buildMinimalReviewPayload(opts: {
  */
 /**
  * Bounded-enrich-refactor extraction of buildReviewPayload's per-field
- * evidence-verification loop (see FAILED_EXTRACTION_ROOT_CAUSE.md and the
+ * evidence-verification loop (see docs/lease-extraction-architecture-audit-2026-07-29.md and the
  * "Bounded Per-Domain Enrich Refactor" plan). Unlike buildLeaseWorkflowAbstraction,
  * this loop is genuinely a per-field-independent schemaEntries.map(...) --
  * each iteration only reads fieldKey/def plus row-level closures, never
@@ -1620,7 +1486,7 @@ function buildReviewPayload(opts: {
     metadata: Record<string, unknown>;
   };
   /**
-   * Bounded-enrich-refactor hook (see FAILED_EXTRACTION_ROOT_CAUSE.md and the
+   * Bounded-enrich-refactor hook (see docs/lease-extraction-architecture-audit-2026-07-29.md and the
    * "Bounded Per-Domain Enrich Refactor" plan). When provided, buildReviewPayload
    * uses this ALREADY-COMPUTED per-row workflow abstraction (pooled from
    * enrich_clauses/enrich_fields/enrich_items/enrich_derivation's separate,
@@ -1729,7 +1595,7 @@ function buildReviewPayload(opts: {
     : [];
   const rows = result.rows.map((r, index) => {
     const values = stripInternalKeys(r);
-    if ((moduleType === "leases" || moduleType === "lease") && isBlank(values.notes)) {
+    if (isLeaseModuleType(moduleType) && isBlank(values.notes)) {
       const camNote = extractCamNoteFromText(doclingRaw);
       if (camNote) values.notes = camNote;
     }
@@ -2717,7 +2583,7 @@ async function handleEnrichMode(args: {
 }
 
 // ---------------------------------------------------------------------------
-// Bounded Per-Domain Enrich Refactor (see FAILED_EXTRACTION_ROOT_CAUSE.md and
+// Bounded Per-Domain Enrich Refactor (see docs/lease-extraction-architecture-audit-2026-07-29.md and
 // the "Bounded Per-Domain Enrich Refactor" plan). Each of the 10 stage names
 // in enrich-bounded-stage/stage-sequence.ts is handled by ONE call to
 // handleBoundedEnrichStage below -- one stage, one Edge Function invocation,
@@ -2772,7 +2638,7 @@ function handleEnrichEvidenceDomainStage(args: {
   // Omitting this here silently regresses "notes" for lease documents
   // in the bounded path (caught by _tests/enrich-bounded-stages.test.ts's
   // byte-equivalence gate).
-  if ((moduleType === "leases" || moduleType === "lease") && isBlank(values.notes)) {
+  if (isLeaseModuleType(moduleType) && isBlank(values.notes)) {
     const camNote = extractCamNoteFromText(doclingRaw);
     if (camNote) values.notes = camNote;
   }
@@ -2986,7 +2852,7 @@ async function handleBoundedEnrichStage(args: {
         const values = stripInternalKeys(row);
         // Mirrors buildReviewPayload's own rows.map() exactly -- see the
         // matching comment in the evidence-domain-stage case above.
-        if ((moduleType === "leases" || moduleType === "lease") && isBlank(values.notes)) {
+        if (isLeaseModuleType(moduleType) && isBlank(values.notes)) {
           const camNote = extractCamNoteFromText(doclingRaw);
           if (camNote) values.notes = camNote;
         }
@@ -3105,7 +2971,7 @@ async function handleBoundedEnrichStage(args: {
   if (stage === "enrich_truth_assembly") {
     // Same mode-gated post-processing + finalize call as the monolithic
     // handleEnrichMode() runs today, unchanged -- confirmed no-ops while
-    // their flags default "off" (see FAILED_EXTRACTION_ROOT_CAUSE.md /
+    // their flags default "off" (see docs/lease-extraction-architecture-audit-2026-07-29.md /
     // the plan's exploration findings).
     const claimsLedgerMode = getLeaseClaimsLedgerMode();
     const packageMode = getLeaseDocumentPackageMode();
@@ -3143,7 +3009,7 @@ async function handleBoundedEnrichStage(args: {
     // Finalize review readiness -- inspect {data, error} explicitly, never
     // swallow a non-throwing RPC error, keep p_package_mode/p_financial_mode
     // exactly as every other call site (do not drop them to make this call
-    // succeed locally -- see FAILED_EXTRACTION_ROOT_CAUSE.md).
+    // succeed locally -- see docs/lease-extraction-architecture-audit-2026-07-29.md).
     const { error: finalizeError } = await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
       p_org_id: orgId,
       p_uploaded_file_id: fileId,
@@ -3219,11 +3085,10 @@ Deno.serve(async (req: Request) => {
 
       let extraction: Record<string, unknown> | null = null;
       if (typeof sample_text === "string" && sample_text.length > 0) {
-        // Tier 1 (dry_run) live comparison support: an internal/service-role
-        // caller may request openai_fact_ledger for this one sample_text call
-        // without touching the BUSINESS_EXTRACTION_PROVIDER project secret.
+        // Dry-run sample text uses the same lease architecture fence as the
+        // real path: whole-document LLM primary plus explicit legacy fallback.
         // No uploaded_files row exists in this branch, so there is nothing to
-        // write — this is the zero-DB-write comparison path.
+        // write.
         const dryRunProvider = enforceLeaseExtractionArchitecture(
           "lease",
           resolveBusinessExtractionProvider(
@@ -3240,9 +3105,7 @@ Deno.serve(async (req: Request) => {
             extraction_method: "dry_run",
           };
           // Azure+OpenAI route: routed through the same orchestrator as the
-          // real path so the selected provider
-          // is handled correctly instead of silently falling to legacy (the
-          // old two-branch ternary here had no third case).
+          // real path so dry-run behavior cannot drift from live lease routing.
           const result = await runBusinessExtraction({
             requestedProvider: dryRunProvider,
             moduleType: "lease",
@@ -3361,6 +3224,7 @@ Deno.serve(async (req: Request) => {
       if (latestJob?.id) finalPipelineJobId = latestJob.id;
     }
     const extractionRunId = finalPipelineJobId || file_id;
+    const extractionGenerationId = generation_id ?? fileRecord.active_generation_id ?? null;
 
     // P1.3: only attempt to record a stage run when this request actually
     // carries a generation_id (worker-dispatched, lease-module calls) --
@@ -3689,14 +3553,13 @@ Deno.serve(async (req: Request) => {
         ),
       );
       console.log(`[normalize-pdf-output] STAGE pipeline_start file_id=${file_id} fileBase64=${!!fileBase64} azureLayoutMode=${azureLayoutMode} provider=${businessExtractionProvider}`);
-      // Run the canonical extraction pipeline.
-      // Rule → Table → LLM(missing only) → Merge → Validate → Calculate.
+      // Run the canonical extraction pipeline. For leases, the architecture
+      // fence above forces whole-document LLM primary plus explicit legacy
+      // fallback; non-lease modules keep their configured provider strategy.
       const pipelineDocling = buildPipelineLayoutInput(fileRecord.docling_raw as Record<string, unknown> | null);
-      // Azure+OpenAI Phase 4E (local implementation): single call through the
-      // business-extraction orchestrator replaces the direct provider
-      // ternary. Returns the exact same ExtractionPipelineResult shape both
-      // providers already produced -- buildReviewPayload/buildLeaseWorkflowAbstraction/
-      // persistence below are unmodified and unaware this replaced a ternary.
+      // One call through the business-extraction orchestrator returns a common
+      // ExtractionPipelineResult shape for primary/fallback/manual-review
+      // outcomes; review payload building and persistence consume that shape.
       const mockOpenAIScenario = resolveMockOpenAIScenario(req, body as Record<string, unknown>, businessExtractionProvider);
       const factLedgerResume = normalizeFactLedgerResume((body as any)?.fact_ledger_resume);
       const result = await runBusinessExtraction({
@@ -3736,6 +3599,10 @@ Deno.serve(async (req: Request) => {
           }
           : {}),
       });
+      result.metadata = {
+        ...(result.metadata ?? {}),
+        generation_id: extractionGenerationId,
+      };
       assertAuthoritativeLeaseExtractionResult(extractionModuleType, result as Record<string, any>);
       stampBusinessExtractionPersistedAt(result, new Date().toISOString());
       console.log(`[normalize-pdf-output] STAGE pipeline_done file_id=${file_id} rows=${result.rows?.length ?? 0} method=${result.method} provider=${businessExtractionProvider}`);
@@ -4048,7 +3915,7 @@ Deno.serve(async (req: Request) => {
           uploadedFile: { ...fileRecord, ui_review_payload: minimalPayload },
           leaseId: null,
           pipelineJobId: finalPipelineJobId ?? null,
-          generationId: generation_id ?? jobGenerationId ?? fileRecord.active_generation_id ?? null,
+          generationId: extractionGenerationId,
           result,
           logger,
         });
@@ -4081,7 +3948,7 @@ Deno.serve(async (req: Request) => {
             orgId,
             fileId: file_id,
             stage: firstEnrichBoundedStage(),
-            generationId: generation_id ?? fileRecord.active_generation_id ?? null,
+            generationId: extractionGenerationId,
             moduleType,
             logger,
           });
@@ -4214,6 +4081,7 @@ Deno.serve(async (req: Request) => {
           extraction_build_version: "2026-06-22.1",
           extraction_run_id: extractionRunId,
           pipeline_job_id: finalPipelineJobId,
+          generation_id: extractionGenerationId,
           source_file_id: file_id,
           normalized_at: new Date().toISOString(),
           worker_attempt: worker_attempt ?? 1,
@@ -4258,6 +4126,7 @@ Deno.serve(async (req: Request) => {
           extraction_build_version: "2026-06-22.1",
           extraction_run_id: extractionRunId,
           pipeline_job_id: finalPipelineJobId,
+          generation_id: extractionGenerationId,
           source_file_id: file_id,
           normalized_at: new Date().toISOString(),
           worker_attempt: worker_attempt ?? 1,
@@ -4272,6 +4141,7 @@ Deno.serve(async (req: Request) => {
           (uiReviewPayload.metadata as Record<string, unknown>).extraction_build_version = "2026-06-22.1";
           (uiReviewPayload.metadata as Record<string, unknown>).extraction_run_id = extractionRunId;
           (uiReviewPayload.metadata as Record<string, unknown>).pipeline_job_id = finalPipelineJobId;
+          (uiReviewPayload.metadata as Record<string, unknown>).generation_id = extractionGenerationId;
           (uiReviewPayload.metadata as Record<string, unknown>).source_file_id = file_id;
           (uiReviewPayload.metadata as Record<string, unknown>).normalized_at = new Date().toISOString();
           (uiReviewPayload.metadata as Record<string, unknown>).worker_attempt = worker_attempt ?? 1;

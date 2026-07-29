@@ -3,7 +3,7 @@
 // (supabase/functions/_shared/extraction/document-intelligence-v3/canonical-layout.ts).
 // Pure-function tests only -- no DB, no network. Fixtures match the real,
 // confirmed docling_raw shape azure-layout-adapter.ts persists (per
-// docs/document-intelligence-v3-baseline.md).
+// docs/lease-extraction-architecture-audit-2026-07-29.md).
 // Run: deno test --allow-env --allow-read --no-lock document-intelligence-v3-canonical-layout.test.ts
 
 import { assert, assertEquals, assertFalse } from "https://deno.land/std@0.208.0/assert/mod.ts";

@@ -4,7 +4,7 @@
  *
  * Pure functions only: build an empty/default v3 contract skeleton, and
  * validate that a claim/evidence/contract object satisfies the required
- * shape from docs/document-intelligence-v3-baseline.md. Nothing here reads
+ * shape from docs/lease-extraction-architecture-audit-2026-07-29.md. Nothing here reads
  * or writes uploaded_files / leases — see adapter.ts for the (still
  * read-only) function that populates a skeleton from real rows.
  */

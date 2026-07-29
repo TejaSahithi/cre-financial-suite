@@ -1,7 +1,7 @@
 // @ts-nocheck
 /**
  * Cross-stage handoff for the bounded per-domain enrich chain (see
- * FAILED_EXTRACTION_ROOT_CAUSE.md and the "Bounded Per-Domain Enrich
+ * docs/lease-extraction-architecture-audit-2026-07-29.md and the "Bounded Per-Domain Enrich
  * Refactor" plan).
  *
  * pipeline_jobs.output is confirmed dead/unused in this codebase (an

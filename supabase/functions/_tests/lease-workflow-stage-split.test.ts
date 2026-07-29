@@ -1,6 +1,6 @@
 // @ts-nocheck
 // Bounded Per-Domain Enrich Refactor -- correctness gate for the
-// lease-workflow.ts split (see FAILED_EXTRACTION_ROOT_CAUSE.md and the
+// lease-workflow.ts split (see docs/lease-extraction-architecture-audit-2026-07-29.md and the
 // "Bounded Per-Domain Enrich Refactor" plan).
 //
 // buildLeaseWorkflowAbstraction() used to be one 430-line function. It is

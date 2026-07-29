@@ -2,12 +2,12 @@
 
 This is a living spec, grounded in the extraction pipeline's actual code as of this commit — not aspirational, and not yet enforced anywhere beyond what the referenced files already do:
 
-- `supabase/functions/_shared/extraction/schemas.ts` — `LEASE_SCHEMA` (82 unique field keys; the base vocabulary for `field_key`/`label`/`data_type`/`validation_rule`, and the schema both `legacy_hybrid` and `vertex_fact_ledger` map onto).
+- `supabase/functions/_shared/extraction/schemas.ts` — `LEASE_SCHEMA` (82 unique field keys; the base vocabulary for `field_key`/`label`/`data_type`/`validation_rule`, and the schema both the primary whole-document LLM path and the legacy fallback map onto).
 - `supabase/functions/_shared/extraction/payload-guard.ts` — `CORE_FIELD_CATEGORIES` / `computeCoreReady()` (source of `required_for_approval`).
 - `supabase/functions/_shared/extraction/lease-workflow.ts` — `buildBudgetHandoffReadiness()` (source of `required_for_budget`), `deriveCamProfile()` (source of `required_for_cam`).
-- `supabase/functions/_shared/extraction/vertex-fact-ledger/approval-blockers.ts` — `PROFILE_BLOCKER_RULES` (source of `required_by_document_profile`).
+- `supabase/functions/_shared/extraction/openai-fact-ledger/approval-blockers.ts` — `PROFILE_BLOCKER_RULES` (source of `required_by_document_profile`).
 
-Any future extraction provider — `vertex_fact_ledger` included — should be evaluated against this document, not against `LEASE_SCHEMA` alone.
+Any future extraction provider should be evaluated against this document, not against `LEASE_SCHEMA` alone.
 
 ## Known cross-schema gaps (read this before the tables)
 
@@ -203,7 +203,7 @@ Every profile-specific blocker rule in `approval-blockers.ts` is already capture
 
 | field_key | label | data_type | required_for_approval | required_for_cam | required_for_budget | required_by_document_profile | evidence_required | approval_impact | validation_rule |
 |---|---|---|---|---|---|---|---|---|---|
-| document_profile *(computed, not a `LEASE_SCHEMA` field)* | Document Profile | enum | **true** | false | false | all | n/a | Selects which `PROFILE_BLOCKER_RULES` set applies; a wrong classification silently applies the wrong blocker set. Computed today by regex (`detectDocumentProfileSignals`) or, under `vertex_fact_ledger`, by `classifyDocumentProfile()`. | enum: full_lease, assignment, amendment, assignment_amendment, abstract, addendum, exhibit |
+| document_profile *(computed, not a `LEASE_SCHEMA` field)* | Document Profile | enum | **true** | false | false | all | n/a | Selects which `PROFILE_BLOCKER_RULES` set applies; a wrong classification silently applies the wrong blocker set. Computed today by regex (`detectDocumentProfileSignals`) or, under the OpenAI extraction path, by `classifyDocumentProfile()`. | enum: full_lease, assignment, amendment, assignment_amendment, abstract, addendum, exhibit |
 | approval_status / review_status *(row-level, not a `LEASE_SCHEMA` field)* | Approval / Review Status | enum | **true** | false | false | all | n/a | `hasApprovedStatus(row?.abstract_status \|\| approval_status \|\| review_status \|\| status)` gates `buildBudgetHandoffReadiness()`'s `ready` flag directly — nothing publishes to Budget until this is approved. | lease row status field(s) |
 
 ---
@@ -220,7 +220,7 @@ The gaps above are now closed at the code level (this doc's field list/table con
 - **6 new `LEASE_SCHEMA` fields added**: `building_rsf`, `landlord_address`, `tenant_address`, `tenant_contact_name`, `tenant_contact_phone`, `landlord_consent_for_transfer` — all six were already referenced in `LEASE_GROUPS`' LLM-prompt field lists, so this makes that array internally consistent again, not just additive.
 - **The 2 shadowed duplicate definitions were merged** — `tenant_insurance_required` and `general_liability_min` now each have exactly one `LEASE_SCHEMA` definition (the one that was already winning at runtime; verified zero behavior change).
 - **`tenant_pro_rata_share` stays a computed-only field** — deliberately *not* added as an extractable `LEASE_SCHEMA` field. It's already correctly derived as `square_footage / building_rsf` in `buildLeaseFieldMap()`; making it independently extractable would create two competing sources of truth for a number that must equal that ratio.
-- **`vertex_fact_ledger`'s `fact-field-mapper.ts` now checks `field-contract.ts` aliases**, not just each field's own `LEASE_SCHEMA` labels — closing the parity gap where `legacy_hybrid` (via `FIELD_SPECS`' aliases) could resolve a field that `vertex_fact_ledger` could not.
+- **The fact-mapping compatibility layer checks `field-contract.ts` aliases**, not just each field's own `LEASE_SCHEMA` labels — closing the parity gap where the legacy fallback could resolve a field that the LLM mapper could not.
 - **A real, previously-hidden ambiguity surfaced while writing tests for this phase**: `tax_responsibility` and `responsibility_taxes` (and the same pattern for `insurance_responsibility`/`responsibility_insurance`) have overlapping `LEASE_SCHEMA` labels — `responsibility_taxes`'s labels are a strict subset of `tax_responsibility`'s — so the enum field could never win a fact-mapping tie against its free-text sibling. Fixed with a distinguishing self-referential alias in `field-contract.ts`, not by reworking either field's `LEASE_SCHEMA` labels.
 - `buildBudgetHandoffReadiness()`, `deriveCamProfile()`, `orchestrator.ts`, and `pipeline.ts`'s snapshot/debug output needed **zero code changes** — confirmed by reading `buildLeaseFieldMap()` directly and by a regression test — they already read `leaseFields`/`row` generically via `FIELD_SPECS`' existing `aliases`-driven `getFirstValue()` bridge, which picks up the new fields automatically now that both `LEASE_SCHEMA` and `FIELD_SPECS` know about them.
 

@@ -54,10 +54,11 @@ Deno.test("resolveBusinessExtractionProvider: an internal debug override still t
   });
 });
 
-Deno.test("enforceLeaseExtractionArchitecture: active lease mode overrides every configured provider to direct OpenAI", () => {
+Deno.test("enforceLeaseExtractionArchitecture: active lease mode overrides every configured provider to primary-plus-legacy-fallback", () => {
   withEnvVar("LEASE_WHOLE_DOCUMENT_LLM_V1", undefined, () => {
-    assertEquals(normalizeTest.enforceLeaseExtractionArchitecture("lease", "legacy_hybrid"), "openai_fact_ledger");
-    assertEquals(normalizeTest.enforceLeaseExtractionArchitecture("lease", "openai_primary_legacy_fallback"), "openai_fact_ledger");
+    assertEquals(normalizeTest.enforceLeaseExtractionArchitecture("lease", "legacy_hybrid"), "openai_primary_legacy_fallback");
+    assertEquals(normalizeTest.enforceLeaseExtractionArchitecture("leases", "legacy_hybrid"), "openai_primary_legacy_fallback");
+    assertEquals(normalizeTest.enforceLeaseExtractionArchitecture("lease", "openai_fact_ledger"), "openai_primary_legacy_fallback");
   });
 });
 
@@ -71,7 +72,7 @@ Deno.test("assertAuthoritativeLeaseExtractionResult: rejects a legacy-shaped res
   withEnvVar("LEASE_WHOLE_DOCUMENT_LLM_V1", "active", () => {
     let message = "";
     try {
-      normalizeTest.assertAuthoritativeLeaseExtractionResult("lease", {
+      normalizeTest.assertAuthoritativeLeaseExtractionResult("leases", {
         metadata: { extractionDebug: { openai_fact_ledger: { facts_extracted_count: 56, facts_mapped_count: 24 } } },
       });
     } catch (error) {
@@ -85,6 +86,19 @@ Deno.test("assertAuthoritativeLeaseExtractionResult: accepts whole_document_llm_
   withEnvVar("LEASE_WHOLE_DOCUMENT_LLM_V1", "active", () => {
     normalizeTest.assertAuthoritativeLeaseExtractionResult("lease", {
       metadata: { extractionDebug: { openai_fact_ledger: { extraction_mode: "whole_document_llm_v2" } } },
+    });
+  });
+});
+
+Deno.test("assertAuthoritativeLeaseExtractionResult: accepts explicit legacy fallback result", () => {
+  withEnvVar("LEASE_WHOLE_DOCUMENT_LLM_V1", "active", () => {
+    normalizeTest.assertAuthoritativeLeaseExtractionResult("leases", {
+      metadata: {
+        provenance: {
+          fallback_used: true,
+          effective_provider: "legacy_hybrid",
+        },
+      },
     });
   });
 });

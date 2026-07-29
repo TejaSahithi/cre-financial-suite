@@ -1,7 +1,7 @@
 // @ts-nocheck
 /**
  * Shared generation-fencing check for the bounded per-domain enrich stages
- * (see FAILED_EXTRACTION_ROOT_CAUSE.md and the "Bounded Per-Domain Enrich
+ * (see docs/lease-extraction-architecture-audit-2026-07-29.md and the "Bounded Per-Domain Enrich
  * Refactor" plan).
  *
  * Before this module existed, "is this still the file's active generation?"

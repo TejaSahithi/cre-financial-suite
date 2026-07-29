@@ -541,7 +541,7 @@ export function buildDerivedFieldEvidence(lease, key, currentValue, currentEvide
     // without re-deriving it. It does NOT change the `value` computed above
     // — the derivation itself is unchanged, only explained. Fixing the
     // "unsafe input, blind derivation" behavior itself is an explicitly
-    // separate, later Micro-step (see LEASE_EXTRACTION_UI_PIPELINE_AUDIT.md
+    // separate, later Micro-step (see docs/lease-extraction-architecture-audit-2026-07-29.md
     // Section 16.0/16.3).
     const parentResolved = resolveLeaseField(lease, "monthly_rent", { mode: "canonical" });
     const parentValidationStatus = effectiveMonthlyEvidence?.requiresReview

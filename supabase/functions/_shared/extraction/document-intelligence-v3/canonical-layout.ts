@@ -46,7 +46,7 @@
  * ---- Original Phase 5 note (legacy path only) ----
  * legacyDoclingToCanonicalLayout builds a richer, provider-agnostic layout
  * projection from whatever is already persisted on an
- * uploaded_files.docling_raw row (per docs/document-intelligence-v3-baseline.md's
+ * uploaded_files.docling_raw row (per docs/lease-extraction-architecture-audit-2026-07-29.md's
  * confirmed docling_raw shape) -- it does not call Azure, does not re-parse,
  * and does not require the raw Azure response (raw_response is only ever
  * read as "not present" here; STORE_FULL_AZURE_RAW_RESPONSE=false rows work

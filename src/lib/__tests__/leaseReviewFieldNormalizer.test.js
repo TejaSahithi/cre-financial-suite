@@ -966,8 +966,17 @@ describe("Phase 48B: no-provider CAM-heavy base lease fallbacks", () => {
     },
   });
 
-  it('does not let a tenant/contact address satisfy property_address when stronger premises evidence exists', () => {
+  it('does not let a tenant/contact address satisfy property_address by default', () => {
     const result = normalizeLeaseReviewData(camHeavyLease());
+    const row = result.standardFields.find((r) => r.canonicalKey === 'property_address');
+    expect(row.value).toBeNull();
+    expect(['missing', 'needs_review']).toContain(row.status);
+    expect(row.sourceProvider).not.toBe('no_provider_payload_fallback');
+    expect(row.validationMessage).toMatch(/does not support/i);
+  });
+
+  it('can still run the old no-provider premises fallback when explicitly opted in for diagnostics', () => {
+    const result = normalizeLeaseReviewData(camHeavyLease(), { allowNoProviderCoreFallbacks: true });
     const row = result.standardFields.find((r) => r.canonicalKey === 'property_address');
     expect(row.value).toBe('12350 South Northshore, Knoxville, TN 37922');
     expect(row.status).toBe('needs_review');
@@ -976,8 +985,26 @@ describe("Phase 48B: no-provider CAM-heavy base lease fallbacks", () => {
     expect(row.validationMessage).toMatch(/tenant\/contact address/i);
   });
 
-  it('prefers premises/demised-premises source text when property_address is missing', () => {
+  it('does not fill missing property_address from premises text unless no-provider core fallback is opted in', () => {
     const result = normalizeLeaseReviewData(camHeavyLease({ fields: { property_address: null }, field_evidence: { property_address: null } }));
+    const row = result.standardFields.find((r) => r.canonicalKey === 'property_address');
+    expect(row.value).toBeNull();
+    expect(row.sourceProvider).not.toBe('no_provider_payload_fallback');
+
+    const diagnosticResult = normalizeLeaseReviewData(
+      camHeavyLease({ fields: { property_address: null }, field_evidence: { property_address: null } }),
+      { allowNoProviderCoreFallbacks: true },
+    );
+    const diagnosticRow = diagnosticResult.standardFields.find((r) => r.canonicalKey === 'property_address');
+    expect(diagnosticRow.value).toBe('12350 South Northshore, Knoxville, TN 37922');
+    expect(diagnosticRow.sourceText).toMatch(/Demised Premises|Premises/i);
+  });
+
+  it('prefers premises/demised-premises source text when property_address is missing in diagnostic fallback mode', () => {
+    const result = normalizeLeaseReviewData(
+      camHeavyLease({ fields: { property_address: null }, field_evidence: { property_address: null } }),
+      { allowNoProviderCoreFallbacks: true },
+    );
     const row = result.standardFields.find((r) => r.canonicalKey === 'property_address');
     expect(row.value).toBe('12350 South Northshore, Knoxville, TN 37922');
     expect(row.sourceText).toMatch(/Demised Premises|Premises/i);
@@ -1002,8 +1029,15 @@ describe("Phase 48B: no-provider CAM-heavy base lease fallbacks", () => {
     expect(monthlyRent.value).toBeNull();
   });
 
-  it('projects Security Deposit Addendum total with evidence and review status', () => {
+  it('does not project Security Deposit Addendum total into core fields by default', () => {
     const result = normalizeLeaseReviewData(camHeavyLease());
+    const row = result.standardFields.find((r) => r.canonicalKey === 'security_deposit');
+    expect(row.value).toBeNull();
+    expect(row.sourceProvider).not.toBe('no_provider_payload_fallback');
+  });
+
+  it('projects Security Deposit Addendum total in diagnostic fallback mode only', () => {
+    const result = normalizeLeaseReviewData(camHeavyLease(), { allowNoProviderCoreFallbacks: true });
     const row = result.standardFields.find((r) => r.canonicalKey === 'security_deposit');
     expect(row.value).toBe(15535.36);
     expect(row.status).toBe('needs_review');

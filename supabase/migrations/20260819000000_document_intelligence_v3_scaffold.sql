@@ -5,7 +5,7 @@
 -- phase); this migration exists so the v3 contract has a real, queryable,
 -- versioned home instead of living only inside the transient
 -- ui_review_payload JSONB blob, per
--- docs/document-intelligence-v3-baseline.md Section 6 ("Durable claim/
+-- docs/lease-extraction-architecture-audit-2026-07-29.md ("Durable claim/
 -- evidence ledger is missing") and Section 7 recommendation 2.
 --
 -- RLS follows the lease_abstract_versions / lease_field_reviews precedent

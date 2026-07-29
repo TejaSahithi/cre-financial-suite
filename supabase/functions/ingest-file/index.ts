@@ -28,6 +28,15 @@ import {
   PARSER_STATUSES,
   REVIEW_STATUSES,
 } from "../_shared/extraction/pipeline-contract.ts";
+import { isLeaseModuleType } from "../_shared/extraction/lease-module.ts";
+import {
+  INGEST_EDGE_CALL_TIMEOUT_MS,
+  INGEST_MAX_WAIT_MS,
+  INGEST_RESPONSE_SAFETY_MS,
+  INGEST_STATUS_READ_TIMEOUT_MS,
+  ingestNormalizeTimeoutCeilingMs,
+  ingestParseTimeoutMs,
+} from "../_shared/extraction/edge-runtime-budgets.ts";
 
 /**
  * ingest-file — Unified File Ingestion Router
@@ -58,12 +67,6 @@ import {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function envBoundedInt(name: string, fallback: number, min: number, max: number): number {
-  const raw = Deno.env.get(name);
-  const value = raw ? Number(raw) : fallback;
-  const parsed = Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
-  return Math.max(min, Math.min(max, parsed));
-}
 /** Edge Function caller with selective retry and strict timeout budget.
  *
  * Timeout budget: Supabase Edge Functions have a 150 s hard wall. With two
@@ -90,7 +93,7 @@ async function callEdgeFunction(
   authToken: string,
   actingOrgId?: string | null,
   retries = 1,
-  timeoutMs = 45000,
+  timeoutMs = INGEST_EDGE_CALL_TIMEOUT_MS,
   discardSuccessBody = false,
 ): Promise<{ ok: boolean; status: number; data: unknown; error?: string; timedOut?: boolean }> {
   const url = `${supabaseUrl}/functions/v1/${functionName}`;
@@ -371,7 +374,7 @@ async function downloadPreviewBytes(
           apikey: serviceKey,
           Range: `bytes=0-${maxBytes - 1}`,
         },
-        signal: AbortSignal.timeout(10_000),
+        signal: AbortSignal.timeout(INGEST_STATUS_READ_TIMEOUT_MS),
       });
       // 206 Partial Content or 200 (server ignored Range but returned the file)
       if (res.ok || res.status === 206) {
@@ -1035,7 +1038,7 @@ Deno.serve(async (req: Request) => {
     const effectiveModule = (detection.moduleType === "unknown"
       ? (fileRecord.module_type as ModuleType) || "unknown"
       : detection.moduleType) as ModuleType;
-    const isLeaseModule = effectiveModule === "leases" || effectiveModule === "lease";
+    const isLeaseModule = isLeaseModuleType(effectiveModule);
     const reviewRequired = isLeaseModule
       ? true
       : routing.route === "parse-document-azure" && subtypeResult.reviewRequired;
@@ -1092,7 +1095,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    if (routing.route === "parse-document-azure" && isLeaseModule && run_synchronously !== true) {
+    if (routing.route === "parse-document-azure" && isLeaseModule) {
       const job = await enqueueLeaseExtractionJob({
         supabaseAdmin,
         logger,
@@ -1111,7 +1114,12 @@ Deno.serve(async (req: Request) => {
           status: "parsing",
           processing_status: "lease_extraction_queued",
           detection: detectionSummary,
-          routing: { routed_to: routing.route, reason: routing.reason },
+          routing: {
+            routed_to: "lease-extraction-worker",
+            parser_route: routing.route,
+            reason: routing.reason,
+            run_synchronously_ignored: run_synchronously === true,
+          },
           message: "Lease extraction has been queued. The parser will run in the background and Lease Review will appear when extraction is ready.",
         }),
         { status: 202, headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -1148,9 +1156,7 @@ Deno.serve(async (req: Request) => {
       // normalize wait based on elapsed time so ingest-file can still return a
       // controlled response instead of being killed by the platform.
       const pipelineStartedAt = Date.now();
-      const MAX_INGEST_WAIT_MS = 135_000;
-      const RESPONSE_SAFETY_MS = 10_000;
-      const PARSE_TIMEOUT_MS = envBoundedInt("INGEST_PARSE_TIMEOUT_MS", 90_000, 30_000, 120_000);
+      const parseTimeoutMs = ingestParseTimeoutMs();
 
       // Step 1: Azure Document Intelligence extraction with enhanced error handling
       // discardSuccessBody=true: parse-document-azure writes parser output directly
@@ -1163,7 +1169,7 @@ Deno.serve(async (req: Request) => {
         downstreamAuthToken,
         actingOrgId,
         1,
-        PARSE_TIMEOUT_MS,
+        parseTimeoutMs,
         !defer_store,
       );
 
@@ -1171,7 +1177,7 @@ Deno.serve(async (req: Request) => {
         console.error(`[ingest-file] Azure Document Intelligence extraction failed:`, azureParseResult.error);
 
         const reason = (azureParseResult as any).timedOut
-          ? `The document parser timed out after ${Math.round(PARSE_TIMEOUT_MS / 1000)}s before it could produce readable lease text. Upload a smaller/text-searchable PDF, or move parsing to a longer-running background worker before retrying.`
+          ? `The document parser timed out after ${Math.round(parseTimeoutMs / 1000)}s before it could produce readable lease text. Upload a smaller/text-searchable PDF, or move parsing to a longer-running background worker before retrying.`
           : `Document extraction failed: ${azureParseResult.error || "Unknown error"}`;
         const payload = await parkForBlockedPipeline({
           supabaseAdmin,
@@ -1251,10 +1257,10 @@ Deno.serve(async (req: Request) => {
       // pushes ingest-file past the 546 memory ceiling.
       // After success we read review_required directly from the DB (below).
       const elapsedAfterParseMs = Date.now() - pipelineStartedAt;
-      const maxNormalizeWaitMs = envBoundedInt("INGEST_NORMALIZE_TIMEOUT_MS", 90_000, 20_000, 120_000);
+      const maxNormalizeWaitMs = ingestNormalizeTimeoutCeilingMs();
       const normalizeTimeoutMs = Math.max(
         20_000,
-        Math.min(maxNormalizeWaitMs, MAX_INGEST_WAIT_MS - elapsedAfterParseMs - RESPONSE_SAFETY_MS),
+        Math.min(maxNormalizeWaitMs, INGEST_MAX_WAIT_MS - elapsedAfterParseMs - INGEST_RESPONSE_SAFETY_MS),
       );
 
       const normalizeResult = await callEdgeFunction(

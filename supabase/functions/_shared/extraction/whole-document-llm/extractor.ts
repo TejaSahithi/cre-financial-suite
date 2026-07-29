@@ -16,6 +16,7 @@ import { computeDerivedFields } from "../calculator.ts";
 import { snapshotFieldMap } from "../pipeline.ts";
 import { EXTRACTION_CONTRACT_VERSION } from "../contract-version.ts";
 import { createDocumentItem } from "../lease-workflow.ts";
+import { isLeaseModuleType } from "../lease-module.ts";
 import {
   buildCompactLeaseDocument,
   compactDocumentEvidenceMap,
@@ -389,7 +390,7 @@ export async function runWholeDocumentLlmPipeline(
   args: RunWholeDocumentLlmArgs,
 ): Promise<ExtractionPipelineResult> {
   const startedAt = Date.now();
-  if (args.moduleType !== "lease") {
+  if (!isLeaseModuleType(args.moduleType)) {
     return failureResult(startedAt, "Whole-document LLM mode currently supports lease documents only.", {
       failure_classification: "unsupported_module",
     });

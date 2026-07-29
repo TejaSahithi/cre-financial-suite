@@ -12,10 +12,7 @@
  * repairs, etc.), never copied from or shaped around any single real
  * document, landlord, or page number.
  *
- * Results (precision/recall/null-accuracy by field family) are summarized in
- * LEASE_EXTRACTION_GOLDEN_CORPUS.md, generated FROM this file's actual pass/
- * fail output -- not asserted in the report independently of what these
- * tests actually verify.
+ * This file is the source of truth for the corpus; reports should be generated from actual pass/fail output, not maintained separately.
  */
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { mapFactsToStandardFields } from "../_shared/extraction/openai-fact-ledger/fact-field-mapper.ts";
@@ -499,7 +496,7 @@ Deno.test("parity: a monthly-installment phrase is rejected for annual_rent by B
 // in openai-fact-ledger.test.ts) are the pre-existing, template-independent
 // regression fixture this generalized layer must continue to satisfy -- not
 // duplicated here; see that file's "fact mapper rejects/keeps Craven-style
-// ..." tests, both passing (verified in LEASE_EXTRACTION_GOLDEN_CORPUS.md).
+// ..." tests, both passing.
 // ═══════════════════════════════════════════════════════════════════════════
 
 Deno.test("corpus/scoreboard: print final tallies for the golden corpus report", () => {

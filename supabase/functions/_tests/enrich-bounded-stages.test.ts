@@ -1,6 +1,6 @@
 // @ts-nocheck
 // Bounded Per-Domain Enrich Refactor -- orchestration tests (see
-// FAILED_EXTRACTION_ROOT_CAUSE.md and the "Bounded Per-Domain Enrich
+// docs/lease-extraction-architecture-audit-2026-07-29.md and the "Bounded Per-Domain Enrich
 // Refactor" plan). Covers the shared stage-orchestration modules
 // (stage-sequence/dispatch/completion/generation-fence/stage-persistence/
 // enrich-stage-limits) directly, and handleBoundedEnrichStage

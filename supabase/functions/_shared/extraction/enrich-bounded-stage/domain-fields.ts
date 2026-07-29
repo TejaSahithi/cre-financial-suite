@@ -2,7 +2,7 @@
 /**
  * Partitions the lease schema's fields across the 5 existing LlmCallDomain
  * buckets, for the enrich_evidence_<domain> bounded stages (see
- * FAILED_EXTRACTION_ROOT_CAUSE.md and the "Bounded Per-Domain Enrich
+ * docs/lease-extraction-architecture-audit-2026-07-29.md and the "Bounded Per-Domain Enrich
  * Refactor" plan). Reuses field-contract.ts's FieldGroup and
  * deterministic-candidates.ts's existing FIELD_GROUP_TO_LLM_CALL_DOMAIN
  * mapping -- no new taxonomy, no new registry.

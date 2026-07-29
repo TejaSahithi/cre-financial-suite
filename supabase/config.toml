@@ -101,10 +101,6 @@ enabled = true
 verify_jwt = false
 
 
-[functions.ocr-document-extract]
-enabled = true
-verify_jwt = false
-
 [functions.review-approve]
 enabled = true
 verify_jwt = true
@@ -150,10 +146,6 @@ verify_jwt = true
 # verify_jwt=true: only valid authenticated users can call this function.
 # Admin role (org_admin / super_admin) is enforced inside the handler.
 
-[functions.phase52-openai-diagnostic]
-enabled = true
-verify_jwt = true
-
 [functions.pipeline-health-check]
 enabled = true
 verify_jwt = true
@@ -195,10 +187,6 @@ verify_jwt = false
 enabled = true
 verify_jwt = true
 
-
-[functions.extract-document-fields]
-enabled = true
-verify_jwt = false
 
 [functions.generate-budget]
 enabled = true
@@ -248,3 +236,182 @@ entrypoint = "./functions/stripe-webhook/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/stripe-webhook/*.html" ]
+
+# Explicit app-called function routing.
+# These endpoints are invoked through src/services/edgeFunctions.js, which
+# refreshes and forwards the user's Supabase JWT before every call.
+[functions.approve-cam-profile]
+enabled = true
+verify_jwt = true
+
+[functions.backfill-lease-evidence]
+enabled = true
+verify_jwt = true
+
+[functions.bulk-create-expenses]
+enabled = true
+verify_jwt = true
+
+[functions.cancel-upload]
+enabled = true
+verify_jwt = true
+
+[functions.confirm-upload]
+enabled = true
+verify_jwt = true
+
+[functions.create-expense-workflow]
+enabled = true
+verify_jwt = true
+
+[functions.delete-expenses]
+enabled = true
+verify_jwt = true
+
+[functions.delete-lease-cascade]
+enabled = true
+verify_jwt = true
+
+[functions.delete-uploaded-file]
+enabled = true
+verify_jwt = true
+
+[functions.document-field-review-action]
+enabled = true
+verify_jwt = true
+
+[functions.document-intelligence-v3-advisory-audit]
+enabled = true
+verify_jwt = true
+
+[functions.document-intelligence-v3-advisory-audit-batch]
+enabled = true
+verify_jwt = true
+
+[functions.document-intelligence-v3-projection-diff]
+enabled = true
+verify_jwt = true
+
+[functions.document-intelligence-v3-readiness]
+enabled = true
+verify_jwt = true
+
+[functions.document-intelligence-v3-run-metrics]
+enabled = true
+verify_jwt = true
+
+[functions.document-intelligence-v4-readiness-metrics]
+enabled = true
+verify_jwt = true
+
+[functions.document-intelligence-v4-review-payload]
+enabled = true
+verify_jwt = true
+
+[functions.document-intelligence-v6-field-search]
+enabled = true
+verify_jwt = true
+
+[functions.link-lease-space-assignment]
+enabled = true
+verify_jwt = true
+
+[functions.manage-lease-critical-date]
+enabled = true
+verify_jwt = true
+
+[functions.manual-override-expense-classification]
+enabled = true
+verify_jwt = true
+
+[functions.persist-expense-classification]
+enabled = true
+verify_jwt = true
+
+[functions.persist-lease-extraction-merge]
+enabled = true
+verify_jwt = true
+
+[functions.portfolio-intelligence-v8-critical-dates]
+enabled = true
+verify_jwt = true
+
+[functions.portfolio-intelligence-v8-export]
+enabled = true
+verify_jwt = true
+
+[functions.portfolio-intelligence-v8-rent-roll-reconciliation]
+enabled = true
+verify_jwt = true
+
+[functions.portfolio-intelligence-v8-search]
+enabled = true
+verify_jwt = true
+
+[functions.portfolio-intelligence-v8-summary]
+enabled = true
+verify_jwt = true
+
+[functions.reject-lease-abstract]
+enabled = true
+verify_jwt = true
+
+[functions.review-expense-classification]
+enabled = true
+verify_jwt = true
+
+[functions.save-cam-profile]
+enabled = true
+verify_jwt = true
+
+[functions.save-lease-config]
+enabled = true
+verify_jwt = true
+
+[functions.save-lease-expense-rule-set]
+enabled = true
+verify_jwt = true
+
+[functions.save-lease-review-draft]
+enabled = true
+verify_jwt = true
+
+[functions.save-lease-rule-amount-cam-input]
+enabled = true
+verify_jwt = true
+
+[functions.save-property-cam-config]
+enabled = true
+verify_jwt = true
+
+[functions.send-lease-back-for-reextraction]
+enabled = true
+verify_jwt = true
+
+[functions.update-expense-amount]
+enabled = true
+verify_jwt = true
+
+[functions.update-expense-details]
+enabled = true
+verify_jwt = true
+
+[functions.update-lease-expense-rule]
+enabled = true
+verify_jwt = true
+
+[functions.update-lease-expense-rule-amount]
+enabled = true
+verify_jwt = true
+
+[functions.update-lease-expense-rule-set-status]
+enabled = true
+verify_jwt = true
+
+[functions.update-lease-extraction-field]
+enabled = true
+verify_jwt = true
+
+[functions.update-lease-field-and-columns]
+enabled = true
+verify_jwt = true

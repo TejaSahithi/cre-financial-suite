@@ -1,17 +1,15 @@
 // @ts-nocheck
 /**
- * Azure Document Intelligence + OpenAI (local implementation) — business-extraction
- * orchestrator. Drop-in replacement for the direct provider-selection
- * ternary in normalize-pdf-output/index.ts — returns the SAME
- * ExtractionPipelineResult shape both providers already produce, with
- * additive metadata.provenance. Does not restructure buildReviewPayload,
- * buildLeaseWorkflowAbstraction, or persistence — those stay exactly as
- * they are, consuming whichever result this module produces.
+ * Azure Document Intelligence + OpenAI business-extraction orchestrator.
+ * Returns one common ExtractionPipelineResult shape with additive
+ * metadata.provenance. normalize-pdf-output owns the lease architecture fence:
+ * live lease calls are forced to primary whole-document LLM plus explicit
+ * legacy fallback while whole-document mode is active.
  *
  * legacy_hybrid            -> legacy pipeline only (unchanged behavior)
- * openai_fact_ledger       -> OpenAI pipeline only (legacy vertex_fact_ledger aliases accepted;
- *                             acceptance evaluated for provenance/reporting
- *                             ONLY -- never triggers legacy fallback here)
+ * openai_fact_ledger       -> OpenAI pipeline only, retained for compatibility
+ *                             and non-lease diagnostics; does not trigger
+ *                             legacy fallback here.
  * openai_primary_legacy_fallback -> OpenAI once (bounded by an absolute
  *                             deadline, no outer retry loop) -> acceptance
  *                             evaluation -> controlled, one-time legacy
@@ -24,7 +22,6 @@ import { runOpenAIFactLedgerPipeline } from "./openai-fact-ledger/orchestrator.t
 import type { ExtractionPipelineResult, DoclingOutput } from "./types.ts";
 import { evaluateExtractionAcceptance } from "./business-extraction-acceptance.ts";
 import { buildProvenance, attachProvenance, normalizeBusinessExtractionMode, type BusinessExtractionMode } from "./business-extraction-provenance.ts";
-import { isWholeDocumentLlmActive } from "./whole-document-llm/feature-mode.ts";
 
 export type { BusinessExtractionMode } from "./business-extraction-provenance.ts";
 
@@ -324,35 +321,6 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
   // openai_primary_legacy_fallback
   const openaiResult = await runOpenAIOnce();
   const openaiAcceptance = evaluateExtractionAcceptance(openaiResult, { provider: "openai_fact_ledger", documentProfile: opts.documentSubtype });
-
-  // When the whole-document experiment is active, its result must remain
-  // observable as-is. Falling back to legacy here would erase the comparison
-  // and could make a failed experiment look like a successful new extractor.
-  // Operators can turn the flag off to restore the prior fallback behavior.
-  if (opts.moduleType === "lease" && isWholeDocumentLlmActive()) {
-    return attachProvenance(
-      openaiResult,
-      buildProvenance({
-        attemptId,
-        requestedProvider: "openai_primary_legacy_fallback",
-        effectiveProvider: "openai_fact_ledger",
-        acceptanceState:
-          openaiAcceptance.state === "accepted" || openaiAcceptance.state === "accepted_needs_review"
-            ? openaiAcceptance.state
-            : "extraction_failed_manual_review",
-        fallbackUsed: false,
-        fallbackReason: openaiAcceptance.state === "accepted" || openaiAcceptance.state === "accepted_needs_review"
-          ? null
-          : openaiAcceptance.reason,
-        openaiAttemptCount: 1,
-        canonicalLayoutSchemaVersion: opts.canonicalLayoutSchemaVersion,
-        sourceContentHash,
-        correlationId: opts.correlationId,
-        providerMocked,
-        mockScenario: mockOpenAIScenario,
-      }),
-    );
-  }
 
   if (openaiAcceptance.state === "accepted" || openaiAcceptance.state === "accepted_needs_review") {
     return attachProvenance(

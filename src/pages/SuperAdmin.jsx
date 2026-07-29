@@ -222,7 +222,7 @@ export default function SuperAdmin() {
   const updateRequest = useMutation({
     mutationFn: async ({ id, approved }) => {
       const { data: { session } } = await supabase.auth.getSession();
-      const { data: result, error: fnError } = await supabase.functions.invoke('approve-request-v2', {
+      const { data: result, error: fnError } = await supabase.functions.invoke('approve-request', {
         body: { id, approved },
         headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
       });

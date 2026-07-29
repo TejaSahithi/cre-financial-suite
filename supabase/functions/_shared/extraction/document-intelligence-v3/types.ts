@@ -3,7 +3,7 @@
  * Document Intelligence v3 — Contract Types (Phase 1 scaffold)
  *
  * Structural types for the `document_intelligence_v3` contract described in
- * docs/document-intelligence-v3-baseline.md. This module defines shape only.
+ * docs/lease-extraction-architecture-audit-2026-07-29.md. This module defines shape only.
  * It does not run, parse, or replace any part of the current legacy_hybrid /
  * openai_fact_ledger extraction pipeline, and nothing else in the runtime
  * pipeline imports it yet — see feature-flag.ts (gate) and adapter.ts
@@ -134,7 +134,7 @@ export type EvidenceSupportType =
   | "multi_source";
 
 /** A forward reference to the future Document Package Graph node
- *  (docs/document-intelligence-v3-baseline.md, Section 6) — not yet a real
+ *  (docs/lease-extraction-architecture-audit-2026-07-29.md, Section 6) — not yet a real
  *  table, so `document_id` stays a plain identifier here, distinct from the
  *  concrete, already-real `uploaded_file_id`. */
 export interface DocumentIntelligenceV3Evidence {

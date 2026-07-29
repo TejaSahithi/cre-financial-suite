@@ -8,7 +8,7 @@
  * document_validation_drops / document_canonical_field_projections). Every
  * response carries diagnostic_only: true. This endpoint performs no writes
  * and is not called by, or wired into, any approval path -- see
- * docs/document-intelligence-v3-baseline.md and the Phase 1-2 baseline for
+ * docs/lease-extraction-architecture-audit-2026-07-29.md and the Phase 1-2 baseline for
  * why that gate still lives entirely in approve_lease_workflow /
  * LeaseReview.jsx, unchanged by this phase.
  *

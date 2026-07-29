@@ -238,7 +238,8 @@ function findSecurityDepositFallback(lease) {
   return null;
 }
 
-function standardFieldFallback(lease, canonicalKey, { value, evidence } = {}) {
+function standardFieldFallback(lease, canonicalKey, { value, evidence, allowNoProviderCoreFallbacks = false } = {}) {
+  if (!allowNoProviderCoreFallbacks) return null;
   if (canonicalKey === "property_address") {
     return findPremisesAddressFallback(lease, value, evidence);
   }
@@ -494,7 +495,7 @@ function computeFieldStatus({ hasValue, evidenceVerified, confidenceBucket, revi
  * and row-level, non-field entries like document_profile/approval_status —
  * those are surfaced separately, see normalizeApprovalBlockers).
  */
-export function normalizeStandardFields(lease, { fieldReviews } = {}) {
+export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCoreFallbacks = false } = {}) {
   const effectiveFieldReviews = fieldReviews ?? lease?.extraction_data?.field_reviews ?? {};
   const rows = [];
   for (const rawContract of LEASE_FIELD_CONTRACT) {
@@ -517,7 +518,11 @@ export function normalizeStandardFields(lease, { fieldReviews } = {}) {
     }
     let fallbackReviewReason = null;
     let fallbackSourceProvider = null;
-    const fallback = standardFieldFallback(lease, canonicalKey, { value, evidence });
+    const fallback = standardFieldFallback(lease, canonicalKey, {
+      value,
+      evidence,
+      allowNoProviderCoreFallbacks,
+    });
     if (fallback) {
       value = fallback.value;
       evidence = fallback.evidence;
@@ -1613,9 +1618,12 @@ export function buildDebugCounts({ standardFields, dynamicFindings, clauseRecord
  * is NOT included here; those stay in their existing async react-query hooks
  * and get layered on top by the components that already load them.
  */
-export function normalizeLeaseReviewData(lease, { fieldReviews } = {}) {
+export function normalizeLeaseReviewData(lease, { fieldReviews, allowNoProviderCoreFallbacks = false } = {}) {
   const effectiveFieldReviews = fieldReviews ?? lease?.extraction_data?.field_reviews ?? {};
-  const standardFields = normalizeStandardFields(lease, { fieldReviews: effectiveFieldReviews });
+  const standardFields = normalizeStandardFields(lease, {
+    fieldReviews: effectiveFieldReviews,
+    allowNoProviderCoreFallbacks,
+  });
   const currentReviewPolicy = buildCurrentReviewPolicy(lease, {
     rows: standardFields,
     fieldReviews: effectiveFieldReviews,

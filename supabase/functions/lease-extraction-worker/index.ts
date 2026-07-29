@@ -32,15 +32,19 @@ import {
   mergePipelineIntoNormalizedOutput,
 } from "../_shared/extraction/pipeline-contract.ts";
 import { withExtractionStage } from "../_shared/extraction/provenance/recorder.ts";
+import { isLeaseModuleType } from "../_shared/extraction/lease-module.ts";
+import {
+  LEASE_WORKER_BOUNDED_ENRICH_STAGE_TIMEOUT_MS,
+  LEASE_WORKER_CHAINED_NORMALIZE_TIMEOUT_MS,
+  LEASE_WORKER_ENRICH_TIMEOUT_MS,
+  LEASE_WORKER_NORMALIZE_ACTIVE_GRACE_MS,
+  LEASE_WORKER_NORMALIZE_RETRY_DELAY_MS,
+  LEASE_WORKER_NORMALIZE_TIMEOUT_MS,
+  LEASE_WORKER_PARSE_TIMEOUT_MS,
+} from "../_shared/extraction/edge-runtime-budgets.ts";
 
 const WORKER_NAME = "lease-extraction-worker";
 
-function envBoundedInt(name: string, fallback: number, min: number, max: number): number {
-  const raw = Deno.env.get(name);
-  const value = raw ? Number(raw) : fallback;
-  const parsed = Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
-  return Math.max(min, Math.min(max, parsed));
-}
 async function runParseStageInline(
   supabaseAdmin: any,
   fileId: string,
@@ -382,28 +386,28 @@ async function runParseStageInline(
   }
 }
 
-const PARSE_TIMEOUT_MS = envBoundedInt("LEASE_WORKER_PARSE_TIMEOUT_MS", 140_000, 30_000, 145_000);
+const PARSE_TIMEOUT_MS = LEASE_WORKER_PARSE_TIMEOUT_MS;
 // Supabase Edge Functions have a 150s hard wall (see ingest-file/index.ts's
 // callEdgeFunction doc comment) -- when this worker runs parse and normalize
 // sequentially in the SAME invocation, the chained normalize timeout must leave
 // enough budget for parse + response overhead so this client-side AbortSignal
 // fires before the platform hard-kills the invocation.
-const CHAINED_NORMALIZE_TIMEOUT_MS = envBoundedInt("LEASE_WORKER_CHAINED_NORMALIZE_TIMEOUT_MS", 90_000, 20_000, 120_000);
+const CHAINED_NORMALIZE_TIMEOUT_MS = LEASE_WORKER_CHAINED_NORMALIZE_TIMEOUT_MS;
 // Jobs that start directly at normalize get a fresh invocation budget.
-const NORMALIZE_TIMEOUT_MS = envBoundedInt("LEASE_WORKER_NORMALIZE_TIMEOUT_MS", 130_000, 30_000, 145_000);
-const NORMALIZE_RETRY_DELAY_MS = envBoundedInt("LEASE_WORKER_NORMALIZE_RETRY_DELAY_MS", 30_000, 5_000, 300_000);
-const NORMALIZE_ACTIVE_GRACE_MS = envBoundedInt("LEASE_WORKER_NORMALIZE_ACTIVE_GRACE_MS", 180_000, 60_000, 900_000);
+const NORMALIZE_TIMEOUT_MS = LEASE_WORKER_NORMALIZE_TIMEOUT_MS;
+const NORMALIZE_RETRY_DELAY_MS = LEASE_WORKER_NORMALIZE_RETRY_DELAY_MS;
+const NORMALIZE_ACTIVE_GRACE_MS = LEASE_WORKER_NORMALIZE_ACTIVE_GRACE_MS;
 // The enrich stage is dispatched as its own separate pipeline job / worker
 // invocation, so it gets its own fresh invocation budget.
-const ENRICH_TIMEOUT_MS = envBoundedInt("LEASE_WORKER_ENRICH_TIMEOUT_MS", 130_000, 30_000, 145_000);
+const ENRICH_TIMEOUT_MS = LEASE_WORKER_ENRICH_TIMEOUT_MS;
 // Bounded Per-Domain Enrich Refactor: each of the 10 bounded stages does a
 // deliberately small SLICE of what the monolithic "enrich" stage above did
-// all at once (that's the whole point -- see FAILED_EXTRACTION_ROOT_CAUSE.md
+// all at once (that's the whole point -- see docs/lease-extraction-architecture-audit-2026-07-29.md
 // and the plan), so none of them should need anywhere near ENRICH_TIMEOUT_MS's
 // budget. One shared constant for all 10 stages, not 10 separate ones --
 // nothing yet distinguishes their real costs (that's what the telemetry this
 // refactor adds is for); split further once real numbers justify it.
-const BOUNDED_ENRICH_STAGE_TIMEOUT_MS = envBoundedInt("LEASE_WORKER_BOUNDED_ENRICH_STAGE_TIMEOUT_MS", 60_000, 15_000, 120_000);
+const BOUNDED_ENRICH_STAGE_TIMEOUT_MS = LEASE_WORKER_BOUNDED_ENRICH_STAGE_TIMEOUT_MS;
 
 // Azure staging P0: durable-state reconciliation must distinguish "confirmed
 // absent" from "couldn't determine" — a reconciliation read failing under the
@@ -1819,7 +1823,7 @@ Deno.serve(async (req: Request) => {
       if (!parseResult.ok && !parseReconciledToNormalize) {
         const message = parseResult.error || "Document parsing failed";
         const errorCode = parseResult.data?.error_code || parseResult.error_code || "PARSE_FAILED";
-        const isLeaseModule = ["leases", "lease"].includes(fileRecord.module_type ?? "");
+        const isLeaseModule = isLeaseModuleType(fileRecord.module_type);
 
         if (isLeaseModule && parserFailureAlreadyPersisted(parseResult)) {
           // parse-document-azure already persisted a blocked parser state with
@@ -2035,7 +2039,7 @@ Deno.serve(async (req: Request) => {
       if (!normalizeResult.ok) {
         const message = normalizeResult.error || "Document normalization failed";
         const errorCode = normalizeResult.error_code || normalizeResult.data?.error_code || "NORMALIZE_FAILED";
-        const isLeaseModule = ["leases", "lease"].includes(fileRecord.module_type ?? "");
+        const isLeaseModule = isLeaseModuleType(fileRecord.module_type);
 
         // Durable-state reconciliation: normalize-pdf-output now persists a
         // minimal core-field payload BEFORE running its expensive
@@ -2211,7 +2215,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: false, job_id: job.id, stage: "normalize", status: "completed" });
     }
 
-    // Bounded Per-Domain Enrich Refactor (see FAILED_EXTRACTION_ROOT_CAUSE.md
+    // Bounded Per-Domain Enrich Refactor (see docs/lease-extraction-architecture-audit-2026-07-29.md
     // and the "Bounded Per-Domain Enrich Refactor" plan). One call per
     // invocation, exactly one stage -- this branch does NOT loop through the
     // whole sequence itself; it dispatches ONE stage to normalize-pdf-output,

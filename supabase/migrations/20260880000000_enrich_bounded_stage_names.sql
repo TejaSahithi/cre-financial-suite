@@ -1,5 +1,5 @@
 -- Bounded Per-Domain Enrich Refactor: widens pipeline_jobs_stage_check to
--- allow the 10 new bounded enrich sub-stages (see FAILED_EXTRACTION_ROOT_CAUSE.md
+-- allow the 10 new bounded enrich sub-stages (see docs/lease-extraction-architecture-audit-2026-07-29.md
 -- and the "Bounded Per-Domain Enrich Refactor" plan). The single monolithic
 -- "enrich" stage was crashing on complex documents (HTTP 546, Supabase
 -- compute/memory exhaustion) because it tried to build the entire rich

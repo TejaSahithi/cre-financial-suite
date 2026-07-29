@@ -6,13 +6,12 @@
  * "legacy" side reviewers actually see today) against a v3 run's
  * `document_canonical_field_projections` rows (the "canonical" side) on a
  * per-field basis, with type-aware value normalization. Diagnostic only —
- * never persisted, never read by the review UI. See
- * docs/release-2-staging-rollout.md for the two test modes this depends on.
+ * never persisted, never read by the review UI.
  *
  * Reuses the P2 claims-ledger's existing normalization machinery
  * (claims/adapters/claim-normalization.ts, claims/concept-registry.ts's
  * inferValueType) rather than re-deriving a parallel money/date/percent
- * parser — see the Release 2 plan's finding #9 for why.
+ * parser.
  *
  * Percent convention: this platform stores percent-typed fields as the raw
  * percent number (5 means "5%"), confirmed from schemas.ts's admin_fee_pct

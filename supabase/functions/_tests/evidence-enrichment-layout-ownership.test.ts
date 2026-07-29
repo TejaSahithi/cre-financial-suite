@@ -6,7 +6,7 @@
 // verified by tracing the call graph: evidence enrichment never
 // independently constructs or resolves a CanonicalDocumentLayout -- it is a
 // pure reuse of the single layout orchestrator.ts resolves once per
-// pipeline run (see docs/azure-vertex-migration-phase4c-evidence-enrichment-review.md).
+// pipeline run (see docs/lease-extraction-architecture-audit-2026-07-29.md).
 // These supplement, not replace, the existing behavioral coverage already
 // in document-intelligence-v3-document-index.test.ts, document-intelligence-v3-fact-mapper.test.ts,
 // and openai-fact-ledger.test.ts, which already prove the canonical-layout

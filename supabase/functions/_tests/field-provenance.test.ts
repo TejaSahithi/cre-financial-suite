@@ -1,6 +1,6 @@
 // @ts-nocheck
 // Micro-step 0 (pipeline-audit provenance) tests. See
-// LEASE_EXTRACTION_UI_PIPELINE_AUDIT.md Section 16 for the design these
+// docs/lease-extraction-architecture-audit-2026-07-29.md for the design these
 // verify. Every test here proves ONE of two things: (a) fieldProvenance is
 // populated correctly for a given scenario, or (b) the two guardrail
 // invariants hold — selection is unchanged, and candidate lists stay capped
@@ -106,7 +106,7 @@ Deno.test("field-provenance: ti_allowance's formula-area contamination gap (orig
   // through unguarded -- a confirmed audit gap. The semantic-compatibility
   // layer (semantic-compatibility.ts's ti_allowance rule) now hard-rejects a
   // candidate whose value matches a left-hand formula operand instead of the
-  // computed total, closing this gap. See LEASE_EXTRACTION_GOLDEN_CORPUS.md.
+  // computed total, closing this gap. See the golden lease corpus tests.
   const areaOperandFact = makeFact({
     category: "clause:default",
     value: 2848,

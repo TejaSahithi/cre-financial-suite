@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * Hard input limits per bounded enrich stage (see FAILED_EXTRACTION_ROOT_CAUSE.md
+ * Hard input limits per bounded enrich stage (see docs/lease-extraction-architecture-audit-2026-07-29.md
  * and the "Bounded Per-Domain Enrich Refactor" plan).
  *
  * Per the user's explicit requirement, a document exceeding a stage's limit

@@ -1,7 +1,7 @@
 // @ts-nocheck
 /**
  * Shared "a bounded enrich stage finished (or failed)" handler (see
- * FAILED_EXTRACTION_ROOT_CAUSE.md and the "Bounded Per-Domain Enrich
+ * docs/lease-extraction-architecture-audit-2026-07-29.md and the "Bounded Per-Domain Enrich
  * Refactor" plan). Replaces what would otherwise be 9 hand-copied versions
  * of the existing "enrich" stage's ~100-150 line failure-handling block --
  * the exact duplication problem isReviewReadyEnrichmentTransportFailure/
@@ -27,7 +27,7 @@ import { getLeaseFinancialScheduleMode } from "../lease-financial-schedule/featu
  * included), and ALWAYS inspects the returned {error} instead of only
  * relying on try/catch -- supabase-js resolves an RPC-level failure (e.g.
  * the confirmed live parameter-mismatch: the deployed function does not yet
- * have these two parameters, see FAILED_EXTRACTION_ROOT_CAUSE.md) as
+ * have these two parameters, see docs/lease-extraction-architecture-audit-2026-07-29.md) as
  * {data:null, error} rather than throwing. Deliberately does NOT drop
  * p_package_mode/p_financial_mode to make this call succeed locally -- that
  * would hide the real, still-pending migration mismatch instead of keeping
@@ -160,7 +160,7 @@ export async function completeBoundedEnrichStage(args: {
   // and re-run finalize_lease_extraction_for_review so
   // evaluate_lease_extraction_readiness() picks up ENRICHMENT_FAILED --
   // which finalize_lease_review_approval re-checks fresh at approval time
-  // regardless of this call's own success (see FAILED_EXTRACTION_ROOT_CAUSE.md §8).
+  // regardless of this call's own success (see docs/lease-extraction-architecture-audit-2026-07-29.md §8).
   await supabaseAdmin.from("pipeline_jobs").update({
     status: "failed",
     error_code: outcome.errorCode ?? "ENRICH_STAGE_FAILED",

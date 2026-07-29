@@ -28,16 +28,10 @@ provider selection is covered by `extraction-provider.test.ts`
 (fail-closed on any unsupported provider value) and `pipeline-health-check.test.ts`
 (config presence).
 
-### 4. `extract-document-fields.test.ts`
-Tests the AI interpretation and field mapping logic in `extract-document-fields/index.ts`.
-
-**Coverage:**
-- **Input Validation**: Text length validation, preprocessing, document characteristics detection
-- **AI Prompt Generation**: System prompt construction, user prompt building with module schemas
-- **Rule-Based Extraction**: Lease field extraction using pattern matching and label detection
-- **Custom Field Analysis**: Detection of unmapped fields, field type inference, suggestion generation
-- **Response Processing**: AI response cleaning, confidence scoring, metadata addition
-- **Error Handling**: AI failures, fallback mechanisms, validation errors
+### 4. Custom fields extraction
+Custom-field extraction is covered by `custom-fields.test.ts` and the
+`extract-with-custom-fields` Edge Function. The older public extraction endpoint
+has been removed so documents cannot bypass the canonical ingest path.
 
 **Key Test Cases:**
 - Input validation and preprocessing with text cleaning
@@ -70,9 +64,6 @@ Tests the custom field management API in `custom-fields/index.ts`.
 ```bash
 # Run file detector tests
 deno test --allow-all supabase/functions/_tests/file-detector.test.ts
-
-# Run AI interpretation tests
-deno test --allow-all supabase/functions/_tests/extract-document-fields.test.ts
 
 # Run custom fields tests
 deno test --allow-all supabase/functions/_tests/custom-fields.test.ts

@@ -12,6 +12,11 @@
  * This function INTENTIONALLY does not contain any legacy parser or LLM
  * call code of its own. Provider-specific parsing logic lives in the shared
  * parser; Azure Document Intelligence is now the parser backend.
+ *
+ * Lease note: normal lease extraction must enter through ingest-file, which
+ * queues lease-extraction-worker. User-facing direct calls to this wrapper
+ * for lease files are rejected so a lease cannot be left in a half-parsed
+ * state outside the generation-scoped worker pipeline.
  */
 
 import { corsHeaders } from "../_shared/cors.ts";
@@ -41,6 +46,7 @@ import {
   buildCompactLeaseDocument,
   PERSISTED_COMPACT_DOCUMENT_KEY,
 } from "../_shared/extraction/whole-document-llm/compact-document.ts";
+import { isLeaseModuleType } from "../_shared/extraction/lease-module.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -76,8 +82,9 @@ Deno.serve(async (req: Request) => {
     req.headers.get("x-user-jwt") ||
     req.headers.get("x-supabase-auth"),
   );
+  const requestIsInternal = isInternalCall(req);
 
-  if (!isInternalCall(req) && !hasUserAuth) {
+  if (!requestIsInternal && !hasUserAuth) {
     return jsonResponse(
       { ok: false, error_code: "UNAUTHORIZED_INTERNAL_PARSE_CALL", message: "Unauthorized parse request" },
       401,
@@ -91,7 +98,7 @@ Deno.serve(async (req: Request) => {
     let supabaseAdmin: any;
     let orgId: string;
 
-    if (isInternalCall(req)) {
+    if (requestIsInternal) {
       supabaseAdmin = createAdminClient();
       user = { id: "internal-compute", email: "internal-compute@system.local" };
       // orgId from x-internal-org-id header (set by lease-extraction-worker via
@@ -202,6 +209,19 @@ Deno.serve(async (req: Request) => {
     const fileName: string = fileRecord.file_name ?? "document";
     const mimeType: string = fileRecord.mime_type ?? "application/octet-stream";
     const logger = createLogger(supabaseAdmin, file_id, orgId);
+    const isLeaseModule = isLeaseModuleType(fileRecord.module_type);
+    if (isLeaseModule && !requestIsInternal) {
+      return jsonResponse(
+        {
+          error: true,
+          error_code: "LEASE_PARSE_REQUIRES_WORKER_PIPELINE",
+          message: "Lease parsing must be queued through ingest-file so extraction stays generation-scoped and review-ready.",
+          file_id,
+          route: "ingest-file",
+        },
+        409,
+      );
+    }
 
     // P1.3: only attempt to record a stage run when this request actually
     // carries a generation_id -- calls without one (non-lease modules, or

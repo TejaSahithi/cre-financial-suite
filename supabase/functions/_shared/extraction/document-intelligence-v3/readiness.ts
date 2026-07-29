@@ -10,7 +10,7 @@
  * carries diagnostic_only: true, nothing here writes to the database, and
  * nothing in the current approval path (approve_lease_workflow,
  * LeaseReview.jsx's bulkEvaluation/canApprove) calls this. See
- * docs/document-intelligence-v3-baseline.md Phase 3 recommendation.
+ * docs/lease-extraction-architecture-audit-2026-07-29.md Phase 3 recommendation.
  */
 
 import { getProfilePolicy, resolvePolicyKey } from "./profile-policy.ts";

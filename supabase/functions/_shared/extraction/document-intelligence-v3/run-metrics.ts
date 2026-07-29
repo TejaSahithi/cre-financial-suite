@@ -152,9 +152,7 @@ export interface RunMetricsSnapshot {
 
 /**
  * Corpus-level rollup across multiple single-run metrics snapshots. Kept
- * intentionally simple (no persistence, no new table) -- see
- * supabase/functions/_tests/diagnostics/release2-corpus-acceptance-harness.ts
- * for the tool that actually drives this against a real staging corpus.
+ * intentionally simple: no persistence and no new table.
  */
 export function aggregateRunMetrics(runs: Array<{
   pipelineCompleted: boolean;
