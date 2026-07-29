@@ -20,8 +20,9 @@ export function resolveBusinessExtractionProvider(
 
 /**
  * Lease extraction has one live strategy while whole-document extraction is
- * active: primary whole-document OpenAI, then one explicit legacy_hybrid
- * fallback when the primary failure is fallback-eligible.
+ * active: primary whole-document OpenAI, with sectioned LLM continuation for
+ * oversize documents. The provider name remains `openai_primary_legacy_fallback`
+ * for compatibility, but legacy_hybrid is a rollback switch, not the default.
  */
 export function enforceLeaseExtractionArchitecture(
   moduleType: string,
@@ -38,13 +39,23 @@ export function wholeDocumentExtractionMode(result: Record<string, any>): string
     ?? null;
 }
 
+function leaseTypescriptLegacyFallbackEnabled(): boolean {
+  return ["1", "true", "yes", "on"].includes(
+    String(Deno.env.get("LEASE_ENABLE_TYPESCRIPT_LEGACY_FALLBACK") ?? "").trim().toLowerCase(),
+  );
+}
+
 export function assertAuthoritativeLeaseExtractionResult(
   moduleType: string,
   result: Record<string, any>,
 ): void {
   if (!isLeaseModuleType(moduleType) || !isWholeDocumentLlmActive()) return;
   const provenance = result?.metadata?.provenance ?? null;
-  if (provenance?.fallback_used === true && provenance?.effective_provider === "legacy_hybrid") return;
+  if (
+    provenance?.fallback_used === true &&
+    provenance?.effective_provider === "legacy_hybrid" &&
+    leaseTypescriptLegacyFallbackEnabled()
+  ) return;
   const actualMode = wholeDocumentExtractionMode(result);
   if (actualMode !== "whole_document_llm_v2") {
     throw new Error(

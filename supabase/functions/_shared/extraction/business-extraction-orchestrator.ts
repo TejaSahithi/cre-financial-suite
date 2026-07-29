@@ -3,8 +3,9 @@
  * Azure Document Intelligence + OpenAI business-extraction orchestrator.
  * Returns one common ExtractionPipelineResult shape with additive
  * metadata.provenance. normalize-pdf-output owns the lease architecture fence:
- * live lease calls are forced to primary whole-document LLM plus explicit
- * legacy fallback while whole-document mode is active.
+ * live lease calls are forced to primary whole-document LLM. Oversize leases
+ * continue through the sectioned LLM reducer; TypeScript legacy fallback is an
+ * explicit rollback switch, not the default large-document path.
  *
  * legacy_hybrid            -> legacy pipeline only (unchanged behavior)
  * openai_fact_ledger       -> OpenAI pipeline only, retained for compatibility
@@ -12,9 +13,8 @@
  *                             legacy fallback here.
  * openai_primary_legacy_fallback -> OpenAI once (bounded by an absolute
  *                             deadline, no outer retry loop) -> acceptance
- *                             evaluation -> controlled, one-time legacy
- *                             fallback when eligible -> whole-result
- *                             selection, never field-level blending.
+ *                             evaluation -> manual review unless
+ *                             LEASE_ENABLE_TYPESCRIPT_LEGACY_FALLBACK=true.
  */
 
 import { runExtractionPipeline } from "./pipeline.ts";
@@ -32,6 +32,38 @@ export type { BusinessExtractionMode } from "./business-extraction-provenance.ts
 const OPENAI_TOTAL_BUDGET_MS = 100_000; // ~90-120s target, mid-point default
 /** @deprecated Compatibility alias for old tests/imports. */
 const VERTEX_TOTAL_BUDGET_MS = OPENAI_TOTAL_BUDGET_MS;
+
+function leaseLegacyFallbackEnabled(): boolean {
+  return ["1", "true", "yes", "on"].includes(
+    String(Deno.env.get("LEASE_ENABLE_TYPESCRIPT_LEGACY_FALLBACK") ?? "").trim().toLowerCase(),
+  );
+}
+
+function isLeaseModule(moduleType: string): boolean {
+  return String(moduleType ?? "").trim().toLowerCase() === "lease";
+}
+
+function stampLegacyFallbackDisabled(result: ExtractionPipelineResult, reason: string): ExtractionPipelineResult {
+  const metadata = (result.metadata ?? {}) as Record<string, any>;
+  const extractionDebug = (metadata.extractionDebug ?? {}) as Record<string, any>;
+  const openaiDebug = extractionDebug.openai_fact_ledger ?? extractionDebug.vertex_fact_ledger ?? {};
+  const stampedOpenaiDebug = {
+    ...openaiDebug,
+    legacy_hybrid_fallback_disabled: true,
+    legacy_hybrid_fallback_disabled_reason: reason,
+  };
+  return {
+    ...result,
+    metadata: {
+      ...metadata,
+      extractionDebug: {
+        ...extractionDebug,
+        openai_fact_ledger: stampedOpenaiDebug,
+        vertex_fact_ledger: stampedOpenaiDebug,
+      },
+    },
+  };
+}
 
 export interface MockOpenAIScenario {
   scenario:
@@ -363,8 +395,33 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
     );
   }
 
-  // fallback_eligible -- run legacy exactly once. No recursion: if legacy
-  // also fails, that is terminal, never re-attempts OpenAI.
+  if (isLeaseModule(opts.moduleType) && !leaseLegacyFallbackEnabled()) {
+    // For leases, "fallback eligible" no longer means "let regex/table code
+    // publish commercial terms." The LLM path now owns oversize continuation;
+    // provider/config/empty failures become explicit manual-review states unless
+    // the operator deliberately enables the rollback switch.
+    const stampedOpenaiResult = stampLegacyFallbackDisabled(openaiResult, openaiAcceptance.reason);
+    return attachProvenance(
+      stampedOpenaiResult,
+      buildProvenance({
+        attemptId,
+        requestedProvider: "openai_primary_legacy_fallback",
+        effectiveProvider: "openai_fact_ledger",
+        acceptanceState: "extraction_failed_manual_review",
+        fallbackUsed: false,
+        fallbackReason: `legacy_hybrid_disabled:${openaiAcceptance.reason}`,
+        openaiAttemptCount: 1,
+        canonicalLayoutSchemaVersion: opts.canonicalLayoutSchemaVersion,
+        sourceContentHash,
+        correlationId: opts.correlationId,
+        providerMocked,
+        mockScenario: mockOpenAIScenario,
+      }),
+    );
+  }
+
+  // fallback_eligible -- run legacy exactly once only when explicitly enabled.
+  // No recursion: if legacy also fails, that is terminal, never re-attempts OpenAI.
   const legacyResult = await runLegacySafely(legacyRunner, opts);
   const legacyAcceptance = evaluateExtractionAcceptance(legacyResult, { provider: "legacy_hybrid", documentProfile: opts.documentSubtype });
 

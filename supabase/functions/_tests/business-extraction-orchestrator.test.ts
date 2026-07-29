@@ -10,6 +10,7 @@ import { runBusinessExtraction } from "../_shared/extraction/business-extraction
 // This suite verifies the explicit legacy rollback/fallback behavior. The
 // production lease architecture defaults to whole-document direct-schema.
 Deno.env.set("LEASE_WHOLE_DOCUMENT_LLM_V1", "off");
+Deno.env.set("LEASE_ENABLE_TYPESCRIPT_LEGACY_FALLBACK", "true");
 
 function baseOpts(overrides: Record<string, unknown> = {}) {
   return {
@@ -50,6 +51,25 @@ function emptyResult(classification?: string) {
     },
   };
 }
+
+Deno.test("runBusinessExtraction: lease TypeScript legacy fallback is disabled by default unless explicitly enabled", async () => {
+  Deno.env.delete("LEASE_ENABLE_TYPESCRIPT_LEGACY_FALLBACK");
+  let legacyCalls = 0;
+  try {
+    const result = await runBusinessExtraction(baseOpts({
+      requestedProvider: "openai_primary_legacy_fallback",
+      vertexRunner: async () => emptyResult("timeout"),
+      legacyRunner: async () => { legacyCalls++; return acceptedResult(); },
+    }));
+    assertEquals(legacyCalls, 0);
+    assertEquals(result.metadata.provenance.effective_provider, "openai_fact_ledger");
+    assertEquals(result.metadata.provenance.fallback_used, false);
+    assertEquals(result.metadata.provenance.acceptance_state, "extraction_failed_manual_review");
+    assertEquals(result.metadata.extractionDebug.openai_fact_ledger.legacy_hybrid_fallback_disabled, true);
+  } finally {
+    Deno.env.set("LEASE_ENABLE_TYPESCRIPT_LEGACY_FALLBACK", "true");
+  }
+});
 
 Deno.test("runBusinessExtraction: legacy_hybrid calls legacy only", async () => {
   let vertexCalls = 0, legacyCalls = 0;

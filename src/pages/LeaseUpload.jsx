@@ -157,6 +157,7 @@ function normalizePipelineStatusRecord(data, id) {
     document_subtype: data?.document_subtype || fileMetadata.document_subtype || null,
     extraction_method: data?.extraction_method || null,
     openai_extraction_attempted: data?.openai_extraction_attempted ?? null,
+    openai_extraction_attempted_column: data?.openai_extraction_attempted_column ?? null,
     ui_review_payload: data?.ui_review_payload || null,
     reviewed_output: data?.reviewed_output || null,
     normalized_output: {
@@ -174,12 +175,14 @@ function normalizePipelineStatusRecord(data, id) {
     review_readiness: data?.review_readiness ?? null,
     review_readiness_reasons: Array.isArray(data?.review_readiness_reasons) ? data.review_readiness_reasons : [],
     docling_summary: data?.docling_summary ?? null,
+    business_extraction_debug: data?.business_extraction_debug ?? null,
     openai_fact_ledger_debug: data?.openai_fact_ledger_debug ?? null,
     updated_at: data?.updated_at || fileMetadata.updated_at || null,
     created_at: data?.created_at || fileMetadata.created_at || null,
     display_state: data?.display_state || null,
     display_message: data?.message || null,
     next_action: data?.next_action || null,
+    enrichment_state: data?.enrichment_state ?? null,
     latest_job: data?.latest_job || null,
     recent_logs: data?.recent_logs || [],
     schema_warnings: data?.schema_warnings || [],
@@ -731,6 +734,10 @@ export default function LeaseUpload() {
   const hasActiveExtractionJob = hasActiveLeaseExtractionJob(fileRecord);
   const failed = fileRecord?.status === "failed";
   const latestJobFailed = fileRecord?.latest_job?.status === "failed";
+  const latestJobOptionalEnrichFailure =
+    latestJobFailed &&
+    fileRecord?.latest_job?.stage === "enrich" &&
+    fileRecord?.status === "review_required";
 
   const uploadPipelineState = useMemo(
     () => getLeaseUploadPipelineState(fileRecord),
@@ -971,12 +978,13 @@ export default function LeaseUpload() {
                 <p>processing_status: {fileRecord?.processing_status ?? "—"}</p>
                 <p>current_stage: {uploadPipelineState.stage ?? "—"}</p>
                 <p>latest_job: {fileRecord?.latest_job?.status ?? "—"}</p>
+                <p>enrichment_status: {fileRecord?.enrichment_state ?? "—"}</p>
                 <p>failed_step: {failed ? fileRecord?.failed_step ?? "—" : "—"}</p>
                 <p>error_message: {failed ? fileRecord?.error_message ?? "—" : "—"}</p>
                 {latestJobFailed && (
                   <>
-                    <p>latest_job_error_code: {fileRecord?.latest_job?.error_code ?? "—"}</p>
-                    <p>latest_job_error_message: {fileRecord?.latest_job?.error_message ?? "—"}</p>
+                    <p>latest_job_error_code: {latestJobOptionalEnrichFailure ? "OPTIONAL_ENRICHMENT_PARTIAL" : fileRecord?.latest_job?.error_code ?? "—"}</p>
+                    <p>latest_job_error_message: {latestJobOptionalEnrichFailure ? "Core extraction is review-ready; optional enrichment hit compute limits and should be rerun through bounded enrichment." : fileRecord?.latest_job?.error_message ?? "—"}</p>
                   </>
                 )}
                 {fileRecord?.docling_summary && (
@@ -993,8 +1001,22 @@ export default function LeaseUpload() {
                   latest_job_generation: {fileRecord?.latest_job?.generation_id ?? "—"}
                   {currentGenerationFailureNotice.show ? " (current — failed)" : ""}
                 </p>
-                <p>extraction_method: {fileRecord?.extraction_method ?? "—"}</p>
-                <p>openai_extraction_attempted: {String(fileRecord?.openai_extraction_attempted ?? "—")}</p>
+                <p>parser_method: {fileRecord?.business_extraction_debug?.parser_method ?? fileRecord?.extraction_method ?? "—"}</p>
+                {fileRecord?.business_extraction_debug && (
+                  <>
+                    <p>business_requested_provider: {fileRecord.business_extraction_debug.requested_provider ?? "—"}</p>
+                    <p>business_effective_provider: {fileRecord.business_extraction_debug.effective_provider ?? "—"}</p>
+                    <p>business_acceptance_state: {fileRecord.business_extraction_debug.acceptance_state ?? "—"}</p>
+                    <p>business_fallback_used: {String(fileRecord.business_extraction_debug.fallback_used ?? "—")}</p>
+                    <p>openai_primary_attempted: {String(fileRecord.business_extraction_debug.openai_attempted ?? "—")}</p>
+                    <p>openai_attempt_count: {fileRecord.business_extraction_debug.openai_attempt_count ?? "—"}</p>
+                    {fileRecord.business_extraction_debug.stale_attempt_column && (
+                      <p className="text-amber-600">
+                        openai_attempt_column_stale: db column is false, durable payload shows OpenAI evidence
+                      </p>
+                    )}
+                  </>
+                )}
                 {fileRecord?.openai_fact_ledger_debug && (
                   <>
                     <p>openai_document_profile: {fileRecord.openai_fact_ledger_debug.document_profile ?? "—"}</p>
@@ -1004,9 +1026,13 @@ export default function LeaseUpload() {
                     <p>typescript_field_mapping_used: {String(fileRecord.openai_fact_ledger_debug.typescript_field_mapping_used ?? "—")}</p>
                     <p>openai_llm_call_count: {fileRecord.openai_fact_ledger_debug.llm_call_count ?? "—"}</p>
                     <p>openai_facts_extracted_count: {fileRecord.openai_fact_ledger_debug.facts_extracted_count ?? "—"}</p>
-                    <p>openai_facts_mapped_count: {fileRecord.openai_fact_ledger_debug.facts_mapped_count ?? "—"}</p>
+                    <p>openai_standard_fields_mapped_from_facts: {fileRecord.business_extraction_debug?.standard_fields_mapped_from_facts_count ?? fileRecord.openai_fact_ledger_debug.facts_mapped_count ?? "—"}</p>
+                    <p>openai_standard_field_per_fact_ratio: {fileRecord.business_extraction_debug?.standard_field_per_fact_ratio ?? "—"}</p>
                     <p>openai_mapped_non_null_field_count: {fileRecord.openai_fact_ledger_debug.mapped_non_null_field_count ?? "—"}</p>
-                    <p>openai_facts_unmapped_count: {fileRecord.openai_fact_ledger_debug.facts_unmapped_count ?? "—"}</p>
+                    <p>openai_unmapped_fact_count: {fileRecord.business_extraction_debug?.unmapped_fact_count ?? fileRecord.openai_fact_ledger_debug.facts_unmapped_count ?? "—"}</p>
+                    {fileRecord.business_extraction_debug?.fact_counter_note && (
+                      <p>{fileRecord.business_extraction_debug.fact_counter_note}</p>
+                    )}
                     <p>openai_invalid_or_omitted_claim_count: {fileRecord.openai_fact_ledger_debug.invalid_or_omitted_claim_count ?? "—"}</p>
                     <p>openai_failure_classification: {fileRecord.openai_fact_ledger_debug.failure_classification ?? "—"}</p>
                     <p>openai_failure_http_status: {fileRecord.openai_fact_ledger_debug.failure_http_status ?? "—"}</p>

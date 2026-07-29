@@ -100,8 +100,8 @@ Fallback:
 
 - Lease whole-document routing now treats both `lease` and `leases` as lease modules.
 - Whole-document authoritative checks now apply to both `lease` and `leases`.
-- Active lease extraction now forces `openai_primary_legacy_fallback`, not direct `openai_fact_ledger`, so live extraction has primary LLM plus explicit legacy fallback.
-- The business extraction orchestrator no longer suppresses legacy fallback while whole-document mode is active.
+- Active lease extraction still enters through the compatibility provider name `openai_primary_legacy_fallback`, but live lease behavior is whole-document LLM primary plus sectioned LLM continuation for oversize documents.
+- The business extraction orchestrator now suppresses TypeScript legacy fallback by default for leases; `LEASE_ENABLE_TYPESCRIPT_LEGACY_FALLBACK=true` is the explicit rollback switch.
 - `ingest-file` now always queues lease PDFs through `lease-extraction-worker`; old `run_synchronously=true` requests are ignored for leases.
 - User-facing direct `parse-document-azure` calls are blocked for lease files to prevent half-parsed, non-generation-scoped states.
 - Critical routing files now share `isLeaseModuleType()` so singular/plural lease checks do not drift.
@@ -122,6 +122,7 @@ Fallback:
 - Scanned relative JS/TS imports in `src`, `supabase/functions`, and `scripts`: 0 unresolved relative imports.
 - Checked raw `/functions/v1/...` fetches: live non-test dispatches are limited to shared invocation helpers and expected internal handoffs.
 - Verified the canonical lease handoff remains `upload-handler -> confirm-upload -> ingest-file -> pipeline_jobs -> lease-extraction-worker -> normalize-pdf-output -> LeaseReview`.
+- Large-document enrich compute fix: monolithic `enrich` is now guarded by document size and redirected to bounded per-stage enrichment. Existing old `enrich` jobs are superseded and re-enqueued as bounded stages instead of calling the known 546-prone downstream path.
 
 ## Hardcoded Limits And Risks
 
@@ -144,6 +145,9 @@ LLM:
 - OpenAI/Azure OpenAI request timeout is 60 seconds per call.
 - Default max output tokens is 16,384 unless overridden.
 - Whole-document input max defaults to 400,000 characters and fails rather than truncates when exceeded.
+- Oversize whole-document leases now route to sectioned strict LLM continuation/reduce before any terminal failure.
+- Sectioned LLM continuation defaults to at most 8 section calls, controlled by `LEASE_WHOLE_DOCUMENT_LLM_MAX_SECTION_CHUNKS`.
+- Sectioned LLM continuation stops before the normalize deadline reserve, controlled by `LEASE_WHOLE_DOCUMENT_LLM_SECTION_DEADLINE_RESERVE_MS`, so the function returns an explicit partial/blocked state instead of platform timeout.
 - Fact-ledger chunking has chunk count, chunk size, concurrency, and deadline-reserve limits.
 - Risk: long leases need continuation/reduce behavior, not silent truncation.
 
@@ -165,7 +169,8 @@ Review UI:
 - Configure Azure OpenAI with the exact deployment name through env vars; do not rely on default model names.
 - Keep whole-document GPT strict schema active for leases.
 - Preserve and inspect compact Azure documents for long leases.
-- Add continuation/reduce for leases that exceed whole-document prompt size.
+- Use sectioned strict LLM continuation/reduce for leases that exceed whole-document prompt size.
+- Keep `LEASE_ENABLE_TYPESCRIPT_LEGACY_FALLBACK` unset in production unless deliberately rolling back; otherwise legacy regex/table extraction can publish unrelated values.
 - Evaluate extraction against a golden CRE lease corpus before trusting production quality.
 - Optimize for evidence-backed correctness over field fill rate. A blank field with a clear review reason is better than an unrelated value in the UI.
 
@@ -186,7 +191,7 @@ Intentionally retained:
 - `extract-with-custom-fields`: custom-field workflow, not the canonical lease upload path.
 - `extract-lease-expense-rules`: post-review lease expense rule generation, not initial lease abstraction extraction.
 - `document-intelligence-v3/v4/v6` diagnostic/readiness/search endpoints: superadmin/debug/review tooling, not alternate lease extraction routes.
-- `openai-fact-ledger` shared modules: still imported by the business extraction orchestrator and canonical claim/readiness code. For leases, active routing forces whole-document LLM primary plus explicit legacy fallback; deleting or renaming this folder safely requires a separate refactor that moves shared types/mappers out from under the legacy folder name.
+- `openai-fact-ledger` shared modules: still imported by the business extraction orchestrator and canonical claim/readiness code. For leases, active routing forces whole-document LLM primary plus sectioned LLM continuation for oversize documents; TypeScript legacy fallback is disabled by default and requires `LEASE_ENABLE_TYPESCRIPT_LEGACY_FALLBACK=true`. Deleting or renaming this folder safely requires a separate refactor that moves shared types/mappers out from under the legacy folder name.
 
 ## Modularization Result
 

@@ -10,6 +10,11 @@ import { getEnrichBoundedStageMode } from "../_shared/extraction/enrich-bounded-
 import { enqueueBoundedEnrichStage } from "../_shared/extraction/enrich-bounded-stage/dispatch.ts";
 import { completeBoundedEnrichStage } from "../_shared/extraction/enrich-bounded-stage/completion.ts";
 import { firstEnrichBoundedStage, isEnrichBoundedStageName } from "../_shared/extraction/enrich-bounded-stage/stage-sequence.ts";
+import {
+  monolithicEnrichGuardReasons,
+  normalizeEnrichInputSize,
+  shouldUseBoundedEnrich,
+} from "../_shared/extraction/enrich-monolithic-guard.ts";
 import { resolveExtractionRunId } from "../_shared/extraction/provenance/recorder.ts";
 import { getLeaseDocumentPackageMode } from "../_shared/extraction/document-package/feature-mode.ts";
 import { getLeaseFinancialScheduleMode } from "../_shared/extraction/lease-financial-schedule/feature-mode.ts";
@@ -44,6 +49,35 @@ import {
 } from "../_shared/extraction/edge-runtime-budgets.ts";
 
 const WORKER_NAME = "lease-extraction-worker";
+
+async function readDurableEnrichInputSize(supabaseAdmin: any, fileId: string) {
+  const projected = await supabaseAdmin
+    .from("uploaded_files")
+    .select(
+      "metadata_full_text_chars:docling_raw->_metadata->>full_text_chars, " +
+      "metadata_page_count:docling_raw->_metadata->>page_count, " +
+      "metadata_text_block_count:docling_raw->_metadata->>text_block_count, " +
+      "raw_page_count:docling_raw->>page_count",
+    )
+    .eq("id", fileId)
+    .maybeSingle();
+
+  let fullTextChars = Number(projected.data?.metadata_full_text_chars ?? 0) || 0;
+  if (!fullTextChars) {
+    const textOnly = await supabaseAdmin
+      .from("uploaded_files")
+      .select("raw_full_text:docling_raw->>full_text")
+      .eq("id", fileId)
+      .maybeSingle();
+    fullTextChars = String(textOnly.data?.raw_full_text || "").length;
+  }
+
+  return normalizeEnrichInputSize({
+    fullTextChars,
+    pageCount: Number(projected.data?.metadata_page_count ?? projected.data?.raw_page_count ?? 0) || 0,
+    textBlockCount: Number(projected.data?.metadata_text_block_count ?? 0) || 0,
+  });
+}
 
 async function runParseStageInline(
   supabaseAdmin: any,
@@ -2286,6 +2320,83 @@ Deno.serve(async (req: Request) => {
       // stage can — never dispatch evidence resolution for a cancelled file.
       if (await isCancelRequested(supabaseAdmin, job.id)) {
         return await stopForCancellation(supabaseAdmin, job, fileId, logger, "before_enrich");
+      }
+
+      const boundedMode = getEnrichBoundedStageMode();
+      const enrichInputSize = await readDurableEnrichInputSize(supabaseAdmin, fileId);
+      const guardReasons = monolithicEnrichGuardReasons(enrichInputSize);
+      if (shouldUseBoundedEnrich(boundedMode, enrichInputSize)) {
+        const firstStage = firstEnrichBoundedStage();
+        const boundedJob = await enqueueBoundedEnrichStage({
+          supabaseAdmin,
+          orgId,
+          fileId,
+          stage: firstStage,
+          generationId: job.generation_id ?? null,
+          moduleType: fileRecord.module_type,
+          logger,
+        });
+
+        if (!boundedJob?.id) {
+          const message = "Could not enqueue bounded enrichment stage; monolithic enrich was not run because it is unsafe for this document.";
+          await failJob(supabaseAdmin, job, "BOUNDED_ENRICH_DISPATCH_FAILED", message);
+          await persistEnrichmentTerminalState({
+            supabaseAdmin,
+            organizationId: orgId,
+            fileId,
+            generationId: job.generation_id,
+            status: "partial",
+            errorCode: "BOUNDED_ENRICH_DISPATCH_FAILED",
+            errorMessage: message,
+            classification: "transport_error",
+            retryable: true,
+            stage: "enrich",
+            completedStages: ["parse", "normalize"],
+            logger,
+          });
+          return jsonResponse({ error: true, error_code: "BOUNDED_ENRICH_DISPATCH_FAILED", job_id: job.id, stage: "enrich", message }, 200);
+        }
+
+        const now = new Date().toISOString();
+        await supabaseAdmin
+          .from("pipeline_jobs")
+          .update({
+            status: "superseded",
+            completed_at: now,
+            updated_at: now,
+            metadata: {
+              ...(job.metadata || {}),
+              redirected_to_bounded_enrich: true,
+              redirected_stage: firstStage,
+              redirected_job_id: boundedJob.id,
+              bounded_mode: boundedMode,
+              monolithic_guard_reasons: guardReasons,
+              enrich_input_size: enrichInputSize,
+            },
+          })
+          .eq("id", job.id);
+
+        await logger.event("enrich", "redirected_to_bounded_enrich", {
+          provider: "lease-extraction-worker",
+          metadata: {
+            job_id: job.id,
+            bounded_job_id: boundedJob.id,
+            next_stage: firstStage,
+            bounded_mode: boundedMode,
+            input_size: enrichInputSize,
+            guard_reasons: guardReasons,
+          },
+        });
+
+        return jsonResponse({
+          error: false,
+          job_id: job.id,
+          stage: "enrich",
+          status: "superseded",
+          redirected_to_bounded_enrich: true,
+          bounded_job_id: boundedJob.id,
+          next_stage: firstStage,
+        }, 200);
       }
 
       await logger.event("enrich", "running", {

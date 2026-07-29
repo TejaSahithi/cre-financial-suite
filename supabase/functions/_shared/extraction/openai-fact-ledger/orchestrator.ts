@@ -193,6 +193,7 @@ export async function runOpenAIFactLedgerPipeline(
       const result = await runWholeDocumentLlmPipeline({
         document: doclingRaw,
         moduleType: input.moduleType,
+        deadlineAt: options.deadlineAt,
         ...(options.provenance ? { provenance: options.provenance } : {}),
       });
       return withOpenAIFactLedgerDebug(result);

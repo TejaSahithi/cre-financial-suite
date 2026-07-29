@@ -65,6 +65,11 @@ import { computeCoreReady, uploadedFileRowHasMeaningfulValues } from "../_shared
 import { enqueueEnrichmentJob } from "../_shared/extraction/enrichment-dispatch.ts";
 import { getEnrichBoundedStageMode } from "../_shared/extraction/enrich-bounded-stage/feature-mode.ts";
 import { enqueueBoundedEnrichStage } from "../_shared/extraction/enrich-bounded-stage/dispatch.ts";
+import {
+  monolithicEnrichGuardReasons,
+  readEnrichInputSizeFromDocling,
+  shouldUseBoundedEnrich,
+} from "../_shared/extraction/enrich-monolithic-guard.ts";
 import { runDocumentIntelligenceV3SideWrite } from "../_shared/extraction/document-intelligence-v3/side-write.ts";
 import { getLeaseClaimsLedgerMode } from "../_shared/extraction/claims/feature-mode.ts";
 import { maybeRunClaimsLedgerForStage } from "../_shared/extraction/claims/claims-pipeline-orchestrator.ts";
@@ -3086,7 +3091,7 @@ Deno.serve(async (req: Request) => {
       let extraction: Record<string, unknown> | null = null;
       if (typeof sample_text === "string" && sample_text.length > 0) {
         // Dry-run sample text uses the same lease architecture fence as the
-        // real path: whole-document LLM primary plus explicit legacy fallback.
+        // real path: whole-document LLM primary plus sectioned LLM continuation.
         // No uploaded_files row exists in this branch, so there is nothing to
         // write.
         const dryRunProvider = enforceLeaseExtractionArchitecture(
@@ -3554,8 +3559,8 @@ Deno.serve(async (req: Request) => {
       );
       console.log(`[normalize-pdf-output] STAGE pipeline_start file_id=${file_id} fileBase64=${!!fileBase64} azureLayoutMode=${azureLayoutMode} provider=${businessExtractionProvider}`);
       // Run the canonical extraction pipeline. For leases, the architecture
-      // fence above forces whole-document LLM primary plus explicit legacy
-      // fallback; non-lease modules keep their configured provider strategy.
+      // fence above forces whole-document LLM primary plus sectioned LLM
+      // continuation; non-lease modules keep their configured provider strategy.
       const pipelineDocling = buildPipelineLayoutInput(fileRecord.docling_raw as Record<string, unknown> | null);
       // One call through the business-extraction orchestrator returns a common
       // ExtractionPipelineResult shape for primary/fallback/manual-review
@@ -3938,11 +3943,14 @@ Deno.serve(async (req: Request) => {
       // set in a deployed environment.
       const inlineEnrichment = Deno.env.get("NORMALIZE_INLINE_ENRICHMENT") === "true";
       if (!inlineEnrichment) {
-        // Bounded Per-Domain Enrich Refactor: when active, dispatch the
-        // first bounded stage instead of the single monolithic "enrich"
-        // stage. "off" (default) preserves this exact call, unchanged --
-        // the kill-switch fallback the plan requires.
-        if (getEnrichBoundedStageMode() === "active") {
+        // Bounded Per-Domain Enrich Refactor: dispatch the first bounded stage
+        // when active. Also force bounded mode for documents too large for the
+        // legacy single-shot "enrich" function, even if the env flag was set
+        // to "off"; that monolithic path is the known 546/compute hotspot.
+        const boundedMode = getEnrichBoundedStageMode();
+        const enrichInputSize = readEnrichInputSizeFromDocling(fileRecord.docling_raw as Record<string, unknown>);
+        const guardReasons = monolithicEnrichGuardReasons(enrichInputSize);
+        if (shouldUseBoundedEnrich(boundedMode, enrichInputSize)) {
           await enqueueBoundedEnrichStage({
             supabaseAdmin,
             orgId,
@@ -3952,6 +3960,12 @@ Deno.serve(async (req: Request) => {
             moduleType,
             logger,
           });
+          if (boundedMode !== "active") {
+            await logger.event("enrich", "bounded_forced_for_large_document", {
+              provider: "lease-extraction-worker",
+              metadata: { mode: boundedMode, input_size: enrichInputSize, guard_reasons: guardReasons },
+            });
+          }
         } else {
           await enqueueEnrichmentJob({
             supabaseAdmin,

@@ -233,7 +233,25 @@ function formatFileRecord(record: Record<string, any>, extras: Record<string, an
     (record.ui_review_payload as any)?.metadata?.extractionDebug ??
     (record.normalized_output as any)?.metadata?.extractionDebug ??
     null;
+  const businessProvenance =
+    (record.ui_review_payload as any)?.metadata?.provenance ??
+    (record.normalized_output as any)?.metadata?.provenance ??
+    null;
   const openaiFactLedgerDebug = extractionDebug?.openai_fact_ledger ?? null;
+  const openaiAttemptCount = Number(businessProvenance?.openai_attempt_count ?? 0);
+  const openaiFactsExtractedCount = Number(openaiFactLedgerDebug?.facts_extracted_count ?? 0);
+  const openaiFactsMappedCount = Number(openaiFactLedgerDebug?.facts_mapped_count ?? 0);
+  const openaiFactsUnmappedCount = Number(openaiFactLedgerDebug?.facts_unmapped_count ?? 0);
+  const openaiLlmCallCount = Number(openaiFactLedgerDebug?.llm_call_count ?? 0);
+  const derivedOpenaiAttempted =
+    record.openai_extraction_attempted === true ||
+    openaiAttemptCount > 0 ||
+    openaiFactsExtractedCount > 0 ||
+    Boolean(openaiFactLedgerDebug?.response_id) ||
+    Boolean(openaiFactLedgerDebug?.failure_http_status);
+  const standardFieldPerFactRatio = openaiFactsExtractedCount > 0
+    ? Number((openaiFactsMappedCount / openaiFactsExtractedCount).toFixed(3))
+    : null;
   return {
     ok: true,
     error: false,
@@ -258,7 +276,8 @@ function formatFileRecord(record: Record<string, any>, extras: Record<string, an
     review_status: record.review_status ?? null,
     document_subtype: record.document_subtype ?? null,
     extraction_method: record.extraction_method ?? null,
-    openai_extraction_attempted: record.openai_extraction_attempted ?? null,
+    openai_extraction_attempted: derivedOpenaiAttempted,
+    openai_extraction_attempted_column: record.openai_extraction_attempted ?? null,
     property_id: record.property_id ?? null,
     building_id: record.building_id ?? null,
     unit_id: record.unit_id ?? null,
@@ -282,6 +301,32 @@ function formatFileRecord(record: Record<string, any>, extras: Record<string, an
     },
     pipeline,
     docling_summary: doclingSummary,
+    business_extraction_debug: {
+      parser_method: record.extraction_method ?? null,
+      requested_provider: businessProvenance?.requested_provider ?? null,
+      effective_provider: businessProvenance?.effective_provider ?? null,
+      acceptance_state: businessProvenance?.acceptance_state ?? null,
+      fallback_used: businessProvenance?.fallback_used ?? null,
+      fallback_reason: businessProvenance?.fallback_reason ?? null,
+      openai_attempt_count: openaiAttemptCount,
+      openai_attempted: derivedOpenaiAttempted,
+      openai_attempted_column: record.openai_extraction_attempted ?? null,
+      openai_debug_present: Boolean(openaiFactLedgerDebug),
+      openai_llm_call_count: Number.isFinite(openaiLlmCallCount) ? openaiLlmCallCount : null,
+      facts_extracted_count: Number.isFinite(openaiFactsExtractedCount) ? openaiFactsExtractedCount : null,
+      standard_fields_mapped_from_facts_count: Number.isFinite(openaiFactsMappedCount) ? openaiFactsMappedCount : null,
+      unmapped_fact_count: Number.isFinite(openaiFactsUnmappedCount) ? openaiFactsUnmappedCount : null,
+      standard_field_per_fact_ratio: standardFieldPerFactRatio,
+      fact_counters_are_partitioned: false,
+      fact_counter_note: "facts_extracted is source facts; mapped is standard fields populated; unmapped is source facts that did not win a field. They are diagnostics, not mapped + unmapped = total.",
+      failure_classification: openaiFactLedgerDebug?.failure_classification ?? null,
+      failure_http_status: openaiFactLedgerDebug?.failure_http_status ?? null,
+      extraction_mode: openaiFactLedgerDebug?.extraction_mode ?? null,
+      architecture: openaiFactLedgerDebug?.architecture ?? null,
+      authoritative: openaiFactLedgerDebug?.authoritative ?? null,
+      typescript_field_mapping_used: openaiFactLedgerDebug?.typescript_field_mapping_used ?? null,
+      stale_attempt_column: record.openai_extraction_attempted === false && derivedOpenaiAttempted,
+    },
     openai_fact_ledger_debug: openaiFactLedgerDebug
       ? {
         document_profile: openaiFactLedgerDebug.document_profile ?? null,
