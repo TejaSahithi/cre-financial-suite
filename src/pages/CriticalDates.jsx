@@ -94,13 +94,22 @@ const URGENCY_LABEL = {
   unknown: "—",
 };
 
+const CRITICAL_DATE_FIELD_ALIASES = {
+  lease_date: ["lease_date", "execution_date", "date_of_lease", "signed_at"],
+  commencement_date: ["commencement_date", "start_date", "lease_start_date", "term_start_date"],
+  rent_commencement_date: ["rent_commencement_date", "rent_start_date", "commencement_date", "start_date"],
+  expiration_date: ["expiration_date", "end_date", "lease_end_date", "term_end_date"],
+  lease_term_months: ["lease_term_months", "term_months", "lease_term", "initial_term"],
+  option_exercise_deadline: ["option_exercise_deadline", "renewal_exercise_deadline", "renewal_deadline"],
+};
+
 function isApprovedLease(lease) {
   return String(lease?.abstract_status || "").toLowerCase() === "approved" ||
     String(lease?.status || "").toLowerCase() === "approved";
 }
 
 function fieldValue(lease, keys) {
-  return approvedLeaseFieldValue(lease, keys);
+  return approvedLeaseFieldValue(lease, keys, CRITICAL_DATE_FIELD_ALIASES);
 }
 
 function isoDate(value) {

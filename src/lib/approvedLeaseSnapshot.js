@@ -20,11 +20,22 @@ function isApprovedSnapshotEntry(entry) {
   return APPROVED_REVIEW_STATUSES.has(status);
 }
 
+function expandApprovedFieldAliases(keys, aliases = {}) {
+  const input = Array.isArray(keys) ? keys : [keys];
+  const expanded = [];
+  for (const key of input) {
+    expanded.push(key);
+    if (Array.isArray(aliases[key])) expanded.push(...aliases[key]);
+  }
+  return [...new Set(expanded.filter(Boolean))];
+}
+
 export function approvedLeaseFieldValue(lease, keys, aliases = {}) {
-  const candidates = (Array.isArray(keys) ? keys : [keys]).flatMap((key) => aliases[key] || [key]);
+  const candidates = expandApprovedFieldAliases(keys, aliases);
   const snapshot = hasApprovalSnapshot(lease) ? lease.abstract_snapshot : null;
   const approvedFields = snapshot?.approved || {};
   const snapshotFields = snapshot?.fields || {};
+  const fieldReviews = lease?.extraction_data?.field_reviews || snapshot?.field_reviews || {};
 
   for (const key of candidates) {
     const approvedValue = valueFromFieldCandidate(approvedFields?.[key]);
@@ -38,7 +49,12 @@ export function approvedLeaseFieldValue(lease, keys, aliases = {}) {
     if (isPresent(snapshotValue)) return snapshotValue;
   }
 
-  if (snapshot) return null;
+  for (const key of candidates) {
+    const reviewEntry = fieldReviews?.[key];
+    if (!isApprovedSnapshotEntry(reviewEntry)) continue;
+    const reviewValue = valueFromFieldCandidate(reviewEntry);
+    if (isPresent(reviewValue)) return reviewValue;
+  }
 
   const extractionFields = lease?.extraction_data?.fields || {};
   const extractedFields = lease?.extracted_fields || {};

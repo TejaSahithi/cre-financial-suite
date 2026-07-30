@@ -1971,7 +1971,7 @@ export const leaseExpenseRuleService = {
     });
   },
 
-  async saveRuleSet({ lease, rules = [], status = "draft", existingRuleSetId = null, categories = [], createdFrom = "workflow", approver = null }) {
+  async saveRuleSet({ lease, rules = [], status = "draft", existingRuleSetId = null, categories = [], createdFrom = "workflow", approver = null, suppressHttpError = false }) {
     if (!supabase || !lease?.id) throw new Error("Lease is required to save expense rules");
 
     const tag = `[saveRuleSet lease=${lease?.id}]`;
@@ -2353,6 +2353,7 @@ export const leaseExpenseRuleService = {
     // is unchanged client-side logic; this call replaces only the mechanical
     // persistence step that used to be 3+ independent, unguarded Supabase
     // calls with zero audit logging.
+    const suppressSaveHttpError = suppressHttpError || normalizeText(createdFrom) === "approve_abstract";
     const rpcResult = await invokeEdgeFunction("save-lease-expense-rule-set", {
       lease_id: lease.id,
       rule_set_id: ruleSetId,
@@ -2364,7 +2365,11 @@ export const leaseExpenseRuleService = {
       values: valuePayloads,
       clauses: clausePayloads,
       superseded_rule_ids: supersededRuleIds,
+      suppress_http_error: suppressSaveHttpError,
     });
+    if (rpcResult?.save_failed) {
+      throw new Error(rpcResult.message || "Could not save lease expense rule set");
+    }
     const resolvedRuleSetId = rpcResult?.rule_set_id || ruleSetId;
 
     // Status recalculation and the conditional lease-config sync stay

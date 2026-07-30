@@ -34,10 +34,10 @@ const navSections = [
   {
     label: "Leases", icon: FileText, children: [
       { label: "Upload Lease", page: "LeaseUpload" },
+      { label: "Lease List", page: "Leases" },
       { label: "File Pipeline", page: "FileHistoryPage" },
       { label: "Rent Projection", page: "RentProjection" },
       { label: "Critical Dates", page: "CriticalDates" },
-      { label: "Lease List", page: "Leases" },
     ]
   },
   {

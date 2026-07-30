@@ -445,7 +445,6 @@ export default function LeaseReview() {
     [leaseFull, fieldReviews],
   );
   const enterpriseTabs = normalized.tabs || {};
-  const documentApproved = lease?.abstract_status === "approved";
   const reviewRowByKey = useMemo(() => {
     const map = new Map();
     allReviewRows.forEach((row) => {
@@ -1908,6 +1907,54 @@ export default function LeaseReview() {
     }
   };
 
+  const runPostApprovalExpenseRuleSync = async (approvedLease) => {
+    if (isStalePayload || !approvedLease?.id) return;
+
+    let persisted = null;
+    try {
+      persisted = await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
+        leaseId: approvedLease.id,
+        source: "approve_abstract",
+        force: false,
+      });
+      console.log(
+        `[LeaseReview] generateLeaseExpenseRulesForLease -> ${persisted?.persistedRulesCount || 0} rules persisted`,
+        persisted,
+      );
+      queryClient.invalidateQueries({ queryKey: ["lease-expense-rules", approvedLease.id] });
+      queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-summary", approvedLease.id] });
+    } catch (persistErr) {
+      console.warn("[LeaseReview] post-approval expense rule generation skipped:", persistErr?.message || persistErr);
+      toast.warning(
+        "Lease approved, but expense-rule extraction needs retry from Review expense rules.",
+        { duration: 8000 },
+      );
+    }
+
+    try {
+      await expenseService.syncLeaseDerivedExpenses({ leases: [approvedLease] });
+    } catch (syncErr) {
+      console.warn("[LeaseReview] legacy lease-import cleanup skipped:", syncErr?.message || syncErr);
+    }
+
+    const hasExpenseRules =
+      (persisted?.persistedRulesCount || 0) > 0 ||
+      Boolean(persisted?.ruleSet?.id) ||
+      Boolean(persisted?.saved?.ruleSet?.id) ||
+      Boolean(approvedRuleSet?.id);
+
+    if (hasExpenseRules && approvedLease?.property_id) {
+      try {
+        const propertyExpenses = await expenseService.filter({ property_id: approvedLease.property_id });
+        await expenseService.classifyExpenses({ expenses: propertyExpenses, leases: [approvedLease] });
+      } catch (classifyErr) {
+        console.warn("[LeaseReview] expense classification skipped:", classifyErr?.message || classifyErr);
+      }
+    }
+
+    queryClient.invalidateQueries({ queryKey: ["Expense"] });
+  };
+
   const handleApproveAbstract = async () => {
     if (!canApprove) {
       approvalBlockers.forEach((b) =>
@@ -2066,38 +2113,12 @@ export default function LeaseReview() {
 
       queryClient.invalidateQueries({ queryKey: ["lease-critical-dates"] });
 
-      let approvedExpenseRuleSet = null;
-      // Persist expense rules using the new leaseRulePipelineService
-      // which aggregates workflow + structured + templates + LLM + text fallback
-      if (!isStalePayload) {
-        try {
-          const persisted = await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
-            leaseId: lease.id,
-            source: "approve_abstract",
-            force: false
-          });
-          console.log(
-            `[LeaseReview] generateLeaseExpenseRulesForLease -> ${persisted?.persistedRulesCount || 0} rules persisted`,
-            persisted
-          );
-        } catch (persistErr) {
-          console.warn("[LeaseReview] generateLeaseExpenseRulesForLease skipped:", persistErr?.message || persistErr);
-        }
-
-        try {
-          await expenseService.syncLeaseDerivedExpenses({ leases: [approvedLease] });
-        } catch (syncErr) {
-          console.warn("[LeaseReview] legacy lease-import cleanup skipped:", syncErr?.message || syncErr);
-        }
-        if (approvedExpenseRuleSet?.ruleSet?.id || approvedRuleSet?.id) {
-          try {
-            const propertyExpenses = await expenseService.filter({ property_id: approvedLease.property_id });
-            await expenseService.classifyExpenses({ expenses: propertyExpenses, leases: [approvedLease] });
-          } catch (classifyErr) {
-            console.warn("[LeaseReview] expense classification skipped:", classifyErr?.message || classifyErr);
-          }
-        }
-      }
+      // Expense/CAM rule extraction is useful after approval, but it is not
+      // part of the approval transaction. Run it as a follow-up so LLM/provider
+      // or rule-save issues do not make the approved lease feel failed.
+      void runPostApprovalExpenseRuleSync(approvedLease).catch((postApprovalErr) => {
+        console.warn("[LeaseReview] post-approval expense sync failed:", postApprovalErr?.message || postApprovalErr);
+      });
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
 
       toast.success(`Lease abstract approved (v${approvedLease.abstract_version || 1})`);
@@ -3442,7 +3463,6 @@ export default function LeaseReview() {
                 onOpenDetail={(row) => openDrawer(row, "view")}
                 onQuickAction={handleTabRowQuickAction}
                 reviewFields={reviewFieldByKey}
-                documentApproved={documentApproved}
               />
             </TabsContent>
           ))}
@@ -3450,28 +3470,28 @@ export default function LeaseReview() {
           <div className="flex justify-end">
             <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setCustomFieldDialog({ tabKey: "rent_charges" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>+ Add Custom Field</Button>
           </div>
-          <LeaseReviewTabTable rows={enterpriseTabs.rent_charges || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} documentApproved={documentApproved} />
+          <LeaseReviewTabTable rows={enterpriseTabs.rent_charges || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} />
           <RentScheduleTable leaseId={lease.id} />
         </TabsContent>
 
         <TabsContent value="expenses_recoveries" className="mt-4 space-y-4">
-          <LeaseReviewTabTable rows={enterpriseTabs.expenses_recoveries || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} reviewFields={reviewFieldByKey} documentApproved={documentApproved} />
+          <LeaseReviewTabTable rows={enterpriseTabs.expenses_recoveries || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} reviewFields={reviewFieldByKey} />
         </TabsContent>
 
         <TabsContent value="cam_rules" className="mt-4 space-y-4">
-          <LeaseReviewTabTable rows={enterpriseTabs.cam_rules || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} reviewFields={reviewFieldByKey} documentApproved={documentApproved} />
+          <LeaseReviewTabTable rows={enterpriseTabs.cam_rules || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} reviewFields={reviewFieldByKey} />
         </TabsContent>
 
         <TabsContent value="clause_records" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.clause_records || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} documentApproved={documentApproved} />
+          <LeaseReviewTabTable rows={enterpriseTabs.clause_records || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} />
         </TabsContent>
 
         <TabsContent value="critical_dates" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.critical_dates || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} documentApproved={documentApproved} />
+          <LeaseReviewTabTable rows={enterpriseTabs.critical_dates || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} />
         </TabsContent>
 
         <TabsContent value="documents_exhibits" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.documents_exhibits || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} documentApproved={documentApproved} />
+          <LeaseReviewTabTable rows={enterpriseTabs.documents_exhibits || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} />
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-base">Source Document</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">
@@ -3482,7 +3502,7 @@ export default function LeaseReview() {
         </TabsContent>
 
         <TabsContent value="budget_preview" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.budget_preview || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} documentApproved={documentApproved} />
+          <LeaseReviewTabTable rows={enterpriseTabs.budget_preview || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} />
           <BudgetPreviewCard lease={lease} />
         </TabsContent>
 

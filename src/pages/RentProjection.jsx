@@ -251,8 +251,14 @@ export default function RentProjection() {
     return { totalLeases, totalSf, totalAnnual, totalMonthly, avgRentPerSf, expiring12mo };
   }, [filteredApprovedLeases]);
 
+  const authoritativeLeaseCount = Number(
+    outputs?.summary?.lease_count ??
+    (Array.isArray(outputs?.lease_summaries) ? outputs.lease_summaries.length : 0),
+  );
+  const hasAuthoritativeProjection = hasSnapshot && authoritativeLeaseCount > 0;
+
   const displayedStats = useMemo(() => {
-    if (!hasSnapshot) return liveStats;
+    if (!hasAuthoritativeProjection) return liveStats;
     const summary = outputs?.summary || {};
     return {
       totalLeases: Number(summary.lease_count ?? liveStats.totalLeases),
@@ -262,10 +268,10 @@ export default function RentProjection() {
       avgRentPerSf: Number(summary.avg_rent_psf ?? liveStats.avgRentPerSf),
       expiring12mo: liveStats.expiring12mo,
     };
-  }, [hasSnapshot, outputs, liveStats]);
+  }, [hasAuthoritativeProjection, outputs, liveStats]);
 
   const authoritativeChart = useMemo(() => {
-    if (!hasSnapshot || !Array.isArray(outputs?.monthly_projections)) return [];
+    if (!hasAuthoritativeProjection || !Array.isArray(outputs?.monthly_projections)) return [];
     return MONTHS.map((month, index) => {
       const row = outputs.monthly_projections[index] || {};
       return {
@@ -274,7 +280,7 @@ export default function RentProjection() {
         projected: Number(row.projected_rent || 0),
       };
     });
-  }, [hasSnapshot, outputs]);
+  }, [hasAuthoritativeProjection, outputs]);
 
   const leaseSummaryRows = useMemo(() => {
     const rows = Array.isArray(outputs?.lease_summaries) ? outputs.lease_summaries : [];
@@ -316,9 +322,15 @@ export default function RentProjection() {
     return rows.filter((row) => [row.tenant_name, row.lease_type].filter(Boolean).join(" ").toLowerCase().includes(needle));
   }, [filteredApprovedLeases, search]);
 
-  const displayedLeaseRows = hasSnapshot ? leaseSummaryRows : liveLeaseSummaryRows;
+  const displayedLeaseRows = hasAuthoritativeProjection ? leaseSummaryRows : liveLeaseSummaryRows;
+  const liveProjectionChart = useMemo(() => MONTHS.map((month) => ({
+    month,
+    current: liveStats.totalMonthly,
+    projected: liveStats.totalMonthly,
+  })), [liveStats.totalMonthly]);
+  const displayedChart = hasAuthoritativeProjection ? authoritativeChart : liveProjectionChart;
 
-  const projectedAnnual = authoritativeChart.reduce((sum, row) => sum + Number(row.projected || 0), 0);
+  const projectedAnnual = displayedChart.reduce((sum, row) => sum + Number(row.projected || 0), 0);
   const projectedMonthlyAvg = projectedAnnual / 12;
   const yoyChange =
     displayedStats.totalAnnual > 0
@@ -354,7 +366,7 @@ export default function RentProjection() {
   };
 
   const handleExport = () => {
-    if (hasSnapshot && leaseSummaryRows.length > 0) {
+    if (hasAuthoritativeProjection && leaseSummaryRows.length > 0) {
       downloadCSV(
         leaseSummaryRows.map((row) => ({
           tenant: row.tenant_name || "",
@@ -550,7 +562,7 @@ export default function RentProjection() {
         </Card>
       )}
 
-      {selectedPropertyId && !hasSnapshot && (
+      {selectedPropertyId && !hasAuthoritativeProjection && (
         <Card className="border-amber-200 bg-amber-50">
           <CardContent className="p-4 flex items-center gap-3">
             <AlertCircle className="w-5 h-5 text-amber-500 shrink-0" />
@@ -564,7 +576,7 @@ export default function RentProjection() {
         </Card>
       )}
 
-      {hasSnapshot && (
+      {hasAuthoritativeProjection && (
         <div className="text-[11px] text-slate-400">
           Snapshot computed {new Date(snapshot.computed_at).toLocaleString()} · {outputs?.summary?.lease_count || 0} approved lease(s) · {PROJECTION_MODES.find((mode) => mode.value === projectionMode)?.label}
         </div>
@@ -578,13 +590,13 @@ export default function RentProjection() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {!hasSnapshot ? (
+          {displayedChart.length === 0 || displayedStats.totalLeases === 0 ? (
             <p className="text-center py-12 text-sm text-slate-400">
-              Run the engine to view authoritative monthly rent projections for this scope.
+              Approved lease abstracts appear here immediately after approval. Run the engine for authoritative monthly projection snapshots.
             </p>
           ) : (
             <ResponsiveContainer width="100%" height={300}>
-              <ComposedChart data={authoritativeChart}>
+              <ComposedChart data={displayedChart}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                 <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                 <YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`} />
@@ -645,7 +657,7 @@ export default function RentProjection() {
                     <Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" />
                   </TableCell>
                 </TableRow>
-              ) : !hasSnapshot && displayedLeaseRows.length === 0 ? (
+              ) : !hasAuthoritativeProjection && displayedLeaseRows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={13} className="text-center py-12 text-sm text-slate-400">
                     No approved leases match the current scope. Approved abstracts appear here immediately; run the engine for authoritative monthly schedule rows.

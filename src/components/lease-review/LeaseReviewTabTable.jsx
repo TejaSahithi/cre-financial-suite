@@ -154,7 +154,7 @@ function shouldShowRow(row, showAdvanced) {
   return false;
 }
 
-export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAction, onNavigateRules, reviewFields = {}, documentApproved = false }) {
+export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAction, onNavigateRules, reviewFields = {} }) {
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -257,14 +257,15 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
               };
               const fKey = row.key || row.fieldKey;
               const reviewField = reviewFields?.[fKey] ?? null;
-              const rowConfirmed = documentApproved
-                || row.status === "approved"
-                || ["accepted", "edited"].includes(reviewField?.status);
               const rawRowValue = row.value ?? row.normalized_value ?? row.normalizedValue;
               const displayRowValue = row.displayValue ?? row.display_value ?? rawRowValue;
               const fullRowValue = formatValue(displayRowValue, row);
               const rowValue = valuePreview(displayRowValue, row);
               const reviewValue = reviewField ? formatValue(reviewField.displayValue ?? reviewField.value, row) : "-";
+              const rowConfirmed = rowHasDisplayValue(row) && (
+                ["accepted", "edited", "approved", "reviewed"].includes(String(reviewField?.status || "").toLowerCase()) ||
+                ["approved", "accepted", "edited", "reviewed"].includes(String(row.status || "").toLowerCase())
+              );
               const isMismatch = reviewField && fullRowValue !== "Not extracted" && reviewValue !== "Not extracted" && fullRowValue.trim().toLowerCase() !== reviewValue.trim().toLowerCase();
 
               return (

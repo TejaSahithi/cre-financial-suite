@@ -598,10 +598,10 @@ export const leaseRulePipelineService = {
            file_id: fileId || null,
          }, {}, { page: "LeaseReview", action: source || "expense_rules" });
          if (llmData?.rules) {
-            llmRules = llmData.rules;
+           llmRules = llmData.rules;
          }
        } catch (err) {
-         console.error("[LLM EXTRACTION CATCH ERROR]", err);
+         console.warn("[LeaseExpenseRules] LLM extraction unavailable; continuing with deterministic candidates.", err?.message || err);
        }
     }
     diagnostics.llmRulesCount = llmRules.length;

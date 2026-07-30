@@ -309,11 +309,12 @@ async function extractRulesFromChunk(
 async function extractRulesFromText(text: string, systemPrompt: string, userPromptBuilder: (t: string) => string): Promise<unknown[]> {
   const chunks = splitIntoChunks(text, INITIAL_CHUNK_CHARS, CHUNK_OVERLAP_CHARS);
   console.log(`[extract-lease-expense-rules] Document is ${text.length} chars — splitting into ${chunks.length} chunks for extraction.`);
-  const chunkResults = await Promise.all(
-    chunks.map((chunk, i) =>
-      extractRulesFromChunk(chunk, systemPrompt, userPromptBuilder, `chunk ${i + 1}/${chunks.length}`)
-    ),
-  );
+  const chunkResults: unknown[][] = [];
+  for (let i = 0; i < chunks.length; i += 1) {
+    chunkResults.push(
+      await extractRulesFromChunk(chunks[i], systemPrompt, userPromptBuilder, `chunk ${i + 1}/${chunks.length}`),
+    );
+  }
 
   const allRules = chunkResults.flat();
   const deduped = deduplicateRules(allRules);
@@ -379,13 +380,14 @@ Return a JSON object with a "rules" array of expense rules found. Each rule must
         : "EXPENSE_RULES_LLM_FAILED";
       await logger?.event("expense_rules", "failed", { reason: message, error_code: errorCode });
       return new Response(JSON.stringify({
-        error: true,
+        error: false,
+        partial: true,
         error_code: errorCode,
         rules: [],
         warning: `AI expense rule extraction failed: ${message}`,
       }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
-        status: 502,
+        status: 200,
       });
     }
 

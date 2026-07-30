@@ -28,6 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { loadFieldReviewMap } from "@/services/leaseAbstractService";
 import { resolveLeaseField } from "@/lib/leaseFieldResolver";
+import { approvedLeaseFieldValue } from "@/lib/approvedLeaseSnapshot";
 import { getLeaseFieldLabel } from "@/lib/leaseFieldOptions";
 import {
   LEASE_REVIEW_FIELDS,
@@ -36,6 +37,43 @@ import {
 } from "@/lib/leaseReviewSchema";
 import { createPageUrl } from "@/utils";
 import { supabase } from "@/services/supabaseClient";
+
+const LEASE_DETAIL_FIELD_ALIASES = {
+  tenant_name: ["tenant_name", "tenant"],
+  landlord_name: ["landlord_name", "landlord"],
+  lease_type: ["lease_type", "expense_structure", "lease_structure", "cam_structure"],
+  monthly_rent: ["monthly_rent", "base_rent_monthly", "base_rent", "monthly_base_rent"],
+  annual_rent: ["annual_rent", "base_rent_annual", "annual_base_rent", "yearly_rent"],
+  rent_per_sf: ["rent_per_sf", "base_rent_psf", "tenant_rent_per_rsf"],
+  square_footage: ["square_footage", "tenant_rsf", "rentable_area_sqft", "premises_rsf", "rsf", "total_sf"],
+  premises_use: ["premises_use", "permitted_use", "use"],
+  suite_number: ["suite_number", "unit_number", "unit", "premises_suite"],
+  commencement_date: ["commencement_date", "start_date", "lease_start_date", "term_start_date"],
+  expiration_date: ["expiration_date", "end_date", "lease_end_date", "term_end_date"],
+  rent_commencement_date: ["rent_commencement_date", "rent_start_date", "commencement_date", "start_date"],
+  initial_term: ["initial_term", "lease_term", "lease_term_months", "term_months"],
+  expense_structure: ["expense_structure", "lease_type", "lease_structure", "cam_structure"],
+  tenant_insurance_required: ["tenant_insurance_required", "insurance_required"],
+  responsibility_taxes: ["responsibility_taxes", "tax_responsibility"],
+  responsibility_utilities: ["responsibility_utilities", "utilities_responsibility"],
+  responsibility_repairs: ["responsibility_repairs", "maintenance_responsibility"],
+};
+
+function hasDetailValue(value) {
+  return value !== undefined && value !== null && String(value).trim() !== "";
+}
+
+function firstDetailValue(...values) {
+  for (const value of values) {
+    if (hasDetailValue(value)) return value;
+  }
+  return null;
+}
+
+function reviewFieldForKey(fieldReviewMap, key) {
+  const aliases = LEASE_DETAIL_FIELD_ALIASES[key] || [key];
+  return aliases.map((alias) => fieldReviewMap?.[alias]).find(Boolean) || null;
+}
 
 export default function LeaseDetail() {
   const location = useLocation();
@@ -123,8 +161,26 @@ export default function LeaseDetail() {
   });
 
   const getFieldObj = useMemo(() => {
-    return (key) => resolveLeaseField(lease, key, { mode: "canonical" });
-  }, [lease]);
+    return (key) => {
+      const resolved = resolveLeaseField(lease, key, { mode: "canonical" });
+      const review = reviewFieldForKey(fieldReviewMap, key);
+      const reviewStatus = String(review?.status || "").toLowerCase();
+      const approvedValue = approvedLeaseFieldValue(lease, key, LEASE_DETAIL_FIELD_ALIASES);
+      const reviewerValue = ["accepted", "edited", "approved", "reviewed"].includes(reviewStatus)
+        ? firstDetailValue(review?.normalized_value, review?.normalizedValue, review?.value, review?.raw_value)
+        : null;
+      const value = firstDetailValue(reviewerValue, approvedValue, resolved?.value);
+      return {
+        ...(resolved || {}),
+        found: hasDetailValue(value) || resolved?.found,
+        value,
+        raw_value: firstDetailValue(review?.raw_value, resolved?.raw_value, value),
+        source_page: firstDetailValue(review?.source_page, resolved?.source_page),
+        source_text: firstDetailValue(review?.source_text, review?.exact_source_text, resolved?.source_text, resolved?.exact_source_text),
+        review_status: review?.status || resolved?.review_status || resolved?.extraction_status || "n/a",
+      };
+    };
+  }, [lease, fieldReviewMap]);
 
   const snapshot = lease?.abstract_snapshot || {};
 
@@ -187,10 +243,10 @@ export default function LeaseDetail() {
   const reviewLink = createPageUrl("LeaseReview", { id: lease.id });
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="lease-detail-print space-y-6 p-6">
       <Link
         to={createPageUrl("Leases")}
-        className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700"
+        className="no-print flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700"
       >
         <ArrowLeft className="h-4 w-4" /> Back to Leases
       </Link>
@@ -220,7 +276,7 @@ export default function LeaseDetail() {
             )}
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="no-print flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => window.print()}>
             <Printer className="mr-1 h-4 w-4" />
             Print
@@ -248,7 +304,7 @@ export default function LeaseDetail() {
       )}
 
       {/* Dev-Only Diagnostic Panel */}
-      <Card className="border-blue-200 bg-blue-50">
+      <Card className="no-print border-blue-200 bg-blue-50">
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm text-blue-900">
             <Settings className="h-4 w-4" />
@@ -472,7 +528,7 @@ export default function LeaseDetail() {
 
 function SectionCard({ icon: Icon, title, children }) {
   return (
-    <Card>
+    <Card data-print-section>
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
           {Icon && <Icon className="h-4 w-4 text-slate-500" />}
@@ -551,17 +607,24 @@ function AuditList({ fieldReviewMap }) {
   );
 }
 
-function formatCurrency(value) {
+function parseDisplayNumber(value) {
   if (value === null || value === undefined || value === "") return null;
-  const n = Number(value);
-  if (!Number.isFinite(n)) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const match = String(value).match(/[-+]?\d[\d,]*(?:\.\d+)?/);
+  if (!match) return null;
+  const n = Number(match[0].replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function formatCurrency(value) {
+  const n = parseDisplayNumber(value);
+  if (n === null) return null;
   return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 }
 
 function formatNumber(value, { fractionDigits = 0 } = {}) {
-  if (value === null || value === undefined || value === "") return null;
-  const n = Number(value);
-  if (!Number.isFinite(n)) return null;
+  const n = parseDisplayNumber(value);
+  if (n === null) return null;
   return fractionDigits > 0 ? n.toFixed(fractionDigits) : n.toLocaleString();
 }
 
@@ -573,8 +636,7 @@ function formatBoolean(value) {
 }
 
 function formatPercent(value) {
-  if (value === null || value === undefined || value === "") return null;
-  const n = Number(value);
-  if (!Number.isFinite(n)) return String(value);
+  const n = parseDisplayNumber(value);
+  if (n === null) return String(value ?? "") || null;
   return `${n}%`;
 }

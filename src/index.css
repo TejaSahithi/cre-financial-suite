@@ -86,3 +86,45 @@
     @apply bg-background text-foreground;
   }
 }
+
+@media print {
+  html,
+  body,
+  #root {
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
+    background: white !important;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .lease-detail-print,
+  .lease-detail-print * {
+    visibility: visible;
+  }
+
+  .lease-detail-print {
+    position: absolute !important;
+    inset: 0 auto auto 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    padding: 0.25in !important;
+    overflow: visible !important;
+    background: white !important;
+  }
+
+  .no-print,
+  .no-print * {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  [data-print-section] {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    box-shadow: none !important;
+  }
+}

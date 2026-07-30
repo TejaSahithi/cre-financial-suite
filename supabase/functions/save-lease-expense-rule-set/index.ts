@@ -63,12 +63,14 @@ Deno.serve(async (req: Request) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
 
+  let suppressHttpError = false;
   try {
     const { user, supabaseAdmin } = await verifyUser(req);
     const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
     await assertPageAccess(req, orgId, ["LeaseExpenseRules", "LeaseExpenseClassification", "LeaseReview"], "write");
 
     const body = await req.json().catch(() => ({}));
+    suppressHttpError = body?.suppress_http_error === true;
     const payload = validatePayload(body);
 
     const { data, error } = await supabaseAdmin.rpc("save_lease_expense_rule_set", {
@@ -95,9 +97,11 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     const message = err?.message || "Could not save lease expense rule set";
     return jsonResponse({
-      error: true,
+      error: !suppressHttpError,
+      partial: suppressHttpError,
+      save_failed: true,
       message,
       error_code: "SAVE_LEASE_EXPENSE_RULE_SET_FAILED",
-    }, errorStatus(message));
+    }, suppressHttpError ? 200 : errorStatus(message));
   }
 });
