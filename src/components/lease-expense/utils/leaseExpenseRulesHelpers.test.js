@@ -6,7 +6,8 @@ import {
   normalizeRuleToken,
   normalizeDisplayKey,
   isSupersededRule,
-  displayDedupeKey
+  displayDedupeKey,
+  dedupeDisplayRows
 } from './leaseExpenseRulesHelpers';
 
 describe('leaseExpenseRulesHelpers', () => {
@@ -45,6 +46,44 @@ describe('leaseExpenseRulesHelpers', () => {
       lease: { id: "123" },
       rule: { category_name: "Taxes", subcategory_name: "Real Estate" }
     };
-    expect(displayDedupeKey(row)).toBe("123::taxes::real_estate");
+    expect(displayDedupeKey(row)).toBe("123::taxes::real_estate::::::::::::");
+  });
+
+  it('does not collapse distinct lease treatments in the same category', () => {
+    const rows = [
+      {
+        lease: { id: "lease-1" },
+        rule: {
+          category_name: "CAM",
+          subcategory_name: "Common Area Maintenance",
+          payment_treatment: "included",
+          recovery_method: "pro_rata_share",
+          allocation_basis: "tenant_share",
+          rule_type: "inclusion",
+        },
+      },
+      {
+        lease: { id: "lease-1" },
+        rule: {
+          category_name: "CAM",
+          subcategory_name: "Common Area Maintenance",
+          payment_treatment: "excluded",
+          recovery_method: "direct_bill",
+          allocation_basis: "actual_cost",
+          rule_type: "exclusion",
+        },
+      },
+    ];
+
+    expect(dedupeDisplayRows(rows)).toHaveLength(2);
+  });
+
+  it('preserves every persisted clause row by database identity', () => {
+    const rows = [
+      { lease: { id: "lease-1" }, rule: { id: "rule-1", category_name: "CAM" } },
+      { lease: { id: "lease-1" }, rule: { id: "rule-2", category_name: "CAM" } },
+    ];
+
+    expect(dedupeDisplayRows(rows)).toHaveLength(2);
   });
 });

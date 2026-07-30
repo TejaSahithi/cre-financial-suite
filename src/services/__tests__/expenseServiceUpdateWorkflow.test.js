@@ -144,4 +144,26 @@ describe('expenseService.updateExpenseWorkflow', () => {
     const result = await expenseService.updateExpenseWorkflow('expense-2', {});
     expect(result).toBeNull();
   });
+
+  it('keeps an explicitly tenantless property expense from auto-linking to the only lease', async () => {
+    const result = await expenseService.resolveExpenseLeaseLink(
+      {
+        property_id: 'property-1',
+        tenant_id: null,
+        lease_id: null,
+        skip_lease_resolution: true,
+      },
+      [{
+        id: 'lease-1',
+        property_id: 'property-1',
+        tenant_id: 'tenant-1',
+        status: 'active',
+      }]
+    );
+
+    expect(result.lease).toBeNull();
+    expect(result.expense.tenant_id).toBeNull();
+    expect(result.expense.lease_id).toBeNull();
+    expect(result.expense.skip_lease_resolution).toBeUndefined();
+  });
 });

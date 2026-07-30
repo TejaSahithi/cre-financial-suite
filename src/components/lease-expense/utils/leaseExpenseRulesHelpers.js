@@ -161,10 +161,18 @@ export function isSupersededRule(rule) {
 
 export function displayDedupeKey(row) {
   const rule = row?.rule || {};
+  if (rule.id) return `id::${rule.id}`;
+  if (rule.rule_key) return `rule_key::${rule.rule_key}`;
   return [
     row?.lease?.id || rule.lease_id || "",
     normalizeDisplayKey(rule.normalized_key || rule.expense_category || rule.category_name),
     normalizeDisplayKey(rule.expense_subcategory || rule.subcategory_name),
+    normalizeDisplayKey(rule.payment_treatment),
+    normalizeDisplayKey(rule.recovery_method),
+    normalizeDisplayKey(rule.allocation_basis),
+    normalizeDisplayKey(rule.rule_type),
+    normalizeDisplayKey(rule.source_page),
+    normalizeDisplayKey(rule.exact_source_text || rule.source_text || rule.source),
   ].join("::");
 }
 
@@ -537,4 +545,3 @@ export function calculateRuleCounts(flattenedRows) {
 
   return summary;
 }
-

@@ -103,7 +103,7 @@ function isApprovedLeaseForExpenseRuleSync(lease) {
     abstractStatus === "approved" ||
     status === "approved" ||
     status === "budget_ready" ||
-    Boolean(lease?.abstract_approved_at || lease?.approved_at || lease?.approved_lease_abstract_id)
+    Boolean(lease?.abstract_approved_at)
   );
 }
 

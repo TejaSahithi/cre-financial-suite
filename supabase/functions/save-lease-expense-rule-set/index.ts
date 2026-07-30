@@ -87,7 +87,7 @@ Deno.serve(async (req: Request) => {
     const leaseStatus = String(lease.status || "").toLowerCase();
     const isApproved =
       abstractStatus === "approved" ||
-      leaseStatus === "approved" ||
+      ["approved", "budget_ready"].includes(leaseStatus) ||
       Boolean(lease.abstract_approved_at);
     if (!isApproved) {
       throw new Error("Lease abstract must be approved before expense/CAM rules can be created");

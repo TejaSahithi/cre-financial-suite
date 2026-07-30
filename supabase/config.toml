@@ -109,21 +109,24 @@ verify_jwt = true
 enabled = true
 verify_jwt = true
 
+# These functions are called directly by the browser. The Supabase gateway
+# must allow OPTIONS through; each handler still authenticates the user and
+# enforces organization/page access before reading or mutating rule data.
 [functions.approve-lease-expense-rule]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 
 [functions.reject-lease-expense-rule]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 
 [functions.mark-lease-expense-rule-not-applicable]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 
 [functions.publish-lease-expense-rule-to-cam]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 
 [functions.send-expense-classification-to-cam]
 enabled = true
@@ -366,7 +369,7 @@ verify_jwt = true
 
 [functions.save-lease-expense-rule-set]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 
 [functions.save-lease-review-draft]
 enabled = true
@@ -394,15 +397,15 @@ verify_jwt = true
 
 [functions.update-lease-expense-rule]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 
 [functions.update-lease-expense-rule-amount]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 
 [functions.update-lease-expense-rule-set-status]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 
 [functions.update-lease-extraction-field]
 enabled = true

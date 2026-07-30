@@ -45,8 +45,6 @@ const navSections = [
       { label: "Expense Dashboard", page: "ExpenseDashboard" },
       { label: "Lease Expense Rules", page: "LeaseExpenseRules" },
       { label: "Actual Expenses", page: "Expenses" },
-      { label: "Add Expense", page: "AddExpense" },
-      { label: "Bulk Import", page: "BulkImport" },
       { label: "Expense Classification (per-lease)", page: "LeaseExpenseClassification" },
       { label: "Expense Review", page: "ExpenseReview" },
       { label: "Expense Projection", page: "ExpenseProjection" },

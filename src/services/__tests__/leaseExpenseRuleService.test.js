@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { leaseExpenseRuleService } from '../leaseExpenseRuleService';
+import {
+  getLeaseWorkflowOutput,
+  getUploadedFileWorkflowOutput,
+  leaseExpenseRuleService,
+} from '../leaseExpenseRuleService';
 import { MOCK_APPROVED_CAM_RULE, MOCK_TEMPLATE_RULE } from './fixtures/camFixtures';
 
 describe('leaseExpenseRuleService - CAM Publishability', () => {
@@ -21,5 +25,35 @@ describe('leaseExpenseRuleService - CAM Publishability', () => {
       generation_source: "template_checklist"
     };
     expect(leaseExpenseRuleService.isRuleCamPublishable(rule)).toBe(false);
+  });
+});
+
+describe('leaseExpenseRuleService - authoritative workflow sources', () => {
+  it('unwraps the approved lease snapshot workflow', () => {
+    const workflow = {
+      expense_rules: [{ category: "taxes" }],
+    };
+
+    expect(getLeaseWorkflowOutput({
+      abstract_snapshot: {
+        metadata: {
+          workflow_output: { records: [workflow] },
+        },
+      },
+    })).toEqual(workflow);
+  });
+
+  it('reads expense rules from the uploaded-file review payload', () => {
+    const workflow = {
+      expense_rules: [{ category: "cam" }, { category: "insurance" }],
+    };
+
+    expect(getUploadedFileWorkflowOutput({
+      ui_review_payload: {
+        metadata: {
+          workflow_output: { records: [workflow] },
+        },
+      },
+    })).toEqual(workflow);
   });
 });

@@ -79,7 +79,9 @@ Deno.serve(async (req: Request) => {
         (leases || [])
           .filter((lease: any) =>
             String(lease.abstract_status || "").toLowerCase() === "approved" ||
-            String(lease.status || "").toLowerCase() === "approved" ||
+            ["approved", "budget_ready"].includes(
+              String(lease.status || "").toLowerCase(),
+            ) ||
             Boolean(lease.abstract_approved_at)
           )
           .map((lease: any) => lease.id),

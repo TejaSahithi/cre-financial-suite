@@ -2109,10 +2109,11 @@ export default function LeaseReview() {
 
       queryClient.invalidateQueries({ queryKey: ["lease-critical-dates"] });
 
-      // Expense/CAM rule extraction is useful after approval, but it is not
-      // part of the approval transaction. Run it as a follow-up so LLM/provider
-      // or rule-save issues do not make the approved lease feel failed.
-      void runPostApprovalExpenseRuleSync(approvedLease).catch((postApprovalErr) => {
+      // Publish expense/CAM clauses only after approval, and wait for the
+      // publication attempt before navigating away so the browser cannot
+      // cancel the request. A publication failure still does not roll back
+      // the already-approved lease.
+      await runPostApprovalExpenseRuleSync(approvedLease).catch((postApprovalErr) => {
         console.warn("[LeaseReview] post-approval expense sync failed:", postApprovalErr?.message || postApprovalErr);
       });
       queryClient.invalidateQueries({ queryKey: ["Expense"] });

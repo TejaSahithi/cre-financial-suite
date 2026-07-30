@@ -1356,6 +1356,16 @@ export const expenseService = {
   isApprovedLeaseRule,
 
   async resolveExpenseLeaseLink(expenseLike = {}, leases = null) {
+    if (expenseLike?.skip_lease_resolution === true) {
+      const expense = { ...expenseLike };
+      delete expense.skip_lease_resolution;
+      return {
+        lease: null,
+        candidates: [],
+        isAmbiguous: false,
+        expense,
+      };
+    }
     const availableLeases = Array.isArray(leases) ? leases : await listWorkflowEntityRows("Lease");
     const directLease = expenseLike?.lease_id
       ? availableLeases.find((lease) => lease.id === expenseLike.lease_id) || null

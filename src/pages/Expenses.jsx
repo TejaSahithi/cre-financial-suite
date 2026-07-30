@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Plus,
@@ -18,6 +18,8 @@ import {
   X,
   CircleDollarSign,
   HelpCircle,
+  FileUp,
+  PenLine,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -40,6 +42,13 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -124,6 +133,7 @@ function resolveDisplayLeaseForExpense(expense, leases = [], unitsById = new Map
 
 export default function Expenses() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [scopeProperty, setScopeProperty] = useState("all");
@@ -132,6 +142,7 @@ export default function Expenses() {
   const [selectedExpenseIds, setSelectedExpenseIds] = useState([]);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showBulkDelete, setShowBulkDelete] = useState(false);
+  const [showAddExpenseMethod, setShowAddExpenseMethod] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: expenses = [], isLoading } = useOrgQuery("Expense");
@@ -163,6 +174,13 @@ export default function Expenses() {
   }, [scope.propertyId, scope.buildingId, scope.unitId]);
 
   const getPropertyName = (propertyId) => scope.propertyById.get(propertyId)?.name || "—";
+
+  const openAddExpense = (mode) => {
+    const params = new URLSearchParams(location.search);
+    params.set("mode", mode);
+    setShowAddExpenseMethod(false);
+    navigate(`${createPageUrl("AddExpense")}?${params.toString()}`);
+  };
 
   const scopedAllExpenses = expenses.filter((expense) =>
     matchesHierarchyScope(expense, scope, {
@@ -640,15 +658,48 @@ export default function Expenses() {
             </Button>
           </Link>
           <RoleGuard allowedRoles={["org_admin", "finance", "property_manager"]} mode="disable">
-            <Link to={createPageUrl("AddExpense") + location.search}>
-              <Button size="sm" className="bg-gradient-to-r from-red-500 to-rose-600 shadow-sm">
-                <Plus className="w-4 h-4 mr-1" />
-                Add Expense
-              </Button>
-            </Link>
+            <Button
+              size="sm"
+              className="bg-gradient-to-r from-red-500 to-rose-600 shadow-sm"
+              onClick={() => setShowAddExpenseMethod(true)}
+            >
+              <Plus className="w-4 h-4 mr-1" />
+              Add Expense
+            </Button>
           </RoleGuard>
         </div>
       </PageHeader>
+
+      <Dialog open={showAddExpenseMethod} onOpenChange={setShowAddExpenseMethod}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>How would you like to add the expense?</DialogTitle>
+            <DialogDescription>
+              Both options open the same Add Expense form. Invoice upload extracts and prefills the fields for review.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => openAddExpense("manual")}
+              className="rounded-xl border-2 border-slate-200 p-5 text-left transition-colors hover:border-blue-400 hover:bg-blue-50"
+            >
+              <PenLine className="mb-3 h-6 w-6 text-blue-600" />
+              <p className="font-semibold text-slate-900">Manual entry</p>
+              <p className="mt-1 text-xs text-slate-500">Enter the expense details yourself.</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => openAddExpense("invoice")}
+              className="rounded-xl border-2 border-slate-200 p-5 text-left transition-colors hover:border-emerald-400 hover:bg-emerald-50"
+            >
+              <FileUp className="mb-3 h-6 w-6 text-emerald-600" />
+              <p className="font-semibold text-slate-900">Invoice upload</p>
+              <p className="mt-1 text-xs text-slate-500">Extract the invoice and prefill the form.</p>
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
         <span className="font-medium">Actual Expenses</span> come from invoices, bulk imports, and

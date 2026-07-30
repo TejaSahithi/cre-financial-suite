@@ -1374,9 +1374,27 @@ export const EXPENSE_SCHEMA: ModuleSchema = {
   },
   property_name: {
     type: "string",
-    labels: ["property", "property name", "building"],
-    tableHeaders: ["property", "property_name", "property name", "building"],
+    labels: ["property", "property name", "site"],
+    tableHeaders: ["property", "property_name", "property name", "site"],
     description: "Property name",
+  },
+  building_name: {
+    type: "string",
+    labels: ["building", "building name", "location"],
+    tableHeaders: ["building", "building_name", "building name"],
+    description: "Building name when it is explicitly stated on the invoice",
+  },
+  unit_number: {
+    type: "string",
+    labels: ["unit", "unit number", "suite", "suite number", "space"],
+    tableHeaders: ["unit", "unit_number", "suite", "suite number", "space"],
+    description: "Unit, suite, or space identifier",
+  },
+  tenant_name: {
+    type: "string",
+    labels: ["tenant", "tenant name", "occupant", "lessee"],
+    tableHeaders: ["tenant", "tenant_name", "tenant name", "occupant", "lessee"],
+    description: "Tenant or occupant name only when explicitly stated on the invoice",
   },
   invoice_number: {
     type: "string",

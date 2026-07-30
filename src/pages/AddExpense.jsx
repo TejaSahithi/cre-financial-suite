@@ -1,15 +1,21 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Paperclip, ArrowLeft, Plus } from "lucide-react";
+import { Loader2, Paperclip, ArrowLeft, Plus, FileUp, CheckCircle2, AlertCircle } from "lucide-react";
 
 import { expenseService } from "@/services/expenseService";
 import { vendorService } from "@/services/vendorService";
 import { supabase } from "@/services/supabaseClient";
+import { invokeEdgeFunction, invokeEdgeFunctionFormData } from "@/services/edgeFunctions";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { buildHierarchyScope } from "@/lib/hierarchyScope";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
+import {
+  buildInvoiceExpenseCandidate,
+  extractExpenseRowsFromUploadedFile,
+  findEntityByName,
+} from "@/lib/expenseInvoicePrefill";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -57,6 +63,10 @@ function buildInitialForm(scope) {
     category: "",
     vendor: "",
     vendor_id: "",
+    tenant_name: "",
+    tenant_id: "",
+    lease_id: "",
+    source: "manual",
     description: "",
     classification: "recoverable",
     portfolio_id: scope.portfolioId || "",
@@ -72,9 +82,13 @@ export default function AddExpense() {
   const queryClient = useQueryClient();
   const urlParams = new URLSearchParams(location.search);
   const editExpenseId = urlParams.get("id");
+  const entryMode = urlParams.get("mode") === "invoice" ? "invoice" : "manual";
+  const isInvoiceMode = !editExpenseId && entryMode === "invoice";
 
   const { data: vendors = [], orgId } = useOrgQuery("Vendor");
   const { data: expenses = [] } = useOrgQuery("Expense");
+  const { data: tenants = [] } = useOrgQuery("Tenant");
+  const { data: leases = [] } = useOrgQuery("Lease");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
@@ -95,6 +109,10 @@ export default function AddExpense() {
   const [form, setForm] = useState(() => buildInitialForm(scope));
   const [attachmentUrl, setAttachmentUrl] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [invoiceExtractionStatus, setInvoiceExtractionStatus] = useState("");
+  const [invoiceExtractionError, setInvoiceExtractionError] = useState("");
+  const [extractedInvoiceName, setExtractedInvoiceName] = useState("");
+  const invoiceFileInputRef = useRef(null);
   const [showNewVendor, setShowNewVendor] = useState(false);
   const [newVendorForm, setNewVendorForm] = useState({
     name: "",
@@ -128,6 +146,10 @@ export default function AddExpense() {
       category: editingExpense.category || "",
       vendor: editingExpense.vendor || "",
       vendor_id: editingExpense.vendor_id || "",
+      tenant_name: editingExpense.tenant_name || "",
+      tenant_id: editingExpense.tenant_id || "",
+      lease_id: editingExpense.lease_id || "",
+      source: editingExpense.source || "manual",
       description: editingExpense.description || "",
       classification: editingExpense.classification || "recoverable",
       portfolio_id: editingExpense.portfolio_id || "",
@@ -147,6 +169,14 @@ export default function AddExpense() {
     : form.property_id
       ? scope.scopedUnits.filter((unit) => unit.property_id === form.property_id)
       : scope.scopedUnits;
+
+  const expensesUrl = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    params.delete("id");
+    params.delete("mode");
+    const query = params.toString();
+    return createPageUrl("Expenses") + (query ? `?${query}` : "");
+  }, [location.search]);
 
   const createMutation = useMutation({
     mutationFn: (data) => expenseService.createExpenseWorkflow(data),
@@ -174,14 +204,24 @@ export default function AddExpense() {
     const writableOrgId = await resolveWritableOrgId(orgId);
     const property = form.property_id ? scope.propertyById.get(form.property_id) ?? null : null;
     
-    // Auto-resolve lease and tenant if possible
-    const matchedLease = scope.scopedLeases?.find(l => 
-      (form.unit_id && l.unit_id === form.unit_id) || 
-      (!form.unit_id && form.building_id && l.building_id === form.building_id && !l.unit_id) ||
-      (!form.unit_id && !form.building_id && form.property_id && l.property_id === form.property_id && !l.building_id)
-    ) || null;
+    // Respect the user's tenant selection. Only derive a lease when exactly
+    // one approved/active lease matches the selected tenant, scope and date.
+    const matchingLeases = leases.filter((lease) => {
+      const status = String(lease.status || "").toLowerCase();
+      if (status && !["approved", "active", "executed", "budget_ready"].includes(status)) return false;
+      if (form.tenant_id && lease.tenant_id !== form.tenant_id) return false;
+      if (form.property_id && lease.property_id !== form.property_id) return false;
+      if (form.building_id && lease.building_id && lease.building_id !== form.building_id) return false;
+      if (form.unit_id && lease.unit_id && lease.unit_id !== form.unit_id) return false;
+      if (form.date && lease.start_date && form.date < lease.start_date) return false;
+      if (form.date && lease.end_date && form.date > lease.end_date) return false;
+      return true;
+    });
+    const matchedLease =
+      (form.lease_id ? leases.find((lease) => lease.id === form.lease_id) : null) ||
+      (matchingLeases.length === 1 ? matchingLeases[0] : null);
     const resolvedLeaseId = matchedLease?.id || null;
-    const resolvedTenantId = matchedLease?.tenant_id || null;
+    const resolvedTenantId = form.tenant_id || matchedLease?.tenant_id || null;
 
     if (isEditing) {
       updateMutation.mutate(
@@ -198,6 +238,7 @@ export default function AddExpense() {
             unit_id: form.unit_id || null,
             lease_id: resolvedLeaseId,
             tenant_id: resolvedTenantId,
+            skip_lease_resolution: !resolvedLeaseId && !resolvedTenantId,
             source: form.source || "manual",
             fiscal_year: form.date ? new Date(form.date).getFullYear() : new Date().getFullYear(),
             service_period_start: form.date || null,
@@ -208,7 +249,7 @@ export default function AddExpense() {
           onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["Expense"] });
             toast.success("Expense updated successfully");
-            navigate(createPageUrl("Expenses") + location.search);
+            navigate(expensesUrl);
           },
           onError: (err) => {
             toast.error(`Failed to update expense: ${err?.message || "Unknown error"}`);
@@ -231,7 +272,8 @@ export default function AddExpense() {
         unit_id: form.unit_id || null,
         lease_id: resolvedLeaseId,
         tenant_id: resolvedTenantId,
-        source: "manual",
+        skip_lease_resolution: !resolvedLeaseId && !resolvedTenantId,
+        source: form.source || (isInvoiceMode ? "invoice" : "manual"),
         fiscal_year: form.date ? new Date(form.date).getFullYear() : new Date().getFullYear(),
         // Batch E (F9). Manual entries default to approved so the existing
         // single-step path stays unchanged. Save-as-draft sets both fields
@@ -251,6 +293,8 @@ export default function AddExpense() {
               ...buildInitialForm(scope),
               vendor: form.vendor,
               vendor_id: form.vendor_id,
+              tenant_name: form.tenant_name,
+              tenant_id: form.tenant_id,
               portfolio_id: property?.portfolio_id || form.portfolio_id || "",
               property_id: form.property_id || "",
               building_id: form.building_id || "",
@@ -258,7 +302,7 @@ export default function AddExpense() {
             });
             setAttachmentUrl("");
           } else {
-            navigate(createPageUrl("Expenses") + location.search);
+            navigate(expensesUrl);
           }
         },
         onError: (err) => {
@@ -266,6 +310,171 @@ export default function AddExpense() {
         },
       }
     );
+  };
+
+  const waitForInvoiceExtraction = async (fileId, timeoutMs = 120000) => {
+    const startedAt = Date.now();
+    let lastRecord = null;
+    while (Date.now() - startedAt <= timeoutMs) {
+      const { data, error } = await supabase
+        .from("uploaded_files")
+        .select("status,error_message,parsed_data,valid_data,normalized_output,ui_review_payload,reviewed_output,storage_path")
+        .eq("id", fileId)
+        .single();
+      if (error) throw error;
+      lastRecord = data;
+      if (data?.status === "failed") {
+        throw new Error(data.error_message || "Invoice extraction failed.");
+      }
+      const rows = extractExpenseRowsFromUploadedFile(data);
+      if (rows.length > 0) return { record: data, rows };
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 1000));
+    }
+    throw new Error(lastRecord?.error_message || "Invoice extraction is still processing. Please try again.");
+  };
+
+  const applyInvoiceCandidate = (candidate) => {
+    const matchedProperty = findEntityByName(
+      properties,
+      candidate.property_name,
+      [(property) => property.name, (property) => property.address]
+    );
+    const propertyId = matchedProperty?.id || form.property_id || "";
+    const propertyBuildings = propertyId
+      ? buildings.filter((building) => building.property_id === propertyId)
+      : buildings;
+    const matchedBuilding = findEntityByName(
+      propertyBuildings,
+      candidate.building_name,
+      [(building) => building.name]
+    );
+    const currentBuildingStillMatches = buildings.some(
+      (building) => building.id === form.building_id && (!propertyId || building.property_id === propertyId)
+    );
+    const buildingId = matchedBuilding?.id || (currentBuildingStillMatches ? form.building_id : "");
+    const scopedUnits = buildingId
+      ? units.filter((unit) => unit.building_id === buildingId)
+      : propertyId
+        ? units.filter((unit) => unit.property_id === propertyId)
+        : units;
+    const matchedUnit = findEntityByName(
+      scopedUnits,
+      candidate.unit_number,
+      [(unit) => unit.unit_number, (unit) => unit.unit_id_code]
+    );
+    const currentUnitStillMatches = scopedUnits.some((unit) => unit.id === form.unit_id);
+    const matchedVendor = findEntityByName(
+      vendors,
+      candidate.vendor,
+      [(vendor) => vendor.name, (vendor) => vendor.company]
+    );
+    const matchedTenant = findEntityByName(
+      tenants,
+      candidate.tenant_name,
+      [(tenant) => tenant.tenant_name, (tenant) => tenant.name, (tenant) => tenant.company]
+    );
+
+    setForm((current) => ({
+      ...current,
+      date: candidate.date || current.date,
+      amount: candidate.amount || current.amount,
+      category: candidate.category || current.category,
+      vendor: matchedVendor?.name || candidate.vendor || current.vendor,
+      vendor_id: matchedVendor?.id || current.vendor_id,
+      tenant_name:
+        matchedTenant?.tenant_name ||
+        matchedTenant?.name ||
+        candidate.tenant_name ||
+        current.tenant_name,
+      tenant_id: matchedTenant?.id || current.tenant_id,
+      description:
+        candidate.description ||
+        (candidate.invoice_number ? `Invoice ${candidate.invoice_number}` : "") ||
+        current.description,
+      classification: candidate.classification || current.classification,
+      portfolio_id: matchedProperty?.portfolio_id || current.portfolio_id,
+      property_id: propertyId,
+      building_id: buildingId,
+      unit_id: matchedUnit?.id || (currentUnitStillMatches ? current.unit_id : ""),
+      source: "invoice",
+    }));
+  };
+
+  const handleInvoiceUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setInvoiceExtractionError("");
+    setInvoiceExtractionStatus("Uploading invoice securely…");
+    setExtractedInvoiceName(file.name);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("file_type", "expenses");
+      if (orgId && orgId !== "__none__") formData.append("org_id", orgId);
+      if (form.property_id) formData.append("property_id", form.property_id);
+      if (form.building_id) formData.append("building_id", form.building_id);
+      if (form.unit_id) formData.append("unit_id", form.unit_id);
+
+      const upload = await invokeEdgeFunctionFormData(
+        "upload-handler",
+        formData,
+        {},
+        { page: "AddExpense", action: "invoice_upload" }
+      );
+      if (!upload?.file_id) throw new Error("Invoice upload completed without a file id.");
+
+      if (upload.storage_path) {
+        const { data: signedData } = await supabase.storage
+          .from("financial-uploads")
+          .createSignedUrl(upload.storage_path, 60 * 60 * 24 * 7);
+        setAttachmentUrl(signedData?.signedUrl || "");
+      }
+
+      setInvoiceExtractionStatus("Reading invoice and mapping expense fields…");
+      let ingestError = null;
+      try {
+        await invokeEdgeFunction(
+          "ingest-file",
+          {
+            file_id: upload.file_id,
+            module_type: "expenses",
+            defer_store: true,
+          },
+          {},
+          { page: "AddExpense", action: "invoice_extract" }
+        );
+      } catch (error) {
+        // The orchestrator request can time out while Azure/LLM processing
+        // continues in its downstream function. Poll the durable file row
+        // before treating the client-side request error as terminal.
+        if (!/timeout|timed out|failed to send|network|fetch/i.test(String(error?.message || error))) {
+          throw error;
+        }
+        ingestError = error;
+      }
+      let extracted;
+      try {
+        extracted = await waitForInvoiceExtraction(upload.file_id);
+      } catch (pollError) {
+        throw ingestError || pollError;
+      }
+      const { rows } = extracted;
+      const candidate = buildInvoiceExpenseCandidate(rows[0], CATEGORIES);
+      applyInvoiceCandidate(candidate);
+      setInvoiceExtractionStatus("Invoice fields extracted. Review them before saving.");
+      toast.success("Invoice extracted and the Add Expense form was prefilled.");
+    } catch (error) {
+      console.error("[AddExpense] invoice extraction failed:", error);
+      const message = error?.message || "Invoice extraction failed.";
+      setInvoiceExtractionError(message);
+      setInvoiceExtractionStatus("");
+      toast.error(message);
+    } finally {
+      setUploading(false);
+      event.target.value = "";
+    }
   };
 
   const handleAttachment = async (event) => {
@@ -309,6 +518,7 @@ export default function AddExpense() {
   };
 
   const handleVendorSelect = (vendorId) => {
+    if (vendorId === "__extracted__") return;
     if (vendorId === "__new__") {
       setShowNewVendor(true);
       return;
@@ -316,6 +526,21 @@ export default function AddExpense() {
 
     const vendor = vendors.find((item) => item.id === vendorId);
     setForm((current) => ({ ...current, vendor: vendor?.name || "", vendor_id: vendorId }));
+  };
+
+  const handleTenantSelect = (tenantId) => {
+    if (tenantId === "__extracted__") return;
+    if (tenantId === "__none__") {
+      setForm((current) => ({ ...current, tenant_name: "", tenant_id: "", lease_id: "" }));
+      return;
+    }
+    const tenant = tenants.find((item) => item.id === tenantId);
+    setForm((current) => ({
+      ...current,
+      tenant_name: tenant?.tenant_name || tenant?.name || "",
+      tenant_id: tenantId,
+      lease_id: "",
+    }));
   };
 
   const handleCreateVendor = async () => {
@@ -336,11 +561,54 @@ export default function AddExpense() {
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
-      <Link to={createPageUrl("Expenses") + location.search} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1">
+      <Link to={expensesUrl} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1">
         <ArrowLeft className="w-4 h-4" />
         Back to Expenses
       </Link>
-      <h1 className="text-2xl font-bold text-slate-900">{isEditing ? "Edit Expense" : "Add Expense"}</h1>
+      <h1 className="text-2xl font-bold text-slate-900">
+        {isEditing ? "Edit Expense" : isInvoiceMode ? "Add Expense from Invoice" : "Add Expense"}
+      </h1>
+
+      {isInvoiceMode && (
+        <Card className="border-blue-200 bg-blue-50/50">
+          <CardContent className="p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="font-semibold text-slate-900 flex items-center gap-2">
+                  <FileUp className="w-5 h-5 text-blue-600" />
+                  Upload vendor invoice
+                </p>
+                <p className="text-sm text-slate-600 mt-1">
+                  Azure Document Intelligence reads the invoice, then the expense extraction model maps its values into this form. Nothing is saved until you review and submit.
+                </p>
+              </div>
+              <Button type="button" onClick={() => invoiceFileInputRef.current?.click()} disabled={uploading}>
+                {uploading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <FileUp className="w-4 h-4 mr-2" />}
+                {uploading ? "Extracting…" : "Choose Invoice"}
+              </Button>
+              <input
+                ref={invoiceFileInputRef}
+                type="file"
+                className="hidden"
+                accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.webp"
+                onChange={handleInvoiceUpload}
+              />
+            </div>
+            {invoiceExtractionStatus && (
+              <div className="mt-3 flex items-center gap-2 text-sm text-emerald-700">
+                {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                <span>{invoiceExtractionStatus}{extractedInvoiceName ? ` (${extractedInvoiceName})` : ""}</span>
+              </div>
+            )}
+            {invoiceExtractionError && (
+              <div className="mt-3 flex items-center gap-2 text-sm text-red-700">
+                <AlertCircle className="w-4 h-4" />
+                <span>{invoiceExtractionError}</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -437,34 +705,61 @@ export default function AddExpense() {
             </div>
           </div>
 
-          <div>
-            <Label>Vendor *</Label>
-            <Select value={form.vendor_id} onValueChange={handleVendorSelect}>
-              <SelectTrigger className={!form.vendor_id ? "border-amber-300" : ""}>
-                <SelectValue placeholder="Select vendor (required)..." />
-              </SelectTrigger>
-              <SelectContent>
-                {vendors.map((vendor) => (
-                  <SelectItem key={vendor.id} value={vendor.id}>
-                    <span className="flex items-center gap-2">
-                      {vendor.name}
-                      {vendor.company ? <span className="text-slate-400 text-xs">({vendor.company})</span> : ""}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label>Vendor *</Label>
+              <Select value={form.vendor_id || (form.vendor ? "__extracted__" : "")} onValueChange={handleVendorSelect}>
+                <SelectTrigger className={!form.vendor_id ? "border-amber-300" : ""}>
+                  <SelectValue placeholder="Select vendor (required)..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {form.vendor && !form.vendor_id && (
+                    <SelectItem value="__extracted__">{form.vendor} (from invoice)</SelectItem>
+                  )}
+                  {vendors.map((vendor) => (
+                    <SelectItem key={vendor.id} value={vendor.id}>
+                      <span className="flex items-center gap-2">
+                        {vendor.name}
+                        {vendor.company ? <span className="text-slate-400 text-xs">({vendor.company})</span> : ""}
+                      </span>
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="__new__">
+                    <span className="flex items-center gap-1 text-violet-600 font-medium">
+                      <Plus className="w-3 h-3" />
+                      Create New Vendor
                     </span>
                   </SelectItem>
-                ))}
-                <SelectItem value="__new__">
-                  <span className="flex items-center gap-1 text-violet-600 font-medium">
-                    <Plus className="w-3 h-3" />
-                    Create New Vendor
-                  </span>
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            {form.vendor && form.vendor_id && (
-              <Link to={`/VendorProfile?id=${form.vendor_id}`} className="text-[10px] text-blue-600 hover:underline mt-1 inline-block">
-                View {form.vendor} profile →
-              </Link>
-            )}
+                </SelectContent>
+              </Select>
+              {form.vendor && form.vendor_id && (
+                <Link to={`/VendorProfile?id=${form.vendor_id}`} className="text-[10px] text-blue-600 hover:underline mt-1 inline-block">
+                  View {form.vendor} profile →
+                </Link>
+              )}
+            </div>
+            <div>
+              <Label>Tenant</Label>
+              <Select
+                value={form.tenant_id || (form.tenant_name ? "__extracted__" : "__none__")}
+                onValueChange={handleTenantSelect}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select tenant..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">No tenant / property expense</SelectItem>
+                  {form.tenant_name && !form.tenant_id && (
+                    <SelectItem value="__extracted__">{form.tenant_name} (from invoice)</SelectItem>
+                  )}
+                  {tenants.map((tenant) => (
+                    <SelectItem key={tenant.id} value={tenant.id}>
+                      {tenant.tenant_name || tenant.name || tenant.company || tenant.id}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           <div>
@@ -517,7 +812,7 @@ export default function AddExpense() {
       </Card>
 
       <div className="flex gap-3 justify-end">
-        <Link to={createPageUrl("Expenses") + location.search}>
+        <Link to={expensesUrl}>
           <Button variant="outline" type="button">
             Cancel
           </Button>

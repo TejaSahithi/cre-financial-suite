@@ -176,9 +176,39 @@ function buildCamRuleLineItem(rule, lease, categoriesById = new Map()) {
   };
 }
 
-function canonicalRuleDedupKey(rule, index = 0) {
+function ruleSemanticFingerprint(rule, index = 0) {
   const category = resolveCanonicalExpenseCategory(rule, index);
-  return `${category.normalizedKey}::${normalizeCategoryKey(category.subcategoryName) || ""}`;
+  return [
+    category.normalizedKey,
+    category.subcategoryName,
+    deriveRuleOperationalResponsibility(rule),
+    deriveRulePaymentTreatment(rule),
+    deriveRuleRecoveryMethod(rule),
+    deriveRuleAllocationBasis(rule),
+    rule?.rule_type,
+    rule?.cap_type,
+    firstPresent(rule?.cap_amount, rule?.cap_value),
+    rule?.cap_percent,
+    rule?.tenant_share_percent,
+    deriveRuleBillingTreatment(rule),
+    firstPresent(rule?.billing_frequency, rule?.frequency),
+    rule?.source_page,
+    deriveRuleExactSourceText(rule),
+  ].map((value) => normalizeText(value)).join("::");
+}
+
+function stableRuleFingerprintHash(value) {
+  let hash = 2166136261;
+  const input = String(value || "");
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function canonicalRuleDedupKey(rule, index = 0) {
+  return ruleSemanticFingerprint(rule, index);
 }
 
 function scoreRuleForDedup(rule) {
@@ -254,17 +284,7 @@ function normalizeRuleStatus(rule) {
 }
 
 function canonicalRulePersistenceKey(rule) {
-  const category = normalizeCategoryKey(firstPresent(
-    rule?.normalized_key,
-    rule?.fallback_category_key,
-    rule?.expense_category,
-    rule?.category_name,
-    rule?.category,
-  ));
-  const subcategory = normalizeCategoryKey(firstPresent(rule?.expense_subcategory, rule?.subcategory_name));
-  const paymentTreatment = normalizeCategoryKey(firstPresent(rule?.payment_treatment, deriveRulePaymentTreatment(rule)));
-  const recoveryMethod = normalizeCategoryKey(firstPresent(rule?.recovery_method, deriveRuleRecoveryMethod(rule)));
-  return [category, subcategory, paymentTreatment, recoveryMethod].join("::");
+  return ruleSemanticFingerprint(rule);
 }
 
 function scorePersistedRuleForMerge(rule) {
@@ -525,11 +545,52 @@ function buildRuleSetEntriesFromServerPayload(payload = {}) {
     });
 }
 
-function getLeaseWorkflowOutput(lease) {
-  const workflow = lease?.extraction_data?.workflow_output;
+function unwrapWorkflowOutput(workflow) {
   if (!workflow || typeof workflow !== "object") return null;
   if (Array.isArray(workflow?.records) && workflow.records[0]) return workflow.records[0];
   return workflow;
+}
+
+export function getLeaseWorkflowOutput(lease) {
+  const candidates = [
+    lease?.extraction_data?.workflow_output,
+    lease?.workflow_output,
+    lease?.abstract_snapshot?.extraction_data?.workflow_output,
+    lease?.abstract_snapshot?.workflow_output,
+    lease?.abstract_snapshot?.metadata?.workflow_output,
+  ];
+  for (const candidate of candidates) {
+    const workflow = unwrapWorkflowOutput(candidate);
+    if (workflow && typeof workflow === "object") return workflow;
+  }
+  return null;
+}
+
+export function getUploadedFileWorkflowOutput(fileRecord) {
+  const firstReviewRecord =
+    fileRecord?.ui_review_payload?.records?.[0] ||
+    fileRecord?.ui_review_payload?.rows?.[0] ||
+    null;
+  const firstNormalizedRecord =
+    fileRecord?.normalized_output?.records?.[0] ||
+    fileRecord?.normalized_output?.rows?.[0] ||
+    null;
+  const firstParsedRecord = Array.isArray(fileRecord?.parsed_data)
+    ? fileRecord.parsed_data[0]
+    : fileRecord?.parsed_data;
+  const candidates = [
+    fileRecord?.ui_review_payload?.metadata?.workflow_output,
+    firstReviewRecord?.workflow_output,
+    fileRecord?.normalized_output?.metadata?.workflow_output,
+    fileRecord?.normalized_output?.workflow_output,
+    firstNormalizedRecord?.workflow_output,
+    firstParsedRecord?.workflow_output,
+  ];
+  for (const candidate of candidates) {
+    const workflow = unwrapWorkflowOutput(candidate);
+    if (workflow && typeof workflow === "object") return workflow;
+  }
+  return null;
 }
 
 function getLeaseWorkflowExpenseRules(lease) {
@@ -550,6 +611,33 @@ function isMissingExpenseRuleTable(error) {
 }
 
 export const leaseExpenseRuleService = {
+  async hydrateLeaseExpenseRuleWorkflow(lease) {
+    if (!lease?.id || getLeaseWorkflowExpenseRules(lease).length > 0) return lease;
+    const sourceFileId = lease?.source_file_id || lease?.extraction_data?.source_file_id || null;
+    if (!sourceFileId || !supabase) return lease;
+
+    try {
+      const { data: fileRecord, error } = await supabase
+        .from("uploaded_files")
+        .select("ui_review_payload, normalized_output, parsed_data")
+        .eq("id", sourceFileId)
+        .maybeSingle();
+      if (error) throw error;
+      const workflowOutput = getUploadedFileWorkflowOutput(fileRecord);
+      if (!workflowOutput || asArray(workflowOutput?.expense_rules).length === 0) return lease;
+      return {
+        ...lease,
+        extraction_data: {
+          ...(lease.extraction_data || {}),
+          workflow_output: workflowOutput,
+        },
+      };
+    } catch (error) {
+      devWarn("[leaseExpenseRuleService] authoritative uploaded-file workflow lookup failed:", error?.message || error);
+      return lease;
+    }
+  },
+
   async loadRuleSet(leaseId) {
     if (!leaseId) return { ruleSet: null, rules: [] };
     const entries = await this.loadRuleSets([leaseId]);
@@ -694,11 +782,12 @@ export const leaseExpenseRuleService = {
       devWarn(`${tag} skipped: no supabase or no lease.id`);
       return { ruleSet: null, rules: [] };
     }
-    const workflowRules = getLeaseWorkflowExpenseRules(lease);
+    const hydratedLease = await this.hydrateLeaseExpenseRuleWorkflow(lease);
+    const workflowRules = getLeaseWorkflowExpenseRules(hydratedLease);
     devLog(`${tag} workflow_rules received: ${workflowRules.length}`);
     if (workflowRules.length === 0) {
-      const wfOut = lease?.extraction_data?.workflow_output;
-      devWarn(`${tag} no workflow expense_rules. extraction_data keys=`, Object.keys(lease?.extraction_data || {}), "workflow_output keys=", wfOut ? Object.keys(wfOut) : null);
+      const wfOut = hydratedLease?.extraction_data?.workflow_output;
+      devWarn(`${tag} no workflow expense_rules. extraction_data keys=`, Object.keys(hydratedLease?.extraction_data || {}), "workflow_output keys=", wfOut ? Object.keys(wfOut) : null);
       return { ruleSet: null, rules: [] };
     }
 
@@ -731,7 +820,7 @@ export const leaseExpenseRuleService = {
     let result = { ruleSet: null, rules: [] };
     try {
       result = await this.saveRuleSet({
-        lease,
+        lease: hydratedLease,
         rules,
         status,
         existingRuleSetId: targetRuleSetId,
@@ -807,7 +896,8 @@ export const leaseExpenseRuleService = {
       const subcategory = norm(firstPresent(ruleObj.expense_subcategory, ruleObj.subcategory_name, deriveRuleSubcategoryName(ruleObj)));
       const type = norm(ruleObj.rule_type);
       const sourceKey = norm(ruleObj.source_field_key);
-      return `${lease.id}_${type}_${category}_${subcategory}_${sourceKey}`;
+      const fingerprint = stableRuleFingerprintHash(ruleSemanticFingerprint(ruleObj));
+      return `${lease.id}_${type}_${category}_${subcategory}_${sourceKey}_${fingerprint}`;
     };
     // Maps rule_key -> original source rule object, captured before dedup
     // collapses rulePayloads, so the values/clauses builder below can still

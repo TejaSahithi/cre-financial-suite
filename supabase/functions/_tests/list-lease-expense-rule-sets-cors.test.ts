@@ -7,12 +7,31 @@ const functionSource = await Deno.readTextFile(
 );
 const configSource = await Deno.readTextFile(new URL("config.toml", root));
 
-Deno.test("list-lease-expense-rule-sets allows the browser preflight through the gateway", () => {
-  const block = configSource.match(
-    /\[functions\.list-lease-expense-rule-sets\]([\s\S]*?)(?=\n\[functions\.|$)/,
-  )?.[1] ?? "";
-  assert(block, "function config block must exist");
-  assertEquals(/verify_jwt\s*=\s*false/.test(block), true);
+const browserRuleFunctions = [
+  "list-lease-expense-rule-sets",
+  "save-lease-expense-rule-set",
+  "approve-lease-expense-rule",
+  "reject-lease-expense-rule",
+  "mark-lease-expense-rule-not-applicable",
+  "publish-lease-expense-rule-to-cam",
+  "update-lease-expense-rule",
+  "update-lease-expense-rule-amount",
+  "update-lease-expense-rule-set-status",
+];
+
+Deno.test("lease expense rule browser functions allow preflight through the gateway", () => {
+  for (const functionName of browserRuleFunctions) {
+    const escapedName = functionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const block = configSource.match(
+      new RegExp(`\\[functions\\.${escapedName}\\]([\\s\\S]*?)(?=\\n\\[functions\\.|$)`),
+    )?.[1] ?? "";
+    assert(block, `${functionName} config block must exist`);
+    assertEquals(
+      /verify_jwt\s*=\s*false/.test(block),
+      true,
+      `${functionName} must let its OPTIONS handler run`,
+    );
+  }
 });
 
 Deno.test("list-lease-expense-rule-sets answers OPTIONS before user authorization", () => {
@@ -23,4 +42,17 @@ Deno.test("list-lease-expense-rule-sets answers OPTIONS before user authorizatio
   assert(optionsIndex < authIndex, "OPTIONS must return before user authorization");
   assertEquals(functionSource.includes('headers: corsHeaders'), true);
   assertEquals(functionSource.includes("await assertPageAccess("), true);
+});
+
+Deno.test("rule list and save require an approved abstract state", async () => {
+  const saveSource = await Deno.readTextFile(
+    new URL("functions/save-lease-expense-rule-set/index.ts", root),
+  );
+  for (const source of [functionSource, saveSource]) {
+    for (const state of ["approved", "budget_ready"]) {
+      assert(source.includes(`"${state}"`), `approved state ${state} must be recognized`);
+    }
+    assert(source.includes("abstract_approved_at"));
+    assertEquals(source.includes('"active", "executed", "signed"'), false);
+  }
 });
