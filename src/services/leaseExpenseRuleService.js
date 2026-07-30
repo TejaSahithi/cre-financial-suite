@@ -1631,6 +1631,7 @@ export const leaseExpenseRuleService = {
     existingRuleSetId = null,
     createdFrom = "workflow",
     approver = null,
+    suppressHttpError = false,
   } = {}) {
     const tag = `[persistExpenseRulesFromWorkflow lease=${lease?.id}]`;
     if (!supabase || !lease?.id) {
@@ -1719,6 +1720,7 @@ export const leaseExpenseRuleService = {
         categories,
         createdFrom,
         approver,
+        suppressHttpError,
       });
       devLog(`${tag} saveRuleSet returned ${result?.rules?.length || 0} persisted rules; ruleSet=`, result?.ruleSet?.id);
     } catch (err) {

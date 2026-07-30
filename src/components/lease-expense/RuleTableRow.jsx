@@ -64,6 +64,25 @@ export default function RuleTableRow({
     : "-";
   const sourcePage = getSourcePage(rule);
   const sourceText = getRuleSourceText(rule) || getExactSourceText(rule) || "-";
+  const amountSummary = [
+    rule.estimated_annual_amount != null ? `$${Number(rule.estimated_annual_amount).toLocaleString()}/yr` : null,
+    rule.estimated_monthly_amount != null ? `$${Number(rule.estimated_monthly_amount).toLocaleString()}/mo` : null,
+    rule.tenant_share_percent != null ? `${rule.tenant_share_percent}% share` : null,
+    capDisplay !== "-" ? `Cap: ${capDisplay}` : null,
+    rule.admin_fee_applicable ? `Admin: ${rule.admin_fee_percent ? `${rule.admin_fee_percent}%` : "yes"}` : null,
+    rule.gross_up_applicable || rule.gross_up_percent != null
+      ? `Gross-up: ${rule.gross_up_percent != null ? `${rule.gross_up_percent}%` : "yes"}`
+      : null,
+  ].filter(Boolean).join(" · ");
+  const billingSummary = [
+    rule.billing_frequency || rule.frequency || null,
+    rule.reconciliation_required ? "Reconcile" : "No reconcile",
+  ].filter(Boolean).join(" · ");
+  const statusSummary = [
+    humanizeToken(rule.review_status || "Pending"),
+    humanizeToken(rule.approval_status || rule.row_status || "Needs Review"),
+    formatConfidence(rule.confidence_score),
+  ].filter(Boolean).join(" · ");
 
   return (
     <TableRow className="align-top hover:bg-slate-50">
@@ -94,25 +113,20 @@ export default function RuleTableRow({
       </TableCell>
       <TableCell className="text-sm text-slate-600">{property?.name || "-"}</TableCell>
       <TableCell className="text-sm">
-        <Badge className="bg-slate-100 text-slate-700 text-[10px]">
-          {humanizeToken(rule.rule_type) || "General"}
-        </Badge>
-      </TableCell>
-      <TableCell className="text-sm">
         <div className="font-medium text-slate-900">
           {rule.category_name || rule.expense_category || category?.category_name || "-"}
         </div>
+        <div className="mt-1 text-[11px] text-slate-500">
+          {rule.expense_subcategory || rule.subcategory_name || category?.subcategory_name || humanizeToken(rule.rule_type) || "General"}
+        </div>
       </TableCell>
-      <TableCell className="text-sm text-slate-700">
-        {rule.expense_subcategory || rule.subcategory_name || category?.subcategory_name || "-"}
-      </TableCell>
-      <TableCell>
-        <Badge className={`text-[10px] ${validation.includedInBaseRent ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600"}`}>
-          {validation.includedInBaseRent ? "Included" : "Separate"}
-        </Badge>
+      <TableCell className="max-w-[280px] text-xs text-slate-700">
+        <div>{humanizeToken(paymentTreatment)}</div>
+        <div className="mt-1 text-slate-500">
+          {validation.includedInBaseRent ? "Included in rent" : "Separate charge / obligation"}
+        </div>
       </TableCell>
       <TableCell className="text-sm text-slate-700">{humanizeToken(responsibility)}</TableCell>
-      <TableCell className="text-sm text-slate-700">{humanizeToken(paymentTreatment)}</TableCell>
       <TableCell>
         <Badge className={`text-[10px] ${["yes", "conditional"].includes(recoverableDecision) && !rule.is_excluded ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
           {formatTriState(recoverableDecision)}
@@ -123,50 +137,24 @@ export default function RuleTableRow({
           {formatTriState(camEligibleDecision)}
         </Badge>
       </TableCell>
-      <TableCell className="text-sm text-slate-700">{humanizeToken(recoveryMethod)}</TableCell>
-      <TableCell className="text-sm text-slate-700">{allocationBasis ? humanizeToken(allocationBasis) : "-"}</TableCell>
-      <TableCell className="text-sm text-slate-700">{capDisplay}</TableCell>
       <TableCell className="text-sm text-slate-700">
-        {rule.admin_fee_applicable ? (rule.admin_fee_percent ? `${rule.admin_fee_percent}%` : "Yes") : "-"}
+        <div>{humanizeToken(recoveryMethod)}</div>
+        <div className="mt-1 text-[11px] text-slate-500">{allocationBasis ? humanizeToken(allocationBasis) : "-"}</div>
       </TableCell>
-      <TableCell className="text-sm text-slate-700">
-        {rule.gross_up_applicable ? (rule.gross_up_percent != null ? `${rule.gross_up_percent}%` : "Yes") : rule.gross_up_percent != null ? `${rule.gross_up_percent}%` : "-"}
+      <TableCell className="max-w-[260px] text-sm text-slate-700">
+        {amountSummary || "-"}
       </TableCell>
-      <TableCell className="text-sm text-slate-700">
-        {rule.tenant_share_percent != null ? `${rule.tenant_share_percent}%` : "-"}
-      </TableCell>
-      <TableCell className="text-sm text-slate-700">
-        {[
-          rule.estimated_annual_amount != null ? `$${Number(rule.estimated_annual_amount).toLocaleString()}/yr` : null,
-          rule.estimated_monthly_amount != null ? `$${Number(rule.estimated_monthly_amount).toLocaleString()}/mo` : null
-        ].filter(Boolean).join(" · ") || "-"}
-      </TableCell>
-      <TableCell className="text-sm text-slate-700">{rule.billing_frequency || rule.frequency || "-"}</TableCell>
-      <TableCell className="text-sm text-slate-700">{rule.reconciliation_required ? "Yes" : "No"}</TableCell>
-      <TableCell className="max-w-[260px] text-xs text-slate-600">
-        {sourceText && sourceText !== "-" ? <span className="italic">"{truncate(sourceText)}"</span> : "-"}
-      </TableCell>
-      <TableCell className="text-xs text-slate-700">{formatConfidence(rule.confidence_score)}</TableCell>
-      <TableCell className="text-xs text-slate-700">{rule.extraction_status || "-"}</TableCell>
-      <TableCell>
-        <Badge className={`text-[10px] ${
-          String(rule.review_status).toLowerCase() === "reviewed" || String(rule.review_status).toLowerCase() === "approved"
-            ? "bg-emerald-100 text-emerald-700"
-            : "bg-amber-100 text-amber-800"
-        }`}>
-          {humanizeToken(rule.review_status || "Pending")}
-        </Badge>
-      </TableCell>
-      <TableCell>
-        <Badge className={`text-[10px] ${
-          String(rule.approval_status || rule.row_status).toLowerCase() === "approved"
-            ? "bg-emerald-100 text-emerald-700"
-            : "bg-amber-100 text-amber-800"
-        }`}>
-          {humanizeToken(rule.approval_status || rule.row_status || "Needs Review")}
-        </Badge>
-      </TableCell>
-      <TableCell className="max-w-[220px]">
+      <TableCell className="text-sm text-slate-700">{billingSummary || "-"}</TableCell>
+      <TableCell className="max-w-[320px]">
+        <div className="mb-1 flex flex-wrap gap-1">
+          <Badge className={`text-[10px] ${
+            String(rule.approval_status || rule.row_status).toLowerCase() === "approved"
+              ? "bg-emerald-100 text-emerald-700"
+              : "bg-amber-100 text-amber-800"
+          }`}>
+            {statusSummary}
+          </Badge>
+        </div>
         {(() => {
           const camPublishStatus = getDisplayCamPublishStatus(rule, validation, displayMode);
           const toneClass =
@@ -182,9 +170,10 @@ export default function RuleTableRow({
             </Badge>
           );
         })()}
-      </TableCell>
-      <TableCell className="text-xs text-slate-500 font-mono">
-        {rule.source_field_key || "-"}
+        <div className="mt-2 text-xs text-slate-600">
+          {sourcePage ? <span className="mr-2 font-medium">p. {sourcePage}</span> : null}
+          {sourceText && sourceText !== "-" ? <span className="italic">"{truncate(sourceText)}"</span> : "-"}
+        </div>
       </TableCell>
       <TableCell>
         <DropdownMenu>

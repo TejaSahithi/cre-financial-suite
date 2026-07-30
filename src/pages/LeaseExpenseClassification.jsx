@@ -273,22 +273,50 @@ export default function LeaseExpenseClassification() {
 
   const totals = useMemo(() => {
     return rows.reduce((summary, row) => {
-      if (row.rowType !== "matched_classification" || !row.actualExpenseId) return summary;
       const amount = row.financialAmount;
+      if (row.actualExpenseId) {
+        summary.approvedActualTotal += amount;
+      }
+      if (row.rowType === "actual_missing_rule" && row.actualExpenseId) {
+        summary.unmatchedActualTotal += amount;
+      }
+      if (row.rowType === "rule_missing_actual") {
+        summary.rulesMissingActualCount += 1;
+        summary.ruleGapAmount += amount;
+      }
+      if (row.rowType !== "matched_classification" || !row.actualExpenseId) return summary;
+      summary.matchedActualTotal += amount;
       if (row.recoverabilityResult === "recoverable") summary.recoverable += amount;
       if (row.recoverabilityResult === "non_recoverable") summary.nonRecoverable += amount;
       if (row.recoverabilityResult === "conditional") summary.conditional += amount;
       if (row.recoverabilityResult === "excluded") summary.excluded += amount;
-      if (["yes", "conditional"].includes(row.camEligible)) summary.camEligible += amount;
-      if (row.classificationStatus === "finalized") summary.finalized += amount;
+      if (["yes", "conditional"].includes(row.camEligible)) {
+        summary.camEligible += amount;
+        if (row.camEligible === "conditional") summary.conditionalCamEligible += amount;
+      }
+      if (row.classificationStatus === "finalized") {
+        summary.finalized += amount;
+        if (row.recoverabilityResult === "recoverable" && row.camEligible === "yes") {
+          summary.finalizedCamEligible += amount;
+        }
+      }
+      if (row.sentToCam) summary.sentToCam += amount;
       return summary;
     }, {
+      approvedActualTotal: 0,
+      matchedActualTotal: 0,
+      unmatchedActualTotal: 0,
+      rulesMissingActualCount: 0,
+      ruleGapAmount: 0,
       recoverable: 0,
       nonRecoverable: 0,
       conditional: 0,
       excluded: 0,
       camEligible: 0,
+      conditionalCamEligible: 0,
       finalized: 0,
+      finalizedCamEligible: 0,
+      sentToCam: 0,
     });
   }, [rows]);
 
@@ -786,6 +814,57 @@ export default function LeaseExpenseClassification() {
             </Card>
           ))}
         </div>
+
+        <Card className="border-slate-200 bg-white shadow-sm">
+          <CardContent className="p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Classification Trace</p>
+                <p className="text-sm font-semibold text-slate-900">Approved actuals -> lease rules -> CAM-ready costs</p>
+              </div>
+              <Badge className="bg-slate-100 text-slate-700">
+                {counts.sent_to_cam} sent to CAM
+              </Badge>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total Approved Actuals</p>
+                <p className="mt-1 text-lg font-bold text-slate-900">{fmt(totals.approvedActualTotal)}</p>
+                <p className="mt-1 text-xs text-slate-500">{approvedActuals.length} approved expense row(s)</p>
+              </div>
+              <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Matched To Rules</p>
+                <p className="mt-1 text-lg font-bold text-emerald-900">{fmt(totals.matchedActualTotal)}</p>
+                <p className="mt-1 text-xs text-emerald-700">{counts.matched} matched classification row(s)</p>
+              </div>
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-amber-700">Needs Decision</p>
+                <p className="mt-1 text-lg font-bold text-amber-900">{fmt(totals.unmatchedActualTotal + totals.conditional + totals.ruleGapAmount)}</p>
+                <p className="mt-1 text-xs text-amber-700">
+                  {counts.actuals_missing_rules} actual gap(s), {totals.rulesMissingActualCount} rule gap(s)
+                </p>
+              </div>
+              <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700">CAM Ready Basis</p>
+                <p className="mt-1 text-lg font-bold text-blue-900">{fmt(totals.finalizedCamEligible)}</p>
+                <p className="mt-1 text-xs text-blue-700">
+                  {fmt(totals.sentToCam)} already sent to CAM
+                </p>
+              </div>
+            </div>
+            <div className="mt-3 grid gap-2 text-xs text-slate-600 md:grid-cols-3">
+              <div className="rounded-md border border-slate-200 p-2">
+                Recoverable: <span className="font-semibold text-slate-900">{fmt(totals.recoverable)}</span>
+              </div>
+              <div className="rounded-md border border-slate-200 p-2">
+                Non-recoverable / excluded: <span className="font-semibold text-slate-900">{fmt(totals.nonRecoverable + totals.excluded)}</span>
+              </div>
+              <div className="rounded-md border border-slate-200 p-2">
+                Conditional CAM: <span className="font-semibold text-slate-900">{fmt(totals.conditionalCamEligible)}</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">

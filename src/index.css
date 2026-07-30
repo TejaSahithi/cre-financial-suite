@@ -116,6 +116,19 @@
     background: white !important;
   }
 
+  .lease-detail-print [class*="overflow"] {
+    overflow: visible !important;
+  }
+
+  .lease-detail-print table {
+    page-break-inside: auto;
+  }
+
+  .lease-detail-print tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
   .no-print,
   .no-print * {
     display: none !important;

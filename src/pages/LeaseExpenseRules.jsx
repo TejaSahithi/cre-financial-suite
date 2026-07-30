@@ -653,43 +653,28 @@ export default function LeaseExpenseRules() {
               <TableRow className="bg-slate-50">
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Tenant</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Property</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Rule Type</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Category</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Subcategory</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Included In Rent</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Rule Summary</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Responsibility</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Payment Treatment</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Recoverable</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">CAM Eligible</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Recovery Method</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Allocation</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Cap</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Admin Fee</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Gross-Up</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Tenant Share</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Est. Amount</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Billing Frequency</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Reconciliation Required</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Exact Source Text</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Confidence</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Extraction</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Review Status</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Approval Status</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">CAM Publish</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Source Field Key</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Method / Allocation</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Amount / Cap / Share</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Billing</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Status / Evidence</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={26} className="py-12 text-center">
+                  <TableCell colSpan={12} className="py-12 text-center">
                     <Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" />
                   </TableCell>
                 </TableRow>
               ) : filteredRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={26} className="py-12 text-center text-sm text-slate-400">
+                  <TableCell colSpan={12} className="py-12 text-center text-sm text-slate-400">
                     {displayMode === "gaps"
                       ? "No coverage gaps in this view."
                       : "No lease-derived expense rules in this view. Coverage gaps and weak fallback rows are available in the Coverage Gaps / Needs Review view."}
@@ -734,4 +719,3 @@ export default function LeaseExpenseRules() {
     </div>
   );
 }
-

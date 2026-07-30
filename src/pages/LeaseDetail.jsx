@@ -21,6 +21,7 @@ import {
   Zap,
   Wrench,
   DollarSign,
+  Download,
   Printer
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -75,6 +76,17 @@ function reviewFieldForKey(fieldReviewMap, key) {
   return aliases.map((alias) => fieldReviewMap?.[alias]).find(Boolean) || null;
 }
 
+function getLeaseSourceFileId(lease) {
+  return (
+    lease?.source_file_id ||
+    lease?.uploaded_file_id ||
+    lease?.file_id ||
+    lease?.extraction_data?.source_file_id ||
+    lease?.extraction_data?.uploaded_file_id ||
+    null
+  );
+}
+
 export default function LeaseDetail() {
   const location = useLocation();
   const urlParams = new URLSearchParams(location.search);
@@ -91,8 +103,13 @@ export default function LeaseDetail() {
       if (error) throw error;
 
       let fileMap = {};
-      if (data.source_file_id) {
-        const { data: file } = await supabase.from("uploaded_files").select("reviewed_output, ui_review_payload").eq("id", data.source_file_id).single();
+      const sourceFileId = getLeaseSourceFileId(data);
+      if (sourceFileId) {
+        const { data: file } = await supabase
+          .from("uploaded_files")
+          .select("id, reviewed_output, ui_review_payload, normalized_output, parsed_data, active_generation_id")
+          .eq("id", sourceFileId)
+          .single();
         if (file) fileMap = file;
       }
 
@@ -109,20 +126,6 @@ export default function LeaseDetail() {
     queryKey: ["lease-field-reviews", leaseId],
     queryFn: () => loadFieldReviewMap(leaseId),
     enabled: !!leaseId,
-  });
-
-  const { data: uploadedFile } = useQuery({
-    queryKey: ["uploaded_file", lease?.source_file_id],
-    queryFn: async () => {
-      if (!lease?.source_file_id) return null;
-      const { data } = await supabase
-        .from("uploaded_files")
-        .select("reviewed_output")
-        .eq("id", lease.source_file_id)
-        .single();
-      return data;
-    },
-    enabled: !!lease?.source_file_id,
   });
 
   const { data: documents = [] } = useQuery({
@@ -175,14 +178,42 @@ export default function LeaseDetail() {
         found: hasDetailValue(value) || resolved?.found,
         value,
         raw_value: firstDetailValue(review?.raw_value, resolved?.raw_value, value),
-        source_page: firstDetailValue(review?.source_page, resolved?.source_page),
-        source_text: firstDetailValue(review?.source_text, review?.exact_source_text, resolved?.source_text, resolved?.exact_source_text),
+        source_page: firstDetailValue(review?.source_page, review?.sourcePage, resolved?.source_page, resolved?.sourcePage),
+        source_text: firstDetailValue(
+          review?.source_text,
+          review?.exact_source_text,
+          review?.exactSourceText,
+          review?.source_clause,
+          review?.sourceClause,
+          resolved?.source_text,
+          resolved?.exact_source_text,
+          resolved?.exactSourceText,
+          resolved?.source_clause,
+          resolved?.sourceClause,
+        ),
         review_status: review?.status || resolved?.review_status || resolved?.extraction_status || "n/a",
       };
     };
   }, [lease, fieldReviewMap]);
 
   const snapshot = lease?.abstract_snapshot || {};
+  const completeFieldGroups = useMemo(() => {
+    return LEASE_REVIEW_FIELDS.reduce((groups, field) => {
+      if (field.tab === "extraction_debug" || field.tab === "extraction_timeline") return groups;
+      const resolved = getFieldObj(field.key);
+      const value = formatFieldValueForDetail(field, resolved?.value ?? resolved?.raw_value);
+      const row = {
+        ...resolved,
+        label: field.label,
+        key: field.key,
+        value: value ?? resolved?.value ?? resolved?.raw_value ?? null,
+      };
+      const group = groups.get(field.tab) || [];
+      group.push(row);
+      groups.set(field.tab, group);
+      return groups;
+    }, new Map());
+  }, [getFieldObj]);
 
   const handleOpenDocument = async (e, url) => {
     e.preventDefault();
@@ -241,6 +272,8 @@ export default function LeaseDetail() {
   const abstractStatus = String(lease.abstract_status || "").toLowerCase();
   const isApproved = abstractStatus === "approved";
   const reviewLink = createPageUrl("LeaseReview", { id: lease.id });
+  const headerTenantName = getFieldObj("tenant_name")?.value || lease.tenant_name || "Unknown tenant";
+  const headerLeaseType = getFieldObj("lease_type")?.value || lease.lease_type || null;
 
   return (
     <div className="lease-detail-print space-y-6 p-6">
@@ -255,8 +288,8 @@ export default function LeaseDetail() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Lease Detail</h1>
           <p className="text-sm text-slate-500">
-            {lease.tenant_name || "Unknown tenant"} ·{" "}
-            {getLeaseFieldLabel("lease_type", lease.lease_type) || "Unknown lease type"}
+            {headerTenantName} ·{" "}
+            {getLeaseFieldLabel("lease_type", headerLeaseType) || "Unknown lease type"}
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Badge className={isApproved ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}>
@@ -280,6 +313,10 @@ export default function LeaseDetail() {
           <Button variant="outline" onClick={() => window.print()}>
             <Printer className="mr-1 h-4 w-4" />
             Print
+          </Button>
+          <Button variant="outline" onClick={() => window.print()}>
+            <Download className="mr-1 h-4 w-4" />
+            Download PDF
           </Button>
           <Link to={reviewLink}>
             <Button variant="outline">
@@ -483,6 +520,19 @@ export default function LeaseDetail() {
         )}
       </SectionCard>
 
+      <SectionCard icon={FileText} title="Complete Field Abstract">
+        <div className="space-y-5">
+          {[...completeFieldGroups.entries()].map(([tabKey, rows]) => (
+            <div key={tabKey} className="space-y-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                {tabKey.replace(/_/g, " ")}
+              </h3>
+              <DetailFieldTable rows={rows} />
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+
       {/* Documents */}
       <SectionCard icon={FileText} title="Documents & Exhibits">
         <div className="space-y-2 text-sm">
@@ -566,6 +616,40 @@ function DetailGrid({ items }) {
   );
 }
 
+function DetailFieldTable({ rows }) {
+  return (
+    <div className="overflow-hidden rounded-lg border border-slate-200">
+      <table className="w-full border-collapse text-left text-xs">
+        <thead className="bg-slate-100 text-[10px] uppercase tracking-wide text-slate-500">
+          <tr>
+            <th className="w-[22%] border-b border-slate-200 px-3 py-2 font-semibold">Field</th>
+            <th className="w-[28%] border-b border-slate-200 px-3 py-2 font-semibold">Value</th>
+            <th className="w-[16%] border-b border-slate-200 px-3 py-2 font-semibold">Status</th>
+            <th className="w-[8%] border-b border-slate-200 px-3 py-2 font-semibold">Page</th>
+            <th className="border-b border-slate-200 px-3 py-2 font-semibold">Evidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const status = row.review_status || row.extraction_status || (row.value ? "extracted" : "not found");
+            return (
+              <tr key={row.key} className="break-inside-avoid border-b border-slate-100 last:border-b-0">
+                <td className="align-top px-3 py-2 font-medium text-slate-900">{row.label}</td>
+                <td className="align-top px-3 py-2 text-slate-800">{row.value ?? "Not extracted"}</td>
+                <td className="align-top px-3 py-2 text-slate-600">{status}</td>
+                <td className="align-top px-3 py-2 text-slate-600">{row.source_page ?? row.sourcePage ?? "—"}</td>
+                <td className="align-top px-3 py-2 text-slate-600">
+                  {row.source_text || row.exact_source_text || row.exactSourceText || row.sourceClause || "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function AuditList({ fieldReviewMap }) {
   const entries = Object.values(fieldReviewMap || {})
     .filter((row) => row && row.reviewed_at)
@@ -639,4 +723,13 @@ function formatPercent(value) {
   const n = parseDisplayNumber(value);
   if (n === null) return String(value ?? "") || null;
   return `${n}%`;
+}
+
+function formatFieldValueForDetail(field, value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (field?.type === "currency") return formatCurrency(value) || String(value);
+  if (field?.type === "number") return formatNumber(value, { fractionDigits: field.key?.includes("rate") || field.key?.includes("pct") || field.key?.includes("percent") ? 2 : 0 }) || String(value);
+  if (field?.type === "boolean") return formatBoolean(value);
+  if (field?.type === "select") return getLeaseFieldLabel(field.key, value) || String(value);
+  return String(value);
 }

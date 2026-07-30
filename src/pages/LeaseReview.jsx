@@ -1912,15 +1912,34 @@ export default function LeaseReview() {
 
     let persisted = null;
     try {
-      persisted = await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
-        leaseId: approvedLease.id,
-        source: "approve_abstract",
-        force: false,
+      const loadedLeaseForRules = leaseFull || lease || {};
+      const leaseForRuleSync = {
+        ...loadedLeaseForRules,
+        ...approvedLease,
+        extraction_data: approvedLease.extraction_data || loadedLeaseForRules.extraction_data || null,
+      };
+      const workflowPersisted = await leaseExpenseRuleService.persistExpenseRulesFromWorkflow({
+        lease: leaseForRuleSync,
+        status: "draft",
+        createdFrom: "primary_workflow_approval",
+        suppressHttpError: true,
       });
-      console.log(
-        `[LeaseReview] generateLeaseExpenseRulesForLease -> ${persisted?.persistedRulesCount || 0} rules persisted`,
-        persisted,
-      );
+      const workflowPersistedCount = workflowPersisted?.rules?.length || 0;
+
+      if (workflowPersistedCount > 0) {
+        persisted = {
+          source: "primary_workflow_approval",
+          persistedRulesCount: workflowPersistedCount,
+          ruleSetId: workflowPersisted?.ruleSet?.id || null,
+        };
+      } else {
+        persisted = await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
+          leaseId: approvedLease.id,
+          source: "approve_abstract",
+          force: false,
+        });
+      }
+      console.log("[LeaseReview] post-approval expense rule sync", persisted);
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rules", approvedLease.id] });
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-summary", approvedLease.id] });
     } catch (persistErr) {

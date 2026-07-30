@@ -700,10 +700,7 @@ export default function Leases() {
                     <TableCell>
                       <div className="flex items-center gap-1">
                         <Link
-                          to={
-                            createPageUrl(abstractStatus === "approved" ? "LeaseDetail" : "LeaseReview") +
-                            `?id=${lease.id}`
-                          }
+                          to={createPageUrl("LeaseDetail") + `?id=${lease.id}`}
                         >
                           <Button variant="ghost" size="sm" className="h-7 px-2 text-xs">
                             View
