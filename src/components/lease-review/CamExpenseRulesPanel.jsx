@@ -45,7 +45,7 @@ export default function CamExpenseRulesPanel({ lease }) {
           <p className="text-sm text-slate-500">Loading expense rules…</p>
         ) : rows.length === 0 ? (
           <p className="text-sm text-slate-500">
-            {error ? "No expense rules table yet — showing extraction fallback only." : "No expense/CAM rules captured for this document."}
+            {error ? "No persisted expense rules table is available yet." : "No persisted expense/CAM rules captured for this document."}
           </p>
         ) : (
           <div className="space-y-2">

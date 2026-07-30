@@ -154,16 +154,12 @@ export function RentScheduleTable({ leaseId }) {
 
 // ─── Expense Rules / CAM Rules ────────────────────────────────────────
 export function useLeaseExpenseRules(leaseOrId) {
-  const lease = leaseOrId && typeof leaseOrId === "object" ? leaseOrId : null;
-  const leaseId = lease?.id || leaseOrId;
+  const leaseId = leaseOrId && typeof leaseOrId === "object" ? leaseOrId.id : leaseOrId;
 
   return useQuery({
-    queryKey: ["lease-expense-rules-detail", leaseId, lease?.extraction_data?.workflow_output?.expense_rules?.length || 0],
+    queryKey: ["lease-expense-rules-detail", leaseId],
     enabled: !!leaseId && !!supabase,
-    queryFn: () => leaseExpenseRuleService.loadRuleSet(leaseId, {
-      lease,
-      includeWorkflowFallback: true,
-    }),
+    queryFn: () => leaseExpenseRuleService.loadRuleSet(leaseId),
     retry: false,
   });
 }

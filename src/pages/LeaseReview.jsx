@@ -86,13 +86,13 @@ import { supabase } from "@/services/supabaseClient";
 import {
   saveAbstractDraft,
   rejectLeaseAbstract,
+  syncApprovedAbstractExpenseTermsToRules,
 } from "@/services/leaseAbstractService";
 import {
   approveLeaseWorkflow,
   createLeaseApprovalIdempotencyKey,
 } from "@/services/leaseApprovalWorkflowService";
 import { logAudit } from "@/services/audit";
-import { leaseRulePipelineService } from "@/services/leaseRulePipelineService";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { useAuth } from "@/lib/AuthContext";
 import { isSuperAdmin } from "@/lib/rbac";
@@ -1933,11 +1933,22 @@ export default function LeaseReview() {
           ruleSetId: workflowPersisted?.ruleSet?.id || null,
         };
       } else {
-        persisted = await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
-          leaseId: approvedLease.id,
-          source: "approve_abstract",
-          force: false,
-        });
+        const approvedSnapshot =
+          approvedLease.abstract_snapshot ||
+          leaseForRuleSync.abstract_snapshot ||
+          approvedLease.extraction_data?.abstract ||
+          leaseForRuleSync.extraction_data?.abstract ||
+          { fields: leaseForRuleSync.extraction_data?.fields || {} };
+        await syncApprovedAbstractExpenseTermsToRules(leaseForRuleSync, approvedSnapshot);
+        const synced = await leaseExpenseRuleService.loadRuleSet(approvedLease.id).catch(() => null);
+        const syncedCount = synced?.rules?.length || 0;
+        if (syncedCount > 0) {
+          persisted = {
+            source: "approved_abstract_expense_backfill",
+            persistedRulesCount: syncedCount,
+            ruleSetId: synced?.ruleSet?.id || null,
+          };
+        }
       }
       console.log("[LeaseReview] post-approval expense rule sync", persisted);
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rules", approvedLease.id] });
@@ -2686,19 +2697,10 @@ export default function LeaseReview() {
         },
       });
 
-      // Also extract expense/CAM rules from the same source text so the
-      // Expenses/Recoveries and CAM Rules tabs populate without a separate
-      // user trip to the LeaseExpenseClassification page.
-      setReextractStage("extracting_rules");
-      try {
-        await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
-          leaseId: lease.id,
-          source: "extract_draft",
-          force: false
-        });
-      } catch (ruleErr) {
-        console.warn("[LeaseReview] draft expense rule extraction skipped:", ruleErr?.message || ruleErr);
-      }
+      // Expense/CAM rules now come from normalized workflow_output.expense_rules
+      // and are persisted through leaseExpenseRuleService. Avoid the removed
+      // secondary expense extractor path here.
+      setReextractStage(null);
 
       const preservedSummary = manualFieldsPreservedCount + approvedFieldsPreservedCount;
       const preservedSuffix = preservedSummary > 0
@@ -2917,9 +2919,7 @@ export default function LeaseReview() {
                 ? "Waiting on extraction-"
                 : reextractStage === "applying"
                   ? "Applying values..."
-                  : reextractStage === "extracting_rules"
-                    ? "Extracting expense rules..."
-                    : "Re-extracting..."
+                  : "Re-extracting..."
               : "Re-extract Lease"}
           </Button>
           <Button

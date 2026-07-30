@@ -145,6 +145,7 @@ const PAGE_PERMISSION_GROUPS = [
       { key: "LeaseUpload",     label: "Lease Upload" },
       { key: "LeaseReview",     label: "Lease Review" },
       { key: "RentProjection",  label: "Rent Projection" },
+      { key: "LeaseRentSchedule", label: "Lease Rent Schedule" },
     ],
   },
   {

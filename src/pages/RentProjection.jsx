@@ -1,13 +1,11 @@
 import React, { useMemo, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { differenceInDays, parseISO } from "date-fns";
+import { differenceInDays } from "date-fns";
 import {
   AlertCircle,
   Building2,
   CalendarDays,
-  ChevronDown,
-  ChevronRight,
   Download,
   Loader2,
   RefreshCw,
@@ -32,6 +30,12 @@ import { useComputeTrigger } from "@/hooks/useComputeTrigger";
 import { approvedLeaseFieldValue, hasApprovalSnapshot } from "@/lib/approvedLeaseSnapshot";
 import { buildHierarchyScope, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { getLeaseFieldLabel } from "@/lib/leaseFieldOptions";
+import {
+  RENT_SCHEDULE_MONTHS,
+  buildLeaseYearSchedule,
+  safeDate,
+  scheduleRowsForLease,
+} from "@/lib/rentScheduleUtils";
 import { supabase } from "@/services/supabaseClient";
 import ScopeSelector from "@/components/ScopeSelector";
 import PageHeader from "@/components/PageHeader";
@@ -62,8 +66,6 @@ const PROJECTION_MODES = [
   { value: "include_assumed_renewals", label: "Include Assumed Renewals" },
 ];
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
 const APPROVED_FIELD_ALIASES = {
   commencement_date: ["commencement_date", "start_date", "lease_start_date", "term_start_date"],
   rent_commencement_date: ["rent_commencement_date", "commencement_date", "start_date", "lease_start_date", "term_start_date"],
@@ -86,142 +88,6 @@ const APPROVED_FIELD_ALIASES = {
 
 const fmtMoney = (n, opts = {}) =>
   `$${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0, ...opts })}`;
-
-function safeDate(value) {
-  if (!value) return null;
-  try {
-    const text = typeof value === "string" ? value.trim() : "";
-    const d = /^\d{4}-\d{2}-\d{2}$/.test(text) ? new Date(`${text}T00:00:00Z`) : (text ? parseISO(text) : new Date(value));
-    return Number.isNaN(d.getTime()) ? null : d;
-  } catch {
-    return null;
-  }
-}
-
-function utcMonthStart(year, monthIndex) {
-  return new Date(Date.UTC(year, monthIndex, 1));
-}
-
-function utcMonthEnd(year, monthIndex) {
-  return new Date(Date.UTC(year, monthIndex + 1, 0));
-}
-
-function utcDayNumber(value) {
-  return Math.floor(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()) / 86400000);
-}
-
-function daysBetweenInclusive(start, end) {
-  return Math.max(0, utcDayNumber(end) - utcDayNumber(start) + 1);
-}
-
-function daysInUtcMonth(value) {
-  return utcMonthEnd(value.getUTCFullYear(), value.getUTCMonth()).getUTCDate();
-}
-
-function scheduleRowsForLease(scheduleRows, leaseId) {
-  return (scheduleRows || []).filter((row) => row?.lease_id === leaseId);
-}
-
-function scheduleRowMonthlyAmount(row) {
-  const monthly = Number(row?.monthly_amount);
-  if (Number.isFinite(monthly)) return monthly;
-  const annual = Number(row?.annual_amount);
-  if (Number.isFinite(annual)) return annual / 12;
-  const rentPerSf = Number(row?.rent_per_sf);
-  const rsf = Number(row?.rsf);
-  if (Number.isFinite(rentPerSf) && Number.isFinite(rsf)) return (rentPerSf * rsf) / 12;
-  return 0;
-}
-
-function scheduleRowAmountForMonth(row, monthStart, monthEnd) {
-  const rowStart = safeDate(row?.period_start);
-  const rowEnd = safeDate(row?.period_end);
-  if (!rowStart || !rowEnd || rowStart > monthEnd || rowEnd < monthStart) return 0;
-
-  const activeStart = rowStart > monthStart ? rowStart : monthStart;
-  const activeEnd = rowEnd < monthEnd ? rowEnd : monthEnd;
-  const overlapDays = daysBetweenInclusive(activeStart, activeEnd);
-  return Math.round(scheduleRowMonthlyAmount(row) * (overlapDays / daysInUtcMonth(monthStart)) * 100) / 100;
-}
-
-function previewAmountForMonth(row, monthStart, monthEnd) {
-  const rentStart = safeDate(row.rent_commencement_date || row.lease_start);
-  const leaseEnd = safeDate(row.lease_end);
-  const monthly = Number(row.monthly_rent || 0) || (Number(row.annualized_rent || 0) / 12);
-  if (!rentStart || !leaseEnd || monthly <= 0 || rentStart > monthEnd || leaseEnd < monthStart) return 0;
-
-  const activeStart = rentStart > monthStart ? rentStart : monthStart;
-  const activeEnd = leaseEnd < monthEnd ? leaseEnd : monthEnd;
-  const overlapDays = daysBetweenInclusive(activeStart, activeEnd);
-  return Math.round(monthly * (overlapDays / daysInUtcMonth(monthStart)) * 100) / 100;
-}
-
-function buildLeaseYearSchedule(row, persistedRows, year) {
-  const hasPersistedRows = persistedRows.length > 0;
-  const months = MONTHS.map((month, index) => {
-    const start = utcMonthStart(year, index);
-    const end = utcMonthEnd(year, index);
-    const amount = hasPersistedRows
-      ? persistedRows.reduce((sum, scheduleRow) => sum + scheduleRowAmountForMonth(scheduleRow, start, end), 0)
-      : previewAmountForMonth(row, start, end);
-    return {
-      month,
-      amount: Math.round(amount * 100) / 100,
-    };
-  });
-
-  return {
-    year,
-    source: hasPersistedRows ? "rent_schedules" : "approved abstract preview",
-    months,
-    total: Math.round(months.reduce((sum, item) => sum + item.amount, 0) * 100) / 100,
-  };
-}
-
-function LeaseMonthlySchedulePanel({ row, persistedRows, fiscalYear }) {
-  const periods = [fiscalYear - 1, fiscalYear, fiscalYear + 1].map((year) =>
-    buildLeaseYearSchedule(row, persistedRows, year),
-  );
-  const source = persistedRows.length > 0 ? "Stored approved rent schedule rows" : "Preview from approved abstract fields";
-
-  return (
-    <div className="rounded-md border border-slate-200 bg-white p-4">
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold text-slate-900">Monthly Rent Schedule</p>
-          <p className="text-xs text-slate-500">
-            {source}. Run Engine refreshes stored rows and the authoritative projection snapshot.
-          </p>
-        </div>
-        <Button asChild variant="outline" size="sm" onClick={(event) => event.stopPropagation()}>
-          <Link to={createPageUrl("LeaseDetail") + `?id=${row.lease_id}`}>Open Lease Detail</Link>
-        </Button>
-      </div>
-
-      <div className="grid gap-3 xl:grid-cols-3">
-        {periods.map((period) => (
-          <div key={period.year} className="rounded-md border border-slate-200">
-            <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-3 py-2">
-              <div>
-                <p className="text-xs font-semibold text-slate-900">FY {period.year}</p>
-                <p className="text-[10px] uppercase text-slate-400">{period.source}</p>
-              </div>
-              <p className="text-sm font-mono font-semibold text-slate-900">{fmtMoney(period.total)}</p>
-            </div>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-1 p-3 sm:grid-cols-3">
-              {period.months.map((month) => (
-                <div key={`${period.year}-${month.month}`} className="flex items-center justify-between gap-2 text-xs">
-                  <span className="text-slate-500">{month.month}</span>
-                  <span className="font-mono text-slate-900">{fmtMoney(month.amount)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function isApprovedLease(lease) {
   const abstract = String(lease?.abstract_status || "").toLowerCase();
@@ -277,6 +143,7 @@ function scopeSelection(propertyId, buildingId, unitId) {
 
 export default function RentProjection() {
   const location = useLocation();
+  const navigate = useNavigate();
   const currentYear = new Date().getFullYear();
   const [fiscalYear, setFiscalYear] = useState(currentYear);
   const [projectionMode, setProjectionMode] = useState("contracted_only");
@@ -286,7 +153,6 @@ export default function RentProjection() {
   const [scopeBuilding, setScopeBuilding] = useState("all");
   const [scopeUnit, setScopeUnit] = useState("all");
   const [search, setSearch] = useState("");
-  const [expandedLeaseId, setExpandedLeaseId] = useState(null);
 
   const { data: leases = [], isLoading: leasesLoading } = useOrgQuery("Lease");
   const { data: properties = [] } = useOrgQuery("Property");
@@ -403,7 +269,7 @@ export default function RentProjection() {
 
   const authoritativeChart = useMemo(() => {
     if (!hasAuthoritativeProjection || !Array.isArray(outputs?.monthly_projections)) return [];
-    return MONTHS.map((month, index) => {
+    return RENT_SCHEDULE_MONTHS.map((month, index) => {
       const row = outputs.monthly_projections[index] || {};
       return {
         month,
@@ -460,7 +326,7 @@ export default function RentProjection() {
     () => Array.from(new Set(displayedLeaseRows.map((row) => row.lease_id).filter(Boolean))),
     [displayedLeaseRows],
   );
-  const { data: rentScheduleRows = [], isLoading: rentSchedulesLoading } = useQuery({
+  const { data: rentScheduleRows = [] } = useQuery({
     queryKey: ["rent-projection-rent-schedules", displayedLeaseIds],
     enabled: displayedLeaseIds.length > 0 && !!supabase,
     queryFn: async () => {
@@ -482,7 +348,7 @@ export default function RentProjection() {
       current: buildLeaseYearSchedule(row, scheduleRowsForLease(rentScheduleRows, row.lease_id), fiscalYear),
       next: buildLeaseYearSchedule(row, scheduleRowsForLease(rentScheduleRows, row.lease_id), fiscalYear + 1),
     }));
-    return MONTHS.map((month, index) => ({
+    return RENT_SCHEDULE_MONTHS.map((month, index) => ({
       month,
       current: Math.round(schedules.reduce((sum, item) => sum + item.current.months[index].amount, 0) * 100) / 100,
       projected: Math.round(schedules.reduce((sum, item) => sum + item.next.months[index].amount, 0) * 100) / 100,
@@ -573,6 +439,11 @@ export default function RentProjection() {
       })),
       `approved-leases-${fiscalYear}.csv`,
     );
+  };
+
+  const openLeaseSchedule = (row) => {
+    if (!row?.lease_id) return;
+    navigate(createPageUrl("LeaseRentSchedule", { id: row.lease_id, fiscal_year: fiscalYear }));
   };
 
   return (
@@ -785,7 +656,7 @@ export default function RentProjection() {
             <div>
               <CardTitle className="text-base">Lease Projection Detail</CardTitle>
               <p className="mt-1 text-xs text-slate-500">
-                Click a lease row to inspect prior, selected, and next fiscal-year monthly rent. Run Engine persists authoritative schedules and snapshot totals for this scope.
+                Open a lease schedule to compare prior, selected, and next fiscal-year monthly rent in a dedicated table.
               </p>
             </div>
             <div className="relative w-64">
@@ -841,75 +712,52 @@ export default function RentProjection() {
                 displayedLeaseRows.map((row, index) => {
                   const property = row.property_id ? hierarchy.propertyById.get(row.property_id) : null;
                   const unit = row.unit_id ? hierarchy.unitById.get(row.unit_id) : null;
-                  const isExpanded = expandedLeaseId === row.lease_id;
-                  const persistedRows = scheduleRowsForLease(rentScheduleRows, row.lease_id);
                   return (
-                    <React.Fragment key={row.lease_id || `${row.tenant_name || "lease"}-${index}`}>
-                      <TableRow
-                        className="cursor-pointer hover:bg-slate-50"
-                        onClick={() => row.lease_id && setExpandedLeaseId(isExpanded ? null : row.lease_id)}
-                      >
-                        <TableCell className="text-sm font-medium text-slate-900">{row.tenant_name || "—"}</TableCell>
-                        <TableCell className="text-sm text-slate-600">{property?.name || "—"}</TableCell>
-                        <TableCell className="text-sm text-slate-600">{unit?.unit_number || "—"}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="text-[10px]">
-                            {getLeaseFieldLabel("lease_type", row.lease_type) || row.lease_type || "—"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-xs text-slate-500">{row.lease_start || "—"}</TableCell>
-                        <TableCell className="text-xs text-slate-500">{row.rent_commencement_date || "—"}</TableCell>
-                        <TableCell className="text-xs text-slate-500">{row.lease_end || "—"}</TableCell>
-                        <TableCell className="text-sm font-mono text-right">{Number(row.rsf || 0).toLocaleString()}</TableCell>
-                        <TableCell className="text-sm font-mono text-right">{fmtMoney(row.fy_scheduled_rent)}</TableCell>
-                        <TableCell className="text-sm font-mono text-right font-semibold">
-                          <div>{fmtMoney(row.annualized_rent)}</div>
-                          {row.rent_provenance && (
-                            <div className="text-[9px] text-slate-400 font-sans font-normal uppercase">
-                              {row.rent_provenance}
-                            </div>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-sm font-mono text-right">{row.rent_psf == null ? "—" : `$${Number(row.rent_psf).toFixed(2)}`}</TableCell>
-                        <TableCell className="text-sm font-mono text-right">{fmtMoney(row.next_fy_scheduled_rent)}</TableCell>
-                        <TableCell className="text-xs text-slate-500 max-w-[320px]">{row.next_fy_zero_explanation || "—"}</TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-7 gap-1 text-xs"
-                            disabled={!row.lease_id}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              if (!row.lease_id) return;
-                              setExpandedLeaseId(isExpanded ? null : row.lease_id);
-                            }}
-                          >
-                            {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                            Schedule
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                      {isExpanded && (
-                        <TableRow className="bg-slate-50/60">
-                          <TableCell colSpan={14} className="p-4">
-                            {rentSchedulesLoading ? (
-                              <div className="flex items-center gap-2 text-sm text-slate-500">
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                                Loading stored rent schedule rows...
-                              </div>
-                            ) : (
-                              <LeaseMonthlySchedulePanel
-                                row={row}
-                                persistedRows={persistedRows}
-                                fiscalYear={fiscalYear}
-                              />
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </React.Fragment>
+                    <TableRow
+                      key={row.lease_id || `${row.tenant_name || "lease"}-${index}`}
+                      className="cursor-pointer hover:bg-slate-50"
+                      onClick={() => openLeaseSchedule(row)}
+                    >
+                      <TableCell className="text-sm font-medium text-slate-900">{row.tenant_name || "—"}</TableCell>
+                      <TableCell className="text-sm text-slate-600">{property?.name || "—"}</TableCell>
+                      <TableCell className="text-sm text-slate-600">{unit?.unit_number || "—"}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-[10px]">
+                          {getLeaseFieldLabel("lease_type", row.lease_type) || row.lease_type || "—"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs text-slate-500">{row.lease_start || "—"}</TableCell>
+                      <TableCell className="text-xs text-slate-500">{row.rent_commencement_date || "—"}</TableCell>
+                      <TableCell className="text-xs text-slate-500">{row.lease_end || "—"}</TableCell>
+                      <TableCell className="text-sm font-mono text-right">{Number(row.rsf || 0).toLocaleString()}</TableCell>
+                      <TableCell className="text-sm font-mono text-right">{fmtMoney(row.fy_scheduled_rent)}</TableCell>
+                      <TableCell className="text-sm font-mono text-right font-semibold">
+                        <div>{fmtMoney(row.annualized_rent)}</div>
+                        {row.rent_provenance && (
+                          <div className="text-[9px] text-slate-400 font-sans font-normal uppercase">
+                            {row.rent_provenance}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-sm font-mono text-right">{row.rent_psf == null ? "—" : `$${Number(row.rent_psf).toFixed(2)}`}</TableCell>
+                      <TableCell className="text-sm font-mono text-right">{fmtMoney(row.next_fy_scheduled_rent)}</TableCell>
+                      <TableCell className="text-xs text-slate-500 max-w-[320px]">{row.next_fy_zero_explanation || "—"}</TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs"
+                          disabled={!row.lease_id}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openLeaseSchedule(row);
+                          }}
+                        >
+                          Schedule
+                        </Button>
+                      </TableCell>
+                    </TableRow>
                   );
                 })
               )}

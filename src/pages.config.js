@@ -75,6 +75,7 @@ const LeaseReview = lazy(() => import('./pages/LeaseReview'));
 const LeaseUpload = lazy(() => import('./pages/LeaseUpload'));
 const Leases = lazy(() => import('./pages/Leases'));
 const LeaseDetail = lazy(() => import('./pages/LeaseDetail'));
+const LeaseRentSchedule = lazy(() => import('./pages/LeaseRentSchedule'));
 const CriticalDates = lazy(() => import('./pages/CriticalDates'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const Onboarding = lazy(() => import('./pages/Onboarding'));
@@ -149,6 +150,7 @@ export const PAGES = {
     "LeaseUpload": LeaseUpload,
     "Leases": Leases,
     "LeaseDetail": LeaseDetail,
+    "LeaseRentSchedule": LeaseRentSchedule,
     "CriticalDates": CriticalDates,
     "Notifications": Notifications,
     "Onboarding": Onboarding,

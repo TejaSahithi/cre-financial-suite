@@ -186,7 +186,6 @@ All backend logic runs as Supabase Edge Functions (Deno, TypeScript). Key functi
 | `parse-file` | Native PDF text extraction fallback |
 | `normalize-pdf-output` | Runs the full 6-step extraction pipeline |
 | `lease-extraction-worker` | Background orchestrator with timeout handling |
-| `extract-lease-expense-rules` | Scans full lease for CAM/expense clauses |
 | `approve-lease-workflow` | Validates and persists signed lease abstract |
 | `approve-lease-expense-rule` | Approves individual expense rules |
 | `reject-lease-expense-rule` | Rejects and records reason |

@@ -12,6 +12,7 @@ import {
   AlertTriangle,
   Loader2,
   Receipt,
+  RefreshCw,
 } from "lucide-react";
 import EditRuleModal from "@/components/lease-expense/EditRuleModal";
 import RuleTableRow from "@/components/lease-expense/RuleTableRow";
@@ -25,6 +26,7 @@ import {
   matchesHierarchyScope,
 } from "@/lib/hierarchyScope";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -42,6 +44,7 @@ import {
 
 
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
+import { syncApprovedAbstractExpenseTermsToRules } from "@/services/leaseAbstractService";
 import {
   approveLeaseExpenseRule,
   createRuleReviewIdempotencyKey,
@@ -90,6 +93,32 @@ import {
   dedupeDisplayRows,
   calculateRuleCounts,
 } from '@/components/lease-expense/utils/leaseExpenseRulesHelpers';
+
+function normalizeStatus(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isApprovedLeaseForExpenseRuleSync(lease) {
+  const abstractStatus = normalizeStatus(lease?.abstract_status);
+  const status = normalizeStatus(lease?.status);
+  return (
+    abstractStatus === "approved" ||
+    status === "approved" ||
+    status === "budget_ready" ||
+    Boolean(lease?.abstract_approved_at || lease?.approved_at || lease?.approved_lease_abstract_id)
+  );
+}
+
+function getApprovedAbstractSnapshot(lease) {
+  return (
+    lease?.abstract_snapshot ||
+    lease?.extraction_data?.abstract_snapshot ||
+    lease?.extraction_data?.approved_abstract ||
+    lease?.extraction_data?.abstract ||
+    null
+  );
+}
+
 export default function LeaseExpenseRules() {
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -164,11 +193,9 @@ export default function LeaseExpenseRules() {
 
 
 
-  // Fallback query: direct supabase read of ALL non-archived rule sets the
-  // current user can see (RLS handles scoping). Always runs so it can rescue
-  // the page when the scoped path drops rules due to dedup/category-resolver
-  // bugs, stale React-Query cache, or any other JS-side issue. Filtered to
-  // the in-scope lease IDs after fetch, so the scope selector still works.
+  // Direct source-of-truth query: read persisted non-archived rule sets the
+  // current user can see (RLS handles scoping), then filter to the selected
+  // scope in memory so the page does not depend on a second resolver path.
   const { data: directRuleSets = [], isLoading: isLoadingDirect } = useQuery({
     queryKey: ["lease-expense-rule-sets-direct"],
     queryFn: async () => {
@@ -229,16 +256,6 @@ export default function LeaseExpenseRules() {
       if (scopeIdSet.size > 0 && !scopeIdSet.has(entry.leaseId)) continue;
       if (entry.rules && entry.rules.length > 0) persistedLeaseIdsWithRules.add(entry.leaseId);
       merged.push(entry);
-    }
-
-    // If no persisted rules exist yet, expose workflow_output.expense_rules as
-    // read-only fallback rows so freshly uploaded leases are visible before a
-    // reviewer action persists the draft set.
-    for (const lease of selectorFilteredLeases) {
-      if (!lease?.id || persistedLeaseIdsWithRules.has(lease.id)) continue;
-      if (scopeIdSet.size > 0 && !scopeIdSet.has(lease.id)) continue;
-      const fallback = leaseExpenseRuleService.buildWorkflowFallbackRuleSet(lease);
-      if (fallback?.rules?.length > 0) merged.push(fallback);
     }
 
     const finalMerged = merged.filter((m) => m.rules && m.rules.length > 0);
@@ -350,6 +367,23 @@ export default function LeaseExpenseRules() {
 
   const counts = useMemo(() => calculateRuleCounts(flattenedRows), [flattenedRows]);
 
+  const persistedLeaseIdsWithRules = useMemo(() => {
+    const ids = new Set();
+    for (const entry of directRuleSets || []) {
+      if (entry?.leaseId && (entry.rules || []).length > 0) ids.add(entry.leaseId);
+    }
+    return ids;
+  }, [directRuleSets]);
+
+  const approvedLeasesMissingRules = useMemo(
+    () =>
+      selectorFilteredLeases
+        .filter((lease) => !leaseIdParam || lease.id === leaseIdParam)
+        .filter(isApprovedLeaseForExpenseRuleSync)
+        .filter((lease) => !persistedLeaseIdsWithRules.has(lease.id)),
+    [selectorFilteredLeases, leaseIdParam, persistedLeaseIdsWithRules],
+  );
+
   const openRuleEditor = (context) => {
     setEditingRuleContext(context);
     setEditForm(buildRuleEditForm(context.rule));
@@ -363,7 +397,7 @@ export default function LeaseExpenseRules() {
   const updateRuleMutation = useMutation({
     mutationFn: async ({ ruleId, leaseId, patch }) => {
       if (!isUuid(ruleId) || String(ruleId).startsWith("workflow-rule-")) {
-        throw new Error("Cannot approve unsaved rule. Regenerate rules first.");
+        throw new Error("Cannot update an unsaved rule. Sync approved rules first.");
       }
       // Only the 18 business fields the rule-editor dialog actually edits are
       // sent to the RPC -- hierarchy fields (buildRuleHierarchyPatch) just
@@ -400,6 +434,80 @@ export default function LeaseExpenseRules() {
     queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
   };
 
+  const syncApprovedLeaseRulesMutation = useMutation({
+    mutationFn: async () => {
+      const candidates = approvedLeasesMissingRules;
+      if (candidates.length === 0) {
+        return { checked: 0, repaired: 0, rules: 0, failed: [], empty: [] };
+      }
+
+      const summary = {
+        checked: candidates.length,
+        repaired: 0,
+        rules: 0,
+        failed: [],
+        empty: [],
+      };
+
+      for (const lease of candidates) {
+        try {
+          let persisted = await leaseExpenseRuleService.persistExpenseRulesFromWorkflow({
+            lease,
+            categories,
+            status: "draft",
+            createdFrom: "approved_lease_rules_backfill",
+            suppressHttpError: true,
+          });
+
+          let persistedCount = persisted?.rules?.length || 0;
+          if (persistedCount === 0) {
+            const snapshot = getApprovedAbstractSnapshot(lease) || { fields: lease?.extraction_data?.fields || {} };
+            await syncApprovedAbstractExpenseTermsToRules(lease, snapshot);
+            persisted = await leaseExpenseRuleService.loadRuleSet(lease.id).catch(() => null);
+            persistedCount = persisted?.rules?.length || 0;
+          }
+
+          if (persistedCount > 0) {
+            summary.repaired += 1;
+            summary.rules += persistedCount;
+          } else {
+            summary.empty.push(lease?.tenant_name || lease?.name || lease.id);
+          }
+        } catch (error) {
+          summary.failed.push({
+            lease: lease?.tenant_name || lease?.name || lease.id,
+            message: error?.message || "Unknown error",
+          });
+        }
+      }
+
+      return summary;
+    },
+    onSuccess: (summary) => {
+      invalidateRuleWorkflowQueries();
+      queryClient.invalidateQueries({ queryKey: ["Expense"] });
+      queryClient.invalidateQueries({ queryKey: ["leases"] });
+
+      if (summary.rules > 0) {
+        toast.success(
+          `Synced ${summary.rules} lease expense rule${summary.rules === 1 ? "" : "s"} from ${summary.repaired} approved lease${summary.repaired === 1 ? "" : "s"}.`,
+        );
+      } else if (summary.checked === 0) {
+        toast.info("No approved leases in this scope need expense-rule sync.");
+      } else {
+        toast.warning(
+          "No expense rules were created. The approved leases may not contain mapped expense/CAM terms yet.",
+        );
+      }
+
+      if (summary.failed.length > 0) {
+        toast.error(`${summary.failed.length} lease${summary.failed.length === 1 ? "" : "s"} could not be synced. Check console logs for details.`);
+        console.warn("[LeaseExpenseRules] approved lease rule sync failures:", summary.failed);
+      }
+    },
+    onError: (error) => toast.error(error?.message || "Could not sync approved lease expense rules"),
+  });
+
   const ruleReviewMutation = useMutation({
     mutationFn: async ({ action, ruleId, reason }) => {
       const idempotencyKey = createRuleReviewIdempotencyKey(ruleId, action);
@@ -416,53 +524,13 @@ export default function LeaseExpenseRules() {
   });
 
   const ensurePersistedRule = async (rule, lease) => {
-    if (!rule._is_fallback && isUuid(rule.id) && !String(rule.id).startsWith("workflow-rule-")) {
+    if (isUuid(rule?.id)) {
       return rule;
     }
 
-    toast.loading("Persisting rules before action...", { id: "persist-toast" });
-    try {
-      const rulesForLease = ruleSetsByLease.find(rs => rs.leaseId === lease.id)?.rules || [];
-      if (!rulesForLease.length) throw new Error("No rules found to persist");
-
-      const authResult = await supabase.auth.getUser();
-      const userId = authResult?.data?.user?.id || null;
-
-      const result = await leaseExpenseRuleService.saveRuleSet({
-        lease,
-        rules: rulesForLease,
-        status: "draft",
-        approver: userId,
-        createdFrom: "manual_approval",
-      });
-
-      toast.success("Rules persisted.", { id: "persist-toast" });
-
-      const computeKey = (r) => {
-        if (r.rule_key) return r.rule_key;
-        const norm = (v) => String(v ?? "").toLowerCase().trim().replace(/[^a-z0-9]/g, '_');
-        const category = norm(r.expense_category || r.category_name || r.normalized_key);
-        const subcategory = norm(r.expense_subcategory || r.subcategory_name);
-        const type = norm(r.rule_type);
-        const sourceKey = norm(r.source_field_key);
-        return `${lease.id}_${type}_${category}_${subcategory}_${sourceKey}`;
-      };
-
-      const targetKey = computeKey(rule);
-      const persistedRule = result?.rules?.find(r => computeKey(r) === targetKey);
-      
-      if (!persistedRule || !isUuid(persistedRule.id)) {
-        throw new Error("Could not find the persisted version of this rule.");
-      }
-
-      queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
-      queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
-      
-      return persistedRule;
-    } catch (err) {
-      toast.error(`Failed to persist: ${err.message}`, { id: "persist-toast" });
-      throw err;
-    }
+    const leaseName = lease?.tenant_name || lease?.name || "this lease";
+    toast.error(`Expense rules for ${leaseName} are not persisted yet. Use Sync Approved Rules, then review the saved rows.`);
+    throw new Error("Expense rule is not persisted");
   };
 
   const approveRule = async (rawRule, lease) => {
@@ -572,7 +640,24 @@ export default function LeaseExpenseRules() {
         title="Lease Expense Rules"
         subtitle={subtitle}
         iconColor="from-amber-500 to-orange-600"
-      />
+      >
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => syncApprovedLeaseRulesMutation.mutate()}
+          disabled={isLoadingDirect || syncApprovedLeaseRulesMutation.isPending || approvedLeasesMissingRules.length === 0}
+          title={
+            approvedLeasesMissingRules.length === 0
+              ? "No approved leases in this scope are missing persisted expense rules."
+              : "Create lease expense rule rows for approved leases that do not have them yet."
+          }
+        >
+          <RefreshCw className={`mr-2 h-4 w-4 ${syncApprovedLeaseRulesMutation.isPending ? "animate-spin" : ""}`} />
+          Sync Approved Rules
+          {approvedLeasesMissingRules.length > 0 ? ` (${approvedLeasesMissingRules.length})` : ""}
+        </Button>
+      </PageHeader>
 
       {leaseIdParam && (
         <div className="flex items-center gap-2 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
@@ -675,9 +760,27 @@ export default function LeaseExpenseRules() {
               ) : filteredRows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={12} className="py-12 text-center text-sm text-slate-400">
-                    {displayMode === "gaps"
-                      ? "No coverage gaps in this view."
-                      : "No lease-derived expense rules in this view. Coverage gaps and weak fallback rows are available in the Coverage Gaps / Needs Review view."}
+                    <div className="mx-auto flex max-w-2xl flex-col items-center gap-3">
+                      <p>
+                        {displayMode === "gaps"
+                          ? "No coverage gaps in this view."
+                          : approvedLeasesMissingRules.length > 0
+                            ? `${approvedLeasesMissingRules.length} approved lease${approvedLeasesMissingRules.length === 1 ? "" : "s"} in this scope have no persisted expense rules yet.`
+                            : "No lease-derived expense rules in this view. Sync approved leases or review coverage gaps for missing rule evidence."}
+                      </p>
+                      {displayMode !== "gaps" && approvedLeasesMissingRules.length > 0 && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => syncApprovedLeaseRulesMutation.mutate()}
+                          disabled={syncApprovedLeaseRulesMutation.isPending}
+                        >
+                          <RefreshCw className={`mr-2 h-4 w-4 ${syncApprovedLeaseRulesMutation.isPending ? "animate-spin" : ""}`} />
+                          Sync approved lease expense rules
+                        </Button>
+                      )}
+                    </div>
                   </TableCell>
                 </TableRow>
               ) : (

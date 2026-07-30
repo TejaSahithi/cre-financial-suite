@@ -12,7 +12,7 @@ export const MODULE_DEFINITIONS = {
   properties:     { label: "Properties",         pages: ["Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail"] },
   tenants:        { label: "Tenants",            pages: ["Tenants", "TenantDetail"] },
   vendors:        { label: "Vendors",            pages: ["Vendors"] },  // nested under expenses in nav
-  leases:         { label: "Leases",             pages: ["Leases", "LeaseUpload", "LeaseReview", "RentProjection", "CriticalDates"] },
+  leases:         { label: "Leases",             pages: ["Leases", "LeaseUpload", "LeaseReview", "LeaseRentSchedule", "RentProjection", "CriticalDates"] },
   expenses:       { label: "Expenses",           pages: ["Expenses", "AddExpense", "BulkImport", "LeaseExpenseRules", "LeaseExpenseClassification", "ExpenseReview", "ExpenseProjection"] },
   cam:            { label: "CAM Engine",         pages: ["CAMDashboard", "CAMSetup", "CAMCalculation"] },
   billing:        { label: "Billing",            pages: ["Billing"] },  // billing nested under tenants in nav

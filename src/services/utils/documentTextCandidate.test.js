@@ -7,9 +7,9 @@ import {
   normalizeKey,
   compactSnippet,
   extractDocumentTextCandidate
-} from './leaseRulePipelineText';
+} from './documentTextCandidate';
 
-describe('leaseRulePipelineText', () => {
+describe('documentTextCandidate', () => {
   it('scrubInapplicableStructuredFields nullifies irrelevant fields', () => {
     const rule = {
       expense_category: 'Electricity',
