@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Search, SlidersHorizontal, Check, Pencil, X, Eye, Ban, Send, MoreHorizontal, AlertTriangle, CircleSlash } from "lucide-react";
+import { Search, SlidersHorizontal, Check, Pencil, X, Eye, Ban, Send, MoreHorizontal, AlertTriangle, CircleSlash, CheckCircle2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -154,7 +154,7 @@ function shouldShowRow(row, showAdvanced) {
   return false;
 }
 
-export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAction, onNavigateRules, reviewFields = {} }) {
+export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAction, onNavigateRules, reviewFields = {}, documentApproved = false }) {
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -257,6 +257,9 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
               };
               const fKey = row.key || row.fieldKey;
               const reviewField = reviewFields?.[fKey] ?? null;
+              const rowConfirmed = documentApproved
+                || row.status === "approved"
+                || ["accepted", "edited"].includes(reviewField?.status);
               const rawRowValue = row.value ?? row.normalized_value ?? row.normalizedValue;
               const displayRowValue = row.displayValue ?? row.display_value ?? rawRowValue;
               const fullRowValue = formatValue(displayRowValue, row);
@@ -285,7 +288,12 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
                       </div>
                     )}
                   </TableCell>
-                  <TableCell className="text-xs"><Badge variant="outline" className={statusMeta.className}>{statusMeta.label}</Badge></TableCell>
+                  <TableCell className="text-xs">
+                    <span className="inline-flex items-center gap-1.5">
+                      {rowConfirmed && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600" aria-label="Confirmed" />}
+                      <Badge variant="outline" className={statusMeta.className}>{statusMeta.label}</Badge>
+                    </span>
+                  </TableCell>
                   <TableCell className="text-center text-xs text-slate-600">{confidence == null ? "-" : `${confidence}%`}</TableCell>
                   <TableCell className="text-xs"><Badge variant="outline" className={extractionModeMeta.className}>{extractionModeMeta.label}</Badge></TableCell>
                   <TableCell className="text-center text-xs text-slate-600">{row.sourcePage ?? row.source_page ?? row.page_number ?? "-"}</TableCell>

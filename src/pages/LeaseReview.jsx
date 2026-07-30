@@ -445,6 +445,7 @@ export default function LeaseReview() {
     [leaseFull, fieldReviews],
   );
   const enterpriseTabs = normalized.tabs || {};
+  const documentApproved = lease?.abstract_status === "approved";
   const reviewRowByKey = useMemo(() => {
     const map = new Map();
     allReviewRows.forEach((row) => {
@@ -1328,7 +1329,22 @@ export default function LeaseReview() {
 
     allKnownKeys.forEach((key) => {
       const fieldDef = LEASE_REVIEW_FIELDS.find((f) => f.key === key) || standardRowByKey.get(key) || { key, label: getFieldPolicyLabel(key) };
-      const row = reviewRowByKey.get(key) || standardRowByKey.get(key) || fieldDef;
+      const directRow = reviewRowByKey.get(key) || standardRowByKey.get(key);
+      // A legacy schema key (e.g. lease_term) can have no row of its own -
+      // the current field contract already collapsed it into its canonical
+      // alias (lease_term_months), which IS fully resolved with real
+      // evidence. Without this, `row` falls back to the bare fieldDef stub
+      // (no value, no evidence) and the field fails "no valid supporting
+      // source text" forever, with no row in the UI the reviewer can act on
+      // to clear it. Same alias map Phase 46 used for the value-presence
+      // check (requiredFieldHasValue), extended here to the row used for
+      // evidence-quality evaluation.
+      const aliasedRow = directRow
+        ? null
+        : getFieldAliases(key)
+            .map((aliasKey) => reviewRowByKey.get(aliasKey) || standardRowByKey.get(aliasKey))
+            .find(Boolean);
+      const row = directRow || aliasedRow || fieldDef;
       const isRequired = requiredFieldKeySet.has(key);
       const isDynamic = !fieldDef.key;
       
@@ -3381,6 +3397,7 @@ export default function LeaseReview() {
                 onOpenDetail={(row) => openDrawer(row, "view")}
                 onQuickAction={handleTabRowQuickAction}
                 reviewFields={reviewFieldByKey}
+                documentApproved={documentApproved}
               />
             </TabsContent>
           ))}
@@ -3388,28 +3405,28 @@ export default function LeaseReview() {
           <div className="flex justify-end">
             <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setCustomFieldDialog({ tabKey: "rent_charges" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>+ Add Custom Field</Button>
           </div>
-          <LeaseReviewTabTable rows={enterpriseTabs.rent_charges || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} />
+          <LeaseReviewTabTable rows={enterpriseTabs.rent_charges || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} documentApproved={documentApproved} />
           <RentScheduleTable leaseId={lease.id} />
         </TabsContent>
 
         <TabsContent value="expenses_recoveries" className="mt-4 space-y-4">
-          <LeaseReviewTabTable rows={enterpriseTabs.expenses_recoveries || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} reviewFields={reviewFieldByKey} />
+          <LeaseReviewTabTable rows={enterpriseTabs.expenses_recoveries || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} reviewFields={reviewFieldByKey} documentApproved={documentApproved} />
         </TabsContent>
 
         <TabsContent value="cam_rules" className="mt-4 space-y-4">
-          <LeaseReviewTabTable rows={enterpriseTabs.cam_rules || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} reviewFields={reviewFieldByKey} />
+          <LeaseReviewTabTable rows={enterpriseTabs.cam_rules || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} reviewFields={reviewFieldByKey} documentApproved={documentApproved} />
         </TabsContent>
 
         <TabsContent value="clause_records" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.clause_records || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} />
+          <LeaseReviewTabTable rows={enterpriseTabs.clause_records || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} documentApproved={documentApproved} />
         </TabsContent>
 
         <TabsContent value="critical_dates" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.critical_dates || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} />
+          <LeaseReviewTabTable rows={enterpriseTabs.critical_dates || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} documentApproved={documentApproved} />
         </TabsContent>
 
         <TabsContent value="documents_exhibits" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.documents_exhibits || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} />
+          <LeaseReviewTabTable rows={enterpriseTabs.documents_exhibits || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} documentApproved={documentApproved} />
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-base">Source Document</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">
@@ -3420,7 +3437,7 @@ export default function LeaseReview() {
         </TabsContent>
 
         <TabsContent value="budget_preview" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.budget_preview || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} />
+          <LeaseReviewTabTable rows={enterpriseTabs.budget_preview || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} documentApproved={documentApproved} />
           <BudgetPreviewCard lease={lease} />
         </TabsContent>
 
