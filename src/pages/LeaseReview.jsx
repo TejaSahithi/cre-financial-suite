@@ -1445,7 +1445,21 @@ export default function LeaseReview() {
         } else {
           reason = "Missing Value";
         }
-      } else if (['calculated', 'derived', 'computed'].includes(extractionStatus) || row?.evidence_type === "derived") {
+      } else if (
+        ['calculated', 'derived', 'computed'].includes(extractionStatus)
+        || row?.evidence_type === "derived"
+        // Rows built by normalizeStandardFields (leaseReviewFieldNormalizer.js)
+        // set extraction_status to the *review workflow* status (e.g.
+        // "needs_review"), not the extraction method - that classification
+        // ("calculated") only lives on extraction_mode/extractionMode. Without
+        // this, a field the UI correctly labels "Calculated" (real derived
+        // value, e.g. lease term months from commencement/expiration dates)
+        // falls through every branch below and blocks forever with no route
+        // to resolve it, since a literal quote match will never exist for a
+        // computed number.
+        || row?.extraction_mode === 'calculated'
+        || row?.extractionMode === 'calculated'
+      ) {
         if (hasValue && canAcceptCalculatedReviewField(row || fieldDef)) {
           eligible = true;
         } else {
