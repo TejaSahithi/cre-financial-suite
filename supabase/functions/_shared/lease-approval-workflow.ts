@@ -143,6 +143,105 @@ function readEvidence(lease: Record<string, unknown>, fieldKey: string, review: 
   };
 }
 
+function approvedSnapshotValue(approved: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = valueFromCandidate(approved[key]);
+    if (isPresent(value)) return value;
+  }
+  return null;
+}
+
+function addApprovedTermMonthsInclusive(startIso: string, months: number) {
+  const start = new Date(`${startIso}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || !Number.isFinite(months) || months <= 0) return null;
+  const targetIndex = start.getUTCMonth() + Math.round(months);
+  const targetYear = start.getUTCFullYear() + Math.floor(targetIndex / 12);
+  const targetMonth = ((targetIndex % 12) + 12) % 12;
+  const targetDay = Math.min(
+    start.getUTCDate(),
+    new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate(),
+  );
+  const end = new Date(Date.UTC(targetYear, targetMonth, targetDay));
+  end.setUTCDate(end.getUTCDate() - 1);
+  return end.toISOString().slice(0, 10);
+}
+
+function reconcileApprovedFinalTermDate(
+  fields: Record<string, unknown>,
+  approved: Record<string, unknown>,
+) {
+  const commencement = toIsoDate(approvedSnapshotValue(
+    approved,
+    ["commencement_date", "start_date", "lease_start_date", "term_start_date"],
+  ));
+  const termMonths = toNumber(approvedSnapshotValue(approved, ["lease_term_months", "term_months"]));
+  if (!commencement || !termMonths || termMonths <= 0) return;
+
+  const finalExpiration = addApprovedTermMonthsInclusive(commencement, termMonths);
+  if (!finalExpiration) return;
+  const minimumExpectedDays = Math.max(45, Math.round(termMonths * 24));
+
+  for (const key of ["expiration_date", "end_date"]) {
+    const current = approved[key] && typeof approved[key] === "object"
+      ? approved[key] as Record<string, unknown>
+      : null;
+    if (!current) continue;
+    const currentIso = toIsoDate(valueFromCandidate(current));
+    const actualDays = currentIso ? daysBetween(commencement, currentIso) : null;
+    if (currentIso && actualDays != null && actualDays >= minimumExpectedDays) continue;
+
+    const corrected = {
+      ...current,
+      value: finalExpiration,
+      raw_value: finalExpiration,
+      extraction_status: "calculated",
+      confidence_score: Math.min(Number(current.confidence_score ?? current.confidence ?? 0.9), 0.9),
+      confidence: Math.min(Number(current.confidence_score ?? current.confidence ?? 0.9), 0.9),
+      source_field_keys: ["commencement_date", "lease_term_months"],
+      derivation_trace: `${key} = commencement_date ${commencement} + lease_term_months ${Math.round(termMonths)} - 1 day`,
+      correction_reason: "Annual anniversary replaced with final initial-term expiration.",
+    };
+    fields[key] = corrected;
+    approved[key] = corrected;
+  }
+}
+
+export function validateApprovedSnapshotIntegrity(snapshot: Record<string, unknown>) {
+  const approved = (snapshot?.approved || {}) as Record<string, unknown>;
+  const commencement = toIsoDate(approvedSnapshotValue(
+    approved,
+    ["commencement_date", "start_date", "lease_start_date", "term_start_date"],
+  ));
+  const expiration = toIsoDate(approvedSnapshotValue(
+    approved,
+    ["expiration_date", "end_date", "lease_end_date", "term_end_date"],
+  ));
+  if (commencement && expiration && expiration <= commencement) {
+    throw new Error("Approved expiration/end date must be after commencement/start date");
+  }
+
+  const termMonths = toNumber(approvedSnapshotValue(approved, ["lease_term_months", "term_months"]));
+  if (termMonths != null && (!Number.isInteger(termMonths) || termMonths <= 0)) {
+    throw new Error("Approved lease term months must be a positive whole number");
+  }
+
+  const monthlyRent = toNumber(approvedSnapshotValue(approved, ["monthly_rent", "base_rent_monthly"]));
+  const annualRent = toNumber(approvedSnapshotValue(approved, ["annual_rent", "base_rent_annual"]));
+  if (monthlyRent != null && monthlyRent < 0) {
+    throw new Error("Approved monthly rent cannot be negative");
+  }
+  if (annualRent != null && annualRent < 0) {
+    throw new Error("Approved annual rent cannot be negative");
+  }
+  if (
+    monthlyRent != null && monthlyRent > 0 &&
+    annualRent != null && annualRent > 0 &&
+    Math.abs(annualRent - monthlyRent * 12) > 1
+  ) {
+    throw new Error("Approved monthly and annual rent conflict; resolve the amount/frequency before approval");
+  }
+}
+
 export function buildAbstractSnapshot({
   lease,
   fieldReviews,
@@ -204,6 +303,8 @@ export function buildAbstractSnapshot({
     }
   }
 
+  reconcileApprovedFinalTermDate(fields, approved);
+
   const sourceFileId = lease.source_file_id ?? extraction.source_file_id ?? extraction.uploaded_file_id ?? null;
   const sourceDocument = {
     uploaded_file_id: sourceFileId,
@@ -212,7 +313,7 @@ export function buildAbstractSnapshot({
     document_subtype: extraction.document_subtype ?? lease.document_subtype ?? null,
   };
 
-  return {
+  const snapshot = {
     version,
     approved_at: approvedAt || new Date().toISOString(),
     approved_by: approvedBy,
@@ -224,6 +325,8 @@ export function buildAbstractSnapshot({
     rejected_fields,
     unmapped_terms,
   };
+  validateApprovedSnapshotIntegrity(snapshot);
+  return snapshot;
 }
 
 export function toIsoDate(value: unknown) {
@@ -332,14 +435,10 @@ function correctSuspiciousExpiration(commencement: string | null, expiration: st
   const minimumExpectedDays = termMonths && termMonths >= 6 ? Math.max(45, Math.round(termMonths * 24)) : null;
   if (!minimumExpectedDays || actualDays == null || actualDays >= minimumExpectedDays) return expiration;
 
-  const start = new Date(`${commencement}T00:00:00Z`);
-  const corrected = new Date(`${expiration}T00:00:00Z`);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(corrected.getTime())) return expiration;
-
-  while (corrected <= start || (daysBetween(commencement, corrected.toISOString().slice(0, 10)) ?? 0) < minimumExpectedDays) {
-    corrected.setUTCFullYear(corrected.getUTCFullYear() + 1);
-  }
-  return corrected.toISOString().slice(0, 10);
+  // Do not advance a recurring anniversary one year at a time: that can
+  // still stop before the final term year. The approved, independently
+  // sourced term length determines the exact inclusive final date.
+  return deriveExpirationFromTerm(commencement, lease) ?? expiration;
 }
 
 function deriveExpirationFromTerm(startIso: string | null, lease: Record<string, unknown>) {
@@ -348,7 +447,14 @@ function deriveExpirationFromTerm(startIso: string | null, lease: Record<string,
   if (!termMonths || termMonths <= 0) return null;
   const start = new Date(`${startIso}T00:00:00Z`);
   if (Number.isNaN(start.getTime())) return null;
-  const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + termMonths, start.getUTCDate()));
+  const targetIndex = start.getUTCMonth() + Math.round(termMonths);
+  const targetYear = start.getUTCFullYear() + Math.floor(targetIndex / 12);
+  const targetMonth = ((targetIndex % 12) + 12) % 12;
+  const targetDay = Math.min(
+    start.getUTCDate(),
+    new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate(),
+  );
+  const end = new Date(Date.UTC(targetYear, targetMonth, targetDay));
   end.setUTCDate(end.getUTCDate() - 1);
   return end.toISOString().slice(0, 10);
 }

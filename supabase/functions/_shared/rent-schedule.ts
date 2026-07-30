@@ -116,7 +116,14 @@ export function formatDateUtc(value: Date | null): string | null {
 }
 
 export function addMonthsUtc(value: Date, months: number): Date {
-  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth() + months, value.getUTCDate()));
+  const targetIndex = value.getUTCMonth() + Math.round(months);
+  const targetYear = value.getUTCFullYear() + Math.floor(targetIndex / 12);
+  const targetMonth = ((targetIndex % 12) + 12) % 12;
+  const targetDay = Math.min(
+    value.getUTCDate(),
+    new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate(),
+  );
+  return new Date(Date.UTC(targetYear, targetMonth, targetDay));
 }
 
 export function daysInMonthUtc(value: Date): number {
@@ -286,11 +293,20 @@ export function normalizedLeaseDates(lease: Record<string, any>): NormalizedLeas
   let leaseEnd = parseDateUtc(
     approvedFieldValue(lease, ["expiration_date", "end_date"]),
   );
-  if (!leaseEnd && leaseStart) {
-    const termMonths = approvedLeaseTermMonths(lease);
-    if (termMonths && termMonths > 0) {
-      leaseEnd = addMonthsUtc(leaseStart, termMonths);
-      leaseEnd.setUTCDate(leaseEnd.getUTCDate() - 1);
+  const termMonths = approvedLeaseTermMonths(lease);
+  if (leaseStart && termMonths && termMonths > 0) {
+    const termEnd = addMonthsUtc(leaseStart, termMonths);
+    termEnd.setUTCDate(termEnd.getUTCDate() - 1);
+    if (!leaseEnd) {
+      leaseEnd = termEnd;
+    } else {
+      const actualDays = Math.round((leaseEnd.getTime() - leaseStart.getTime()) / 86_400_000);
+      const minimumExpectedDays = Math.max(45, Math.round(termMonths * 24));
+      // A next-anniversary date is not the final term end. Correct this
+      // known failure mode using the exact approved initial term.
+      if (actualDays < minimumExpectedDays) {
+        leaseEnd = termEnd;
+      }
     }
   }
   return {
@@ -691,9 +707,7 @@ export function nextFiscalYearExplanation(
   projectionMode: ProjectionMode,
 ): string | null {
   if (nextFyTotal > 0) return null;
-  const leaseEnd = parseDateUtc(
-    approvedFieldValue(lease, ["expiration_date", "end_date"]),
-  );
+  const leaseEnd = normalizedLeaseDates(lease).leaseEnd;
   if (!leaseEnd) return "No approved rent schedule rows are available for next fiscal year.";
 
   const expiryText = formatDateUtc(leaseEnd);

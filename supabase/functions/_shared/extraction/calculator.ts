@@ -67,6 +67,17 @@ function setDerived(row: Row, field: string, value: unknown, trace: string, inpu
   row._derivation_source_fields = sourceFields;
 }
 
+function markDerivationConflict(row: Row, fields: string[], reason: string): void {
+  const needsReview = (row._derivation_needs_review ?? {}) as Record<string, boolean>;
+  const conflicts = (row._derivation_conflicts ?? {}) as Record<string, string>;
+  for (const field of fields) {
+    needsReview[field] = true;
+    conflicts[field] = reason;
+  }
+  row._derivation_needs_review = needsReview;
+  row._derivation_conflicts = conflicts;
+}
+
 function computeLeaseDerived(row: Row): void {
   let monthlyRent = num(row, "monthly_rent");
   let annualRent = num(row, "annual_rent");
@@ -83,41 +94,28 @@ function computeLeaseDerived(row: Row): void {
     nearlyEqual(monthlyRent, amendedAdditionalYearRent) &&
     (annualRent === null || nearlyEqual(annualRent, monthlyRent * 12))
   ) {
-    const derivedMonthly = round2(amendedAdditionalYearRent / 12);
-    setDerived(
+    markDerivationConflict(
       row,
-      "annual_rent",
-      amendedAdditionalYearRent,
-      `amended_base_rent_for_additional_year(${amendedAdditionalYearRent}) treated as annual rent for the additional year`,
-      ["amended_base_rent_for_additional_year"],
+      ["monthly_rent", "annual_rent", "amended_base_rent_for_additional_year"],
+      "The additional-year annual amount was mapped into monthly rent. Source amounts were preserved; resolve the field/unit mapping before approval.",
     );
-    setDerived(
-      row,
-      "monthly_rent",
-      derivedMonthly,
-      `amended_base_rent_for_additional_year(${amendedAdditionalYearRent}) / 12`,
-      ["amended_base_rent_for_additional_year"],
-    );
-    const needsReview = (row._derivation_needs_review ?? {}) as Record<string, boolean>;
-    needsReview.monthly_rent = true;
-    needsReview.annual_rent = true;
-    row._derivation_needs_review = needsReview;
-    monthlyRent = derivedMonthly;
-    annualRent = amendedAdditionalYearRent;
   }
 
-
-  // Reconcile conflicts if monthly_rent was extracted as a PSF value (suspiciously small)
+  // Plausibility checks may identify a likely field/unit conflict, but they
+  // must never rewrite executed-document amounts.
   if (monthlyRent !== null && monthlyRent < 300 && sqft !== null && sqft > 0) {
     if (annualRent !== null && annualRent > 1000) {
-      const corrected = round2(annualRent / 12);
-      setDerived(row, "monthly_rent", corrected, `reconciled from annual_rent(${annualRent}) / 12 — extracted monthly looked like PSF`, ["annual_rent"]);
-      monthlyRent = corrected;
+      markDerivationConflict(
+        row,
+        ["monthly_rent", "annual_rent"],
+        "Monthly and annual rent do not reconcile. Source amounts were preserved without automatic conversion.",
+      );
     } else if (annualRent === null) {
-      const originalPsf = monthlyRent;
-      const corrected = round2(originalPsf * sqft);
-      setDerived(row, "monthly_rent", corrected, `monthly_rent(${originalPsf}) × square_footage(${sqft}) — treated as PSF rate`, ["monthly_rent", "square_footage"]);
-      monthlyRent = corrected;
+      markDerivationConflict(
+        row,
+        ["monthly_rent"],
+        "The monthly-rent value resembles a per-square-foot rate. Source value was preserved; verify its unit before approval.",
+      );
     }
   }
 
@@ -125,51 +123,23 @@ function computeLeaseDerived(row: Row): void {
   if (monthlyRent !== null && annualRent !== null) {
     const expectedMonthly = annualRent / 12;
     if (Math.abs(monthlyRent - expectedMonthly) > 10) {
-      if (monthlyRent < 300 && annualRent > 1000) {
-        const corrected = round2(expectedMonthly);
-        setDerived(row, "monthly_rent", corrected, `reconciled: annual_rent(${annualRent}) / 12 — extracted monthly(${monthlyRent}) was too small`, ["annual_rent"]);
-        monthlyRent = corrected;
-      }
+      markDerivationConflict(
+        row,
+        ["monthly_rent", "annual_rent"],
+        `Monthly rent (${monthlyRent}) does not equal annual rent (${annualRent}) / 12. Both source amounts were preserved.`,
+      );
     }
   }
 
-  // Last-resort safety net (NOT the primary fix — see the fact-ledger
-  // prompt's "RENT FIGURES" instruction and monthly_rent/annual_rent's
-  // allowedClauseCategories in schemas.ts for the real disambiguation):
-  // only monthly_rent was extracted, annual_rent wasn't, and square_footage
-  // is available. If treating monthlyRent as truly monthly produces an
-  // absurd implied annual $/SF rate, but treating it as an ALREADY-annual
-  // figure (i.e. it was mislabeled monthly when it's really the annual
-  // amount) produces a plausible rate, swap it — this is exactly the
-  // "annual amount recorded as monthly_rent" failure mode. Deliberately
-  // conservative thresholds (500 $/SF/yr is rarely legitimate; 2-500 is a
-  // wide normal band) to avoid misfiring on genuinely high-PSF leases.
   if (monthlyRent !== null && annualRent === null && sqft !== null && sqft > 0) {
     const asExtractedAnnualPsf = (monthlyRent * 12) / sqft;
     const swappedAnnualPsf = monthlyRent / sqft;
     if (asExtractedAnnualPsf > 500 && swappedAnnualPsf >= 2 && swappedAnnualPsf <= 500) {
-      const originalValue = monthlyRent;
-      const swappedMonthly = round2(originalValue / 12);
-      setDerived(
+      markDerivationConflict(
         row,
-        "annual_rent",
-        originalValue,
-        `needs_review: monthly_rent(${originalValue}) looked like an annual figure mislabeled as monthly (implied ${round2(asExtractedAnnualPsf)} $/SF/yr as-extracted vs. ${round2(swappedAnnualPsf)} $/SF/yr swapped) — swapped`,
-        ["monthly_rent", "square_footage"],
+        ["monthly_rent"],
+        "The monthly-rent value may actually be annual based on the RSF relationship. It was not automatically swapped.",
       );
-      setDerived(
-        row,
-        "monthly_rent",
-        swappedMonthly,
-        `needs_review: derived from swapped annual_rent(${originalValue}) / 12`,
-        ["monthly_rent", "square_footage"],
-      );
-      const needsReview = (row._derivation_needs_review ?? {}) as Record<string, boolean>;
-      needsReview.monthly_rent = true;
-      needsReview.annual_rent = true;
-      row._derivation_needs_review = needsReview;
-      monthlyRent = swappedMonthly;
-      annualRent = originalValue;
     }
   }
 
@@ -177,6 +147,9 @@ function computeLeaseDerived(row: Row): void {
   if (monthlyRent !== null && annualRent === null) {
     const derived = round2(monthlyRent * 12);
     setDerived(row, "annual_rent", derived, `monthly_rent(${monthlyRent}) × 12`, ["monthly_rent"]);
+    const needsReview = (row._derivation_needs_review ?? {}) as Record<string, boolean>;
+    needsReview.annual_rent = true;
+    row._derivation_needs_review = needsReview;
     annualRent = derived;
   }
 
@@ -184,6 +157,9 @@ function computeLeaseDerived(row: Row): void {
   if (monthlyRent === null && annualRent !== null) {
     const derived = round2(annualRent / 12);
     setDerived(row, "monthly_rent", derived, `annual_rent(${annualRent}) / 12`, ["annual_rent"]);
+    const needsReview = (row._derivation_needs_review ?? {}) as Record<string, boolean>;
+    needsReview.monthly_rent = true;
+    row._derivation_needs_review = needsReview;
     monthlyRent = derived;
   }
 
@@ -221,14 +197,20 @@ function computeLeaseDerived(row: Row): void {
         const traceText = `start_date(${startDate}) to end_date(${endDate}) = ${months} months`;
         if (row.lease_term_months === null) {
           setDerived(row, "lease_term_months", months, traceText, ["start_date", "end_date"]);
-        } else {
-          // Value already extracted — stamp trace to confirm it is date-consistent
+        } else if (Number(row.lease_term_months) === months) {
+          // Value already extracted and actually date-consistent.
           const traces = (row._derivation_traces ?? {}) as Record<string, string>;
           traces["lease_term_months"] = `confirmed: ${traceText}`;
           row._derivation_traces = traces;
           const sourceFields = (row._derivation_source_fields ?? {}) as Record<string, string[]>;
           sourceFields["lease_term_months"] = ["start_date", "end_date"];
           row._derivation_source_fields = sourceFields;
+        } else {
+          markDerivationConflict(
+            row,
+            ["lease_term_months", "end_date"],
+            `Stated lease_term_months (${row.lease_term_months}) conflicts with the ${months}-month start/end date interval. Values were preserved.`,
+          );
         }
       }
     }

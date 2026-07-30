@@ -15,6 +15,7 @@ function extracted(value, sourcePage, sourceText, confidence = 0.95, extra = {})
 function leaseFixture({ profile = "base_lease", fields = {}, workflow = {}, uploadedFile = {} } = {}) {
   return {
     id: `${profile}-fixture`,
+    abstract_status: "approved",
     document_subtype: profile,
     extraction_data: {
       fields,

@@ -94,6 +94,53 @@ Deno.test("buildAbstractSnapshot preserves source document identity", () => {
     document_subtype: "base_lease",
   });
 });
+
+Deno.test("buildAbstractSnapshot canonicalizes a next-anniversary date to the final term year", () => {
+  const snapshot = buildAbstractSnapshot({
+    lease: {
+      extracted_fields: {
+        commencement_date: { value: "2024-02-01" },
+        expiration_date: { value: "2025-01-31" },
+        end_date: { value: "2025-01-31" },
+        lease_term_months: { value: 60 },
+      },
+    },
+    fieldReviews: {
+      commencement_date: { status: "accepted", value: "2024-02-01" },
+      expiration_date: { status: "accepted", value: "2025-01-31" },
+      end_date: { status: "accepted", value: "2025-01-31" },
+      lease_term_months: { status: "accepted", value: 60 },
+    },
+    version: 1,
+    approvedBy: "Pat",
+  });
+
+  assertEquals(snapshot.approved.expiration_date.value, "2029-01-31");
+  assertEquals(snapshot.approved.end_date.value, "2029-01-31");
+  assertEquals(snapshot.approved.expiration_date.extraction_status, "calculated");
+});
+
+Deno.test("buildAbstractSnapshot blocks conflicting approved monthly and annual rent", () => {
+  assertThrows(
+    () => buildAbstractSnapshot({
+      lease: {
+        extracted_fields: {
+          monthly_rent: { value: 2000 },
+          annual_rent: { value: 12000 },
+        },
+      },
+      fieldReviews: {
+        monthly_rent: { status: "accepted", value: 2000 },
+        annual_rent: { status: "accepted", value: 12000 },
+      },
+      version: 1,
+      approvedBy: "Pat",
+    }),
+    Error,
+    "Approved monthly and annual rent conflict",
+  );
+});
+
 Deno.test("buildCriticalDateRows derives idempotent lease milestone rows", () => {
   const rows = buildCriticalDateRows({
     id: "lease-1",
@@ -135,6 +182,25 @@ Deno.test("buildCriticalDateRows publishes only approved snapshot fields for cur
 
   assertEquals(rows.map((row) => row.date_type), ["commencement"]);
   assertEquals(rows[0]?.due_date, "2026-06-01");
+});
+
+Deno.test("buildCriticalDateRows uses the final term year instead of the next annual anniversary", () => {
+  const rows = buildCriticalDateRows({
+    id: "lease-final-term-year",
+    org_id: "org-1",
+    abstract_snapshot: {
+      approved: {
+        commencement_date: { value: "2024-02-01", review_status: "accepted" },
+        expiration_date: { value: "2025-01-31", review_status: "accepted" },
+        lease_term_months: { value: 60, review_status: "accepted" },
+      },
+    },
+  }, "2024-02-01");
+
+  assertEquals(
+    rows.find((row) => row.date_type === "expiration")?.due_date,
+    "2029-01-31",
+  );
 });
 
 Deno.test("buildCriticalDateRows does not treat rent commencement or lease date as commencement", () => {

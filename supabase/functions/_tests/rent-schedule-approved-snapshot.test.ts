@@ -50,3 +50,18 @@ Deno.test("rent schedule does not use lease date as lease or rent commencement",
   assertEquals(dates.leaseStart, null);
   assertEquals(dates.rentStart, null);
 });
+
+Deno.test("rent schedule corrects a next-anniversary expiration to the final approved term year", () => {
+  const dates = normalizedLeaseDates({
+    abstract_status: "approved",
+    abstract_snapshot: {
+      approved: {
+        commencement_date: { value: "2024-02-01", review_status: "accepted" },
+        expiration_date: { value: "2025-01-31", review_status: "accepted" },
+        lease_term_months: { value: 60, review_status: "accepted" },
+      },
+    },
+  });
+
+  assertEquals(dates.leaseEnd?.toISOString().slice(0, 10), "2029-01-31");
+});

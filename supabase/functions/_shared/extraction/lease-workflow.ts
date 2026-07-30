@@ -525,53 +525,20 @@ function parseLeaseTermMonths(value: unknown): number | null {
   return null;
 }
 
-const MONTH_NAME_TO_NUMBER: Record<string, number> = {
-  january: 1,
-  jan: 1,
-  february: 2,
-  feb: 2,
-  march: 3,
-  mar: 3,
-  april: 4,
-  apr: 4,
-  may: 5,
-  june: 6,
-  jun: 6,
-  july: 7,
-  jul: 7,
-  august: 8,
-  aug: 8,
-  september: 9,
-  sep: 9,
-  october: 10,
-  oct: 10,
-  november: 11,
-  nov: 11,
-  december: 12,
-  dec: 12,
-};
-
-function parseRecurringMonthDay(value: unknown): { month: number; day: number; text: string } | null {
-  const text = cleanText(value);
-  if (!text) return null;
-  const match = text.match(/\b([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,)?\s*(?:of\s+each\s+year|each\s+year|annually|every\s+year)\b/i);
-  if (!match) return null;
-  const month = MONTH_NAME_TO_NUMBER[match[1].toLowerCase()];
-  const day = Number(match[2]);
-  if (!month || !Number.isFinite(day) || day < 1 || day > 31) return null;
-  return { month, day, text: cleanText(match[0]) };
-}
-
-function nextRecurringDateAfter(startIso: string, recurring: { month: number; day: number }): string | null {
+function addMonthsInclusiveEnd(startIso: string, months: number): string | null {
+  if (!Number.isFinite(months) || months <= 0) return null;
   const start = new Date(`${startIso}T00:00:00Z`);
   if (!Number.isFinite(start.getTime())) return null;
-  let year = start.getUTCFullYear();
-  let candidate = new Date(Date.UTC(year, recurring.month - 1, recurring.day));
-  if (candidate <= start) {
-    year += 1;
-    candidate = new Date(Date.UTC(year, recurring.month - 1, recurring.day));
-  }
-  return Number.isFinite(candidate.getTime()) ? candidate.toISOString().slice(0, 10) : null;
+  const targetIndex = start.getUTCMonth() + Math.round(months);
+  const targetYear = start.getUTCFullYear() + Math.floor(targetIndex / 12);
+  const targetMonth = ((targetIndex % 12) + 12) % 12;
+  const targetDay = Math.min(
+    start.getUTCDate(),
+    new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate(),
+  );
+  const end = new Date(Date.UTC(targetYear, targetMonth, targetDay));
+  end.setUTCDate(end.getUTCDate() - 1);
+  return Number.isFinite(end.getTime()) ? end.toISOString().slice(0, 10) : null;
 }
 
 function deriveTermMonthsFromDates(startIso: string, endIso: string): number | null {
@@ -2649,6 +2616,39 @@ function buildLeaseFieldMap(
     };
   }
 
+  // Carry deterministic-calculator conflicts into the review contract.
+  // Calculator diagnostics must be approval-visible; silently dropping them
+  // would let a preserved but unit-conflicted amount look auto-approved.
+  const derivationConflicts = row?._derivation_conflicts && typeof row._derivation_conflicts === "object"
+    ? row._derivation_conflicts as Record<string, string>
+    : {};
+  const derivationNeedsReview = row?._derivation_needs_review && typeof row._derivation_needs_review === "object"
+    ? row._derivation_needs_review as Record<string, boolean>
+    : {};
+  for (const [fieldKey, reason] of Object.entries(derivationConflicts)) {
+    if (!fieldMap[fieldKey]) continue;
+    fieldMap[fieldKey] = {
+      ...fieldMap[fieldKey],
+      extraction_status: "conflict_detected",
+      validation_errors: [
+        ...(fieldMap[fieldKey].validation_errors || []),
+        "deterministic_derivation_conflict",
+      ],
+      requires_review: true,
+      review_reason: reason,
+      approval_blocking_reason: reason,
+    };
+  }
+  for (const [fieldKey, needsReview] of Object.entries(derivationNeedsReview)) {
+    if (!needsReview || !fieldMap[fieldKey] || derivationConflicts[fieldKey]) continue;
+    fieldMap[fieldKey] = {
+      ...fieldMap[fieldKey],
+      requires_review: true,
+      review_reason: fieldMap[fieldKey].review_reason
+        || "This value was deterministically calculated from another lease amount and requires verification.",
+    };
+  }
+
   // Wire derivation trace for lease_term when calculated from lease_term_months
   if (fieldMap.lease_term?.extraction_status === "calculated" && !isBlank(fieldMap.lease_term?.value)) {
     const ltMonths = asNumber(row?.lease_term_months);
@@ -2766,17 +2766,10 @@ function buildLeaseFieldMap(
     }
   }
 
-  // Last-resort safety net, ported from calculator.ts's identical guard (NOT
-  // the primary fix — see fact-ledger-extractor.ts's "RENT FIGURES"
-  // instruction and monthly_rent/annual_rent's allowedClauseCategories in
-  // schemas.ts). Only when base_rent_monthly was extracted, annual_rent
-  // wasn't, and square footage is available: if treating the extracted value
-  // as truly monthly implies an absurd annual $/SF rate, but treating it as
-  // an ALREADY-annual figure mislabeled as monthly implies a plausible rate,
-  // swap it and flag for review — this file reimplements the × 12
-  // derivation independently of calculator.ts (a known duplication, not
-  // unified in this pass), so it needs the same guard to reach the same
-  // answer given the same inputs.
+  // Market-plausibility heuristics are diagnostic only. Never divide or
+  // multiply a source-backed amount because it merely "looks annual" or
+  // "looks monthly"; preserve the executed-document value and require a
+  // reviewer to resolve the unit conflict.
   if (
     monthlyRentForDerived != null && monthlyRentForDerived > 0 &&
     squareFeetForDerived != null && squareFeetForDerived > 0 &&
@@ -2786,18 +2779,17 @@ function buildLeaseFieldMap(
     const asExtractedAnnualPsf = (monthlyRentForDerived * 12) / squareFeetForDerived;
     const swappedAnnualPsf = monthlyRentForDerived / squareFeetForDerived;
     if (asExtractedAnnualPsf > 500 && swappedAnnualPsf >= 2 && swappedAnnualPsf <= 500) {
-      const originalValue = monthlyRentForDerived;
-      const swappedMonthly = round2(originalValue / 12);
       fieldMap.base_rent_monthly = {
         ...fieldMap.base_rent_monthly,
-        value: swappedMonthly,
-        raw_value: swappedMonthly,
-        normalized_value: swappedMonthly,
-        derivation_trace: `needs_review: base_rent_monthly(${originalValue}) looked like an annual figure mislabeled as monthly (implied ${round2(asExtractedAnnualPsf)} $/SF/yr as-extracted vs. ${round2(swappedAnnualPsf)} $/SF/yr swapped) — swapped to ${swappedMonthly}`,
+        extraction_status: "conflict_detected",
+        validation_errors: [
+          ...(fieldMap.base_rent_monthly?.validation_errors || []),
+          "monthly_rent_unit_conflict",
+        ],
         requires_review: true,
-        review_reason: "monthly_rent/annual_rent swap auto-corrected — verify against source document",
+        review_reason: "The stated rent frequency conflicts with the amount/RSF relationship. The source amount was preserved without automatic conversion.",
+        approval_blocking_reason: "Resolve whether the source amount is monthly or annual before approval.",
       };
-      monthlyRentForDerived = swappedMonthly;
     }
   }
 
@@ -2820,8 +2812,8 @@ function buildLeaseFieldMap(
         source_field_keys: ["base_rent_monthly"],
         derivation_trace: `annual_rent = base_rent_monthly (${monthlyRentForDerived}) x 12`,
         validation_errors: [],
-        requires_review: false,
-        review_reason: null,
+        requires_review: true,
+        review_reason: "Annual rent was mathematically annualized from monthly base rent. Verify against any stepped or partial-period rent schedule.",
         approval_blocking_reason: null,
         editable: true,
         field_group: "rent_terms",
@@ -2915,37 +2907,42 @@ function buildLeaseFieldMap(
   };
 
   const commencementDate = toIsoDate(fieldMap.commencement_date?.value);
-  const expirationDate = toIsoDate(fieldMap.expiration_date?.value);
-  if (commencementDate && expirationDate) {
+  const statedTermMonths =
+    parseLeaseTermMonths(row?.lease_term_months) ??
+    parseLeaseTermMonths(fieldMap.lease_term_months?.value) ??
+    parseLeaseTermMonths(fieldMap.lease_term?.value);
+  const initialExpirationDate = toIsoDate(fieldMap.expiration_date?.value);
+  let expirationDerivedFromTerm = false;
+
+  if (commencementDate && initialExpirationDate && statedTermMonths) {
     const startDate = new Date(`${commencementDate}T00:00:00Z`);
-    const endDate = new Date(`${expirationDate}T00:00:00Z`);
-    const termMonths =
-      parseLeaseTermMonths(row?.lease_term_months) ??
-      parseLeaseTermMonths(fieldMap.lease_term_months?.value) ??
-      parseLeaseTermMonths(fieldMap.lease_term?.value);
+    const endDate = new Date(`${initialExpirationDate}T00:00:00Z`);
     const actualDays = daysBetween(startDate, endDate);
-    const minimumExpectedDays = termMonths && termMonths >= 6 ? Math.max(45, Math.round(termMonths * 24)) : null;
+    const minimumExpectedDays = statedTermMonths >= 6 ? Math.max(45, Math.round(statedTermMonths * 24)) : null;
     const hasImplausiblyShortTerm =
       minimumExpectedDays != null &&
       actualDays != null &&
       actualDays > 0 &&
       actualDays < minimumExpectedDays;
+    const expirationEvidenceText = [
+      fieldMap.expiration_date?.source_clause,
+      fieldMap.expiration_date?.exact_source_text,
+      fieldMap.expiration_date?.raw_value,
+      row?.expiration_date,
+      row?.end_date,
+    ].filter(Boolean).join(" ");
+    const evidenceIsRecurringAnniversary =
+      /\b(?:of\s+each\s+year|each\s+year|annually|every\s+year)\b/i.test(expirationEvidenceText);
+    const expirationWasPreviouslyCalculated =
+      String(fieldMap.expiration_date?.extraction_status || "").toLowerCase() === "calculated";
+    const derivedExpiration = addMonthsInclusiveEnd(commencementDate, statedTermMonths);
     if (
       Number.isFinite(startDate.getTime()) &&
       Number.isFinite(endDate.getTime()) &&
-      (endDate <= startDate || hasImplausiblyShortTerm)
+      derivedExpiration &&
+      initialExpirationDate !== derivedExpiration &&
+      (endDate <= startDate || hasImplausiblyShortTerm || evidenceIsRecurringAnniversary || expirationWasPreviouslyCalculated)
     ) {
-      const corrected = new Date(Date.UTC(
-        startDate.getUTCFullYear(),
-        endDate.getUTCMonth(),
-        endDate.getUTCDate(),
-      ));
-      while (
-        corrected <= startDate ||
-        (minimumExpectedDays != null && (daysBetween(startDate, corrected) ?? 0) < minimumExpectedDays)
-      ) {
-        corrected.setUTCFullYear(corrected.getUTCFullYear() + 1);
-      }
       const expirationEvidence = extractClauseSnippet(
         asArray(doclingRaw?.text_blocks),
         fullText,
@@ -2958,69 +2955,27 @@ function buildLeaseFieldMap(
           editable: true,
           field_group: "lease_term",
         }),
-        value: corrected.toISOString().slice(0, 10),
+        value: derivedExpiration,
+        raw_value: derivedExpiration,
+        normalized_value: derivedExpiration,
         source_page: fieldMap.expiration_date?.source_page ?? expirationEvidence.source_page ?? null,
-        source_clause: expirationEvidence.clause_text ?? fieldMap.expiration_date?.source_clause ?? "Calculated as the next plausible expiration occurrence after commencement date",
-        confidence_score: Math.min(Number(fieldMap.expiration_date?.confidence_score ?? 0.74), 0.82),
-        extraction_status: "calculated",
-      };
-    }
-  }
-  if (commencementDate && !toIsoDate(fieldMap.expiration_date?.value)) {
-    const expirationEvidenceText = [
-      fieldMap.expiration_date?.source_clause,
-      fieldMap.expiration_date?.exact_source_text,
-      fieldMap.expiration_date?.raw_value,
-      row?.expiration_date,
-      row?.end_date,
-    ].filter(Boolean).join(" ");
-    const recurringExpiration = parseRecurringMonthDay(expirationEvidenceText);
-    const recurringDerivedExpiration = recurringExpiration
-      ? nextRecurringDateAfter(commencementDate, recurringExpiration)
-      : null;
-    if (recurringDerivedExpiration) {
-      const expirationEvidence = fieldMap.expiration_date?.source_clause
-        ? { clause_text: fieldMap.expiration_date.source_clause, source_page: fieldMap.expiration_date.source_page ?? null }
-        : extractClauseSnippet(
-          asArray(doclingRaw?.text_blocks),
-          fullText,
-          ["expiration date", "expires", "term", recurringExpiration.text],
-          420,
-        );
-      fieldMap.expiration_date = {
-        ...(fieldMap.expiration_date || {
-          key: "expiration_date",
-          editable: true,
-          field_group: "lease_term",
-        }),
-        value: recurringDerivedExpiration,
-        raw_value: recurringDerivedExpiration,
-        normalized_value: recurringDerivedExpiration,
-        source_page: fieldMap.expiration_date?.source_page ?? expirationEvidence.source_page ?? null,
-        source_clause: expirationEvidence.clause_text ?? fieldMap.expiration_date?.source_clause ?? expirationEvidenceText ?? null,
-        exact_source_text: expirationEvidence.clause_text ?? fieldMap.expiration_date?.exact_source_text ?? expirationEvidenceText ?? null,
-        confidence_score: Math.min(Number(fieldMap.expiration_date?.confidence_score ?? 0.82), 0.82),
+        source_clause: expirationEvidence.clause_text ?? fieldMap.expiration_date?.source_clause ?? null,
+        exact_source_text: expirationEvidence.clause_text ?? fieldMap.expiration_date?.exact_source_text ?? null,
+        confidence_score: Math.min(Number(fieldMap.expiration_date?.confidence_score ?? 0.9), 0.9),
         extraction_status: "calculated",
         evidence_type: "derived",
         source_text_quality: "derived",
-        source_field_keys: ["commencement_date", "expiration_date"],
-        derivation_trace: `expiration_date = next ${recurringExpiration.text} after commencement_date ${commencementDate}`,
+        source_field_keys: ["commencement_date", "lease_term_months"],
+        derivation_trace: `expiration_date = commencement_date ${commencementDate} + lease_term_months ${statedTermMonths} - 1 day`,
         requires_review: true,
-        review_reason: "Expiration year was deterministically derived from recurring month/day language and commencement date.",
+        review_reason: "The prior date represented an annual anniversary, not the final term expiration. Final expiration was calculated from the stated initial term.",
       };
+      expirationDerivedFromTerm = true;
     }
   }
-  const expirationDateAfterRecurring = toIsoDate(fieldMap.expiration_date?.value);
-  if (commencementDate && !toIsoDate(fieldMap.expiration_date?.value)) {
-    const startDate = new Date(`${commencementDate}T00:00:00Z`);
-    const termMonths =
-      parseLeaseTermMonths(row?.lease_term_months) ??
-      parseLeaseTermMonths(fieldMap.lease_term_months?.value) ??
-      parseLeaseTermMonths(fieldMap.lease_term?.value);
-    if (Number.isFinite(startDate.getTime()) && termMonths && termMonths > 0) {
-      const derivedExpiration = new Date(startDate);
-      derivedExpiration.setUTCMonth(derivedExpiration.getUTCMonth() + termMonths);
-      derivedExpiration.setUTCDate(derivedExpiration.getUTCDate() - 1);
+  if (commencementDate && !toIsoDate(fieldMap.expiration_date?.value) && statedTermMonths) {
+    const derivedExpiration = addMonthsInclusiveEnd(commencementDate, statedTermMonths);
+    if (derivedExpiration) {
       const termEvidence = extractClauseSnippet(
         asArray(doclingRaw?.text_blocks),
         fullText,
@@ -3033,16 +2988,32 @@ function buildLeaseFieldMap(
           editable: true,
           field_group: "lease_term",
         }),
-        value: derivedExpiration.toISOString().slice(0, 10),
+        value: derivedExpiration,
+        raw_value: derivedExpiration,
+        normalized_value: derivedExpiration,
         source_page: termEvidence.source_page ?? fieldMap.lease_term?.source_page ?? fieldMap.commencement_date?.source_page ?? null,
         source_clause: termEvidence.clause_text ?? fieldMap.lease_term?.source_clause ?? fieldMap.commencement_date?.source_clause ?? null,
-        confidence_score: 0.72,
+        exact_source_text: termEvidence.clause_text ?? fieldMap.lease_term?.exact_source_text ?? fieldMap.commencement_date?.exact_source_text ?? null,
+        confidence_score: 0.9,
         extraction_status: "needs_review",
+        evidence_type: "derived",
+        source_text_quality: "derived",
+        source_field_keys: ["commencement_date", "lease_term_months"],
+        derivation_trace: `expiration_date = commencement_date ${commencementDate} + lease_term_months ${statedTermMonths} - 1 day`,
+        requires_review: true,
+        review_reason: "Final expiration was calculated from commencement date and the independently stated initial lease term.",
       };
+      expirationDerivedFromTerm = true;
     }
   }
-  if (commencementDate && expirationDateAfterRecurring && !parseLeaseTermMonths(fieldMap.lease_term_months?.value)) {
-    const derivedMonths = deriveTermMonthsFromDates(commencementDate, expirationDateAfterRecurring);
+  const finalExpirationDate = toIsoDate(fieldMap.expiration_date?.value);
+  if (
+    commencementDate &&
+    finalExpirationDate &&
+    !expirationDerivedFromTerm &&
+    !parseLeaseTermMonths(fieldMap.lease_term_months?.value)
+  ) {
+    const derivedMonths = deriveTermMonthsFromDates(commencementDate, finalExpirationDate);
     if (derivedMonths) {
       fieldMap.lease_term_months = {
         ...(fieldMap.lease_term_months || {
@@ -3061,7 +3032,7 @@ function buildLeaseFieldMap(
         evidence_type: "derived",
         source_text_quality: "derived",
         source_field_keys: ["commencement_date", "expiration_date"],
-        derivation_trace: `lease_term_months = months between ${commencementDate} and ${expirationDateAfterRecurring}`,
+        derivation_trace: `lease_term_months = months between ${commencementDate} and ${finalExpirationDate}`,
         requires_review: true,
       };
     }

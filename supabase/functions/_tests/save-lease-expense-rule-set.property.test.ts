@@ -111,7 +111,9 @@ async function setUpScope(admin: ReturnType<typeof adminClient>, suffix: string)
     tenant_name: `Save Lease Rule Set Tenant ${suffix}`,
     start_date: "2026-01-01",
     end_date: "2030-12-31",
-    status: "active",
+    status: "approved",
+    abstract_status: "approved",
+    abstract_approved_at: new Date().toISOString(),
   });
 
   const category = await insertOne(admin, "expense_categories", {
@@ -220,6 +222,44 @@ Deno.test({
     assertEquals(auditRows![0].before, null);
     assertExists(auditRows![0].after);
     assertEquals((auditRows![0].metadata as Record<string, unknown>).rule_set_action, "created");
+  },
+});
+
+Deno.test({
+  name: "save_lease_expense_rule_set: unapproved lease cannot materialize expense or CAM rules",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { org, accessToken, property, category } = await setUpScope(admin, suffix);
+    const lease = await insertOne(admin, "leases", {
+      org_id: org.id,
+      property_id: property.id,
+      tenant_name: `Unapproved Expense Rule Tenant ${suffix}`,
+      status: "active",
+      abstract_status: "pending_review",
+    });
+
+    const res = await callSaveRuleSet(accessToken, {
+      lease_id: lease.id,
+      status: "draft",
+      property_id: property.id,
+      rules: [buildRule({
+        rule_key: `unapproved_${suffix}`,
+        expense_category_id: category.id,
+      })],
+    });
+    const body = await res.json();
+    assertEquals(res.status, 409, JSON.stringify(body));
+    assertEquals(body.error_code, "SAVE_LEASE_EXPENSE_RULE_SET_FAILED");
+
+    const { data: ruleSets, error: ruleSetsError } = await admin
+      .from("lease_expense_rule_sets")
+      .select("id")
+      .eq("lease_id", lease.id);
+    assertNoError(ruleSetsError);
+    assertEquals(ruleSets?.length, 0);
   },
 });
 

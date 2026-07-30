@@ -233,6 +233,12 @@ Date taxonomy:
 - expiration_date and end_date are the same lease-admin concept: the date the current term ends.
   If the schema contains both keys and the document states an exact expiration/end date, return
   both keys with the same value, sourceQuote, and sourceNodeIds.
+- A phrase such as "January 31 of each year" is an annual anniversary label, not the final
+  expiration year. Search the complete document, definitions, exhibits, and amendments for the
+  controlling initial-term length and extract that independently as lease_term_months. Never
+  publish the next anniversary as expiration_date/end_date. If no full date with a year is stated,
+  leave expiration_date/end_date unstated; deterministic post-processing may calculate the final
+  date only from a source-backed commencement date plus source-backed initial-term length.
 - rent_commencement_date is the first date base/minimum rent is payable. It may equal
   commencement_date, but only when the rent clause says rent begins on commencement or no free
   rent/abatement/delayed rent start applies.
@@ -251,6 +257,10 @@ Rent and revenue taxonomy:
 - If the lease contains a rent schedule, free-rent period, stepped rent, option rent, renewal rent,
   percentage rent, or amortized charge schedule, create a dynamicFindings schedule preserving
   every row/period exactly as stated, even when a scalar monthly_rent is also found.
+- Reconcile every amount against its unit and period before returning it: monthly versus annual,
+  per-square-foot versus total dollars, base rent versus additional rent, and current-term versus
+  option/renewal amounts. Preserve cents and signs exactly. If two controlling sources disagree,
+  return conflicting/ambiguous with both alternatives instead of choosing or averaging.
 
 Expense, CAM, and operating-cost taxonomy:
 - First classify the economic structure from the actual lease language: gross/full-service,

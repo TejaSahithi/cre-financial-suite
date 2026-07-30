@@ -453,9 +453,17 @@ Deno.serve(async (req: Request) => {
       const normalizedApprovalFilter = String(approvalStatusFilter || "approved").toLowerCase();
       const abstractStatus = String(lease.abstract_status || "").toLowerCase();
       const leaseStatus = String(lease.status || "").toLowerCase();
-      const matchApproval = normalizedApprovalFilter === "all" ||
-        abstractStatus === normalizedApprovalFilter ||
-        (normalizedApprovalFilter === "approved" && leaseStatus === "approved");
+      // Rent schedules and projections are authoritative downstream records:
+      // no caller-supplied filter may broaden this set to unapproved leases.
+      const hasApprovalBoundary =
+        abstractStatus === "approved" ||
+        leaseStatus === "approved" ||
+        Boolean(lease.abstract_approved_at);
+      const matchApproval = hasApprovalBoundary && (
+        normalizedApprovalFilter === "all" ||
+        normalizedApprovalFilter === "approved" ||
+        abstractStatus === normalizedApprovalFilter
+      );
       const normalizedStatusFilter = String(leaseStatusFilter || "active").toLowerCase();
       const matchStatus = normalizedStatusFilter === "all" ||
         leaseStatus === normalizedStatusFilter ||

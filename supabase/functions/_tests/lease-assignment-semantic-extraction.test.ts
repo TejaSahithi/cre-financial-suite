@@ -52,11 +52,12 @@ Deno.test("lease workflow: additional-year base rent maps to its own rent field"
   assertEquals(rentItem.display_tab, "rent_charges");
 });
 
-Deno.test("computeDerivedFields: additional-year base rent corrects same-value monthly rent", () => {
+Deno.test("computeDerivedFields: additional-year base rent conflict preserves source amounts for review", () => {
   const rows = [{ monthly_rent: 120000, annual_rent: 1440000, amended_base_rent_for_additional_year: 120000 }];
   computeDerivedFields(rows, "lease");
 
-  assertEquals(rows[0].annual_rent, 120000);
-  assertEquals(rows[0].monthly_rent, 10000);
-  assertEquals(rows[0]._derivation_source_fields.monthly_rent, ["amended_base_rent_for_additional_year"]);
+  assertEquals(rows[0].annual_rent, 1440000);
+  assertEquals(rows[0].monthly_rent, 120000);
+  assertEquals(rows[0]._derivation_needs_review.monthly_rent, true);
+  assertEquals(Boolean(rows[0]._derivation_conflicts.monthly_rent), true);
 });

@@ -15,6 +15,7 @@ function validatePayload(body: Record<string, unknown> = {}) {
 function errorStatus(message: string) {
   if (/unauthorized|missing authorization/i.test(message)) return 401;
   if (/access denied|permission/i.test(message)) return 403;
+  if (/lease abstract must be approved/i.test(message)) return 409;
   if (/required|not found|cannot approve/i.test(message)) return 400;
   return 500;
 }
@@ -37,6 +38,32 @@ Deno.serve(async (req: Request) => {
 
     const body = await req.json().catch(() => ({}));
     const payload = validatePayload(body);
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from("cam_profiles")
+      .select("lease_id")
+      .eq("id", payload.profileId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (profileError || !profile?.lease_id) {
+      throw new Error(profileError?.message || "CAM profile not found");
+    }
+    const { data: lease, error: leaseError } = await supabaseAdmin
+      .from("leases")
+      .select("abstract_status, status, abstract_approved_at")
+      .eq("id", profile.lease_id)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (leaseError || !lease) {
+      throw new Error(leaseError?.message || "Lease not found");
+    }
+    if (
+      String(lease.abstract_status || "").toLowerCase() !== "approved" &&
+      String(lease.status || "").toLowerCase() !== "approved" &&
+      !lease.abstract_approved_at
+    ) {
+      throw new Error("Lease abstract must be approved before a CAM profile can be approved");
+    }
 
     const { data, error } = await supabaseAdmin.rpc("approve_cam_profile", {
       p_org_id: orgId,

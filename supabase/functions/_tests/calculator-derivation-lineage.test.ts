@@ -76,7 +76,7 @@ Deno.test("computeDerivedFields: a field with no calculation performed has no li
   assertEquals(row._derivation_source_fields?.monthly_rent, undefined);
 });
 
-Deno.test("computeDerivedFields: monthly_rent that is actually an annual figure (mislabeled) gets swapped when square_footage makes the as-extracted rate absurd", () => {
+Deno.test("computeDerivedFields: suspicious monthly/annual mapping is flagged without rewriting source amounts", () => {
   // 25200 recorded as "monthly" with 300 sqft implies 1008 $/SF/yr as-extracted
   // (absurd, >500 threshold) but a plausible 84 $/SF/yr if 25200 is actually
   // the annual figure -- the exact "annual amount recorded as monthly_rent"
@@ -84,10 +84,11 @@ Deno.test("computeDerivedFields: monthly_rent that is actually an annual figure 
   const rows = [{ monthly_rent: 25200, annual_rent: null, square_footage: 300 }];
   computeDerivedFields(rows, "lease");
   const row = rows[0];
-  assertEquals(row.monthly_rent, 2100);
-  assertEquals(row.annual_rent, 25200);
+  assertEquals(row.monthly_rent, 25200);
+  assertEquals(row.annual_rent, 302400);
   assertEquals(row._derivation_needs_review.monthly_rent, true);
   assertEquals(row._derivation_needs_review.annual_rent, true);
+  assertEquals(Boolean(row._derivation_conflicts.monthly_rent), true);
 });
 
 Deno.test("computeDerivedFields: a genuinely high monthly rent is NOT swapped when the implied PSF stays in the plausible band", () => {
@@ -100,7 +101,7 @@ Deno.test("computeDerivedFields: a genuinely high monthly rent is NOT swapped wh
   const row = rows[0];
   assertEquals(row.monthly_rent, 25200);
   assertEquals(row.annual_rent, 302400);
-  assertEquals(row._derivation_needs_review, undefined);
+  assertEquals(row._derivation_needs_review.annual_rent, true);
 });
 
 Deno.test("computeDerivedFields: swap guard does not fire without square_footage (existing <300 PSF guard is unaffected)", () => {
@@ -109,7 +110,7 @@ Deno.test("computeDerivedFields: swap guard does not fire without square_footage
   const row = rows[0];
   assertEquals(row.monthly_rent, 1400);
   assertEquals(row.annual_rent, 16800);
-  assertEquals(row._derivation_needs_review, undefined);
+  assertEquals(row._derivation_needs_review.annual_rent, true);
 });
 
 Deno.test("computeDerivedFields: non-lease module types are untouched (no derived-field code path for them here)", () => {

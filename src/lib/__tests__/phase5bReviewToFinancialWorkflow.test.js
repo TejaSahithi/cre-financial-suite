@@ -84,6 +84,7 @@ const workflowRules = [
 function leaseFixture({ profile = "base_lease", fields = baseFields, fieldReviews = {}, rules = workflowRules } = {}) {
   return {
     id: `${profile}-phase5b`,
+    abstract_status: "approved",
     document_subtype: profile,
     monthly_rent: 99999,
     commencement_date: "2026-02-01",

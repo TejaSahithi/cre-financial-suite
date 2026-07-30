@@ -139,6 +139,8 @@ Deno.serve(async (req: Request) => {
       ? 401
       : /access denied|permission/i.test(message)
         ? 403
+        : /conflict|cannot be negative|must be after|positive whole number/i.test(message)
+          ? 409
         : /required|valid date|idempotency/i.test(message)
           ? 400
           : 500;

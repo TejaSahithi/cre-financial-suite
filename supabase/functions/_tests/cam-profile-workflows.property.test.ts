@@ -118,6 +118,9 @@ async function setUpScope(admin: ReturnType<typeof adminClient>, suffix: string,
   const lease = await insertOne(admin, "leases", {
     org_id: org.id,
     property_id: property.id,
+    status: "approved",
+    abstract_status: "approved",
+    abstract_approved_at: new Date().toISOString(),
   });
 
   const profile = await insertOne(admin, "cam_profiles", {
@@ -208,7 +211,13 @@ Deno.test({
 
     const otherOrg = await insertOne(admin, "organizations", { name: `Other Org ${suffix}`, status: "active" });
     const otherProperty = await insertOne(admin, "properties", { org_id: otherOrg.id, name: `Other Property ${suffix}`, status: "active" });
-    const otherLease = await insertOne(admin, "leases", { org_id: otherOrg.id, property_id: otherProperty.id });
+    const otherLease = await insertOne(admin, "leases", {
+      org_id: otherOrg.id,
+      property_id: otherProperty.id,
+      status: "approved",
+      abstract_status: "approved",
+      abstract_approved_at: new Date().toISOString(),
+    });
     const otherProfile = await insertOne(admin, "cam_profiles", {
       org_id: otherOrg.id, lease_id: otherLease.id, property_id: otherProperty.id, status: "draft",
     });
@@ -237,7 +246,13 @@ Deno.test({
 
     const otherOrg = await insertOne(admin, "organizations", { name: `Other Org Approve ${suffix}`, status: "active" });
     const otherProperty = await insertOne(admin, "properties", { org_id: otherOrg.id, name: `Other Property Approve ${suffix}`, status: "active" });
-    const otherLease = await insertOne(admin, "leases", { org_id: otherOrg.id, property_id: otherProperty.id });
+    const otherLease = await insertOne(admin, "leases", {
+      org_id: otherOrg.id,
+      property_id: otherProperty.id,
+      status: "approved",
+      abstract_status: "approved",
+      abstract_approved_at: new Date().toISOString(),
+    });
     const otherProfile = await insertOne(admin, "cam_profiles", {
       org_id: otherOrg.id, lease_id: otherLease.id, property_id: otherProperty.id, status: "draft",
       building_rsf: 10000, tenant_rsf: 1000, tenant_pro_rata_share: 10,

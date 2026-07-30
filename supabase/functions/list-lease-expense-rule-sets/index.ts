@@ -57,10 +57,35 @@ Deno.serve(async (req: Request) => {
       ruleSetQuery = ruleSetQuery.in("lease_id", leaseIds);
     }
 
-    const { data: ruleSets = [], error: ruleSetsError } = await ruleSetQuery;
+    const { data: unfilteredRuleSets = [], error: ruleSetsError } = await ruleSetQuery;
     if (ruleSetsError) {
       throw new Error(ruleSetsError.message || "Could not load lease expense rule sets");
     }
+
+    const candidateLeaseIds = [...new Set(
+      (unfilteredRuleSets || []).map((row: any) => row.lease_id).filter(isUuid),
+    )];
+    let approvedLeaseIds = new Set<string>();
+    if (candidateLeaseIds.length > 0) {
+      const { data: leases = [], error: leasesError } = await supabaseAdmin
+        .from("leases")
+        .select("id, abstract_status, status, abstract_approved_at")
+        .eq("org_id", orgId)
+        .in("id", candidateLeaseIds);
+      if (leasesError) {
+        throw new Error(leasesError.message || "Could not verify lease approval status");
+      }
+      approvedLeaseIds = new Set(
+        (leases || [])
+          .filter((lease: any) =>
+            String(lease.abstract_status || "").toLowerCase() === "approved" ||
+            String(lease.status || "").toLowerCase() === "approved" ||
+            Boolean(lease.abstract_approved_at)
+          )
+          .map((lease: any) => lease.id),
+      );
+    }
+    const ruleSets = (unfilteredRuleSets || []).filter((row: any) => approvedLeaseIds.has(row.lease_id));
 
     const ruleSetIds = (ruleSets || []).map((row: any) => row.id).filter(isUuid);
     if (ruleSetIds.length === 0) {

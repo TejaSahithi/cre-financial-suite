@@ -307,7 +307,10 @@ verify_jwt = true
 
 [functions.list-lease-expense-rule-sets]
 enabled = true
-verify_jwt = true
+# Browser OPTIONS preflights do not carry a user Authorization token. Let the
+# function answer CORS itself, then enforce the JWT, organization boundary,
+# and page permission inside verifyUser/getUserOrgId/assertPageAccess.
+verify_jwt = false
 
 [functions.manage-lease-critical-date]
 enabled = true

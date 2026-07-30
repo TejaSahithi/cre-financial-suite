@@ -37,7 +37,7 @@ describe("leaseReviewFieldNormalizer smoke test", () => {
     expect(tenantRow.group).toBe("parties");
   });
 
-  it("derives recurring month/day expiration candidates from commencement-backed evidence", () => {
+  it("does not mistake a recurring month/day anniversary for the final lease expiration", () => {
     const lease = {
       id: "recurring-expiration-lease",
       extraction_data: {
@@ -66,12 +66,81 @@ describe("leaseReviewFieldNormalizer smoke test", () => {
     const expiration = rows.find((r) => r.canonicalKey === "expiration_date");
     const termMonths = rows.find((r) => r.canonicalKey === "lease_term_months");
 
-    expect(expiration.value).toBe("2025-01-31");
+    expect(expiration.value).toBeNull();
+    expect(expiration.status).toBe("not_found");
+    expect(termMonths.value).toBeNull();
+    expect(termMonths.status).toBe("not_found");
+  });
+
+  it("calculates the final expiration from commencement plus the independently stated term", () => {
+    const lease = {
+      id: "five-year-recurring-expiration-lease",
+      extraction_data: {
+        fields: {
+          commencement_date: "2024-02-01",
+          expiration_date: null,
+          lease_term_months: 60,
+        },
+        field_evidence: {
+          commencement_date: {
+            value: "2024-02-01",
+            source_text: "Commencement Date: February 1, 2024",
+            source_page: 1,
+            extraction_status: "extracted",
+          },
+          expiration_date: {
+            value: null,
+            source_text: "Expiration Date: January 31st of each year",
+            source_page: 1,
+            extraction_status: "not_found",
+          },
+          lease_term_months: {
+            value: 60,
+            source_text: "The initial Term is sixty (60) months.",
+            source_page: 2,
+            extraction_status: "extracted",
+          },
+        },
+      },
+    };
+
+    const rows = normalizeStandardFields(lease);
+    const expiration = rows.find((r) => r.canonicalKey === "expiration_date");
+
+    expect(expiration.value).toBe("2029-01-31");
     expect(expiration.status).toBe("needs_review");
     expect(expiration.extractionMode).toBe(EXTRACTION_MODES.CALCULATED);
-    expect(expiration.validationMessage).toMatch(/recurring expiration/i);
-    expect(termMonths.value).toBe(12);
-    expect(termMonths.status).toBe("needs_review");
+    expect(expiration.sourcePage).toBe(2);
+    expect(expiration.validationMessage).toMatch(/stated initial lease term/i);
+  });
+
+  it("does not publish downstream rules, critical dates, or budget preview before approval", () => {
+    const lease = {
+      id: "pending-downstream-lease",
+      abstract_status: "review_required",
+      extraction_data: {
+        fields: {
+          commencement_date: "2024-02-01",
+          expiration_date: "2029-01-31",
+        },
+        workflow_output: {
+          expense_rules: [{
+            rule_key: "cam-rule",
+            expense_category: "cam",
+            normalized_rule: "Tenant reimburses CAM",
+          }],
+        },
+      },
+    };
+
+    const result = normalizeLeaseReviewData(lease);
+
+    expect(result.downstreamApproved).toBe(false);
+    expect(result.expenseRules).toEqual([]);
+    expect(result.camRules).toEqual([]);
+    expect(result.criticalDates).toEqual([]);
+    expect(result.tabs.critical_dates).toEqual([]);
+    expect(result.tabs.budget_preview).toEqual([]);
   });
 
   it("derives monthly rent from annual rent with source lineage when monthly rent is missing", () => {
@@ -297,7 +366,7 @@ describe("Old legacy payloads still render", () => {
 
 describe("enterprise lease abstract row model", () => {
   it("places monthly_rent only in Rent & Charges as editable and Budget Preview as read-only", () => {
-    const result = normalizeLeaseReviewData({ extraction_data: { fields: { monthly_rent: 27865 } } });
+    const result = normalizeLeaseReviewData({ abstract_status: "approved", extraction_data: { fields: { monthly_rent: 27865 } } });
     expect(result.tabs.rent_charges.some((row) => row.canonicalKey === "monthly_rent" && row.rowType === "standard" && row.editable)).toBe(true);
     expect(result.tabs.budget_preview.some((row) => row.canonicalKey === "monthly_rent" && row.rowType === "read_only_reference" && row.editable === false)).toBe(true);
     const editableAppearances = Object.values(result.tabs).flat().filter((row) => row.canonicalKey === "monthly_rent" && row.editable).length;
@@ -306,6 +375,7 @@ describe("enterprise lease abstract row model", () => {
 
   it("splits expense and CAM rule rows into their related tabs", () => {
     const result = normalizeLeaseReviewData({
+      abstract_status: "approved",
       extraction_data: {
         workflow_output: {
           expense_rules: [
@@ -575,6 +645,7 @@ describe("Phase 40: extraction mode resolver", () => {
 
   it("non-standard row types (dynamic findings, clause records, expense/CAM rules) default to unknown, not a guessed mode", () => {
     const lease = {
+      abstract_status: "approved",
       extraction_data: {
         workflow_output: {
           extracted_document_items: [
@@ -597,6 +668,7 @@ describe("Phase 40: extraction mode resolver", () => {
 
   it("critical dates and budget preview reference rows inherit the standard field's real extraction mode (not unknown by default)", () => {
     const lease = {
+      abstract_status: "approved",
       extraction_data: {
         fields: { commencement_date: "2025-01-01" },
         field_evidence: { commencement_date: { source_text: "Commencement Date: January 1, 2025", source_page: 1 } },
@@ -1081,6 +1153,7 @@ describe("Phase 48B: no-provider CAM-heavy base lease fallbacks", () => {
   };
 
   const camHeavyLease = (overrides = {}) => ({
+    abstract_status: 'approved',
     document_subtype: 'base_lease',
     extraction_data: {
       workflow_output: { document_profile: { documentType: 'base_lease' } },

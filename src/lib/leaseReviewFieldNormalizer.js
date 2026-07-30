@@ -167,32 +167,6 @@ function sourceSnippet(text, index = 0, radius = 520) {
   return compactText(raw.slice(start, end));
 }
 
-const MONTH_NAME_TO_NUMBER = {
-  january: 1,
-  jan: 1,
-  february: 2,
-  feb: 2,
-  march: 3,
-  mar: 3,
-  april: 4,
-  apr: 4,
-  may: 5,
-  june: 6,
-  jun: 6,
-  july: 7,
-  jul: 7,
-  august: 8,
-  aug: 8,
-  september: 9,
-  sep: 9,
-  october: 10,
-  oct: 10,
-  november: 11,
-  nov: 11,
-  december: 12,
-  dec: 12,
-};
-
 function toIsoDate(value) {
   if (!isMeaningfulValue(value)) return null;
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
@@ -227,27 +201,20 @@ function parseLeaseTermMonths(value) {
   return null;
 }
 
-function parseRecurringMonthDay(value) {
-  const text = String(value ?? "");
-  const match = text.match(/\b([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,)?\s*(?:of\s+each\s+year|each\s+year|annually|every\s+year)\b/i);
-  if (!match) return null;
-  const month = MONTH_NAME_TO_NUMBER[match[1].toLowerCase()];
-  const day = Number(match[2]);
-  if (!month || !Number.isFinite(day) || day < 1 || day > 31) return null;
-  return { month, day, text: compactText(match[0]) };
-}
-
-function nextRecurringDateAfter(startIso, recurring) {
-  if (!startIso || !recurring) return null;
+function addMonthsInclusiveEnd(startIso, months) {
+  if (!startIso || !Number.isFinite(months) || months <= 0) return null;
   const start = new Date(`${startIso}T00:00:00Z`);
   if (Number.isNaN(start.getTime())) return null;
-  let year = start.getUTCFullYear();
-  let candidate = new Date(Date.UTC(year, recurring.month - 1, recurring.day));
-  if (candidate <= start) {
-    year += 1;
-    candidate = new Date(Date.UTC(year, recurring.month - 1, recurring.day));
-  }
-  return Number.isNaN(candidate.getTime()) ? null : candidate.toISOString().slice(0, 10);
+  const targetIndex = start.getUTCMonth() + Math.round(months);
+  const targetYear = start.getUTCFullYear() + Math.floor(targetIndex / 12);
+  const targetMonth = ((targetIndex % 12) + 12) % 12;
+  const targetDay = Math.min(
+    start.getUTCDate(),
+    new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate(),
+  );
+  const end = new Date(Date.UTC(targetYear, targetMonth, targetDay));
+  end.setUTCDate(end.getUTCDate() - 1);
+  return Number.isNaN(end.getTime()) ? null : end.toISOString().slice(0, 10);
 }
 
 function deriveTermMonthsFromDates(startIso, endIso) {
@@ -402,21 +369,6 @@ function deriveLeaseTermContext(lease) {
     || toIsoDate(readFieldValue(lease, "end_date"));
   const expirationEvidence = readFieldEvidence(lease, "expiration_date");
   const endEvidence = readFieldEvidence(lease, "end_date");
-  const expirationText = [
-    expirationEvidence?.sourceText,
-    expirationEvidence?.sourceClause,
-    expirationEvidence?.rawValue,
-    endEvidence?.sourceText,
-    endEvidence?.sourceClause,
-    endEvidence?.rawValue,
-    readFieldValue(lease, "expiration_date"),
-    readFieldValue(lease, "end_date"),
-  ].filter(Boolean).join(" ");
-  const recurring = parseRecurringMonthDay(expirationText);
-  const derivedExpiration = !existingExpiration && commencement && recurring
-    ? nextRecurringDateAfter(commencement, recurring)
-    : null;
-
   const termValue =
     readTypedLeaseColumnValue(lease, "lease_term_months")
     ?? readTypedLeaseColumnValue(lease, "lease_term")
@@ -434,16 +386,20 @@ function deriveLeaseTermContext(lease) {
     leaseTermTextEvidence?.rawValue,
   ].filter(Boolean).join(" ");
   const existingTermMonths = parseLeaseTermMonths(termValue) || parseLeaseTermMonths(termText);
-  const effectiveExpiration = existingExpiration || derivedExpiration;
-  const derivedTermMonths = !existingTermMonths && commencement && effectiveExpiration
-    ? deriveTermMonthsFromDates(commencement, effectiveExpiration)
+  // A recurring month/day is an anniversary label, not the final lease
+  // expiration. The final year can only be established from an explicit
+  // expiration date or an independently sourced initial-term length.
+  const derivedExpiration = !existingExpiration && commencement && existingTermMonths
+    ? addMonthsInclusiveEnd(commencement, existingTermMonths)
+    : null;
+  const derivedTermMonths = !existingTermMonths && commencement && existingExpiration
+    ? deriveTermMonthsFromDates(commencement, existingExpiration)
     : null;
 
   return {
     commencement,
     existingExpiration,
     derivedExpiration,
-    recurring,
     expirationEvidence: expirationEvidence?.sourceText || expirationEvidence?.sourceClause ? expirationEvidence : endEvidence,
     existingTermMonths,
     derivedTermMonths,
@@ -453,11 +409,14 @@ function deriveLeaseTermContext(lease) {
 function derivedStandardField(lease, canonicalKey, value, termContext) {
   if (isMeaningfulValue(value)) return null;
   if ((canonicalKey === "expiration_date" || canonicalKey === "end_date") && termContext?.derivedExpiration) {
-    const evidence = termContext.expirationEvidence || {};
+    const evidence = readFieldEvidence(lease, "lease_term_months")
+      || readFieldEvidence(lease, "lease_term")
+      || termContext.expirationEvidence
+      || {};
     return {
       value: termContext.derivedExpiration,
-      confidence: 0.82,
-      reviewReason: `Expiration date was derived from recurring expiration language (${termContext.recurring?.text || "month/day of each year"}) and commencement date. Verify the year before approval.`,
+      confidence: 0.9,
+      reviewReason: "Expiration date was calculated from the approved commencement date and stated initial lease term. Verify both source inputs before approval.",
       evidence: {
         value: termContext.derivedExpiration,
         rawValue: termContext.derivedExpiration,
@@ -467,10 +426,10 @@ function derivedStandardField(lease, canonicalKey, value, termContext) {
         extractionStatus: EXTRACTION_STATUSES.CALCULATED,
         evidenceType: "derived",
         sourceTextQuality: SOURCE_TEXT_QUALITIES.DERIVED,
-        sourceFieldKeys: ["commencement_date", "expiration_date"],
-        derivationTrace: `expiration_date = next ${termContext.recurring?.text || "recurring month/day"} after commencement_date ${termContext.commencement}`,
+        sourceFieldKeys: ["commencement_date", "lease_term_months"],
+        derivationTrace: `expiration_date = commencement_date ${termContext.commencement} + lease_term_months ${termContext.existingTermMonths} - 1 day`,
         requiresReview: true,
-        reviewReason: `Derived from recurring expiration language and commencement date ${termContext.commencement}.`,
+        reviewReason: "Calculated from commencement date and the independently extracted initial lease term.",
       },
     };
   }
@@ -1822,6 +1781,14 @@ export function normalizeCriticalDates(standardFields) {
   return CRITICAL_DATE_KEYS.map((key) => byKey.get(key)).filter(Boolean);
 }
 
+function isLeaseApprovedForDownstream(lease) {
+  const abstractStatus = String(lease?.abstract_status || "").trim().toLowerCase();
+  const leaseStatus = String(lease?.status || "").trim().toLowerCase();
+  return abstractStatus === "approved"
+    || leaseStatus === "approved"
+    || Boolean(lease?.abstract_approved_at);
+}
+
 // ── Advisory approval blockers ────────────────────────────────────────────
 
 function readDocumentProfile(lease) {
@@ -2084,12 +2051,21 @@ export function normalizeLeaseReviewData(lease, { fieldReviews, allowNoProviderC
   });
   const dynamicFindings = normalizeDynamicFindings(lease);
   const clauseRecords = normalizeClauseRecords(lease, { profile: currentReviewPolicy.profile });
-  const allRuleRows = normalizeExpenseRuleFallback(lease);
+  const downstreamApproved = isLeaseApprovedForDownstream(lease);
+  // Expense/CAM rules, critical-date records, and budget/rent projections
+  // are downstream operating artifacts. Lease facts remain visible for
+  // human review, but these artifacts are not published until the abstract
+  // approval boundary has been crossed.
+  const allRuleRows = downstreamApproved ? normalizeExpenseRuleFallback(lease) : [];
   const expenseRules = allRuleRows.filter((row) => row.rowType !== "cam_rule");
   const camRules = allRuleRows.filter((row) => row.rowType === "cam_rule");
-  const criticalDates = normalizeCriticalDates(standardFields);
+  const criticalDates = downstreamApproved ? normalizeCriticalDates(standardFields) : [];
   const approvalBlockers = normalizeApprovalBlockers(lease, standardFields, currentReviewPolicy);
   const tabs = buildRowsByTab({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates });
+  if (!downstreamApproved) {
+    tabs.critical_dates = [];
+    tabs.budget_preview = [];
+  }
   const readinessSummary = buildReadinessSummary({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates, approvalBlockers, tabs, currentReviewPolicy });
   const budgetPreview = tabs.budget_preview || [];
   const debugCounts = buildDebugCounts({ standardFields, dynamicFindings, clauseRecords, expenseRules, camRules, criticalDates, approvalBlockers, tabs });
@@ -2105,6 +2081,7 @@ export function normalizeLeaseReviewData(lease, { fieldReviews, allowNoProviderC
     criticalDates,
     approvalBlockers,
     currentReviewPolicy,
+    downstreamApproved,
     budgetPreview,
     debugCounts,
   };
