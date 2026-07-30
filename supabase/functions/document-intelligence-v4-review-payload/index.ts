@@ -40,14 +40,24 @@ function parseRequest(req: Request) {
 }
 
 async function fetchUploadedFile({ supabaseAdmin, orgId, uploadedFileId }: { supabaseAdmin: any; orgId: string; uploadedFileId: string }) {
-  const { data, error } = await supabaseAdmin
-    .from("uploaded_files")
-    .select("id, org_id, module_type, file_name, ui_review_payload, active_generation_id, canonical_layout_v3, canonical_layout_v3_hash, canonical_layout_v3_schema_version, canonical_layout_v3_adapter_version")
-    .eq("id", uploadedFileId)
-    .eq("org_id", orgId)
-    .maybeSingle();
-  if (error) throw new Error(`Failed to fetch uploaded_files row: ${error.message}`);
-  return data ?? null;
+  const columnSets = [
+    "id, org_id, module_type, file_name, ui_review_payload, active_generation_id, canonical_layout_v3, canonical_layout_v3_hash, canonical_layout_v3_schema_version, canonical_layout_v3_adapter_version",
+    "id, org_id, module_type, file_name, ui_review_payload, active_generation_id",
+    "id, org_id, module_type, file_name, ui_review_payload",
+  ];
+  let lastError: string | null = null;
+  for (const columns of columnSets) {
+    const { data, error } = await supabaseAdmin
+      .from("uploaded_files")
+      .select(columns)
+      .eq("id", uploadedFileId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (!error) return data ?? null;
+    lastError = error.message;
+    console.warn(`[document-intelligence-v4-review-payload] uploaded_files select fallback after error: ${error.message}`);
+  }
+  throw new Error(`Failed to fetch uploaded_files row: ${lastError ?? "unknown error"}`);
 }
 
 async function fetchCurrentEnterprisePayload(args: { supabaseAdmin: any; orgId: string; uploadedFileId: string; runId: string; sourceMode: string; generationId?: string | null; schemaVersion?: string | null }) {
@@ -212,13 +222,22 @@ Deno.serve(async (req: Request) => {
       runResolutionError = resolveError?.message ?? String(resolveError);
     }
     if (!run) {
+      let legacyUploadedFile: any = null;
+      let legacyFetchError: string | null = null;
+      if (parsed.uploadedFileId) {
+        try {
+          legacyUploadedFile = await fetchUploadedFile({ supabaseAdmin, orgId, uploadedFileId: parsed.uploadedFileId });
+        } catch (uploadedFileError: any) {
+          legacyFetchError = uploadedFileError?.message ?? String(uploadedFileError);
+        }
+      }
       return jsonResponse({
         mode: rollout.mode,
         uiAuthority: "legacy",
         enterpriseReviewPayload: null,
-        legacyReviewPayload: null,
+        legacyReviewPayload: legacyUploadedFile?.ui_review_payload ?? null,
         authorityReadiness: { ready: false, materialMismatchCount: 0, approvalCriticalMismatchCount: 0, canonicalMissingCount: 0, unsupportedFieldCount: 0, reasons: [runResolutionError ? "document_intelligence_run_resolution_failed" : "no_completed_document_intelligence_run"] },
-        diagnostics: { rollout, runResolutionError },
+        diagnostics: { rollout, runResolutionError, legacyFetchError },
       });
     }
 

@@ -106,7 +106,10 @@ export async function fetchCanonicalReviewRolloutConfig(args: {
   }
 
   const { data, error } = await query.order("document_family", { ascending: true }).limit(10);
-  if (error) throw new Error(`Failed to fetch canonical review rollout config: ${error.message}`);
+  if (error) {
+    console.warn(`[canonical-review-rollout] config unavailable; falling back to default rollout: ${error.message}`);
+    return null;
+  }
   const rows = Array.isArray(data) ? data : [];
   return rows.find((row: any) => family && row.document_family === family) ?? rows.find((row: any) => row.document_family == null || row.document_family === "default") ?? null;
 }

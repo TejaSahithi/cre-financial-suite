@@ -1,7 +1,7 @@
 // @ts-nocheck
 
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { resolveCanonicalReviewRollout } from "../_shared/extraction/document-intelligence-v3/canonical-review-rollout.ts";
+import { fetchCanonicalReviewRolloutConfig, resolveCanonicalReviewRollout } from "../_shared/extraction/document-intelligence-v3/canonical-review-rollout.ts";
 import { buildCanonicalReviewReadinessMetrics } from "../_shared/extraction/document-intelligence-v3/canonical-review-readiness-metrics.ts";
 import { buildEnterpriseReviewPayload } from "../_shared/extraction/document-intelligence-v3/enterprise-review-payload.ts";
 
@@ -81,6 +81,31 @@ Deno.test("Release 4B rollout resolver defaults unknown organizations to legacy"
   assertEquals(decision.uiAuthority, "legacy");
   assertEquals(decision.builderSourceMode, "legacy");
   assert(decision.diagnostics.reasonCodes.includes("legacy_default_for_unconfigured_organization"));
+});
+
+Deno.test("Release 4B rollout config read degrades when rollout table is unavailable", async () => {
+  const supabaseAdmin = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: () => ({
+            or: () => ({
+              order: () => ({
+                limit: async () => ({ data: null, error: { message: "relation canonical_review_rollout_configs does not exist" } }),
+              }),
+            }),
+          }),
+        }),
+      }),
+    }),
+  };
+
+  const config = await fetchCanonicalReviewRolloutConfig({
+    supabaseAdmin,
+    orgId: "org-1",
+    documentFamily: "lease",
+  });
+  assertEquals(config, null);
 });
 
 Deno.test("Release 4B rollout resolver keeps shadow legacy-authoritative while building canonical hybrid", () => {
