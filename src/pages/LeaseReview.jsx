@@ -86,7 +86,6 @@ import { supabase } from "@/services/supabaseClient";
 import {
   saveAbstractDraft,
   rejectLeaseAbstract,
-  syncApprovedAbstractExpenseTermsToRules,
 } from "@/services/leaseAbstractService";
 import {
   approveLeaseWorkflow,
@@ -900,29 +899,9 @@ export default function LeaseReview() {
     retry: false,
     queryFn: async () => {
       const EMPTY = { ruleSet: null, expense: { total: 0, approved: 0 }, cam: { total: 0, approved: 0 }, tableMissing: false };
-      if (!supabase || !leaseId) return EMPTY;
-      const { data: ruleSets, error } = await supabase
-        .from("lease_expense_rule_sets")
-        .select("id, status, approved_at, version")
-        .eq("lease_id", leaseId)
-        .neq("status", "archived")
-        .order("version", { ascending: false })
-        .limit(1);
-      if (error) {
-        if (error.code === "PGRST205" || error.code === "42P01" || /lease_expense_rule_sets/i.test(error.message || "")) {
-          return { ...EMPTY, tableMissing: true };
-        }
-        throw error;
-      }
-      const ruleSet = ruleSets?.[0] || null;
+      if (!leaseId) return EMPTY;
+      const { ruleSet, rules } = await leaseExpenseRuleService.loadRuleSet(leaseId);
       if (!ruleSet) return EMPTY;
-      const { data: rules, error: rulesErr } = await supabase
-        .from("lease_expense_rules")
-        .select("id, row_status, review_status, approval_status, expense_category, cam_eligible, rule_type, admin_fee_percent, gross_up_percent, cap_percent, cap_amount, estimated_annual_amount, estimated_monthly_amount, tenant_share_percent, reconciliation_required")
-        .eq("rule_set_id", ruleSet.id);
-      if (rulesErr && (rulesErr.code === "PGRST205" || rulesErr.code === "42P01")) {
-        return { ruleSet, expense: { total: 0, approved: 0 }, cam: { total: 0, approved: 0 }, tableMissing: true };
-      }
       
       const totals = (rules || []).reduce(
         (acc, r) => {
@@ -983,7 +962,7 @@ export default function LeaseReview() {
       if ((result?.rules?.length || 0) > 0) {
         queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-summary", leaseForRules.id] });
         queryClient.invalidateQueries({ queryKey: ["lease-expense-rules-detail", leaseForRules.id] });
-        queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
+        queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
       }
     }).catch((error) => {
       console.warn("[LeaseReview] workflow expense rule draft persistence skipped:", error?.message || error);
@@ -1933,22 +1912,9 @@ export default function LeaseReview() {
           ruleSetId: workflowPersisted?.ruleSet?.id || null,
         };
       } else {
-        const approvedSnapshot =
-          approvedLease.abstract_snapshot ||
-          leaseForRuleSync.abstract_snapshot ||
-          approvedLease.extraction_data?.abstract ||
-          leaseForRuleSync.extraction_data?.abstract ||
-          { fields: leaseForRuleSync.extraction_data?.fields || {} };
-        await syncApprovedAbstractExpenseTermsToRules(leaseForRuleSync, approvedSnapshot);
-        const synced = await leaseExpenseRuleService.loadRuleSet(approvedLease.id).catch(() => null);
-        const syncedCount = synced?.rules?.length || 0;
-        if (syncedCount > 0) {
-          persisted = {
-            source: "approved_abstract_expense_backfill",
-            persistedRulesCount: syncedCount,
-            ruleSetId: synced?.ruleSet?.id || null,
-          };
-        }
+        console.warn("[LeaseReview] primary workflow did not include expense_rules; no abstract-field fallback was run", {
+          lease_id: approvedLease.id,
+        });
       }
       console.log("[LeaseReview] post-approval expense rule sync", persisted);
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rules", approvedLease.id] });

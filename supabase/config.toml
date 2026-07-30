@@ -305,6 +305,10 @@ verify_jwt = true
 enabled = true
 verify_jwt = true
 
+[functions.list-lease-expense-rule-sets]
+enabled = true
+verify_jwt = true
+
 [functions.manage-lease-critical-date]
 enabled = true
 verify_jwt = true

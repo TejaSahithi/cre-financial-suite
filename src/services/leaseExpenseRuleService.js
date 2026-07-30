@@ -281,31 +281,6 @@ function scorePersistedRuleForMerge(rule) {
   ].reduce((sum, score) => sum + score, 0);
 }
 
-// Read + filter only -- computes which existing rule ids are stale/unresolved
-// (per isProtectedHumanRule's decision, unchanged) and therefore safe to
-// supersede. Does NOT delete or update anything itself: the mechanical
-// delete now happens server-side, folded into save_lease_expense_rule_set's
-// own transaction via its p_superseded_rule_ids param (Phase 6R-2) -- this
-// closes a real atomicity gap that existed when the delete was a separate,
-// unguarded call before the RPC ever ran. SECURITY DEFINER bypasses RLS, so
-// the RLS-denial marker-update fallback this function used to have is no
-// longer needed.
-async function computeSupersededRuleIds({ leaseId, ruleSetId }) {
-  if (!leaseId || !ruleSetId) return [];
-
-  const { data: existingRows, error: existingError } = await supabase
-    .from("lease_expense_rules")
-    .select("*")
-    .eq("lease_id", leaseId)
-    .eq("rule_set_id", ruleSetId);
-  if (existingError) throw existingError;
-
-  return (existingRows || [])
-    .filter((rule) => !isProtectedHumanRule(rule))
-    .map((rule) => rule.id)
-    .filter(Boolean);
-}
-
 function normalizeRecoveryStatus(rule) {
   if (rule?.is_excluded) return "excluded";
   if (normalizeTriStateDecision(rule?.recoverable_from_tenant) === "conditional") return "conditional";
@@ -495,45 +470,6 @@ async function resolveWorkflowOrgId(lease) {
   return resolveWritableOrgId(lease?.org_id || await getCurrentOrgId());
 }
 
-async function loadRuleDependencies(ruleSetId) {
-  if (!ruleSetId) return { rules: [], valuesByRuleId: new Map(), clausesByRuleId: new Map() };
-
-  const { data: rules, error: rulesError } = await supabase
-    .from("lease_expense_rules")
-    .select("*")
-    .eq("rule_set_id", ruleSetId);
-  if (rulesError) throw rulesError;
-
-  const ruleIds = (rules || []).map((rule) => rule.id).filter(Boolean);
-  const [{ data: values, error: valuesError }, { data: clauses, error: clausesError }] = await Promise.all([
-    ruleIds.length > 0
-      ? supabase.from("lease_expense_values").select("*").in("rule_id", ruleIds)
-      : Promise.resolve({ data: [], error: null }),
-    ruleIds.length > 0
-      ? supabase.from("lease_expense_rule_clauses").select("*").in("lease_expense_rule_id", ruleIds)
-      : Promise.resolve({ data: [], error: null }),
-  ]);
-
-  if (valuesError) throw valuesError;
-  if (clausesError) throw clausesError;
-
-  const valuesByRuleId = new Map();
-  (values || []).forEach((value) => valuesByRuleId.set(value.rule_id, value));
-
-  const clausesByRuleId = new Map();
-  (clauses || []).forEach((clause) => {
-    const existing = clausesByRuleId.get(clause.lease_expense_rule_id) || [];
-    existing.push(clause);
-    clausesByRuleId.set(clause.lease_expense_rule_id, existing);
-  });
-
-  return {
-    rules: rules || [],
-    valuesByRuleId,
-    clausesByRuleId,
-  };
-}
-
 function mergeRulesWithRelations(rules = [], valuesByRuleId = new Map(), clausesByRuleId = new Map()) {
   return (rules || []).map((rule) => {
     const valueRow = valuesByRuleId.get(rule.id) || null;
@@ -543,6 +479,50 @@ function mergeRulesWithRelations(rules = [], valuesByRuleId = new Map(), clauses
       clauses: clausesByRuleId.get(rule.id) || [],
     };
   });
+}
+
+function buildRuleSetEntriesFromServerPayload(payload = {}) {
+  const ruleSets = Array.isArray(payload?.ruleSets) ? payload.ruleSets : [];
+  const rules = Array.isArray(payload?.rules) ? payload.rules : [];
+  const values = Array.isArray(payload?.values) ? payload.values : [];
+  const clauses = Array.isArray(payload?.clauses) ? payload.clauses : [];
+
+  const rulesBySet = new Map();
+  for (const rule of rules) {
+    const existing = rulesBySet.get(rule.rule_set_id) || [];
+    existing.push(rule);
+    rulesBySet.set(rule.rule_set_id, existing);
+  }
+
+  const valuesByRuleId = new Map((values || []).map((value) => [value.rule_id, value]));
+  const clausesByRuleId = new Map();
+  (clauses || []).forEach((clause) => {
+    const existing = clausesByRuleId.get(clause.lease_expense_rule_id) || [];
+    existing.push(clause);
+    clausesByRuleId.set(clause.lease_expense_rule_id, existing);
+  });
+
+  const ruleSetsByLeaseId = new Map();
+  for (const ruleSet of ruleSets) {
+    const existing = ruleSetsByLeaseId.get(ruleSet.lease_id) || [];
+    existing.push(ruleSet);
+    ruleSetsByLeaseId.set(ruleSet.lease_id, existing);
+  }
+
+  return [...ruleSetsByLeaseId.values()]
+    .map((leaseRuleSets) => selectPreferredRuleSet(leaseRuleSets, rulesBySet))
+    .filter(Boolean)
+    .map((ruleSet) => {
+      const rulesForSet = rulesBySet.get(ruleSet.id) || [];
+      const mergedRules = mergeRulesWithRelations(rulesForSet, valuesByRuleId, clausesByRuleId);
+      const finalizedRules = finalizeLeaseExpenseRules(mergedRules, ruleSet?.status || "draft")
+        .map(normalizeLeaseExpenseRule);
+      return {
+        leaseId: ruleSet.lease_id,
+        ruleSet,
+        rules: finalizedRules,
+      };
+    });
 }
 
 function getLeaseWorkflowOutput(lease) {
@@ -571,186 +551,27 @@ function isMissingExpenseRuleTable(error) {
 
 export const leaseExpenseRuleService = {
   async loadRuleSet(leaseId) {
-    if (!supabase || !leaseId) return { ruleSet: null, rules: [] };
-
-    try {
-      const { data: ruleSets, error } = await supabase
-        .from("lease_expense_rule_sets")
-        .select("*")
-        .eq("lease_id", leaseId)
-        .not("status", "eq", "archived")
-        .order("version", { ascending: false });
-
-      if (error) throw error;
-
-      const setIds = (ruleSets || []).map((ruleSet) => ruleSet.id).filter(Boolean);
-      const { data: ruleRows, error: ruleRowsError } = setIds.length > 0
-        ? await supabase
-          .from("lease_expense_rules")
-          .select("*")
-          .in("rule_set_id", setIds)
-        : { data: [], error: null };
-      if (ruleRowsError) throw ruleRowsError;
-
-      const rulesBySet = new Map();
-      for (const rule of ruleRows || []) {
-        const existing = rulesBySet.get(rule.rule_set_id) || [];
-        existing.push(rule);
-        rulesBySet.set(rule.rule_set_id, existing);
-      }
-
-      const ruleSet = selectPreferredRuleSet(ruleSets || [], rulesBySet);
-      if (!ruleSet) {
-        return { ruleSet: null, rules: [] };
-      }
-
-      const { rules, valuesByRuleId, clausesByRuleId } = await loadRuleDependencies(ruleSet.id);
-      const mergedRules = mergeRulesWithRelations(rules, valuesByRuleId, clausesByRuleId);
-      const finalizedRules = finalizeLeaseExpenseRules(mergedRules, ruleSet?.status || "draft")
-        .map(normalizeLeaseExpenseRule);
-
-      return { ruleSet, rules: finalizedRules };
-    } catch (error) {
-      if (!isMissingExpenseRuleTable(error)) throw error;
-      return { ruleSet: null, rules: [] };
-    }
+    if (!leaseId) return { ruleSet: null, rules: [] };
+    const entries = await this.loadRuleSets([leaseId]);
+    return entries.find((entry) => entry.leaseId === leaseId) || { ruleSet: null, rules: [] };
   },
 
   async loadRuleSets(leaseIds = []) {
     const tag = `[loadRuleSets leaseIds=${leaseIds?.length || 0}]`;
-    if (!supabase || !Array.isArray(leaseIds) || leaseIds.length === 0) {
+    if (!Array.isArray(leaseIds) || leaseIds.length === 0) {
       devLog(`${tag} early return — no leaseIds`);
       return [];
     }
 
     try {
-      const { data: ruleSets, error } = await supabase
-        .from("lease_expense_rule_sets")
-        .select("*")
-        .in("lease_id", leaseIds)
-        .not("status", "eq", "archived")
-        .order("version", { ascending: false });
-
-      if (error) {
-        console.error(`${tag} rule_sets query failed:`, error);
-        throw error;
-      }
-      devLog(`${tag} rule_sets read: ${ruleSets?.length || 0}`, ruleSets?.map((s) => ({ id: s.id?.slice(0, 8), lease: s.lease_id?.slice(0, 8), v: s.version, status: s.status })));
-
-      const ruleSetsByLeaseId = new Map();
-      for (const ruleSet of ruleSets || []) {
-        const existing = ruleSetsByLeaseId.get(ruleSet.lease_id) || [];
-        existing.push(ruleSet);
-        ruleSetsByLeaseId.set(ruleSet.lease_id, existing);
-      }
-
-      const allRuleSetIds = (ruleSets || []).map((ruleSet) => ruleSet.id).filter(Boolean);
-      if (allRuleSetIds.length === 0) {
-        return [];
-      }
-
-      const { data: allRules, error: rulesError } = await supabase
-        .from("lease_expense_rules")
-        .select("*")
-        .in("rule_set_id", allRuleSetIds);
-
-      if (rulesError) {
-        console.error(`${tag} rules query failed:`, rulesError);
-        throw rulesError;
-      }
-      devLog(`${tag} rules read: ${allRules?.length || 0} for ${allRuleSetIds.length} rule_set(s)`);
-
-      const rulesBySet = new Map();
-      for (const rule of allRules || []) {
-        const existing = rulesBySet.get(rule.rule_set_id) || [];
-        existing.push(rule);
-        rulesBySet.set(rule.rule_set_id, existing);
-      }
-
-      const latestRuleSets = [...ruleSetsByLeaseId.values()]
-        .map((leaseRuleSets) => selectPreferredRuleSet(leaseRuleSets, rulesBySet))
-        .filter(Boolean);
-      const ruleSetIds = latestRuleSets.map((ruleSet) => ruleSet.id);
-      if (ruleSetIds.length === 0) {
-        return [];
-      }
-
-      const selectedRuleSetIdLookup = new Set(ruleSetIds);
-      const rules = (allRules || []).filter((rule) => selectedRuleSetIdLookup.has(rule.rule_set_id));
-
-      const ruleIds = (rules || []).map((rule) => rule.id).filter(Boolean);
-      const [{ data: values, error: valuesError }, { data: clauses, error: clausesError }] = await Promise.all([
-        ruleIds.length > 0
-          ? supabase.from("lease_expense_values").select("*").in("rule_id", ruleIds)
-          : Promise.resolve({ data: [], error: null }),
-        ruleIds.length > 0
-          ? supabase.from("lease_expense_rule_clauses").select("*").in("lease_expense_rule_id", ruleIds)
-          : Promise.resolve({ data: [], error: null }),
-      ]);
-
-      if (valuesError) throw valuesError;
-      if (clausesError) throw clausesError;
-
-      const valuesByRuleId = new Map((values || []).map((value) => [value.rule_id, value]));
-      const clausesByRuleId = new Map();
-      (clauses || []).forEach((clause) => {
-        const existing = clausesByRuleId.get(clause.lease_expense_rule_id) || [];
-        existing.push(clause);
-        clausesByRuleId.set(clause.lease_expense_rule_id, existing);
-      });
-
-      const persistedEntries = latestRuleSets.map((ruleSet) => {
-        const rulesForSet = (rules || []).filter((rule) => rule.rule_set_id === ruleSet.id);
-        const mergedRules = mergeRulesWithRelations(rulesForSet, valuesByRuleId, clausesByRuleId);
-        const finalizedRules = finalizeLeaseExpenseRules(mergedRules, ruleSet.status || "draft")
-          .map(normalizeLeaseExpenseRule);
-        devLog(`${tag} lease ${ruleSet.lease_id?.slice(0, 8)} → ${rulesForSet.length} raw → ${finalizedRules.length} finalized (after dedup/exclude)`);
-        return {
-          leaseId: ruleSet.lease_id,
-          ruleSet,
-          rules: finalizedRules,
-        };
-      });
+      const payload = await invokeEdgeFunction("list-lease-expense-rule-sets", { lease_ids: leaseIds });
+      const persistedEntries = buildRuleSetEntriesFromServerPayload(payload);
       devLog(`${tag} returning ${persistedEntries.length} entries`);
-
       return persistedEntries;
     } catch (error) {
       console.error(`${tag} FAILED`, error);
-      return [];
+      throw error;
     }
-  },
-
-  async recalculateRuleSetStatus(ruleSetId) {
-    if (!supabase || !ruleSetId) return null;
-
-    const { data: rules, error: rulesError } = await supabase
-      .from("lease_expense_rules")
-      .select("*")
-      .eq("rule_set_id", ruleSetId);
-    if (rulesError) throw rulesError;
-
-    const { data: ruleSet, error: ruleSetError } = await supabase
-      .from("lease_expense_rule_sets")
-      .select("id, lease_id")
-      .eq("id", ruleSetId)
-      .single();
-    if (ruleSetError) throw ruleSetError;
-
-    // Status derivation (deriveRuleSetStatusFromRules) stays client-side --
-    // only the mechanical persistence moves server-side.
-    const nextStatus = deriveRuleSetStatusFromRules(rules || []);
-
-    const result = await invokeEdgeFunction("update-lease-expense-rule-set-status", {
-      rule_set_id: ruleSetId,
-      lease_id: ruleSet.lease_id,
-      status: nextStatus,
-    });
-
-    return {
-      id: result.rule_set_id,
-      status: result.status,
-      approved_at: result.approved_at,
-    };
   },
 
   // Diagnostic: dump the full state of the lease expense-rule pipeline for
@@ -807,24 +628,14 @@ export const leaseExpenseRuleService = {
       }
     }
 
-    // Existing persisted rules for this lease
+    // Existing persisted rules for this lease, loaded through the server
+    // rule-list function so diagnostics do not hit protected tables directly.
     let existingRuleSets = [];
     let existingRules = [];
     try {
-      const sets = await supabase
-        .from("lease_expense_rule_sets")
-        .select("id, status, version, created_at")
-        .eq("lease_id", lease.id)
-        .order("version", { ascending: false });
-      existingRuleSets = sets.data || [];
-      if (existingRuleSets.length > 0) {
-        const setIds = existingRuleSets.map((s) => s.id);
-        const rules = await supabase
-          .from("lease_expense_rules")
-          .select("id, rule_set_id, expense_category, review_status")
-          .in("rule_set_id", setIds);
-        existingRules = rules.data || [];
-      }
+      const persisted = await this.loadRuleSet(lease.id);
+      existingRuleSets = persisted?.ruleSet ? [persisted.ruleSet] : [];
+      existingRules = persisted?.rules || [];
     } catch (err) {
       devWarn("[diagnose] rule lookup failed:", err?.message || err);
     }
@@ -912,48 +723,10 @@ export const leaseExpenseRuleService = {
       mentioned_in_lease: r.extraction_status !== "not_found",
     }));
 
-    // Idempotency: reuse the most-recent non-archived rule_set for this
-    // lease as the target so we don't pile up phantom versions per click.
-    //
-    // Rule:
-    //   - If latest rule_set is APPROVED and extraction_version matches,
-    //     reuse it. The upsert by (rule_set_id, rule_key) guarantees
-    //     approved rules with user-reviewed fields are NOT overwritten
-    //     because they share the same rule_key and the persistence layer
-    //     keeps the existing approved review_status/approval_status.
-    //   - If latest is APPROVED and extraction_version is different, leave
-    //     it frozen and create a NEW draft set for the new extraction.
-    //   - If latest is DRAFT, reuse it regardless of version.
+    // The server-owned save path is the mechanical writer. Do not read
+    // protected rule-set tables directly from the browser while deciding
+    // whether to create or update rows; RLS intentionally blocks those calls.
     let targetRuleSetId = existingRuleSetId;
-    const EXTRACTION_VERSION_FOR_LOOKUP = "v1.2026.05.19";
-    if (!targetRuleSetId) {
-      try {
-        const { data: existingSets } = await supabase
-          .from("lease_expense_rule_sets")
-          .select("id, status, version, extraction_version")
-          .eq("lease_id", lease.id)
-          .not("status", "eq", "archived")
-          .order("version", { ascending: false })
-          .limit(1);
-        const latest = existingSets?.[0];
-        if (latest?.id) {
-          const sameExtractionVersion =
-            !latest.extraction_version || latest.extraction_version === EXTRACTION_VERSION_FOR_LOOKUP;
-          if (latest.status !== "approved" || sameExtractionVersion) {
-            targetRuleSetId = latest.id;
-            devLog(
-              `${tag} reusing existing rule_set ${latest.id} (v${latest.version}, status=${latest.status}, ev=${latest.extraction_version || "—"})`,
-            );
-          } else {
-            devLog(
-              `${tag} latest rule_set is approved with different extraction_version (${latest.extraction_version}) — creating a new draft for ${EXTRACTION_VERSION_FOR_LOOKUP}`,
-            );
-          }
-        }
-      } catch (err) {
-        devWarn(`${tag} existing rule_set lookup failed:`, err?.message || err);
-      }
-    }
 
     let result = { ruleSet: null, rules: [] };
     try {
@@ -990,7 +763,6 @@ export const leaseExpenseRuleService = {
       normalizeText(createdFrom).includes("lease_rule_pipeline") ? EVIDENCE_ALIGNED_EXTRACTION_VERSION : null,
       LEGACY_EXTRACTION_VERSION,
     );
-    const isEvidenceAlignedSave = isEvidenceAlignedVersion(incomingExtractionVersion);
     const normalizedRules = finalizeLeaseExpenseRules(rules, status);
     const { categories: persistedCategories, rules: resolvedRules } = await ensurePersistentCategories({
       orgId,
@@ -1002,64 +774,12 @@ export const leaseExpenseRuleService = {
     let ruleSetId = existingRuleSetId;
     let currentVersion = 1;
 
-    // ── Version-management DECISION only ────────────────────────────────
-    // This block decides which rule_set to target (reuse an existing id,
-    // or create a new one at the next version) and what version number to
-    // use. It no longer writes to lease_expense_rule_sets itself -- that
-    // mechanical write now happens inside save_lease_expense_rule_set (one
-    // transaction with the rules/values/clauses write + the audit row).
-    // ruleSetId stays null through this block exactly when a new rule_set
-    // row should be created (the RPC's p_rule_set_id contract).
-    if (ruleSetId) {
-      const { data: targetRuleSet } = await supabase
-        .from("lease_expense_rule_sets")
-        .select("version")
-        .eq("id", ruleSetId)
-        .eq("org_id", orgId)
-        .maybeSingle();
-      currentVersion = Number(targetRuleSet?.version) || currentVersion;
-    } else {
-      const { data: existingSets } = await supabase
-        .from("lease_expense_rule_sets")
-        .select("*")
-        .eq("lease_id", lease.id)
-        .not("status", "eq", "archived")
-        .order("version", { ascending: false })
-        .limit(5);
-
-      if (existingSets && existingSets.length > 0) {
-        const latestSet = existingSets[0];
-        const latestVersion = Number(latestSet.version) || 1;
-        currentVersion = latestVersion;
-        let latestRows = [];
-        try {
-          const { data: rows, error: rowsError } = await supabase
-            .from("lease_expense_rules")
-            .select("*")
-            .eq("rule_set_id", latestSet.id)
-            .eq("lease_id", lease.id);
-          if (rowsError) throw rowsError;
-          latestRows = rows || [];
-        } catch (error) {
-          devWarn(`${tag} latest rule_set child lookup skipped:`, error?.message || error);
-        }
-
-        const latestHasProtectedRows = latestRows.some(isProtectedHumanRule);
-        const latestVersionMatches = normalizeText(latestSet.extraction_version) === normalizeText(incomingExtractionVersion);
-        const latestIsFrozen = isApprovedWorkflowStatus(latestSet.status) || latestHasProtectedRows;
-        const shouldCreateNewVersion = isEvidenceAlignedSave && !latestVersionMatches && latestIsFrozen;
-
-        if (shouldCreateNewVersion) {
-          currentVersion = latestVersion + 1;
-          devLog(`${tag} will create v${currentVersion} rule_set for ${incomingExtractionVersion}; preserving protected rows from prior set`);
-        } else {
-          ruleSetId = latestSet.id;
-          currentVersion = latestVersion;
-          devLog(`${tag} reusing rule_set ${ruleSetId} (v${currentVersion}) for ${incomingExtractionVersion}`);
-        }
-      } else {
-        currentVersion = 1;
-      }
+    // Browser code no longer queries lease_expense_rule_sets for version
+    // decisions. That table is RLS-protected; the Edge Function/RPC owns the
+    // mechanical write, and callers may pass an explicit existingRuleSetId
+    // when they are intentionally editing a known set.
+    if (!ruleSetId) {
+      currentVersion = 1;
     }
 
     // Save every rule we have a canonical category text for, even if the
@@ -1179,55 +899,11 @@ export const leaseExpenseRuleService = {
       return payload;
     });
 
-    // ── Preserve user-approved fields on upsert ─────────────────────────
-    // Per Part 1 spec idempotency rule:
-    //   "If rule_key exists and review_status is approved, do not overwrite
-    //    user-reviewed fields."
-    //
-    // We fetch existing rows for the target rule_set keyed by rule_key,
-    // and for any row whose existing review_status is 'approved', we
-    // override the new payload's review/approval/published fields with the
-    // preserved values. Without this, an extract click that hits the same
-    // rule_key UPSERTs the row back to 'needs_review' and silently undoes
-    // the user's approval.
     let preservedByKey = new Map();
     let protectedByCanonicalKey = new Map();
-    // Note: no longer gated on `ruleSetId` being already-known -- in the
-    // original code ruleSetId was always truthy by this point (the rule_set
-    // row was created synchronously above); now that creation is deferred
-    // to the RPC, ruleSetId can still be null here for a brand-new version.
-    // The query below is lease_id-scoped (not rule_set-scoped) anyway, so
-    // this always ran in practice -- keeping it ungated preserves that.
-    if (rulePayloads.length > 0) {
-      try {
-        const ruleKeys = rulePayloads.map((p) => p.rule_key).filter(Boolean);
-        if (ruleKeys.length > 0) {
-          const { data: existing } = await supabase
-            .from("lease_expense_rules")
-            .select("*")
-            .eq("lease_id", lease.id)
-            .in("rule_key", ruleKeys);
-          for (const row of existing || []) {
-            preservedByKey.set(row.rule_key, row);
-          }
-        }
-        const { data: existingForLease, error: existingForLeaseError } = await supabase
-          .from("lease_expense_rules")
-          .select("*")
-          .eq("lease_id", lease.id);
-        if (existingForLeaseError) throw existingForLeaseError;
-        for (const row of existingForLease || []) {
-          if (isRuleSuperseded(row) || !isProtectedHumanRule(row)) continue;
-          const canonicalKey = canonicalRulePersistenceKey(row);
-          const current = protectedByCanonicalKey.get(canonicalKey);
-          if (!current || scorePersistedRuleForMerge(row) > scorePersistedRuleForMerge(current)) {
-            protectedByCanonicalKey.set(canonicalKey, row);
-          }
-        }
-      } catch (err) {
-        devWarn(`${tag} existing-rule pre-fetch skipped:`, err?.message || err);
-      }
-    }
+    // Existing-rule preservation is now intentionally server-owned. Keeping
+    // this browser-side prefetch caused direct protected-table reads and
+    // repeated 403s in Lease Expense Rules.
 
     if (protectedByCanonicalKey.size > 0) {
       let canonicalMergedCount = 0;
@@ -1299,19 +975,7 @@ export const leaseExpenseRuleService = {
       }
     }
 
-    let supersededRuleIds = [];
-    if (isEvidenceAlignedSave && ruleSetId) {
-      try {
-        supersededRuleIds = await computeSupersededRuleIds({ leaseId: lease.id, ruleSetId });
-        if (supersededRuleIds.length > 0) {
-          devLog(
-            `[leaseExpenseRuleService] saveRuleSet will supersede ${supersededRuleIds.length} stale unresolved rule(s) as part of the v3 upsert`,
-          );
-        }
-      } catch (error) {
-        devWarn("[leaseExpenseRuleService] stale rule supersede computation warning:", error?.message || error);
-      }
-    }
+    const supersededRuleIds = [];
 
     // ── Values/clauses source data, keyed by rule_key ──────────────────
     // The RPC hasn't run yet, so newly-created rules' DB ids aren't known
@@ -1375,16 +1039,6 @@ export const leaseExpenseRuleService = {
       throw new Error(rpcResult.message || "Could not save lease expense rule set");
     }
     const resolvedRuleSetId = rpcResult?.rule_set_id || ruleSetId;
-
-    // Status recalculation and the conditional lease-config sync stay
-    // separate, unchanged client-side calls -- both depend on decision
-    // logic (deriveRuleSetStatusFromRules / buildLeaseConfigFromRules) too
-    // large/risky to port into the RPC per the confirmed narrow scope.
-    try {
-      await this.recalculateRuleSetStatus(resolvedRuleSetId);
-    } catch (error) {
-      devWarn("[leaseExpenseRuleService] rule set status recalculation warning:", error?.message || error);
-    }
 
     const persisted = await this.loadRuleSet(lease.id);
     if (status === "approved") {

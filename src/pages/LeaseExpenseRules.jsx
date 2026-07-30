@@ -44,7 +44,6 @@ import {
 
 
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
-import { syncApprovedAbstractExpenseTermsToRules } from "@/services/leaseAbstractService";
 import {
   approveLeaseExpenseRule,
   createRuleReviewIdempotencyKey,
@@ -87,7 +86,6 @@ import {
   isCoverageGapRule,
   getRuleValidation,
   buildRuleHierarchyPatch,
-  pickPreferredRuleSet,
   getLeaseBuildingId,
   buildDisplayRows,
   dedupeDisplayRows,
@@ -106,16 +104,6 @@ function isApprovedLeaseForExpenseRuleSync(lease) {
     status === "approved" ||
     status === "budget_ready" ||
     Boolean(lease?.abstract_approved_at || lease?.approved_at || lease?.approved_lease_abstract_id)
-  );
-}
-
-function getApprovedAbstractSnapshot(lease) {
-  return (
-    lease?.abstract_snapshot ||
-    lease?.extraction_data?.abstract_snapshot ||
-    lease?.extraction_data?.approved_abstract ||
-    lease?.extraction_data?.abstract ||
-    null
   );
 }
 
@@ -193,52 +181,14 @@ export default function LeaseExpenseRules() {
 
 
 
-  // Direct source-of-truth query: read persisted non-archived rule sets the
-  // current user can see (RLS handles scoping), then filter to the selected
-  // scope in memory so the page does not depend on a second resolver path.
-  const { data: directRuleSets = [], isLoading: isLoadingDirect } = useQuery({
-    queryKey: ["lease-expense-rule-sets-direct"],
-    queryFn: async () => {
-      const { data: sets, error: setsErr } = await supabase
-        .from("lease_expense_rule_sets")
-        .select("*")
-        .not("status", "eq", "archived")
-        .order("version", { ascending: false });
-      if (setsErr) {
-        console.error("[LeaseExpenseRules] direct rule_sets read failed:", setsErr);
-        return [];
-      }
-      const ruleSetsByLease = new Map();
-      for (const s of sets || []) {
-        const existing = ruleSetsByLease.get(s.lease_id) || [];
-        existing.push(s);
-        ruleSetsByLease.set(s.lease_id, existing);
-      }
-      const setIds = (sets || []).map((s) => s.id).filter(Boolean);
-      console.log("[LeaseExpenseRules-DIRECT] rule_sets read:", sets?.length || 0);
-      if (setIds.length === 0) return [];
-      const { data: rules, error: rulesErr } = await supabase
-        .from("lease_expense_rules")
-        .select("*")
-        .in("rule_set_id", setIds);
-      if (rulesErr) {
-        console.error("[LeaseExpenseRules] direct rules read failed:", rulesErr);
-        return [];
-      }
-      console.log("[LeaseExpenseRules-DIRECT] rules read:", rules?.length || 0);
-      const byRuleSet = new Map();
-      for (const r of rules || []) {
-        const list = byRuleSet.get(r.rule_set_id) || [];
-        list.push(r);
-        byRuleSet.set(r.rule_set_id, list);
-      }
-      const latest = [...ruleSetsByLease.values()].map((ruleSetsForLease) => pickPreferredRuleSet(ruleSetsForLease, byRuleSet)).filter(Boolean);
-      return latest.map((s) => ({
-        leaseId: s.lease_id,
-        ruleSet: s,
-        rules: byRuleSet.get(s.id) || [],
-      }));
-    },
+  const {
+    data: serverRuleSets = [],
+    isLoading: isLoadingRuleSets,
+    error: ruleSetLoadError,
+  } = useQuery({
+    queryKey: ["lease-expense-rule-sets", leaseIds],
+    queryFn: () => leaseExpenseRuleService.loadRuleSets(leaseIds),
+    enabled: leaseIds.length > 0,
   });
 
   const ruleSetsByLease = useMemo(() => {
@@ -250,9 +200,9 @@ export default function LeaseExpenseRules() {
       return [];
     }
     
-    // Direct DB rows are the source of truth for actionable rules.
+    // Server-loaded persisted rows are the source of truth for actionable rules.
     const persistedLeaseIdsWithRules = new Set();
-    for (const entry of directRuleSets) {
+    for (const entry of serverRuleSets) {
       if (scopeIdSet.size > 0 && !scopeIdSet.has(entry.leaseId)) continue;
       if (entry.rules && entry.rules.length > 0) persistedLeaseIdsWithRules.add(entry.leaseId);
       merged.push(entry);
@@ -261,13 +211,13 @@ export default function LeaseExpenseRules() {
     const finalMerged = merged.filter((m) => m.rules && m.rules.length > 0);
     console.log("[LeaseExpenseRules] all leases in scope:", leases.map(l => ({ id: l.id, name: l.tenant_name || l.name, abstract_status: l.abstract_status })));
     console.log("[LeaseExpenseRules] merged ruleSetsByLease:", {
-      direct_entries: directRuleSets?.length || 0,
+      server_entries: serverRuleSets?.length || 0,
       after_scope_filter: finalMerged.length,
     });
     return finalMerged;
-  }, [directRuleSets, leaseIds, scopeProperty, scopeBuilding, scopeUnit, selectorFilteredLeases]);
+  }, [serverRuleSets, leaseIds, scopeProperty, scopeBuilding, scopeUnit, selectorFilteredLeases]);
 
-  const isLoading = isLoadingDirect;
+  const isLoading = isLoadingRuleSets;
 
 
 
@@ -369,11 +319,11 @@ export default function LeaseExpenseRules() {
 
   const persistedLeaseIdsWithRules = useMemo(() => {
     const ids = new Set();
-    for (const entry of directRuleSets || []) {
+    for (const entry of serverRuleSets || []) {
       if (entry?.leaseId && (entry.rules || []).length > 0) ids.add(entry.leaseId);
     }
     return ids;
-  }, [directRuleSets]);
+  }, [serverRuleSets]);
 
   const approvedLeasesMissingRules = useMemo(
     () =>
@@ -410,15 +360,10 @@ export default function LeaseExpenseRules() {
         lease_id: leaseId,
         patch: businessPatch,
       });
-      const data = result?.rule;
-      if (data?.rule_set_id) {
-        await leaseExpenseRuleService.recalculateRuleSetStatus(data.rule_set_id);
-      }
-      return data;
+      return result?.rule;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
-      queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
       queryClient.invalidateQueries({ queryKey: ["expense-classification-rule-sets"] });
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
@@ -428,7 +373,6 @@ export default function LeaseExpenseRules() {
 
   const invalidateRuleWorkflowQueries = () => {
     queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
-    queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
     queryClient.invalidateQueries({ queryKey: ["expense-classification-rule-sets"] });
     queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
     queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
@@ -459,13 +403,7 @@ export default function LeaseExpenseRules() {
             suppressHttpError: true,
           });
 
-          let persistedCount = persisted?.rules?.length || 0;
-          if (persistedCount === 0) {
-            const snapshot = getApprovedAbstractSnapshot(lease) || { fields: lease?.extraction_data?.fields || {} };
-            await syncApprovedAbstractExpenseTermsToRules(lease, snapshot);
-            persisted = await leaseExpenseRuleService.loadRuleSet(lease.id).catch(() => null);
-            persistedCount = persisted?.rules?.length || 0;
-          }
+          const persistedCount = persisted?.rules?.length || 0;
 
           if (persistedCount > 0) {
             summary.repaired += 1;
@@ -646,7 +584,7 @@ export default function LeaseExpenseRules() {
           variant="outline"
           size="sm"
           onClick={() => syncApprovedLeaseRulesMutation.mutate()}
-          disabled={isLoadingDirect || syncApprovedLeaseRulesMutation.isPending || approvedLeasesMissingRules.length === 0}
+          disabled={isLoadingRuleSets || syncApprovedLeaseRulesMutation.isPending || approvedLeasesMissingRules.length === 0}
           title={
             approvedLeasesMissingRules.length === 0
               ? "No approved leases in this scope are missing persisted expense rules."
@@ -761,14 +699,23 @@ export default function LeaseExpenseRules() {
                 <TableRow>
                   <TableCell colSpan={12} className="py-12 text-center text-sm text-slate-400">
                     <div className="mx-auto flex max-w-2xl flex-col items-center gap-3">
-                      <p>
-                        {displayMode === "gaps"
+                      {ruleSetLoadError ? (
+                        <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-left text-red-700">
+                          <p className="font-medium">Could not load lease expense rules.</p>
+                          <p className="mt-1 text-xs">
+                            {ruleSetLoadError?.message || "The server rule-list function failed. Check function deployment and page access."}
+                          </p>
+                        </div>
+                      ) : (
+                        <p>
+                          {displayMode === "gaps"
                           ? "No coverage gaps in this view."
                           : approvedLeasesMissingRules.length > 0
                             ? `${approvedLeasesMissingRules.length} approved lease${approvedLeasesMissingRules.length === 1 ? "" : "s"} in this scope have no persisted expense rules yet.`
                             : "No lease-derived expense rules in this view. Sync approved leases or review coverage gaps for missing rule evidence."}
-                      </p>
-                      {displayMode !== "gaps" && approvedLeasesMissingRules.length > 0 && (
+                        </p>
+                      )}
+                      {!ruleSetLoadError && displayMode !== "gaps" && approvedLeasesMissingRules.length > 0 && (
                         <Button
                           type="button"
                           variant="outline"

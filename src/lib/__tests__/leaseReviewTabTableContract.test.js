@@ -54,6 +54,7 @@ describe("LeaseReviewTabTable contract", () => {
 
   it("separates filled rows from missing/source-only rows and cleans source previews", () => {
     expect(source).toContain("completenessFilter");
+    expect(source).toContain('useState("filled")');
     expect(source).toContain("Filled");
     expect(source).toContain("Missing");
     expect(source).toContain("rowMatchesCompletenessFilter(row, completenessFilter)");
