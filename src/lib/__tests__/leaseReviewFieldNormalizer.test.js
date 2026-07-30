@@ -74,6 +74,35 @@ describe("leaseReviewFieldNormalizer smoke test", () => {
     expect(termMonths.status).toBe("needs_review");
   });
 
+  it("derives monthly rent from annual rent with source lineage when monthly rent is missing", () => {
+    const lease = {
+      id: "annual-only-rent-lease",
+      extraction_data: {
+        fields: {
+          annual_rent: 25200,
+          monthly_rent: null,
+        },
+        field_evidence: {
+          annual_rent: {
+            value: 25200,
+            source_text: "Annual Rent: $25,200",
+            source_page: 3,
+            extraction_status: "extracted",
+          },
+        },
+      },
+    };
+
+    const rows = normalizeStandardFields(lease);
+    const monthlyRent = rows.find((r) => r.canonicalKey === "monthly_rent");
+
+    expect(monthlyRent.value).toBe(2100);
+    expect(monthlyRent.extractionMode).toBe(EXTRACTION_MODES.CALCULATED);
+    expect(monthlyRent.sourcePage).toBe(3);
+    expect(monthlyRent.sourceText).toBe("Annual Rent: $25,200");
+    expect(monthlyRent.validationMessage).toMatch(/annual rent divided by 12/i);
+  });
+
   it("keeps consent fields when cited transfer language semantically supports the value", () => {
     const lease = {
       id: "consent-lease",
@@ -95,6 +124,30 @@ describe("leaseReviewFieldNormalizer smoke test", () => {
     const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "landlord_consent_for_transfer");
     expect(row.value).toBe("prior written landlord consent required");
     expect(row.validationMessage).toBeFalsy();
+  });
+
+  it("rejects invalid typed standard values in grouped Lease Review rows", () => {
+    const lease = {
+      id: "invalid-standard-value-lease",
+      extraction_data: {
+        fields: {
+          expiration_date: "2024-02-30",
+        },
+        field_evidence: {
+          expiration_date: {
+            value: "2024-02-30",
+            source_text: "Expiration Date: February 30, 2024",
+            source_page: 1,
+            extraction_status: "extracted",
+          },
+        },
+      },
+    };
+
+    const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "expiration_date");
+    expect(row.value).toBeNull();
+    expect(row.validation_errors).toContain("expiration_date_failed_validation");
+    expect(row.validationMessage).toMatch(/valid calendar date/i);
   });
 
   it("marks separate gross lease CAM economics as display-only not applicable instead of missing", () => {

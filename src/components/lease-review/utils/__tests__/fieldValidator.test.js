@@ -77,6 +77,14 @@ describe("validateFieldValue — currency fields", () => {
   it("accepts monthly_rent = '$1,400' (string with currency symbol)", () => {
     expect(validateFieldValue("monthly_rent", "$1,400").valid).toBe(true);
   });
+
+  it("accepts annual_rent = '25,200.00' (string with thousands separator)", () => {
+    expect(validateFieldValue("annual_rent", "25,200.00").valid).toBe(true);
+  });
+
+  it("rejects accounting-negative currency values", () => {
+    expect(validateFieldValue("security_deposit", "($1,400)").valid).toBe(false);
+  });
 });
 
 describe("validateFieldValue — date fields", () => {
@@ -95,6 +103,48 @@ describe("validateFieldValue — date fields", () => {
   it("rejects an ISO-shaped but invalid calendar date (month 13)", () => {
     // JS Date silently wraps Feb-30 to Mar-1, but month 13 is truly NaN.
     expect(validateFieldValue("commencement_date", "2024-13-01").valid).toBe(false);
+  });
+
+  it("rejects an ISO-shaped rollover date such as February 30", () => {
+    expect(validateFieldValue("expiration_date", "2024-02-30").valid).toBe(false);
+  });
+});
+
+describe("validateFieldValue — percentages, booleans, responsibilities, and phones", () => {
+  it("validates select-style option values and common domain aliases", () => {
+    expect(validateFieldValue("lease_type", "nnn").valid).toBe(true);
+    expect(validateFieldValue("lease_type", "Triple Net (NNN)").valid).toBe(true);
+    expect(validateFieldValue("lease_type", "not-a-real-lease-type").valid).toBe(false);
+    expect(validateFieldValue("billing_frequency", "monthly").valid).toBe(true);
+    expect(validateFieldValue("billing_frequency", "per month").valid).toBe(true);
+    expect(validateFieldValue("billing_frequency", "every few weeks").valid).toBe(false);
+    expect(validateFieldValue("cam_cap_type", "non_cumulative").valid).toBe(true);
+    expect(validateFieldValue("cam_cap_type", "unlimited maybe").valid).toBe(false);
+  });
+
+  it("accepts percent strings and rejects percentages over 100", () => {
+    expect(validateFieldValue("escalation_rate", "5%").valid).toBe(true);
+    expect(validateFieldValue("cam_cap_pct", 101).valid).toBe(false);
+  });
+
+  it("accepts clear boolean values and rejects party names in boolean fields", () => {
+    expect(validateFieldValue("tenant_insurance_required", "Yes").valid).toBe(true);
+    expect(validateFieldValue("tenant_insurance_required", "tenant").valid).toBe(false);
+  });
+
+  it("accepts normalized responsibility values and rejects long clause text", () => {
+    expect(validateFieldValue("responsibility_taxes", "landlord_with_cap").valid).toBe(true);
+    expect(validateFieldValue("electric_responsibility", "Tenant separately metered").valid).toBe(true);
+    expect(validateFieldValue("responsibility_insurance", "Tenant shall indemnify, defend, protect, and hold landlord harmless from all claims arising from the premises and the lease obligations in every case.").valid).toBe(false);
+  });
+
+  it("accepts normal phone numbers and rejects contact-line text with no phone", () => {
+    expect(validateFieldValue("tenant_contact_phone", "618-946-9700").valid).toBe(true);
+    expect(validateFieldValue("tenant_contact_phone", "Narendra Pydi").valid).toBe(false);
+  });
+
+  it("accepts square footage with a unit suffix", () => {
+    expect(validateFieldValue("square_footage", "1,875 SF").valid).toBe(true);
   });
 });
 

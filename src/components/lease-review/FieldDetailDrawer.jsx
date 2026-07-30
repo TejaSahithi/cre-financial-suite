@@ -60,9 +60,13 @@ const confidenceClass = (score) => {
 };
 
 function formatTime(value) {
-  if (!value) return "â€”";
+  if (!value) return "-";
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString();
+}
+
+function resolveDrawerFieldKey(field) {
+  return field?.key ?? field?.fieldKey ?? field?.canonicalKey ?? field?.field_key ?? null;
 }
 
 export default function FieldDetailDrawer({
@@ -88,7 +92,7 @@ export default function FieldDetailDrawer({
   const [mode, setMode] = useState(initialMode);
   const [editValue, setEditValue] = useState("");
   const [overrideReason, setOverrideReason] = useState("");
-  // Editable evidence form state â€” reviewer can correct what extraction
+  // Editable evidence form state - reviewer can correct what extraction
   // missed or got wrong without re-running the pipeline.
   const [evRaw, setEvRaw] = useState("");
   const [evSourcePage, setEvSourcePage] = useState("");
@@ -98,25 +102,28 @@ export default function FieldDetailDrawer({
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
-  const resolvedValue = field ? readFieldValue(lease, field.key) : null;
-  const value = field ? (field.normalized_value ?? field.value ?? resolvedValue) : null;
+  const fieldKey = resolveDrawerFieldKey(field);
+  const actionField = field && fieldKey ? { ...field, key: fieldKey } : field;
+  const fieldLabel = field?.label || field?.field_label || (fieldKey ? getLeaseFieldLabel(fieldKey, fieldKey) : "Field");
+  const resolvedValue = fieldKey ? readFieldValue(lease, fieldKey) : null;
+  const value = field ? (field.normalized_value ?? field.normalizedValue ?? field.value ?? resolvedValue) : null;
   const resolvedEvidence = field
-    ? readFieldEvidence(lease, field.key)
+    ? readFieldEvidence(lease, fieldKey)
     : { rawValue: null, sourcePage: null, sourceText: null, extractionStatus: null };
   const evidence = field ? {
     ...resolvedEvidence,
     rawValue: field.raw_value ?? field.rawValue ?? resolvedEvidence.rawValue,
     sourcePage: field.page_number ?? field.source_page ?? resolvedEvidence.sourcePage,
     sourceText: field.source_text ?? field.exact_source_text ?? resolvedEvidence.sourceText,
-    extractionStatus: field.status ?? field.extraction_status ?? resolvedEvidence.extractionStatus,
+    extractionStatus: field.extraction_status ?? field.extractionStatus ?? resolvedEvidence.extractionStatus ?? field.status,
   } : resolvedEvidence;
   const { rawValue, sourcePage, sourceText } = evidence;
-  const confidence = field ? (field.confidence_score ?? field.confidence ?? readFieldConfidence(lease, field.key)) : null;
+  const confidence = field ? (field.confidence_score ?? field.confidence ?? readFieldConfidence(lease, fieldKey)) : null;
   const status = review?.status || REVIEW_STATUSES.PENDING;
   const confidenceLabel =
     classifyConfidence(confidence) === "unknown" ? "Unknown Confidence" : `${Math.round(confidence)}%`;
   const inferredExtractionStatus = field
-    ? resolveExtractionStatus(lease, field.key, { value, confidence, evidence })
+    ? resolveExtractionStatus(lease, fieldKey, { value, confidence, evidence })
     : "missing";
   const extractionStatusLabel = EXTRACTION_STATUS_LABELS[inferredExtractionStatus] || inferredExtractionStatus;
 
@@ -133,7 +140,7 @@ export default function FieldDetailDrawer({
     setEvSourceText(evidence?.sourceText == null ? "" : String(evidence.sourceText));
     setEvConfidence(typeof confidence === "number" ? String(confidence) : "");
     setEvExtractionStatus(evidence?.extractionStatus || inferredExtractionStatus || "");
-  }, [open, field?.key]);  
+  }, [open, fieldKey, initialMode, value, review?.note, rawValue, sourcePage, sourceText, confidence, evidence?.extractionStatus, inferredExtractionStatus]);
 
   // Whether this field needs an override reason to clear the approval gate.
   const hasEvidence = hasValidSourceEvidence(evidence);
@@ -161,7 +168,8 @@ export default function FieldDetailDrawer({
 
   const handleSave = async () => {
     let val = typeof editValue === "string" ? editValue.trim() : editValue;
-    if (NUMERIC_REVIEW_FIELDS.has(field.key) || field.type === "number" || field.type === "currency") {
+    if (!actionField?.key) return;
+    if (NUMERIC_REVIEW_FIELDS.has(actionField.key) || field.type === "number" || field.type === "currency") {
       const n = parseFloat(String(val).replace(/[$,]/g, ""));
       val = Number.isNaN(n) ? null : n;
     }
@@ -191,7 +199,7 @@ export default function FieldDetailDrawer({
       })(),
       extraction_status: typeof evExtractionStatus === "string" && evExtractionStatus.trim().length > 0 ? evExtractionStatus.trim() : undefined,
     };
-    await onSaveEdit(field, val, evidencePatch);
+    await onSaveEdit(actionField, val, evidencePatch);
     setMode("view");
   };
 
@@ -222,10 +230,10 @@ export default function FieldDetailDrawer({
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <SheetTitle className="truncate text-base">
-                {field.label}
+                {fieldLabel}
                 {field.required && <span className="ml-1 text-red-500">*</span>}
               </SheetTitle>
-              <SheetDescription className="text-xs text-slate-500">{field.key}</SheetDescription>
+              <SheetDescription className="text-xs text-slate-500">{fieldKey}</SheetDescription>
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
               <Badge className={`text-[10px] ${confidenceClass(confidence)}`}>{confidenceLabel}</Badge>
@@ -244,12 +252,12 @@ export default function FieldDetailDrawer({
             </p>
             {mode === "edit" ? (
               <div className="space-y-2">
-                {hasLeaseFieldOptions(field.options || field.key) ? (
+                {hasLeaseFieldOptions(field.options || fieldKey) ? (
                   <SelectWithCustom
                     value={editValue}
                     onChange={(next) => setEditValue(next)}
-                    options={LEASE_FIELD_OPTIONS[field.options || field.key]}
-                    placeholder={`Select ${field.label.toLowerCase()}`}
+                    options={LEASE_FIELD_OPTIONS[field.options || fieldKey]}
+                    placeholder={`Select ${String(fieldLabel).toLowerCase()}`}
                   />
                 ) : field.type === "boolean" ? (
                   <Select value={String(editValue)} onValueChange={(v) => setEditValue(v)}>
@@ -292,11 +300,11 @@ export default function FieldDetailDrawer({
             ) : (
               <p className="rounded-md bg-slate-50 px-3 py-2 text-base font-medium text-slate-900">
                 {value == null || value === ""
-                  ? "â€”"
+                  ? "-"
                   : field.type === "currency" && !Number.isNaN(Number(value))
                   ? `$${Number(value).toLocaleString()}`
-                  : field.type === "select" && hasLeaseFieldOptions(field.options || field.key)
-                  ? getLeaseFieldLabel(field.options || field.key, value) || String(value)
+                  : field.type === "select" && hasLeaseFieldOptions(field.options || fieldKey)
+                  ? getLeaseFieldLabel(field.options || fieldKey, value) || String(value)
                   : String(value)}
               </p>
             )}
@@ -304,7 +312,7 @@ export default function FieldDetailDrawer({
 
           {/* Release 1: calculated fields carry a derivation trace
               (e.g. "monthly_rent(1470) x 12" for annual_rent) all the way
-              to the persisted record, but nothing rendered it â€” a reviewer
+              to the persisted record, but nothing rendered it - a reviewer
               saw the "Calculated" mode badge with no way to see the actual
               formula/inputs. readFieldEvidence() already resolves this from
               evidence.derivation_trace (leaseReviewSchema.js), so this is
@@ -318,7 +326,7 @@ export default function FieldDetailDrawer({
             </section>
           )}
 
-          {/* Editable evidence form â€” reviewer can correct extractor output
+          {/* Editable evidence form - reviewer can correct extractor output
               without re-running the pipeline. Persists via onSaveEvidence. */}
           <section className="space-y-3 rounded-md border border-slate-200 bg-slate-50/50 p-3">
             <div className="flex items-center justify-between">
@@ -363,7 +371,7 @@ export default function FieldDetailDrawer({
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
-                <Label className="text-[10px] font-semibold uppercase text-slate-500">Confidence Score (0â€“100)</Label>
+                <Label className="text-[10px] font-semibold uppercase text-slate-500">Confidence Score (0-100)</Label>
                 <Input
                   className="mt-1"
                   type="number"
@@ -415,7 +423,7 @@ export default function FieldDetailDrawer({
                 className="bg-blue-600 hover:bg-blue-700"
                 disabled={!onSaveEvidence || isSaving}
                 onClick={() =>
-                  onSaveEvidence && onSaveEvidence(field, buildEvidencePatchFromForm())
+                  onSaveEvidence && onSaveEvidence(actionField, buildEvidencePatchFromForm())
                 }
               >
                 {isSaving && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
@@ -426,7 +434,7 @@ export default function FieldDetailDrawer({
 
           <section className="grid gap-3 sm:grid-cols-2">
             <Meta label="Review Status" value={REVIEW_STATUS_LABELS[status]} />
-            <Meta label="Reviewer" value={review?.reviewer || "â€”"} />
+            <Meta label="Reviewer" value={review?.reviewer || "-"} />
             <Meta label="Reviewed At" value={formatTime(review?.reviewed_at)} />
           </section>
 
@@ -451,7 +459,7 @@ export default function FieldDetailDrawer({
                     {(row.old_value || row.new_value) && (
                       <div className="mt-0.5 text-[11px] text-slate-500">
                         {row.old_value ? `from ${row.old_value} ` : ""}
-                        {row.new_value ? `â†’ ${row.new_value}` : ""}
+                        {row.new_value ? `-> ${row.new_value}` : ""}
                       </div>
                     )}
                   </li>
@@ -475,8 +483,8 @@ export default function FieldDetailDrawer({
             <Textarea
               placeholder={
                 needsOverride
-                  ? "Explain why this value is accepted without source evidence (e.g. confirmed verbally with tenant, reviewed in source PDF page 3)â€¦"
-                  : "Optional reviewer note for this fieldâ€¦"
+                  ? "Explain why this value is accepted without source evidence (e.g. confirmed verbally with tenant, reviewed in source PDF page 3)..."
+                  : "Optional reviewer note for this field..."
               }
               rows={3}
               value={overrideReason}
@@ -495,7 +503,7 @@ export default function FieldDetailDrawer({
               <Button
                 size="sm"
                 className="bg-blue-600 hover:bg-blue-700"
-                onClick={() => onSaveOverrideReason && onSaveOverrideReason(field, overrideReason)}
+                onClick={() => onSaveOverrideReason && onSaveOverrideReason(actionField, overrideReason)}
                 disabled={!onSaveOverrideReason || isSaving || overrideReason === (review?.note || "")}
               >
                 {isSaving && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
@@ -505,7 +513,7 @@ export default function FieldDetailDrawer({
             {needsOverride && (
               <p className="text-[11px] text-amber-700">
                 This required field has no extracted source page/text. Either provide an override reason here, or
-                Edit and re-confirm to attach evidence â€” otherwise approval stays blocked.
+                Edit and re-confirm to attach evidence - otherwise approval stays blocked.
               </p>
             )}
           </section>
@@ -533,10 +541,10 @@ export default function FieldDetailDrawer({
                     try { await handleSave(); }
                     catch (err) { console.warn("[FieldDetailDrawer] save-before-accept failed:", err); return; }
                   } else if (onSaveEvidence && evidenceFormChanged()) {
-                    try { await onSaveEvidence(field, buildEvidencePatchFromForm()); }
+                    try { await onSaveEvidence(actionField, buildEvidencePatchFromForm()); }
                     catch (err) { console.warn("[FieldDetailDrawer] evidence-save-before-accept failed:", err); return; }
                   }
-                  await onAccept(field);
+                  await onAccept(actionField);
                 }}
                 disabled={isSaving}
               >
@@ -551,14 +559,14 @@ export default function FieldDetailDrawer({
                 size="sm"
                 variant="outline"
                 className="text-red-700"
-                onClick={() => onReject(field)}
+                onClick={() => onReject(actionField)}
                 disabled={isSaving}
               >
                 <X className="mr-1 h-3.5 w-3.5" />
                 Reject
               </Button>
               {field.allowNA !== false && (
-                <Button size="sm" variant="outline" onClick={() => onMarkNA(field)} disabled={isSaving}>
+                <Button size="sm" variant="outline" onClick={() => onMarkNA(actionField)} disabled={isSaving}>
                   <MinusCircle className="mr-1 h-3.5 w-3.5" />
                   N/A
                 </Button>
@@ -567,7 +575,7 @@ export default function FieldDetailDrawer({
                 size="sm"
                 variant="outline"
                 className="text-amber-700"
-                onClick={() => onMarkManualRequired(field)}
+                onClick={() => onMarkManualRequired(actionField)}
                 disabled={isSaving}
               >
                 <HelpCircle className="mr-1 h-3.5 w-3.5" />
@@ -577,7 +585,7 @@ export default function FieldDetailDrawer({
                 size="sm"
                 variant="outline"
                 className="text-purple-700"
-                onClick={() => onNeedsLegal(field)}
+                onClick={() => onNeedsLegal(actionField)}
                 disabled={isSaving}
               >
                 <Gavel className="mr-1 h-3.5 w-3.5" />
@@ -588,7 +596,7 @@ export default function FieldDetailDrawer({
                   size="sm"
                   variant="ghost"
                   className="text-slate-500"
-                  onClick={() => onReset(field)}
+                  onClick={() => onReset(actionField)}
                   disabled={isSaving}
                 >
                   <Undo2 className="mr-1 h-3.5 w-3.5" />

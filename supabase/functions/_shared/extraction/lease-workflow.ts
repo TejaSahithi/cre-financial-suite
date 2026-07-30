@@ -2725,6 +2725,47 @@ function buildLeaseFieldMap(
   let monthlyRentForDerived = asNumber(fieldMap.base_rent_monthly?.value);
   const squareFeetForDerived = asNumber(fieldMap.tenant_rsf?.value) ?? asNumber(fieldMap.rentable_area_sqft?.value);
 
+  if (
+    (monthlyRentForDerived == null || monthlyRentForDerived <= 0) &&
+    fieldHasValidEvidence(fieldMap.annual_rent)
+  ) {
+    const annualRentForMonthly = asNumber(fieldMap.annual_rent?.value);
+    if (annualRentForMonthly != null && annualRentForMonthly > 0) {
+      const derivedMonthly = round2(annualRentForMonthly / 12);
+      const annualRentSourceText = deriveSourceText(fieldMap.annual_rent);
+      const derivedMonthlyField = {
+        ...(fieldMap.base_rent_monthly || { key: "base_rent_monthly", editable: true, field_group: "rent_terms" }),
+        key: "base_rent_monthly",
+        value: derivedMonthly,
+        raw_value: derivedMonthly,
+        normalized_value: derivedMonthly,
+        source_page: fieldMap.annual_rent?.source_page ?? null,
+        source_clause: annualRentSourceText || null,
+        exact_source_text: annualRentSourceText || null,
+        confidence_score: 0.9,
+        extraction_status: "calculated",
+        evidence_type: "derived",
+        source_text_quality: "derived",
+        source_field_keys: ["annual_rent"],
+        derivation_trace: `base_rent_monthly = annual_rent (${annualRentForMonthly}) / 12`,
+        validation_errors: [],
+        requires_review: true,
+        review_reason: "Monthly rent was calculated from annual rent divided by 12. Verify the payment schedule before approval.",
+        approval_blocking_reason: null,
+        editable: true,
+        field_group: "rent_terms",
+      };
+      fieldMap.base_rent_monthly = derivedMonthlyField;
+      if (!fieldHasValidEvidence(fieldMap.monthly_rent)) {
+        fieldMap.monthly_rent = {
+          ...derivedMonthlyField,
+          key: "monthly_rent",
+        };
+      }
+      monthlyRentForDerived = derivedMonthly;
+    }
+  }
+
   // Last-resort safety net, ported from calculator.ts's identical guard (NOT
   // the primary fix — see fact-ledger-extractor.ts's "RENT FIGURES"
   // instruction and monthly_rent/annual_rent's allowedClauseCategories in

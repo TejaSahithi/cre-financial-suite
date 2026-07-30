@@ -18,7 +18,6 @@ import { toast } from "sonner";
 import {
   leaseService,
   persistLeaseExtractionMerge,
-  updateLeaseFieldAndColumns,
   updateLeaseExtractionField,
   backfillLeaseEvidence,
   sendLeaseBackForReextraction,
@@ -70,7 +69,6 @@ import {
   normalizeStoredConfidence,
   isResolvedReview,
   classifyConfidence,
-  resolveFieldColumns,
   resolveExtractionStatus,
   hasValidSourceEvidence,
   isCalculatedExtractionStatus,
@@ -231,9 +229,8 @@ export default function LeaseReview() {
   const [editingField, setEditingField] = useState(null);
   const [editValue, setEditValue] = useState("");
   // True while handleFieldSave or FieldDetailDrawer's onSaveEdit is in
-  // flight (Phase HARD-3B2 -- replaces the removed generic lease-update
-  // mutation's isPending flag as the shared disabled/loading signal now
-  // that both call sites go through updateLeaseFieldAndColumns directly).
+  // flight. Draft review edits persist through update_lease_extraction_field
+  // so schema-drifting typed lease columns are not touched before approval.
   const [fieldSaving, setFieldSaving] = useState(false);
   const [showSignature, setShowSignature] = useState(false);
   const [showApproval, setShowApproval] = useState(false);
@@ -273,10 +270,13 @@ export default function LeaseReview() {
   // Edit a second time inside the drawer).
   const [drawerField, setDrawerField] = useState(null);
   const [drawerMode, setDrawerMode] = useState("view");
-  const drawerReview = drawerField ? fieldReviews[drawerField.key] : null;
+  const getReviewFieldKey = (field) => field?.key ?? field?.fieldKey ?? field?.canonicalKey ?? field?.field_key ?? null;
+  const drawerFieldKey = getReviewFieldKey(drawerField);
+  const drawerReview = drawerFieldKey ? fieldReviews[drawerFieldKey] : null;
   const openDrawer = (field, mode = "view") => {
     setDrawerMode(mode);
-    setDrawerField(field);
+    const key = getReviewFieldKey(field);
+    setDrawerField(key ? { ...field, key } : field);
   };
 
 
@@ -351,7 +351,7 @@ export default function LeaseReview() {
     };
   }, [reviewDocument, uploadedFile]);
   const reviewFieldByKey = reviewDocument?.fields || {};
-  const drawerReviewField = drawerField?.key ? reviewFieldByKey[drawerField.key] || null : null;
+  const drawerReviewField = drawerFieldKey ? reviewFieldByKey[drawerFieldKey] || null : null;
   // P0.7: files already sitting at review_required from before the P0.4/P0.5
   // migrations backfilled review_readiness conservatively to 'partial'
   // (never fabricating 'ready') - without this, they'd stay blocked from
@@ -1518,14 +1518,26 @@ export default function LeaseReview() {
   // Persist a field review change to the backend (saveAbstractDraft writes
   // both the JSONB shape AND lease_field_reviews) and write an audit log
   // entry. UI updates optimistically; on error the local state is reverted.
-  const persistFieldAction = async ({ field, status, value, previousReview, note }) => {
+  const persistFieldAction = async ({ field, status, value, previousReview, note, evidence }) => {
+    const key = getReviewFieldKey(field);
+    if (!key) {
+      toast.error("Cannot save field review: missing field key.");
+      return;
+    }
     const next = {
       ...fieldReviews,
-      [field.key]: {
-        ...(fieldReviews[field.key] || {}),
+      [key]: {
+        ...(fieldReviews[key] || {}),
         status,
         ...(value !== undefined ? { value } : {}),
         ...(note !== undefined ? { note } : {}),
+        ...(evidence?.sourcePage !== undefined ? { source_page: evidence.sourcePage } : {}),
+        ...(evidence?.sourceText !== undefined ? { source_text: evidence.sourceText } : {}),
+        ...(evidence?.extractionStatus !== undefined ? { extraction_status: evidence.extractionStatus } : {}),
+        ...(evidence?.evidenceType !== undefined ? { evidence_type: evidence.evidenceType } : {}),
+        ...(evidence?.sourceTextQuality !== undefined ? { source_text_quality: evidence.sourceTextQuality } : {}),
+        ...(evidence?.sourceFieldKeys !== undefined ? { source_field_keys: evidence.sourceFieldKeys } : {}),
+        ...(evidence?.derivationTrace !== undefined ? { derivation_trace: evidence.derivationTrace } : {}),
         reviewed_at: new Date().toISOString(),
       },
     };
@@ -1537,7 +1549,7 @@ export default function LeaseReview() {
         entityId: lease.id,
         action: status === REVIEW_STATUSES.EDITED ? "field_edit" : `field_${status}`,
         orgId: lease.org_id,
-        fieldChanged: field.key,
+        fieldChanged: key,
         oldValue: previousReview ? previousReview.value ?? previousReview.status : null,
         newValue: value !== undefined ? value : status,
         propertyId: lease.property_id || null,
@@ -1597,6 +1609,11 @@ export default function LeaseReview() {
   };
 
   const handleAccept = (field) => {
+    const key = getReviewFieldKey(field);
+    if (!key) {
+      toast.error("Cannot accept field: missing field key.");
+      return;
+    }
     // Re-read the lease from the React Query cache. The closure-captured
     // `lease` ref is stale right after a Save edit chains into Accept; the
     // cache has the fresh write but the parent component hasn't re-rendered
@@ -1612,8 +1629,19 @@ export default function LeaseReview() {
     // value is fine.
     const cached = queryClient.getQueryData(["lease", leaseId]);
     const freshLease = Array.isArray(cached) ? (cached[0] ?? lease) : (cached || lease);
-    const value = readFieldValue(freshLease, field.key);
-    const evidence = readFieldEvidence(freshLease, field.key);
+    const rowValue = field?.normalized_value ?? field?.normalizedValue ?? field?.value ?? null;
+    const value = readFieldValue(freshLease, key) ?? rowValue;
+    const storedEvidence = readFieldEvidence(freshLease, key);
+    const evidence = {
+      ...(storedEvidence || {}),
+      sourceText: storedEvidence?.sourceText ?? field?.source_text ?? field?.exact_source_text ?? field?.sourceText ?? null,
+      sourcePage: storedEvidence?.sourcePage ?? field?.source_page ?? field?.page_number ?? field?.sourcePage ?? null,
+      extractionStatus: storedEvidence?.extractionStatus ?? field?.extraction_status ?? field?.status ?? null,
+      evidenceType: storedEvidence?.evidenceType ?? field?.evidence_type ?? null,
+      sourceTextQuality: storedEvidence?.sourceTextQuality ?? field?.source_text_quality ?? null,
+      sourceFieldKeys: storedEvidence?.sourceFieldKeys ?? field?.source_field_keys ?? null,
+      derivationTrace: storedEvidence?.derivationTrace ?? field?.derivation_trace ?? null,
+    };
     const hasEvidence = hasValidSourceEvidence(evidence);
 
     // Manual-override signals: the reviewer can accept without lease
@@ -1621,10 +1649,10 @@ export default function LeaseReview() {
     // having saved a reviewer-edited record (source: "manual" /
     // manually_edited: true). Treat any of these as the equivalent of
     // evidence for the Accept gate.
-    const fieldRecord = freshLease?.extraction_data?.fields?.[field.key] || {};
+    const fieldRecord = freshLease?.extraction_data?.fields?.[key] || {};
     const extractionStatus = String(
       fieldRecord.extraction_status
-        || freshLease?.extraction_data?.field_evidence?.[field.key]?.extraction_status
+        || freshLease?.extraction_data?.field_evidence?.[key]?.extraction_status
         || "",
     ).toLowerCase();
     const isManualOverride =
@@ -1650,34 +1678,36 @@ export default function LeaseReview() {
       return;
     }
     return persistFieldAction({
-      field,
+      field: { ...field, key },
       status: REVIEW_STATUSES.ACCEPTED,
-      previousReview: fieldReviews[field.key],
+      value,
+      evidence,
+      previousReview: fieldReviews[key],
     });
   };
   const handleReject = (field) =>
     persistFieldAction({
-      field,
+      field: { ...field, key: getReviewFieldKey(field) },
       status: REVIEW_STATUSES.REJECTED,
-      previousReview: fieldReviews[field.key],
+      previousReview: fieldReviews[getReviewFieldKey(field)],
     });
   const handleMarkNA = (field) =>
     persistFieldAction({
-      field,
+      field: { ...field, key: getReviewFieldKey(field) },
       status: REVIEW_STATUSES.N_A,
-      previousReview: fieldReviews[field.key],
+      previousReview: fieldReviews[getReviewFieldKey(field)],
     });
   const handleNeedsLegal = (field) =>
     persistFieldAction({
-      field,
+      field: { ...field, key: getReviewFieldKey(field) },
       status: REVIEW_STATUSES.NEEDS_LEGAL,
-      previousReview: fieldReviews[field.key],
+      previousReview: fieldReviews[getReviewFieldKey(field)],
     });
   const handleMarkManualRequired = (field) =>
     persistFieldAction({
-      field,
+      field: { ...field, key: getReviewFieldKey(field) },
       status: REVIEW_STATUSES.MANUAL_REQUIRED,
-      previousReview: fieldReviews[field.key],
+      previousReview: fieldReviews[getReviewFieldKey(field)],
     });
 
   const handleTabRowQuickAction = (row, action) => {
@@ -1690,9 +1720,14 @@ export default function LeaseReview() {
     else if (action === "view_source") openDrawer(row, "view");
   };
   const handleResetField = async (field) => {
-    const previousReview = fieldReviews[field.key];
+    const key = getReviewFieldKey(field);
+    if (!key) {
+      toast.error("Cannot reset field review: missing field key.");
+      return;
+    }
+    const previousReview = fieldReviews[key];
     const next = { ...fieldReviews };
-    delete next[field.key];
+    delete next[key];
     setFieldReviews(next);
     try {
       await saveAbstractDraft({ lease, fieldReviews: next, reviewer: lease?.signed_by || null, action: "reset" });
@@ -1701,7 +1736,7 @@ export default function LeaseReview() {
         entityId: lease.id,
         action: "field_reset",
         orgId: lease.org_id,
-        fieldChanged: field.key,
+        fieldChanged: key,
         oldValue: previousReview?.status || null,
         newValue: null,
       });
@@ -1713,24 +1748,19 @@ export default function LeaseReview() {
   };
 
   const openEdit = (field) => {
-    setEditingField(field);
-    const current = readFieldValue(lease, field.key);
+    const key = getReviewFieldKey(field);
+    setEditingField(key ? { ...field, key } : field);
+    const current = key ? readFieldValue(lease, key) : null;
     setEditValue(current == null ? "" : String(current));
   };
 
-  // Phase 6R-1 note: intentionally still direct (leaseService.update(), the
-  // audited generic factory) -- NOT migrated to update_lease_extraction_field.
-  // Unlike the sites that were migrated, this write combines typed lease
-  // columns (via resolveFieldColumns's large, schema-drift-tolerant alias
-  // map -- many aliases target columns whose existence on the current
-  // deployed schema has not been verified) with the extraction_data.fields
-  // merge in one atomic call. Safely covering this would need either a
-  // verified, exhaustive typed-column whitelist (a separate schema audit)
-  // or a dedicated RPC with its own missing-column tolerance -- both larger
-  // than this phase's scope. Flagged as a follow-up, not implemented here.
   const handleFieldSave = async () => {
     if (!editingField) return;
-    const key = editingField.key;
+    const key = getReviewFieldKey(editingField);
+    if (!key) {
+      toast.error("Cannot save field edit: missing field key.");
+      return;
+    }
     let val = typeof editValue === "string" ? editValue.trim() : editValue;
     if (NUMERIC_REVIEW_FIELDS.has(key) || editingField.type === "number" || editingField.type === "currency") {
       const n = parseFloat(String(val).replace(/[$,]/g, ""));
@@ -1740,34 +1770,23 @@ export default function LeaseReview() {
       val = val === true || val === "true" || val === "yes";
     }
 
-    // Write fixed fields to every aliased column so legacy + new columns stay
-    // in sync. Dynamic discovered rows live only in extraction_data because
-    // they intentionally do not have rigid lease-table columns.
-    const columnUpdates = {};
-    if (!editingField.dynamic_document_item) {
-      for (const column of resolveFieldColumns(key)) {
-        columnUpdates[column] = val;
-      }
-    }
-    // total_sf alias -> square_footage column (legacy).
-    if (key === "total_sf") columnUpdates.square_footage = val;
-
     const previousValue = readFieldValue(lease, key);
 
     setFieldSaving(true);
     try {
       const fieldPatch = { value: val, manually_edited: true, edited_at: new Date().toISOString() };
-      await updateLeaseFieldAndColumns({
+      await updateLeaseExtractionField({
         leaseId: lease.id,
+        fieldArea: "field_value",
+        action: "field_evidence_edit",
         fieldKey: key,
-        columnUpdates,
         patch: { field: fieldPatch },
       });
       const nextExtraction = {
         ...(lease.extraction_data || {}),
         fields: { ...(lease.extraction_data?.fields || {}), [key]: fieldPatch },
       };
-      updateLeaseQueryCache(queryClient, leaseId, { ...columnUpdates, extraction_data: nextExtraction });
+      updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["leases"] });
       if (lease?.property_id) {
@@ -3483,15 +3502,16 @@ export default function LeaseReview() {
           // left blank arrive as `undefined` and are NOT written, so
           // pre-existing extractor evidence is preserved. Synchronous prep
           // runs inside the try block so any throw surfaces as a toast.
+          const key = getReviewFieldKey(f);
+          if (!key) {
+            toast.error("Cannot save field edit: missing field key.");
+            return;
+          }
+          setFieldSaving(true);
           try {
-            const columnUpdates = {};
-            if (!f.dynamic_document_item) {
-              for (const column of resolveFieldColumns(f.key)) columnUpdates[column] = val;
-            }
-            if (f.key === "total_sf") columnUpdates.square_footage = val;
-            const previousValue = readFieldValue(lease, f.key);
-            const existingFieldRecord = lease.extraction_data?.fields?.[f.key] || {};
-            const existingEvidenceRecord = lease.extraction_data?.field_evidence?.[f.key] || {};
+            const previousValue = readFieldValue(leaseFull, key);
+            const existingFieldRecord = lease.extraction_data?.fields?.[key] || {};
+            const existingEvidenceRecord = lease.extraction_data?.field_evidence?.[key] || {};
 
             // Build the merged field record. Reviewer-provided evidence
             // overlays the existing extractor evidence; omitted fields
@@ -3539,14 +3559,15 @@ export default function LeaseReview() {
             const nextConfidenceScores = evidencePatch.confidence !== undefined
               ? {
                   ...(lease.extraction_data?.confidence_scores || {}),
-                  [f.key]: evidencePatch.confidence,
+                  [key]: evidencePatch.confidence,
                 }
               : (lease.extraction_data?.confidence_scores || undefined);
 
-            await updateLeaseFieldAndColumns({
+            await updateLeaseExtractionField({
               leaseId: lease.id,
-              fieldKey: f.key,
-              columnUpdates,
+              fieldArea: "field_value",
+              action: "field_evidence_edit",
+              fieldKey: key,
               patch: {
                 field: mergedFieldRecord,
                 field_evidence: mergedEvidenceRecord,
@@ -3555,11 +3576,11 @@ export default function LeaseReview() {
             });
             const nextExtraction = {
               ...(lease.extraction_data || {}),
-              fields: { ...(lease.extraction_data?.fields || {}), [f.key]: mergedFieldRecord },
-              field_evidence: { ...(lease.extraction_data?.field_evidence || {}), [f.key]: mergedEvidenceRecord },
+              fields: { ...(lease.extraction_data?.fields || {}), [key]: mergedFieldRecord },
+              field_evidence: { ...(lease.extraction_data?.field_evidence || {}), [key]: mergedEvidenceRecord },
               ...(nextConfidenceScores ? { confidence_scores: nextConfidenceScores } : {}),
             };
-            updateLeaseQueryCache(queryClient, leaseId, { ...columnUpdates, extraction_data: nextExtraction });
+            updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
             queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
             queryClient.invalidateQueries({ queryKey: ["leases"] });
             if (lease?.property_id) {
@@ -3576,10 +3597,10 @@ export default function LeaseReview() {
             }
             try {
               await persistFieldAction({
-                field: f,
+                field: { ...f, key },
                 status: REVIEW_STATUSES.EDITED,
                 value: val,
-                previousReview: { value: previousValue, status: fieldReviews[f.key]?.status },
+                previousReview: { value: previousValue, status: fieldReviews[key]?.status },
               });
             } catch (auditErr) {
               console.warn("[LeaseReview] persistFieldAction non-fatal failure on edit:", auditErr?.message || auditErr);
@@ -3588,6 +3609,7 @@ export default function LeaseReview() {
           } catch (err) {
             console.error("[LeaseReview] onSaveEdit failed:", err);
             toast.error(err?.message || `Could not save ${f.label}`);
+            throw err;
           } finally {
             setFieldSaving(false);
           }
@@ -3597,9 +3619,15 @@ export default function LeaseReview() {
           // Reviewer-corrected evidence. Lands in extraction_data.field_evidence
           // and (mirrored) in extraction_data.fields so every downstream reader
           // sees the same shape the extractor would have produced.
+          const key = getReviewFieldKey(f);
+          if (!key) {
+            toast.error("Cannot save evidence: missing field key.");
+            return;
+          }
+          setFieldSaving(true);
           try {
-            const prevField = lease.extraction_data?.fields?.[f.key] || null;
-            const prevEvidence = lease.extraction_data?.field_evidence?.[f.key] || null;
+            const prevField = lease.extraction_data?.fields?.[key] || null;
+            const prevEvidence = lease.extraction_data?.field_evidence?.[key] || null;
             const cleanPatch = {
               raw_value: evidencePatch.raw_value ?? null,
               source_page:
@@ -3630,7 +3658,7 @@ export default function LeaseReview() {
               leaseId: lease.id,
               fieldArea: "field_value",
               action: "field_evidence_edit",
-              fieldKey: f.key,
+              fieldKey: key,
               patch: {
                 field: fieldPatch,
                 field_evidence: cleanPatch,
@@ -3641,15 +3669,15 @@ export default function LeaseReview() {
               ...(lease.extraction_data || {}),
               fields: {
                 ...(lease.extraction_data?.fields || {}),
-                [f.key]: { ...(prevField || {}), ...fieldPatch },
+                [key]: { ...(prevField || {}), ...fieldPatch },
               },
               field_evidence: {
                 ...(lease.extraction_data?.field_evidence || {}),
-                [f.key]: cleanPatch,
+                [key]: cleanPatch,
               },
               confidence_scores: {
                 ...(lease.extraction_data?.confidence_scores || {}),
-                ...(confValue != null ? { [f.key]: confValue } : {}),
+                ...(confValue != null ? { [key]: confValue } : {}),
               },
             };
             // updateLeaseExtractionField() above already persisted this patch
@@ -3668,7 +3696,7 @@ export default function LeaseReview() {
               entityId: lease.id,
               action: "field_evidence_edit",
               orgId: lease.org_id,
-              fieldChanged: f.key,
+              fieldChanged: key,
               oldValue: prevEvidence ? JSON.stringify(prevEvidence) : null,
               newValue: JSON.stringify({ ...cleanPatch, confidence: confValue }),
               propertyId: lease.property_id || null,
@@ -3678,16 +3706,25 @@ export default function LeaseReview() {
           } catch (err) {
             console.error("[LeaseReview] evidence save failed:", err);
             toast.error(err?.message || "Could not save evidence");
+            throw err;
+          } finally {
+            setFieldSaving(false);
           }
         }}
         onSaveOverrideReason={async (f, reason) => {
           // Persists the reason into fieldReviews[key].note so the approval
           // gate's `hasEvidenceOverride` check unblocks the field.
+          const key = getReviewFieldKey(f);
+          if (!key) {
+            toast.error("Cannot save override reason: missing field key.");
+            return;
+          }
+          setFieldSaving(true);
           const trimmed = (reason || "").trim();
-          const previousReview = fieldReviews[f.key];
+          const previousReview = fieldReviews[key];
           const next = {
             ...fieldReviews,
-            [f.key]: {
+            [key]: {
               ...(previousReview || {}),
               note: trimmed || null,
               evidence_override: trimmed.length > 0,
@@ -3702,7 +3739,7 @@ export default function LeaseReview() {
               entityId: lease.id,
               action: trimmed ? "field_override_reason_set" : "field_override_reason_cleared",
               orgId: lease.org_id,
-              fieldChanged: f.key,
+              fieldChanged: key,
               oldValue: previousReview?.note || null,
               newValue: trimmed || null,
               propertyId: lease.property_id || null,
@@ -3712,6 +3749,9 @@ export default function LeaseReview() {
             console.error("[LeaseReview] override save failed:", err);
             toast.error(err?.message || "Could not save override reason");
             setFieldReviews(fieldReviews);
+            throw err;
+          } finally {
+            setFieldSaving(false);
           }
         }}
         isSaving={fieldSaving}

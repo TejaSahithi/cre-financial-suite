@@ -31,7 +31,12 @@ function nearlyEqual(a: number, b: number, tolerance = 0.01): boolean {
 function num(row: Row, field: string): number | null {
   const v = row[field];
   if (v === null || v === undefined) return null;
-  const n = typeof v === "number" ? v : parseFloat(String(v));
+  const text = String(v).trim();
+  const normalized = text
+    .replace(/^\((.*)\)$/, "-$1")
+    .replace(/[$,\s]/g, "")
+    .replace(/%$/, "");
+  const n = typeof v === "number" ? v : Number(normalized);
   return isFinite(n) ? n : null;
 }
 

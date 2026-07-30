@@ -33,6 +33,14 @@ Deno.test("computeDerivedFields: monthly_rent derived from annual_rent, with sou
   assertEquals(row._derivation_source_fields.monthly_rent, ["annual_rent"]);
 });
 
+Deno.test("computeDerivedFields: currency-formatted annual_rent derives monthly_rent correctly", () => {
+  const rows = [{ monthly_rent: null, annual_rent: "$25,200.00" }];
+  computeDerivedFields(rows, "lease");
+  const row = rows[0];
+  assertEquals(row.monthly_rent, 2100);
+  assertEquals(row._derivation_source_fields.monthly_rent, ["annual_rent"]);
+});
+
 Deno.test("computeDerivedFields: rent_per_sf derived from annual_rent and square_footage, with both source_field_keys", () => {
   const rows = [{ monthly_rent: 1400, annual_rent: 16800, square_footage: 1110, rent_per_sf: null }];
   computeDerivedFields(rows, "lease");

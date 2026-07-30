@@ -9,6 +9,8 @@
  * Every exported function must have a test in fieldValidator.test.js.
  */
 
+import { LEASE_FIELD_OPTIONS } from "../../../lib/leaseFieldOptions.js";
+
 // Values that look like booleans / placeholders and are never valid in a
 // text-field context (property name, party name, etc.).
 const BOOLEAN_STRINGS = new Set([
@@ -28,21 +30,148 @@ const GENERIC_NAME_LABELS = new Set([
 const NUMERIC_KEYS = new Set([
   "square_footage", "building_rsf", "renewal_notice_months",
   "termination_notice_months", "free_rent_months", "late_fee_grace_days",
-  "lease_term_months",
+  "lease_term_months", "rent_per_sf", "base_year", "default_cure_period",
+  "mechanics_lien_cure_period", "estoppel_certificate_deadline",
+  "holdover_rent_multiplier",
 ]);
 
 /** Field keys whose values must be parseable as money. */
 const CURRENCY_KEYS = new Set([
   "monthly_rent", "annual_rent", "security_deposit", "cam_amount",
   "ti_allowance", "expense_stop", "general_liability_min",
+  "late_fee_amount", "returned_payment_fee_amount", "application_fee_amount",
+  "administrative_fee_amount", "pet_fee_amount", "pet_rent_amount",
+  "parking_fee_amount", "assignment_consideration",
+  "amended_base_rent_for_additional_year", "utility_reimbursement_amount",
+  "water_sewer_reimbursement_amount",
 ]);
 
 /** Field keys that must be a valid ISO date (YYYY-MM-DD). */
 const DATE_KEYS = new Set([
   "commencement_date", "expiration_date", "lease_date",
   "rent_commencement_date", "option_exercise_deadline",
-  "assignment_effective_date",
+  "assignment_effective_date", "start_date", "end_date",
+  "tenant_signature_date", "landlord_signature_date",
 ]);
+
+/** Field keys whose values are percentages stored as plain numbers. */
+const PERCENT_KEYS = new Set([
+  "escalation_rate", "late_fee_percent", "cam_cap_pct", "admin_fee_pct",
+  "gross_up_threshold", "tenant_pro_rata_share", "renewal_escalation_percent",
+]);
+
+/** Field keys whose values must be clear boolean answers. */
+const BOOLEAN_KEYS = new Set([
+  "gross_up_enabled", "tenant_insurance_required", "waiver_of_subrogation",
+  "additional_insureds_required", "right_of_first_refusal",
+  "early_termination_option", "renewal_option", "termination_option",
+  "landlord_consent",
+]);
+
+const RESPONSIBILITY_KEYS = new Set([
+  "responsibility_taxes", "tax_responsibility",
+  "responsibility_insurance", "insurance_responsibility",
+  "property_insurance_responsibility",
+  "responsibility_utilities", "electric_responsibility",
+  "water_sewer_responsibility",
+  "responsibility_repairs", "maintenance_responsibility",
+  "hvac_responsibility",
+]);
+
+const SELECT_OPTION_KEYS = {
+  lease_type: "lease_type",
+  billing_frequency: "billing_frequency",
+  escalation_type: "escalation_type",
+  escalation_timing: "escalation_timing",
+  cam_cap_type: "cam_cap_type",
+  management_fee_basis: "management_fee_basis",
+  renewal_type: "renewal_type",
+};
+
+const SELECT_VALUE_ALIASES = {
+  lease_type: {
+    nnn: "triple_net",
+    "triple net": "triple_net",
+    "triple-net": "triple_net",
+    nn: "double_net",
+    "double net": "double_net",
+    "single net": "single_net",
+    "full service gross": "full_service",
+    "full-service": "full_service",
+  },
+  billing_frequency: {
+    annually: "annual",
+    yearly: "annual",
+    "per year": "annual",
+    "per month": "monthly",
+    "each month": "monthly",
+    "one-time": "one_time",
+    once: "one_time",
+  },
+};
+
+function parseAccountingNumber(value, { allowPercent = false, allowUnitWords = false } = {}) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  let s = String(value ?? "").trim().toLowerCase();
+  if (!s) return null;
+  if (allowUnitWords) {
+    s = s.replace(/\b(?:rentable|usable|square|sq\.?|feet|foot|sf|rsf|usf|months?|mos?|days?|yrs?|years?)\b/g, "");
+  }
+  s = s.replace(/^\((.*)\)$/, "-$1").replace(/[$,\s]/g, "");
+  if (allowPercent) s = s.replace(/%$/, "");
+  if (!/^-?\d+(?:\.\d+)?$/.test(s)) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function isRealIsoDate(str) {
+  const match = String(str || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+  const y = Number(match[1]);
+  const m = Number(match[2]);
+  const d = Number(match[3]);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return (
+    date.getUTCFullYear() === y &&
+    date.getUTCMonth() === m - 1 &&
+    date.getUTCDate() === d
+  );
+}
+
+function isBooleanLike(value) {
+  if (typeof value === "boolean") return true;
+  const s = String(value ?? "").trim().toLowerCase();
+  return /^(yes|no|true|false|y|n|1|0)$/.test(s);
+}
+
+function isSupportedResponsibilityValue(value) {
+  const s = String(value ?? "").trim().toLowerCase().replace(/[_-]+/g, " ");
+  if (!s) return false;
+  if (s.length > 120) return false;
+  return /\b(tenant|landlord|lessor|lessee|shared|both|included|pro rata|reimburse|reimbursement|separate(?:ly)? metered|cap|base year)\b/.test(s);
+}
+
+function normalizeEnumText(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_\u2010-\u2015-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function isAllowedSelectValue(fieldKey, value) {
+  const optionKey = SELECT_OPTION_KEYS[fieldKey];
+  if (!optionKey) return true;
+  const normalized = normalizeEnumText(value);
+  if (!normalized) return true;
+  const aliasValue = SELECT_VALUE_ALIASES[fieldKey]?.[normalized];
+  const options = LEASE_FIELD_OPTIONS[optionKey] || [];
+  return options.some((option) => {
+    const optionValue = normalizeEnumText(option.value);
+    const optionLabel = normalizeEnumText(option.label);
+    return normalized === optionValue || normalized === optionLabel || aliasValue === option.value;
+  });
+}
 
 /**
  * Validate a single extracted field value.
@@ -58,6 +187,41 @@ export function validateFieldValue(fieldKey, value) {
 
   const str = String(value).trim();
   const lower = str.toLowerCase();
+
+  if (!isAllowedSelectValue(fieldKey, value)) {
+    return {
+      valid: false,
+      reason: `"${str}" is not an allowed value for ${fieldKey.replace(/_/g, " ")}.`,
+    };
+  }
+
+  if (BOOLEAN_KEYS.has(fieldKey)) {
+    if (!isBooleanLike(value)) {
+      return {
+        valid: false,
+        reason: `"${str}" is not a valid yes/no value for ${fieldKey.replace(/_/g, " ")}.`,
+      };
+    }
+  }
+
+  if (RESPONSIBILITY_KEYS.has(fieldKey)) {
+    if (!isSupportedResponsibilityValue(value)) {
+      return {
+        valid: false,
+        reason: `"${str}" is not a clear responsibility value for ${fieldKey.replace(/_/g, " ")}.`,
+      };
+    }
+  }
+
+  if (fieldKey === "tenant_contact_phone" || fieldKey.endsWith("_phone") || fieldKey === "phone") {
+    const digitCount = str.replace(/\D/g, "").length;
+    if (digitCount < 7 || digitCount > 15) {
+      return {
+        valid: false,
+        reason: `"${str}" is not a valid phone number.`,
+      };
+    }
+  }
 
   // ── Text/name fields: reject boolean-like strings ──────────────────────────
   const isNameOrTextKey =
@@ -177,7 +341,7 @@ export function validateFieldValue(fieldKey, value) {
 
   // ── Numeric keys ─────────────────────────────────────────────────────────────
   if (NUMERIC_KEYS.has(fieldKey)) {
-    const n = Number(String(value));
+    const n = parseAccountingNumber(value, { allowUnitWords: true });
     if (!Number.isFinite(n) || n < 0) {
       return {
         valid: false,
@@ -191,7 +355,7 @@ export function validateFieldValue(fieldKey, value) {
 
   // ── Currency keys ─────────────────────────────────────────────────────────────
   if (CURRENCY_KEYS.has(fieldKey)) {
-    const n = Number(String(value).replace(/[$,\s]/g, ""));
+    const n = parseAccountingNumber(value);
     if (!Number.isFinite(n) || n < 0) {
       return {
         valid: false,
@@ -200,13 +364,24 @@ export function validateFieldValue(fieldKey, value) {
     }
   }
 
+  // ── Percent keys ─────────────────────────────────────────────────────────────
+  if (PERCENT_KEYS.has(fieldKey)) {
+    const n = parseAccountingNumber(value, { allowPercent: true });
+    if (!Number.isFinite(n) || n < 0 || n > 100) {
+      return {
+        valid: false,
+        reason: `"${str}" is not a valid percentage for ${fieldKey.replace(/_/g, " ")}.`,
+      };
+    }
+  }
+
   // ── Date keys ─────────────────────────────────────────────────────────────────
   if (DATE_KEYS.has(fieldKey) || fieldKey.endsWith("_date")) {
     if (typeof value === "string") {
       if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
-        // Preferred ISO format — validate it's a real date.
-        const d = new Date(`${str}T00:00:00Z`);
-        if (Number.isNaN(d.getTime())) {
+        // Preferred ISO format — validate exact calendar components so
+        // rollover dates like 2024-02-30 are rejected.
+        if (!isRealIsoDate(str)) {
           return { valid: false, reason: `"${str}" is not a valid calendar date.` };
         }
       } else {

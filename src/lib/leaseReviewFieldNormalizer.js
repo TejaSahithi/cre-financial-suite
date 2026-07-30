@@ -42,6 +42,7 @@ import {
   REQUIRED_FIELD_KEYS,
 } from "@/lib/leaseReviewSchema";
 import { collectExtractedDocumentItems } from "@/components/lease-review/utils/dynamicFields";
+import { validateFieldValue } from "@/components/lease-review/utils/fieldValidator";
 import { LEASE_FIELD_CONTRACT, LEASE_REVIEW_CANONICAL_TABS, getFieldContract, resolveCanonicalFieldKey } from "@/lib/leaseFieldContract";
 import { buildCurrentReviewPolicy, resolveCurrentReviewProfile } from "@/lib/leaseReviewCurrentPolicy";
 import { getFieldAliases } from "@/lib/leaseFieldResolver";
@@ -494,6 +495,58 @@ function derivedStandardField(lease, canonicalKey, value, termContext) {
       },
     };
   }
+  if (canonicalKey === "monthly_rent") {
+    const annualRentValue = readTypedLeaseColumnValue(lease, "annual_rent") ?? readFieldValue(lease, "annual_rent");
+    const annualRent = moneyNumber(annualRentValue);
+    if (annualRent != null && annualRent > 0) {
+      const evidence = readFieldEvidence(lease, "annual_rent") || {};
+      const monthlyRent = annualRent / 12;
+      return {
+        value: monthlyRent,
+        confidence: 0.86,
+        reviewReason: "Monthly rent was calculated from annual rent divided by 12. Verify the payment schedule before approval.",
+        evidence: {
+          value: monthlyRent,
+          rawValue: moneyDisplay(monthlyRent),
+          sourcePage: evidence.sourcePage ?? null,
+          sourceText: evidence.sourceText ?? evidence.sourceClause ?? null,
+          sourceClause: evidence.sourceClause ?? evidence.sourceText ?? null,
+          extractionStatus: EXTRACTION_STATUSES.CALCULATED,
+          evidenceType: "derived",
+          sourceTextQuality: SOURCE_TEXT_QUALITIES.DERIVED,
+          sourceFieldKeys: ["annual_rent"],
+          derivationTrace: `monthly_rent = annual_rent ${moneyDisplay(annualRent) || annualRent} / 12`,
+          requiresReview: true,
+        },
+      };
+    }
+  }
+  if (canonicalKey === "annual_rent") {
+    const monthlyRentValue = readTypedLeaseColumnValue(lease, "monthly_rent") ?? readFieldValue(lease, "monthly_rent");
+    const monthlyRent = moneyNumber(monthlyRentValue);
+    if (monthlyRent != null && monthlyRent > 0) {
+      const evidence = readFieldEvidence(lease, "monthly_rent") || {};
+      const annualRent = monthlyRent * 12;
+      return {
+        value: annualRent,
+        confidence: 0.88,
+        reviewReason: "Annual rent was calculated from monthly rent multiplied by 12.",
+        evidence: {
+          value: annualRent,
+          rawValue: moneyDisplay(annualRent),
+          sourcePage: evidence.sourcePage ?? null,
+          sourceText: evidence.sourceText ?? evidence.sourceClause ?? null,
+          sourceClause: evidence.sourceClause ?? evidence.sourceText ?? null,
+          extractionStatus: EXTRACTION_STATUSES.CALCULATED,
+          evidenceType: "derived",
+          sourceTextQuality: SOURCE_TEXT_QUALITIES.DERIVED,
+          sourceFieldKeys: ["monthly_rent"],
+          derivationTrace: `annual_rent = monthly_rent ${moneyDisplay(monthlyRent) || monthlyRent} * 12`,
+          requiresReview: true,
+        },
+      };
+    }
+  }
   return null;
 }
 
@@ -890,6 +943,27 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
         reviewReason: evidenceOverrideReason,
       };
     }
+    const validationErrors = [
+      ...(Array.isArray(evidence?.validationErrors) ? evidence.validationErrors : []),
+      ...(Array.isArray(evidence?.validation_errors) ? evidence.validation_errors : []),
+    ];
+    if (!evidenceOverrideReason && isMeaningfulValue(value)) {
+      const validationResult = validateFieldValue(canonicalKey, value);
+      if (!validationResult.valid) {
+        validationErrors.push(`${canonicalKey}_failed_validation`);
+        const preservedSourceText = evidence?.sourceText || evidence?.sourceClause || null;
+        evidenceOverrideReason = validationResult.reason || "Extracted value failed field type validation.";
+        invalidValueRejected = true;
+        value = null;
+        evidence = {
+          ...(evidence || {}),
+          sourceText: preservedSourceText,
+          requiresReview: true,
+          reviewReason: evidenceOverrideReason,
+          validationErrors,
+        };
+      }
+    }
     const extractionStatus = resolveExtractionStatus(lease, canonicalKey, { value, confidence, evidence });
     let evidenceVerified = invalidValueRejected ? false : hasValidSourceEvidence(evidence);
 
@@ -969,6 +1043,8 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
       readOnlyReferences: contract.readOnlyReferences || [],
       approvalImpact: describeApprovalImpact(contract),
       validationMessage: evidenceOverrideReason ?? fallbackReviewReason ?? (evidence?.reviewReason ?? evidence?.approvalBlockingReason ?? null),
+      validationErrors,
+      validation_errors: validationErrors,
       fallbackApplied: Boolean(fallbackSourceProvider),
       sourceProvider: fallbackSourceProvider ?? evidence?.extractionStatus
         ?? lease?.extraction_data?.workflow_output?.extraction_provider

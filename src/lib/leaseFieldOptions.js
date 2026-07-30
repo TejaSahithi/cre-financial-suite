@@ -54,6 +54,13 @@ export const LEASE_FIELD_OPTIONS = {
     { value: "fiscal_year", label: "Fiscal Year" },
   ],
 
+  billing_frequency: [
+    { value: "monthly", label: "Monthly" },
+    { value: "quarterly", label: "Quarterly" },
+    { value: "annual", label: "Annual" },
+    { value: "one_time", label: "One Time" },
+  ],
+
   cam_cap_type: [
     { value: "none", label: "None" },
     { value: "cumulative", label: "Cumulative" },
