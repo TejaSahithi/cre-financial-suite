@@ -160,11 +160,15 @@ describe("leaseReviewCurrentPolicy", () => {
   it("approval gate honors alias reviews and reviewer-corrected validation errors", () => {
     const source = readFileSync(resolve(process.cwd(), "src/pages/LeaseReview.jsx"), "utf8");
 
+    expect(source).toContain("const getReviewForFieldKey = (key) =>");
+    expect(source).toContain("const isFieldReviewResolved = (key) => isResolvedReview(getReviewForFieldKey(key).review)");
     expect(source).toContain("const reviewKeys = [...new Set([key, ...getFieldAliases(key)])]");
     expect(source).toContain("const reviewClearsAutomatedValidation");
     expect(source).toContain("existingValidationErrors.length > 0 && !reviewClearsAutomatedValidation");
     expect(source).toContain("reviewStatus === REVIEW_STATUSES.EDITED && reviewClearsAutomatedValidation");
     expect(source).toContain("explicit reviewer decision; downstream treats value as not approved");
+    expect(source).toContain("const hasReviewerResolvedReviewPayload");
+    expect(source).toContain("uploadedFile && !isReviewReady && !hasReviewerResolvedReviewPayload");
   });
 });
 

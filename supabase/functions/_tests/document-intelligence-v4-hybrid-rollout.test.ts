@@ -108,6 +108,21 @@ Deno.test("Release 4B rollout config read degrades when rollout table is unavail
   assertEquals(config, null);
 });
 
+Deno.test("Release 4B rollout config read degrades when schema cache lookup throws", async () => {
+  const supabaseAdmin = {
+    from: () => {
+      throw new Error("Could not find the table 'public.canonical_review_rollout_configs' in the schema cache");
+    },
+  };
+
+  const config = await fetchCanonicalReviewRolloutConfig({
+    supabaseAdmin,
+    orgId: "org-1",
+    documentFamily: "lease",
+  });
+  assertEquals(config, null);
+});
+
 Deno.test("Release 4B rollout resolver keeps shadow legacy-authoritative while building canonical hybrid", () => {
   const decision = resolveCanonicalReviewRollout({ orgId: "org-1", env: env({ ENABLE_CANONICAL_REVIEW_PAYLOAD_SHADOW: "true" }) });
   assertEquals(decision.mode, "shadow");

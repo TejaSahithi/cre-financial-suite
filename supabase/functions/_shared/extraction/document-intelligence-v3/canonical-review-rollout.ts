@@ -94,24 +94,29 @@ export async function fetchCanonicalReviewRolloutConfig(args: {
   orgId: string;
   documentFamily?: string | null;
 }): Promise<Record<string, unknown> | null> {
-  const family = args.documentFamily ?? null;
-  let query = args.supabaseAdmin
-    .from("canonical_review_rollout_configs")
-    .select("mode, enabled, document_family, reason, updated_at")
-    .eq("org_id", args.orgId)
-    .eq("enabled", true);
+  try {
+    const family = args.documentFamily ?? null;
+    let query = args.supabaseAdmin
+      .from("canonical_review_rollout_configs")
+      .select("mode, enabled, document_family, reason, updated_at")
+      .eq("org_id", args.orgId)
+      .eq("enabled", true);
 
-  if (family) {
-    query = query.or(`document_family.eq.${family},document_family.eq.default,document_family.is.null`);
-  }
+    if (family) {
+      query = query.or(`document_family.eq.${family},document_family.eq.default,document_family.is.null`);
+    }
 
-  const { data, error } = await query.order("document_family", { ascending: true }).limit(10);
-  if (error) {
-    console.warn(`[canonical-review-rollout] config unavailable; falling back to default rollout: ${error.message}`);
+    const { data, error } = await query.order("document_family", { ascending: true }).limit(10);
+    if (error) {
+      console.warn(`[canonical-review-rollout] config unavailable; falling back to default rollout: ${error.message}`);
+      return null;
+    }
+    const rows = Array.isArray(data) ? data : [];
+    return rows.find((row: any) => family && row.document_family === family) ?? rows.find((row: any) => row.document_family == null || row.document_family === "default") ?? null;
+  } catch (error: any) {
+    console.warn(`[canonical-review-rollout] config read threw; falling back to default rollout: ${error?.message ?? error}`);
     return null;
   }
-  const rows = Array.isArray(data) ? data : [];
-  return rows.find((row: any) => family && row.document_family === family) ?? rows.find((row: any) => row.document_family == null || row.document_family === "default") ?? null;
 }
 
 export async function resolveCanonicalReviewRolloutForOrg(args: {

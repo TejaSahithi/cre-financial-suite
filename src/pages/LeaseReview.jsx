@@ -1131,8 +1131,14 @@ export default function LeaseReview() {
   const currentReviewPolicy = normalized.currentReviewPolicy || {};
   const requiredFieldKeys = currentReviewPolicy.requiredFieldKeys || REQUIRED_FIELD_KEYS;
   const requiredFieldKeySet = new Set(requiredFieldKeys);
-  const requiredReviewedKeys = requiredFieldKeys.filter((k) => isResolvedReview(fieldReviews[k]));
-  const requiredPendingKeys = requiredFieldKeys.filter((k) => !isResolvedReview(fieldReviews[k]));
+  const getReviewForFieldKey = (key) => {
+    const reviewKeys = [...new Set([key, ...getFieldAliases(key)])];
+    const reviewKey = reviewKeys.find((candidateKey) => fieldReviews[candidateKey]) || key;
+    return { reviewKey, review: fieldReviews[reviewKey] };
+  };
+  const isFieldReviewResolved = (key) => isResolvedReview(getReviewForFieldKey(key).review);
+  const requiredReviewedKeys = requiredFieldKeys.filter((k) => isFieldReviewResolved(k));
+  const requiredPendingKeys = requiredFieldKeys.filter((k) => !isFieldReviewResolved(k));
   const requiredResolved = requiredPendingKeys.length === 0;
 
   if (import.meta.env.DEV) {
@@ -1150,7 +1156,7 @@ export default function LeaseReview() {
 
   const totalFields = LEASE_REVIEW_FIELDS.length;
   const resolvedCount = LEASE_REVIEW_FIELDS.reduce(
-    (acc, f) => acc + (isResolvedReview(fieldReviews[f.key]) ? 1 : 0),
+    (acc, f) => acc + (isFieldReviewResolved(f.key) ? 1 : 0),
     0,
   );
 
@@ -1525,14 +1531,16 @@ export default function LeaseReview() {
   })();
 
   const approvalBlockers = [];
-  // P0.7: server-computed review_readiness is the authoritative gate -
-  // approval is fail-closed on anything other than 'ready' (no waiver
-  // bypass in this P0 release; 'manual_review' routes to a separate
-  // resolution workflow, not this button). The actual enforcement lives
-  // server-side in finalize_lease_review_approval (P0.6); this blocker only
-  // prevents submitting a request that server will reject anyway, and
-  // explains why in the UI instead of a raw 422.
-  if (uploadedFile && !isReviewReady) {
+  // P0.7: server-computed review_readiness remains the backend authority.
+  // The client may still submit when the file is only stale/pending but the
+  // reviewer has resolved the current payload; server-side approval remains
+  // the final gate if extraction readiness is genuinely incomplete.
+  const hasReviewerResolvedReviewPayload =
+    reviewReadiness === "pending" &&
+    hasDisplayableExtractedFields &&
+    bulkEvaluation.validationBlockers.length === 0 &&
+    bulkEvaluation.requiredBlockers.length === 0;
+  if (uploadedFile && !isReviewReady && !hasReviewerResolvedReviewPayload) {
     approvalBlockers.push({
       kind: "review_not_ready",
       title: reviewReadiness === "manual_review"
@@ -3401,13 +3409,13 @@ export default function LeaseReview() {
                 <ul className="mt-2 space-y-1 text-xs">
                   {requiredFieldKeys.map((key) => {
                     const field = LEASE_REVIEW_FIELDS.find((f) => f.key === key) || standardRowByKey.get(key) || { label: getFieldPolicyLabel(key) };
-                    const review = fieldReviews[key];
+                    const { review } = getReviewForFieldKey(key);
                     const resolved = isResolvedReview(review);
                     return (
                       <li key={key} className="flex items-center justify-between gap-2 rounded border border-slate-200 bg-slate-50 px-2 py-1">
                         <span className="text-slate-600">{field?.label || key}</span>
                         <Badge className={resolved ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}>
-                          {resolved ? REVIEW_STATUS_LABELS[review.status] : "Pending"}
+                          {resolved ? REVIEW_STATUS_LABELS[review?.status] : "Pending"}
                         </Badge>
                       </li>
                     );
