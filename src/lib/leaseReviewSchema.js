@@ -1240,7 +1240,15 @@ export function resolveSourceTextQuality(evidence = {}) {
   }
 
   if (evidenceType === EVIDENCE_TYPES.DERIVED || isCalculatedExtractionStatus(extractionStatus) || hasDerivation) {
-    return hasValue && hasDerivation ? SOURCE_TEXT_QUALITIES.DERIVED : SOURCE_TEXT_QUALITIES.MISSING;
+    // A calculated/derived field is valid evidence on its extraction_status
+    // alone (matching the backend's workflowSourceTextQuality) - requiring
+    // hasDerivation too was stricter than the backend and stricter than any
+    // reviewer can satisfy: there's no UI control to set a derivation trace
+    // or source_field_keys, so a manually-confirmed calculated value (e.g.
+    // lease_term_months computed from commencement/expiration dates) was
+    // permanently stuck at "missing" quality - self-contradicting its own
+    // evidence_type of "derived" - no matter what the reviewer edited.
+    return hasValue ? SOURCE_TEXT_QUALITIES.DERIVED : SOURCE_TEXT_QUALITIES.MISSING;
   }
   if (evidenceType === EVIDENCE_TYPES.INFERRED || extractionStatus === EXTRACTION_STATUSES.INFERRED) {
     return hasValue && (sourceText || sourceClause || evidence?.derivationTrace || evidence?.derivation_trace)
