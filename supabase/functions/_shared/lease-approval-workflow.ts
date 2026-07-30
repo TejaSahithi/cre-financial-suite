@@ -96,7 +96,20 @@ function valueFromCandidate(candidate: unknown) {
   if (candidate == null) return null;
   if (typeof candidate !== "object") return candidate;
   const record = candidate as Record<string, unknown>;
-  return record.value ?? record.normalized_value ?? record.raw_value ?? null;
+  return record.value ?? record.normalized_value ?? record.normalizedValue ?? record.raw_value ?? null;
+}
+
+const APPROVED_REVIEW_STATUSES = new Set(["accepted", "edited", "approved", "reviewed"]);
+
+function isPresent(value: unknown) {
+  return value !== undefined && value !== null && String(value).trim() !== "";
+}
+
+function isApprovedSnapshotEntry(entry: unknown) {
+  if (!entry || typeof entry !== "object") return false;
+  const record = entry as Record<string, unknown>;
+  const status = String(record.review_status ?? record.status ?? "").trim().toLowerCase();
+  return APPROVED_REVIEW_STATUSES.has(status);
 }
 
 function readFieldValue(lease: Record<string, unknown>, fieldKey: string, review: Record<string, unknown> | null) {
@@ -237,15 +250,33 @@ export function toIsoDate(value: unknown) {
 }
 
 function getApprovedValue(lease: Record<string, unknown>, key: string, aliases: string[] = []) {
-  const snapshotFields = (lease.abstract_snapshot as any)?.fields || {};
+  const snapshot = lease.abstract_snapshot && typeof lease.abstract_snapshot === "object"
+    ? lease.abstract_snapshot as Record<string, unknown>
+    : null;
+  const approvedFields = (snapshot?.approved || {}) as Record<string, unknown>;
+  const snapshotFields = (snapshot?.fields || {}) as Record<string, unknown>;
   const candidates = [key, ...aliases];
+
   for (const k of candidates) {
-    if (snapshotFields[k] && snapshotFields[k].value !== undefined && snapshotFields[k].value !== null) {
-      return snapshotFields[k].value;
+    const approvedValue = valueFromCandidate(approvedFields[k]);
+    if (isPresent(approvedValue)) return approvedValue;
+  }
+
+  for (const k of candidates) {
+    const entry = snapshotFields[k];
+    if (!isApprovedSnapshotEntry(entry)) continue;
+    const snapshotValue = valueFromCandidate(entry);
+    if (isPresent(snapshotValue)) {
+      return snapshotValue;
     }
   }
+
+  // Legacy approved leases may predate abstract_snapshot.approved. For current
+  // approvals, never fall through to raw extraction/top-level lease fields.
+  if (snapshot) return null;
+
   for (const k of candidates) {
-    if (lease[k] !== undefined && lease[k] !== null) {
+    if (isPresent(lease[k])) {
       return lease[k];
     }
   }
@@ -284,16 +315,6 @@ function toNumber(value: unknown) {
 function toTermMonths(lease: Record<string, unknown>) {
   const direct = toNumber(getApprovedValue(lease, "lease_term_months", ["term_months"]));
   if (direct && direct > 0) return Math.round(direct);
-
-  for (const key of ["lease_term", "term", "initial_term"]) {
-    const raw = String(getApprovedValue(lease, key) || "").toLowerCase();
-    if (!raw) continue;
-    const years = raw.match(/(\d+(?:\.\d+)?)\s*(year|yr)/);
-    if (years) return Math.round(Number(years[1]) * 12);
-    const months = raw.match(/(\d+(?:\.\d+)?)\s*(month|mo)/);
-    if (months) return Math.round(Number(months[1]));
-  }
-
   return null;
 }
 
@@ -337,7 +358,7 @@ export function buildCriticalDateRows(approvedLease: Record<string, unknown>, to
     getApprovedValue(approvedLease, "lease_date", ["lease_execution_date", "signed_date"])
   );
   const commencement = toIsoDate(
-    getApprovedValue(approvedLease, "commencement_date", ["start_date", "lease_start_date", "term_start_date", "rent_commencement_date"])
+    getApprovedValue(approvedLease, "commencement_date", ["start_date", "lease_start_date", "term_start_date"])
   );
   const rawExpiration = toIsoDate(
     getApprovedValue(approvedLease, "expiration_date", ["end_date", "lease_end_date", "term_end_date"])

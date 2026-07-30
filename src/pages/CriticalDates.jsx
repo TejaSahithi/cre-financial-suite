@@ -22,6 +22,7 @@ import {
 import PageHeader from "@/components/PageHeader";
 import ScopeSelector from "@/components/ScopeSelector";
 import useOrgQuery from "@/hooks/useOrgQuery";
+import { approvedLeaseFieldValue } from "@/lib/approvedLeaseSnapshot";
 import {
   buildHierarchyScope,
   getScopeSubtitle,
@@ -99,20 +100,7 @@ function isApprovedLease(lease) {
 }
 
 function fieldValue(lease, keys) {
-  const candidates = Array.isArray(keys) ? keys : [keys];
-  const snapshot = lease?.abstract_snapshot?.fields || {};
-  const extraction = lease?.extraction_data?.fields || {};
-  const extracted = lease?.extracted_fields || {};
-  for (const key of candidates) {
-    const snapshotValue = snapshot?.[key]?.value;
-    if (snapshotValue !== undefined && snapshotValue !== null && snapshotValue !== "") return snapshotValue;
-    if (lease?.[key] !== undefined && lease?.[key] !== null && lease?.[key] !== "") return lease[key];
-    const extractionValue = extraction?.[key]?.value ?? extraction?.[key];
-    if (extractionValue !== undefined && extractionValue !== null && extractionValue !== "") return extractionValue;
-    const extractedValue = extracted?.[key]?.value ?? extracted?.[key];
-    if (extractedValue !== undefined && extractedValue !== null && extractedValue !== "") return extractedValue;
-  }
-  return null;
+  return approvedLeaseFieldValue(lease, keys);
 }
 
 function isoDate(value) {
@@ -128,11 +116,6 @@ function isoDate(value) {
 function termMonths(lease) {
   const direct = Number(String(fieldValue(lease, ["lease_term_months", "term_months"]) || "").replace(/[^\d.]/g, ""));
   if (Number.isFinite(direct) && direct > 0) return Math.round(direct);
-  const raw = String(fieldValue(lease, ["lease_term", "term", "initial_term"]) || "").toLowerCase();
-  const years = raw.match(/(\d+(?:\.\d+)?)\s*(?:year|yr)/);
-  if (years) return Math.round(Number(years[1]) * 12);
-  const months = raw.match(/(\d+(?:\.\d+)?)\s*(?:month|mo)/);
-  if (months) return Math.round(Number(months[1]));
   return null;
 }
 
@@ -150,7 +133,7 @@ function previewCriticalDatesForLease(lease) {
   if (!isApprovedLease(lease)) return [];
   const today = new Date().toISOString().slice(0, 10);
   const leaseDate = isoDate(fieldValue(lease, ["lease_date", "lease_execution_date", "signed_at"]));
-  const commencement = isoDate(fieldValue(lease, ["commencement_date", "start_date", "rent_commencement_date", "lease_date"]));
+  const commencement = isoDate(fieldValue(lease, ["commencement_date", "start_date", "lease_start_date", "term_start_date"]));
   const rentCommencement = isoDate(fieldValue(lease, ["rent_commencement_date"]));
   const expiration = isoDate(fieldValue(lease, ["expiration_date", "end_date"])) || deriveExpiration(commencement, lease);
   const optionDeadline = isoDate(fieldValue(lease, ["option_exercise_deadline", "renewal_exercise_deadline"]));

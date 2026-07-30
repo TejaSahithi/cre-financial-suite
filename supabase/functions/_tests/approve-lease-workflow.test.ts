@@ -114,3 +114,41 @@ Deno.test("buildCriticalDateRows derives idempotent lease milestone rows", () =>
   assertEquals(rows.find((row) => row.date_type === "renewal_notice")?.due_date, "2027-04-01");
   assertEquals(rows.every((row) => row.source === "derived"), true);
 });
+
+Deno.test("buildCriticalDateRows publishes only approved snapshot fields for current approvals", () => {
+  const rows = buildCriticalDateRows({
+    id: "lease-1",
+    org_id: "org-1",
+    property_id: "property-1",
+    commencement_date: "1900-01-01",
+    expiration_date: "1900-12-31",
+    abstract_snapshot: {
+      approved: {
+        commencement_date: { value: "2026-06-01", review_status: "accepted" },
+      },
+      fields: {
+        expiration_date: { value: "2027-05-31", review_status: "pending" },
+        rent_commencement_date: { value: "2026-07-01", review_status: "pending" },
+      },
+    },
+  }, "2026-06-02");
+
+  assertEquals(rows.map((row) => row.date_type), ["commencement"]);
+  assertEquals(rows[0]?.due_date, "2026-06-01");
+});
+
+Deno.test("buildCriticalDateRows does not treat rent commencement or lease date as commencement", () => {
+  const rows = buildCriticalDateRows({
+    id: "lease-1",
+    org_id: "org-1",
+    property_id: "property-1",
+    abstract_snapshot: {
+      approved: {
+        lease_date: { value: "2026-05-15", review_status: "accepted" },
+        rent_commencement_date: { value: "2026-07-01", review_status: "accepted" },
+      },
+    },
+  }, "2026-06-02");
+
+  assertEquals(rows.map((row) => row.date_type), ["lease_date", "rent_commencement"]);
+});

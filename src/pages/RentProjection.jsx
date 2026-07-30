@@ -26,6 +26,7 @@ import { toast } from "sonner";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useSnapshotQuery } from "@/hooks/useSnapshotQuery";
 import { useComputeTrigger } from "@/hooks/useComputeTrigger";
+import { approvedLeaseFieldValue, hasApprovalSnapshot } from "@/lib/approvedLeaseSnapshot";
 import { buildHierarchyScope, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { getLeaseFieldLabel } from "@/lib/leaseFieldOptions";
 import ScopeSelector from "@/components/ScopeSelector";
@@ -112,25 +113,7 @@ function isLeaseStatusMatch(lease, filter) {
 }
 
 function approvedFieldValue(lease, keys) {
-  const candidates = (Array.isArray(keys) ? keys : [keys]).flatMap((key) => (
-    APPROVED_FIELD_ALIASES[key] || [key]
-  ));
-  const snapshotFields = lease?.abstract_snapshot?.fields || {};
-  const extractionFields = lease?.extraction_data?.fields || {};
-  const extractedFields = lease?.extracted_fields || {};
-
-  for (const key of candidates) {
-    const snapshotValue = snapshotFields?.[key]?.value;
-    if (snapshotValue !== undefined && snapshotValue !== null && snapshotValue !== "") return snapshotValue;
-    if (lease?.[key] !== undefined && lease?.[key] !== null && lease?.[key] !== "") return lease[key];
-    const extracted = extractedFields?.[key];
-    if (extracted && typeof extracted === "object" && "value" in extracted && extracted.value !== "") return extracted.value;
-    if (extracted !== undefined && extracted !== null && extracted !== "") return extracted;
-    const extraction = extractionFields?.[key];
-    if (extraction && typeof extraction === "object" && "value" in extraction && extraction.value !== "") return extraction.value;
-    if (extraction !== undefined && extraction !== null && extraction !== "") return extraction;
-  }
-  return null;
+  return approvedLeaseFieldValue(lease, keys, APPROVED_FIELD_ALIASES);
 }
 
 function approvedLeaseRsf(lease) {
@@ -307,13 +290,15 @@ export default function RentProjection() {
     const rows = filteredApprovedLeases.map((lease) => {
       const annualizedRent = approvedLeaseAnnualRent(lease);
       const rsf = approvedLeaseRsf(lease);
+      const tenantName = approvedFieldValue(lease, ["tenant_name"]);
+      const leaseType = approvedFieldValue(lease, ["lease_type"]);
       return {
         lease_id: lease.id,
-        tenant_name: approvedFieldValue(lease, ["tenant_name"]) || lease.tenant_name || "Unknown",
+        tenant_name: tenantName || (hasApprovalSnapshot(lease) ? "Unknown" : lease.tenant_name) || "Unknown",
         property_id: lease.property_id ?? null,
         building_id: lease.building_id ?? null,
         unit_id: lease.unit_id ?? null,
-        lease_type: approvedFieldValue(lease, ["lease_type"]) || lease.lease_type || null,
+        lease_type: leaseType || (hasApprovalSnapshot(lease) ? null : lease.lease_type) || null,
         lease_start: approvedFieldValue(lease, ["commencement_date", "start_date"]) || "",
         rent_commencement_date: approvedFieldValue(lease, ["rent_commencement_date"]) || "",
         lease_end: approvedFieldValue(lease, ["expiration_date", "end_date"]) || "",
@@ -405,7 +390,7 @@ export default function RentProjection() {
         property: hierarchy.propertyById.get(lease.property_id)?.name || "",
         building: hierarchy.buildingById.get(hierarchy.unitById.get(lease.unit_id)?.building_id)?.name || "",
         unit: hierarchy.unitById.get(lease.unit_id)?.unit_number || lease.unit_number || "",
-        lease_type: getLeaseFieldLabel("lease_type", lease.lease_type) || lease.lease_type || "",
+        lease_type: getLeaseFieldLabel("lease_type", approvedFieldValue(lease, ["lease_type"])) || approvedFieldValue(lease, ["lease_type"]) || "",
         lease_start: approvedFieldValue(lease, ["commencement_date", "start_date"]) || "",
         rent_commencement_date: approvedFieldValue(lease, ["rent_commencement_date"]) || "",
         lease_end: approvedFieldValue(lease, ["expiration_date", "end_date"]) || "",

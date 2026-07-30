@@ -46,7 +46,71 @@ import { leaseService } from "@/services/leaseService";
 import { supabase } from "@/services/supabaseClient";
 import { isMeaningfulValue } from "@/lib/leaseReviewSchema";
 import { resolveLeaseField } from "@/lib/leaseFieldResolver";
+import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
 import useOrgId from "@/hooks/useOrgId";
+
+function cleanListScalar(value) {
+  if (!isMeaningfulValue(value)) return null;
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "—" || trimmed === "-" || trimmed === "â€”") return null;
+  return trimmed;
+}
+
+function parseMoneyValue(value) {
+  const scalar = cleanListScalar(value);
+  if (scalar === null) return null;
+  if (typeof scalar === "number") return Number.isFinite(scalar) ? scalar : null;
+  const text = String(scalar).trim();
+  const negative = /^\(.*\)$/.test(text);
+  const cleaned = text.replace(/[()$,%\s,]/g, "");
+  if (!cleaned) return null;
+  const n = Number(cleaned);
+  if (!Number.isFinite(n)) return null;
+  return negative ? -n : n;
+}
+
+function buildLeaseListFields(lease) {
+  try {
+    return Object.fromEntries(
+      normalizeLeaseReviewData(lease).standardFields.map((field) => [field.canonicalKey, field]),
+    );
+  } catch (error) {
+    if (import.meta.env.DEV) {
+      console.warn("[Leases] Failed to normalize lease list fields:", error);
+    }
+    return {};
+  }
+}
+
+function resolveLeaseListValue(lease, fieldKey, ...typedFallbacks) {
+  const normalizedField = lease?.__leaseListFields?.[fieldKey];
+  const normalizedValue = cleanListScalar(
+    normalizedField?.normalizedValue ?? normalizedField?.value ?? normalizedField?.displayValue,
+  );
+  if (normalizedValue !== null) return normalizedValue;
+
+  const resolved = resolveLeaseField(lease, fieldKey, { mode: "canonical" });
+  const resolvedValue = cleanListScalar(resolved?.value);
+  if (resolvedValue !== null) return resolvedValue;
+
+  for (const fallback of typedFallbacks) {
+    const fallbackValue = cleanListScalar(fallback);
+    if (fallbackValue !== null) return fallbackValue;
+  }
+  return null;
+}
+
+function getLeaseSourceFileId(lease) {
+  return (
+    lease?.source_file_id ||
+    lease?.uploaded_file_id ||
+    lease?.file_id ||
+    lease?.extraction_data?.source_file_id ||
+    lease?.extraction_data?.uploaded_file_id ||
+    null
+  );
+}
 
 // Derived lease lifecycle status:
 //   draft       → no review work done (or rejected)
@@ -65,7 +129,7 @@ function deriveLeaseStatus(lease, budgetReadyLeaseIds) {
   const today = new Date();
 
   // Hard expiry first — overrides everything else.
-  const end = lease?.expiration_date || lease?.end_date;
+  const end = resolveLeaseListValue(lease, "expiration_date", lease?.expiration_date, lease?.end_date);
   if (end) {
     const endDate = new Date(end);
     if (!Number.isNaN(endDate.getTime()) && endDate < today) return "expired";
@@ -140,12 +204,12 @@ export default function Leases() {
        const { data, error } = await query;
        if (error) throw error;
 
-       const sourceFileIds = [...new Set(data.map(l => l.source_file_id).filter(Boolean))];
+       const sourceFileIds = [...new Set(data.map(getLeaseSourceFileId).filter(Boolean))];
        const fileMap = {};
        if (sourceFileIds.length > 0) {
            const { data: files } = await supabase
              .from("uploaded_files")
-             .select("id, reviewed_output, ui_review_payload")
+             .select("id, reviewed_output, ui_review_payload, normalized_output, parsed_data")
              .in("id", sourceFileIds);
            if (files) {
                for (const f of files) fileMap[f.id] = f;
@@ -154,8 +218,8 @@ export default function Leases() {
 
        return data.map(lease => ({
          ...lease,
-         uploaded_file: fileMap[lease.source_file_id] || null,
-         uploaded_files: fileMap[lease.source_file_id] || null
+         uploaded_file: fileMap[getLeaseSourceFileId(lease)] || null,
+         uploaded_files: fileMap[getLeaseSourceFileId(lease)] || null
        }));
     }
   });
@@ -164,10 +228,19 @@ export default function Leases() {
   const { data: properties = [] } = useOrgQuery("Property", {}, { allowSuperAdminGlobal: true });
   const { data: portfolios = [] } = useOrgQuery("Portfolio", {}, { allowSuperAdminGlobal: true });
 
+  const leasesForList = useMemo(
+    () =>
+      leases.map((lease) => ({
+        ...lease,
+        __leaseListFields: buildLeaseListFields(lease),
+      })),
+    [leases],
+  );
+
   // Approved expense rule sets feed the "Budget Ready" derived status.
   // We scope the query to lease IDs we already have to avoid pulling every
   // org's rule sets, and degrade gracefully if the table doesn't exist yet.
-  const leaseIdList = useMemo(() => leases.map((l) => l.id).filter(Boolean), [leases]);
+  const leaseIdList = useMemo(() => leasesForList.map((l) => l.id).filter(Boolean), [leasesForList]);
   const { data: approvedRuleSetLeaseIds = [] } = useQuery({
     queryKey: ["lease_expense_rule_sets_approved", leaseIdList],
     enabled: leaseIdList.length > 0,
@@ -213,8 +286,8 @@ export default function Leases() {
   }, [urlView]);
 
   useEffect(() => {
-    setSelectedLeaseIds((prev) => prev.filter((id) => leases.some((lease) => lease.id === id)));
-  }, [leases]);
+    setSelectedLeaseIds((prev) => prev.filter((id) => leasesForList.some((lease) => lease.id === id)));
+  }, [leasesForList]);
 
   const statusColors = {
     approved: "bg-blue-100 text-blue-700",
@@ -227,7 +300,7 @@ export default function Leases() {
 
   const getStatusColor = (status) => statusColors[status] || "bg-slate-100 text-slate-600";
 
-  const scopedLeases = leases.filter((lease) =>
+  const scopedLeases = leasesForList.filter((lease) =>
     matchesHierarchyScope(lease, scope, {
       propertyKey: "property_id",
       unitKey: "unit_id",
@@ -263,8 +336,8 @@ export default function Leases() {
     const building = unit?.building_id ? scope.buildingById.get(unit.building_id) ?? null : null;
     const property = lease.property_id ? scope.propertyById.get(lease.property_id) ?? null : null;
 
-    const tName = resolveLeaseField(lease, "tenant_name").value || lease.tenant_name;
-    const lType = resolveLeaseField(lease, "lease_type").value || lease.lease_type;
+    const tName = resolveLeaseListValue(lease, "tenant_name", lease.tenant_name);
+    const lType = resolveLeaseListValue(lease, "lease_type", lease.lease_type);
     const matchSearch =
       !search ||
       [
@@ -534,22 +607,26 @@ export default function Leases() {
               </TableRow>
             ) : (
               filtered.map((lease) => {
-                const daysLeft = lease.end_date ? differenceInDays(new Date(lease.end_date), new Date()) : null;
                 const unit = lease.unit_id ? scope.unitById.get(lease.unit_id) ?? null : null;
                 const buildingId = getLeaseBuildingId(lease, scope);
                 const building = buildingId ? scope.buildingById.get(buildingId) ?? null : null;
                 const property = lease.property_id ? scope.propertyById.get(lease.property_id) ?? null : null;
-                const tenantName = resolveLeaseField(lease, "tenant_name").value || lease.tenant_name || "—";
-                const landlordName = resolveLeaseField(lease, "landlord_name").value || lease.landlord_name || property?.landlord_name || "—";
-                const leaseType = resolveLeaseField(lease, "lease_type").value || lease.lease_type;
-                const startDate = resolveLeaseField(lease, "commencement_date").value || lease.start_date || lease.commencement_date || "—";
-                const endDate = resolveLeaseField(lease, "expiration_date").value || lease.end_date || lease.expiration_date || "—";
+                const tenantName = resolveLeaseListValue(lease, "tenant_name", lease.tenant_name) || "—";
+                const landlordName = resolveLeaseListValue(lease, "landlord_name", lease.landlord_name, property?.landlord_name) || "—";
+                const leaseType = resolveLeaseListValue(lease, "lease_type", lease.lease_type);
+                const startDateValue = resolveLeaseListValue(lease, "commencement_date", lease.commencement_date, lease.start_date);
+                const endDateValue = resolveLeaseListValue(lease, "expiration_date", lease.expiration_date, lease.end_date);
+                const startDate = startDateValue || "—";
+                const endDate = endDateValue || "—";
+                const daysLeft = endDateValue ? differenceInDays(new Date(endDateValue), new Date()) : null;
                 
-                const rawMonthlyRent = resolveLeaseField(lease, "monthly_rent").value || lease.monthly_rent;
-                const rawAnnualRent = resolveLeaseField(lease, "annual_rent").value || lease.annual_rent;
+                const rawMonthlyRent = resolveLeaseListValue(lease, "monthly_rent", lease.monthly_rent);
+                const rawAnnualRent = resolveLeaseListValue(lease, "annual_rent", lease.annual_rent);
                 
-                const annualRent = Number(rawAnnualRent || Number(rawMonthlyRent || 0) * 12 || 0);
-                const monthlyRent = Number(rawMonthlyRent || (annualRent ? annualRent / 12 : 0));
+                const parsedMonthlyRent = parseMoneyValue(rawMonthlyRent);
+                const parsedAnnualRent = parseMoneyValue(rawAnnualRent);
+                const annualRent = parsedAnnualRent ?? (parsedMonthlyRent != null ? parsedMonthlyRent * 12 : null);
+                const monthlyRent = parsedMonthlyRent ?? (parsedAnnualRent != null ? parsedAnnualRent / 12 : null);
                 
                 const unitLabel = lease.unit_number || unit?.unit_number || lease.unit_id_code || unit?.unit_id_code || (lease.unit_id && lease.unit_id.length > 8 ? lease.unit_id.substring(0, 8) : lease.unit_id) || "—";
                 const derivedStatus = deriveLeaseStatus(lease, budgetReadyLeaseIds);
@@ -558,12 +635,12 @@ export default function Leases() {
                 // Dev diagnostics (only visible in console)
                 if (import.meta.env.DEV) {
                    const diagnostics = [
-                     { fieldKey: "tenant_name", ...resolveLeaseField(lease, "tenant_name") },
-                     { fieldKey: "landlord_name", ...resolveLeaseField(lease, "landlord_name") },
-                     { fieldKey: "lease_type", ...resolveLeaseField(lease, "lease_type") },
-                     { fieldKey: "commencement_date", ...resolveLeaseField(lease, "commencement_date") },
-                     { fieldKey: "expiration_date", ...resolveLeaseField(lease, "expiration_date") },
-                     { fieldKey: "monthly_rent", ...resolveLeaseField(lease, "monthly_rent") }
+                     { fieldKey: "tenant_name", ...resolveLeaseField(lease, "tenant_name", { mode: "canonical" }) },
+                     { fieldKey: "landlord_name", ...resolveLeaseField(lease, "landlord_name", { mode: "canonical" }) },
+                     { fieldKey: "lease_type", ...resolveLeaseField(lease, "lease_type", { mode: "canonical" }) },
+                     { fieldKey: "commencement_date", ...resolveLeaseField(lease, "commencement_date", { mode: "canonical" }) },
+                     { fieldKey: "expiration_date", ...resolveLeaseField(lease, "expiration_date", { mode: "canonical" }) },
+                     { fieldKey: "monthly_rent", ...resolveLeaseField(lease, "monthly_rent", { mode: "canonical" }) }
                    ];
                    console.table(diagnostics.map(d => ({
                      fieldKey: d.fieldKey,

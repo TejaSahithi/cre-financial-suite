@@ -143,8 +143,16 @@ function safeObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+function approvedSnapshotFields(lease: Record<string, any>): Record<string, any> {
+  return safeObject(lease?.abstract_snapshot?.approved);
+}
+
 function snapshotFields(lease: Record<string, any>): Record<string, any> {
   return safeObject(lease?.abstract_snapshot?.fields);
+}
+
+function hasAbstractSnapshot(lease: Record<string, any>): boolean {
+  return Boolean(lease?.abstract_snapshot && typeof lease.abstract_snapshot === "object");
 }
 
 function extractionFields(lease: Record<string, any>): Record<string, any> {
@@ -193,6 +201,26 @@ export function asText(value: unknown): string | null {
   return text ? text : null;
 }
 
+const APPROVED_REVIEW_STATUSES = new Set(["accepted", "edited", "approved", "reviewed"]);
+
+function valueFromCandidate(candidate: unknown): unknown {
+  if (candidate == null) return null;
+  if (typeof candidate !== "object") return candidate;
+  const record = candidate as Record<string, unknown>;
+  return record.value ?? record.normalized_value ?? record.normalizedValue ?? record.raw_value ?? null;
+}
+
+function isPresent(value: unknown): boolean {
+  return value !== undefined && value !== null && String(value).trim() !== "";
+}
+
+function isApprovedSnapshotEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  const record = entry as Record<string, unknown>;
+  const status = String(record.review_status ?? record.status ?? "").trim().toLowerCase();
+  return APPROVED_REVIEW_STATUSES.has(status);
+}
+
 export function round2(value: number): number {
   return Math.round((Number(value) || 0) * 100) / 100;
 }
@@ -210,26 +238,34 @@ export function approvedFieldValue(
   const candidates = (Array.isArray(keys) ? keys : [keys]).flatMap((key) => (
     APPROVED_FIELD_ALIASES[key] ?? [key]
   ));
+  const approved = approvedSnapshotFields(lease);
   const snapshot = snapshotFields(lease);
-  const extraction = extractionFields(lease);
-  const extracted = extractedFields(lease);
 
   for (const key of candidates) {
-    const snapshotField = safeObject(snapshot[key]);
-    if (snapshotField.value != null && snapshotField.value !== "") {
-      return snapshotField.value;
-    }
-    if (lease?.[key] != null && lease[key] !== "") {
-      return lease[key];
-    }
+    const approvedValue = valueFromCandidate(approved[key]);
+    if (isPresent(approvedValue)) return approvedValue;
   }
+
   for (const key of candidates) {
-    const extractionField = safeObject(extraction[key]);
-    if (extractionField.value != null && extractionField.value !== "") return extractionField.value;
-    if (extraction[key] != null && extraction[key] !== "" && typeof extraction[key] !== "object") return extraction[key];
-    const extractedField = safeObject(extracted[key]);
-    if (extractedField.value != null && extractedField.value !== "") return extractedField.value;
-    if (extracted[key] != null && extracted[key] !== "" && typeof extracted[key] !== "object") return extracted[key];
+    const snapshotEntry = snapshot[key];
+    if (!isApprovedSnapshotEntry(snapshotEntry)) continue;
+    const snapshotValue = valueFromCandidate(snapshotEntry);
+    if (isPresent(snapshotValue)) return snapshotValue;
+  }
+
+  // Current approved leases carry abstract_snapshot.approved. Do not publish
+  // pending extraction fields into schedules. Fall back only for legacy rows
+  // that predate the approval snapshot contract.
+  if (hasAbstractSnapshot(lease)) return null;
+
+  const extraction = extractionFields(lease);
+  const extracted = extractedFields(lease);
+  for (const key of candidates) {
+    if (isPresent(lease?.[key])) return lease[key];
+    const extractionValue = valueFromCandidate(extraction[key]);
+    if (isPresent(extractionValue)) return extractionValue;
+    const extractedValue = valueFromCandidate(extracted[key]);
+    if (isPresent(extractedValue)) return extractedValue;
   }
   return null;
 }
@@ -237,22 +273,15 @@ export function approvedFieldValue(
 function approvedLeaseTermMonths(lease: Record<string, any>): number | null {
   const direct = asInteger(approvedFieldValue(lease, ["lease_term_months", "term_months"]));
   if (direct && direct > 0) return direct;
-
-  const raw = String(approvedFieldValue(lease, ["lease_term", "term", "initial_term"]) || "").toLowerCase();
-  if (!raw) return null;
-  const years = raw.match(/(\d+(?:\.\d+)?)\s*(?:year|yr)/);
-  if (years) return Math.round(Number(years[1]) * 12);
-  const months = raw.match(/(\d+(?:\.\d+)?)\s*(?:month|mo)/);
-  if (months) return Math.round(Number(months[1]));
   return null;
 }
 
 export function normalizedLeaseDates(lease: Record<string, any>): NormalizedLeaseDates {
   const leaseStart = parseDateUtc(
-    approvedFieldValue(lease, ["commencement_date", "start_date", "rent_commencement_date", "lease_date"]),
+    approvedFieldValue(lease, ["commencement_date", "start_date", "lease_start_date", "term_start_date"]),
   );
   const rentStart = parseDateUtc(
-    approvedFieldValue(lease, ["rent_commencement_date", "commencement_date", "start_date", "lease_date"]),
+    approvedFieldValue(lease, ["rent_commencement_date", "commencement_date", "start_date"]),
   );
   let leaseEnd = parseDateUtc(
     approvedFieldValue(lease, ["expiration_date", "end_date"]),

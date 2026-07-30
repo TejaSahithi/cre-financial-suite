@@ -443,14 +443,20 @@ export const LEASE_SCHEMA: ModuleSchema = {
     description:
       "The date the lease was signed or executed (YYYY-MM-DD). " +
       "Look for 'made and entered into as of [DATE]', 'Effective Date: [DATE]', 'dated [DATE]', " +
-      "or the date in the opening recital. This is BEFORE commencement_date.",
+      "or the date in the opening recital. This is the agreement/execution date, not the term start. " +
+      "Do NOT use commencement_date, start_date, rent_commencement_date, or a signature-block date " +
+      "unless the document expressly says that date is also the lease date.",
   },
   start_date: {
     type: "date",
     required: true,
     labels: ["start date", "commencement date", "lease start", "commence", "effective date", "begin date"],
     tableHeaders: ["start_date", "start date", "commencement", "commence", "start", "effective"],
-    description: "Lease start date in YYYY-MM-DD",
+    description:
+      "Lease term start date in YYYY-MM-DD. This is the same business concept as commencement_date; " +
+      "if the document states an exact commencement/start date and both fields are requested, populate " +
+      "start_date and commencement_date with the same value and evidence. Do NOT use lease_date unless " +
+      "the lease expressly says the lease/execution date is also the commencement/start date.",
     // See fact-field-mapper.ts's resolveLeaseTermDatePair() for how an
     // unlabeled "term shall be from X through Y" sentence still populates
     // this field even though its own labels[] can't disambiguate start vs.
@@ -467,7 +473,11 @@ export const LEASE_SCHEMA: ModuleSchema = {
     patterns: [
       /(?:amended\s+expiration\s+date|expiration\s+date\s+is\s+amended\s+to|term\s+is\s+extended\s+to|extended\s+through|expires?\s+on)[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
     ],
-    description: "Lease expiration date in YYYY-MM-DD",
+    description:
+      "Lease expiration/end date in YYYY-MM-DD. This is the same business concept as expiration_date; " +
+      "if the document states an exact expiration/end date and both fields are requested, populate " +
+      "end_date and expiration_date with the same value and evidence. If only a recurring month/day " +
+      "such as 'January 31st of each year' is stated with no year, leave the value null and cite the text.",
     domain: "dates",
     evidencePolicy: "enforced",
     allowedClauseCategories: ["lease_term"],
@@ -602,7 +612,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "'Modified Gross Lease' or 'Modified Gross Lease with Base Year' → modified_gross. " +
       "'Triple Net' or 'NNN' → nnn. " +
       "'Full Service' or 'Gross Lease' → gross. " +
-      "Do NOT return the full phrase — return only the key.",
+      "Do NOT return the full phrase — return only the key. " +
+      "A gross/full-service lease often means CAM, taxes, insurance, maintenance, janitorial, or utilities " +
+      "are included in rent; those inclusion rules belong in dynamic expense/CAM findings unless a fixed " +
+      "field asks for a specific supported actor or amount.",
   },
   permitted_use: {
     type: "string",
@@ -724,7 +737,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "Annual CAM (Common Area Maintenance) charges in USD as a plain number. " +
       "ONLY extract if a specific dollar amount is explicitly labeled as CAM, common area maintenance, or operating expense charges. " +
       "Do NOT calculate or estimate — if no explicit dollar figure is stated, return null. " +
-      "Do NOT confuse CAM charges with the base rent, security deposit, or TI allowance.",
+      "For gross/full-service leases where CAM is included in rent or no separate CAM charge is stated, " +
+      "leave cam_amount null and create a dynamic finding explaining the inclusion rule. " +
+      "Do NOT return 0, N/A, 'included', a lease type, a heading, base rent, security deposit, or TI allowance.",
   },
   utility_reimbursement_amount: {
     type: "number",
@@ -753,14 +768,20 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["tax responsibility", "taxes", "real estate taxes", "property taxes"],
     tableHeaders: ["tax_responsibility", "taxes", "tax resp"],
     patterns: [/(?:tax(?:es)?|real estate taxes)\b[^.\n]{0,80}\b(?:landlord|lessor|tenant|lessee)\b/i],
-    description: "Who is responsible for paying real estate/property taxes (e.g. 'tenant', 'landlord', 'shared').",
+    description:
+      "Who is responsible for paying real estate/property taxes (e.g. 'tenant', 'landlord', 'shared'). " +
+      "Use only category-specific tax language. A generic gross/full-service heading is not enough; if taxes " +
+      "are included in rent, cite the exact inclusion sentence and use dynamicFindings for the rule.",
   },
   insurance_responsibility: {
     type: "string",
     labels: ["insurance responsibility", "insurance", "property insurance"],
     tableHeaders: ["insurance_responsibility", "insurance", "ins resp"],
     patterns: [/(?:insurance|property insurance)\b[^.\n]{0,80}\b(?:landlord|lessor|tenant|lessee)\b/i],
-    description: "Who is responsible for providing/paying for property insurance (e.g. 'tenant', 'landlord', 'shared').",
+    description:
+      "Who is responsible for providing/paying for landlord property insurance premiums (e.g. 'tenant', 'landlord', 'shared'). " +
+      "Do not use tenant liability insurance procurement, indemnity, casualty, or waiver language for this field. " +
+      "If property insurance cost is included in gross/full-service rent, cite the exact inclusion sentence and use dynamicFindings for the rule.",
     domain: "insurance",
     evidencePolicy: "enforced",
     allowedClauseCategories: ["insurance"],
@@ -848,9 +869,12 @@ export const LEASE_SCHEMA: ModuleSchema = {
       /(?:initial\s+)?(?:base\s+)?term[:\s]+[a-z\-]+\s+\((\d{1,3})\)\s*(?:months|mos?\.?)/i,
     ],
     description:
-      "Lease term in months. Can be extracted or computed from start/end dates. " +
+      "Lease term in months. Extract only an explicit term month count from the document; deterministic code " +
+      "may compute a review candidate from exact start/end dates later. " +
       "Look for numeric forms like '86 months' AND written-out forms like 'eighty-six (86) months' or " +
-      "'for a period of eighty-six (86) months'. Extract the digit inside the parentheses in the latter case.",
+      "'for a period of eighty-six (86) months'. Extract the digit inside the parentheses in the latter case. " +
+      "Do NOT convert 'year to year', 'month to month', annual renewal language, or a recurring expiration " +
+      "phrase into a numeric month count.",
   },
   status: {
     type: "enum",
@@ -888,6 +912,8 @@ export const LEASE_SCHEMA: ModuleSchema = {
     ],
     description:
       "Lease term commencement date in YYYY-MM-DD (often different from lease signing date). " +
+      "This is the same business concept as start_date; if both fields are requested and an exact date is " +
+      "stated, populate both with the same value and evidence. " +
       "IMPORTANT: If the commencement date is defined FORMULAICALLY (e.g. 'one day after four months from the " +
       "Effective Date', 'upon issuance of a Certificate of Occupancy', or 'the later of X or Y') and no explicit " +
       "calendar date appears in the document, return null — do NOT substitute the lease_date, signing date, or " +
@@ -911,7 +937,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
     description:
       "Lease expiration / end date in YYYY-MM-DD. If the document only gives a recurring month/day such as " +
       "'January 31 of each year' with no year, return null for the date value but still cite that exact source_text; " +
-      "the deterministic normalizer will derive the review candidate from commencement date.",
+      "the deterministic normalizer will derive the review candidate from commencement date. This is the same " +
+      "business concept as end_date; if both fields are requested and an exact date is stated, populate both " +
+      "with the same value and evidence.",
     domain: "dates",
     evidencePolicy: "enforced",
     allowedClauseCategories: ["lease_term"],
@@ -921,7 +949,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["rent commencement date", "rent start", "rent commencement"],
     tableHeaders: ["rent_commencement_date", "rent commencement"],
     patterns: [/(?:rent\s+commencement|rent\s+start)\s*(?:date)?\s*[:.]\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i],
-    description: "Date rent payments begin (may differ from term commencement when free-rent applies)",
+    description:
+      "Date base/minimum rent payments begin (may differ from term commencement when free-rent, abatement, " +
+      "early occupancy, delivery conditions, or delayed rent start applies). Do NOT copy commencement_date " +
+      "unless the rent clause expressly says rent begins on commencement or there is no separate rent-start rule.",
   },
   tenant_signature_date: {
     type: "date",
@@ -1005,7 +1036,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["real estate taxes", "property taxes", "taxes"],
     tableHeaders: ["responsibility_taxes", "tax responsibility"],
     patterns: [/\b(?:real\s+estate\s+taxes|property\s+taxes|taxes)\b[^\n]{0,120}\b(tenant|landlord|landlord\s+with\s+cap|shared|both)\b/i],
-    description: "Party responsible for property/real estate taxes: landlord, tenant, shared, landlord_with_cap",
+    description:
+      "Party responsible for property/real estate taxes: landlord, tenant, shared, landlord_with_cap. " +
+      "Use only category-specific tax language. In a gross/full-service lease, do not infer this from the lease " +
+      "type label alone; cite the exact clause stating taxes are included in rent or paid/reimbursed by a party.",
     domain: "taxes",
     evidencePolicy: "enforced",
     allowedClauseCategories: ["taxes"],
@@ -1017,7 +1051,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["insurance responsibility", "property insurance responsibility"],
     tableHeaders: ["responsibility_insurance", "insurance responsibility"],
     patterns: [/\binsurance\b[^\n]{0,120}\b(tenant|landlord|shared)\b/i],
-    description: "Party responsible for insurance premium/cost responsibility; distinct from tenant policy procurement and waiver-of-subrogation requirements.",
+    description:
+      "Party responsible for landlord property-insurance premium/cost responsibility; distinct from tenant " +
+      "policy procurement and waiver-of-subrogation requirements. Use category-specific insurance-cost " +
+      "language, not indemnity/casualty/waiver language or a generic full-service heading.",
     domain: "insurance",
     evidencePolicy: "enforced",
     allowedClauseCategories: ["insurance", "operating_expense_recovery"],
@@ -1030,7 +1067,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["utilities responsibility", "utilities"],
     tableHeaders: ["responsibility_utilities", "utilities responsibility"],
     patterns: [/\b(?:utilities|electricity|water|gas|sewer)\b[^\n]{0,120}\b(tenant|landlord|shared)\b/i],
-    description: "Party responsible for utilities (electric, water, gas, sewer)",
+    description:
+      "Party responsible for utilities (electric, water, gas, sewer): landlord, tenant, shared, landlord_with_cap. " +
+      "Use utility-cost/service language only. If utilities are included in gross/full-service rent, cite the exact " +
+      "inclusion clause and also create a dynamic finding explaining the included utility rule.",
   },
   responsibility_repairs: {
     type: "enum",
@@ -1038,7 +1078,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["repairs", "maintenance", "repairs and maintenance"],
     tableHeaders: ["responsibility_repairs", "repairs"],
     patterns: [/\b(?:repairs?|maintenance|r&m)\b[^\n]{0,120}\b(tenant|landlord|shared)\b/i],
-    description: "Party responsible for repairs & maintenance",
+    description:
+      "Party responsible for repairs and maintenance: landlord, tenant, shared, landlord_with_cap. " +
+      "Separate structural/common-area maintenance from tenant interior repairs, HVAC maintenance, casualty, " +
+      "and capital replacement. Use dynamicFindings for important exceptions, caps, or approval duties.",
   },
   base_year: {
     type: "number",
@@ -1047,7 +1090,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["base year"],
     tableHeaders: ["base_year"],
     patterns: [/\bbase\s+year\b[^\n]{0,30}?(\d{4})/i],
-    description: "Base year for expense pass-throughs (e.g. 2024)",
+    description:
+      "Base year for modified-gross/base-year expense pass-throughs (e.g. 2024). Only extract an explicitly " +
+      "stated base year. For gross/full-service leases with no separate base year, return null.",
   },
   expense_stop: {
     type: "number",
@@ -1055,7 +1100,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["expense stop"],
     tableHeaders: ["expense_stop"],
     patterns: [/\bexpense\s+stop\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i],
-    description: "Expense stop amount in USD (cap above which tenant pays excess)",
+    description:
+      "Expense stop amount in USD (threshold above which tenant pays excess operating expenses). Only extract " +
+      "an explicitly stated expense stop. Do not use this for gross/full-service leases with no separate stop.",
   },
 
   // ─── CAM structure ──────────────────────────────────────────────────
@@ -1107,7 +1154,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     enumValues: ["cam_pool_pro_rata", "tenant_annual_rent", "gross_rent", "fixed"],
     labels: ["management fee basis", "mgmt fee basis"],
     tableHeaders: ["management_fee_basis"],
-    description: "What management fees are calculated on: cam_pool_pro_rata, tenant_annual_rent, gross_rent, fixed",
+    description:
+      "What management fees are calculated on: cam_pool_pro_rata, tenant_annual_rent, gross_rent, fixed. " +
+      "Only populate when the document explicitly states the management/admin fee basis for CAM or operating " +
+      "expense recoveries; otherwise leave null and preserve related language as a dynamic finding.",
   },
   hvac_responsibility: {
     type: "enum",
@@ -1115,7 +1165,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["hvac responsibility", "hvac"],
     tableHeaders: ["hvac_responsibility"],
     patterns: [/\bhvac\b[^\n]{0,120}\b(tenant|landlord|shared)\b/i],
-    description: "Party responsible for HVAC maintenance",
+    description:
+      "Party responsible for HVAC maintenance: landlord, tenant, shared, landlord_with_cap. " +
+      "Do not infer from generic repair language unless HVAC is included in that stated scope; cite the exact HVAC or system-maintenance clause.",
   },
   gross_up_enabled: {
     type: "boolean",

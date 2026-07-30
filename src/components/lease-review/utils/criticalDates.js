@@ -59,16 +59,6 @@ const toNumber = (value) => {
 const toTermMonths = (lease) => {
   const direct = toNumber(lease?.lease_term_months ?? lease?.term_months);
   if (direct && direct > 0) return Math.round(direct);
-
-  for (const key of ["lease_term", "term", "initial_term"]) {
-    const raw = String(lease?.[key] || "").toLowerCase();
-    if (!raw) continue;
-    const years = raw.match(/(\d+(?:\.\d+)?)\s*(year|yr)/);
-    if (years) return Math.round(Number(years[1]) * 12);
-    const months = raw.match(/(\d+(?:\.\d+)?)\s*(month|mo)/);
-    if (months) return Math.round(Number(months[1]));
-  }
-
   return null;
 };
 

@@ -2,8 +2,8 @@
 
 import type { FieldDef } from "../schemas.ts";
 
-export const WHOLE_DOCUMENT_SCHEMA_VERSION = "lease-whole-document-v2";
-export const WHOLE_DOCUMENT_SCHEMA_NAME = "lease_whole_document_v2";
+export const WHOLE_DOCUMENT_SCHEMA_VERSION = "lease-whole-document-v3-cre-executive";
+export const WHOLE_DOCUMENT_SCHEMA_NAME = "lease_whole_document_v3_cre_executive";
 
 export type WholeDocumentFieldStatus =
   | "found"
@@ -222,6 +222,65 @@ Perform these review passes silently before producing the JSON response:
    does not fit the fixed schema and report each one in dynamicFindings.
 10. Challenge every proposed value against competing evidence and common field-confusion risks.
 
+CRE EXECUTIVE EXTRACTION PLAYBOOK
+
+Date taxonomy:
+- lease_date is the execution/made/signed date of the agreement. It is not the commencement date
+  unless the document expressly says the execution/effective date is also the commencement date.
+- commencement_date and start_date are the same lease-admin concept: the date the term begins.
+  If the schema contains both keys and the document states an exact commencement/start date,
+  return both keys with the same value, sourceQuote, and sourceNodeIds.
+- expiration_date and end_date are the same lease-admin concept: the date the current term ends.
+  If the schema contains both keys and the document states an exact expiration/end date, return
+  both keys with the same value, sourceQuote, and sourceNodeIds.
+- rent_commencement_date is the first date base/minimum rent is payable. It may equal
+  commencement_date, but only when the rent clause says rent begins on commencement or no free
+  rent/abatement/delayed rent start applies.
+- lease_term_months is the stated length of the controlling current term. Use an explicit month
+  count when the document says one. Do not convert "year to year", "annual renewal", "month to
+  month", or a recurring month/day label into a numeric month count.
+- tenant_signature_date and landlord_signature_date are signature-block dates. They are not
+  lease_date unless the document makes that relationship explicit.
+
+Rent and revenue taxonomy:
+- monthly_rent is the recurring base/minimum rent per month for the first paid period of the
+  current term. Do not use security deposit components, annual totals, CAM estimates, utilities,
+  late fees, or TI allowance.
+- annual_rent is only an explicitly stated annual/base annual rent. If only monthly rent is
+  stated, leave annual_rent unstated; downstream deterministic math may derive it for display.
+- If the lease contains a rent schedule, free-rent period, stepped rent, option rent, renewal rent,
+  percentage rent, or amortized charge schedule, create a dynamicFindings schedule preserving
+  every row/period exactly as stated, even when a scalar monthly_rent is also found.
+
+Expense, CAM, and operating-cost taxonomy:
+- First classify the economic structure from the actual lease language: gross/full-service,
+  modified gross/base-year, net/NN/NNN, direct tenant payment, or reimbursement/pass-through.
+- Full-service/gross means certain costs may be included in base rent. It does not by itself prove
+  every scalar CAM/tax/insurance/utility field. Quote the exact inclusion clause and create
+  separate dynamicFindings for each included category, such as CAM/operating expenses, real estate
+  taxes, property insurance premiums, utilities, janitorial, maintenance, and HVAC.
+- cam_amount is a numeric dollar amount only when the document expressly states a CAM/common-area
+  maintenance/operating-expense charge amount. Do not place "N/A", "included", a lease type, a
+  heading, or a responsibility actor into cam_amount.
+- base_year and expense_stop apply to modified-gross/base-year/expense-stop economics only. If a
+  gross/full-service lease simply says costs are included in rent, those fixed numeric fields are
+  not stated; put the inclusion rule in dynamicFindings.
+- Extract expense obligations category by category. Taxes, landlord property insurance premiums,
+  tenant liability insurance procurement, utilities, electric, water/sewer, repairs, maintenance,
+  HVAC, janitorial, trash, landscaping/snow, management/admin fees, gross-up, caps, exclusions,
+  audit rights, reconciliations, and reimbursement timing are different concepts. Do not collapse
+  them into one generic expense finding.
+- Responsibility fields such as responsibility_taxes, responsibility_insurance,
+  responsibility_utilities, responsibility_repairs, electric_responsibility, and
+  water_sewer_responsibility must contain only the responsible actor value allowed by that field.
+  The sourceQuote must be category-specific evidence, not a general lease-type heading.
+
+Completeness expectation:
+- Read every paragraph, sentence, statement, exhibit row, and signature block. Every operational,
+  financial, approval, notice, default, insurance, repair, maintenance, utility, CAM, tax,
+  assignment, renewal, termination, or budget-impacting term must either map to a fixed field or
+  appear as a focused dynamicFinding. Do not stop after the obvious summary fields.
+
 FIXED CLAIM CONTRACT
 
 For every fixed schema field, return it in exactly ONE of these places:
@@ -234,13 +293,21 @@ Never return a field twice, and never put the same key in both collections. Deta
 - conflicting: the document contains materially different competing values.
 - illegible: OCR quality prevents a reliable determination.
 
+The schema intentionally contains legacy/canonical pairs. When both keys are present, mirror the
+same supported value and evidence into both keys for these same-concept pairs:
+- start_date and commencement_date.
+- end_date and expiration_date.
+
 EVIDENCE CONTRACT:
 1. For found/ambiguous/conflicting, sourceQuote must be exact verbatim text from the compact JSON.
 2. sourceNodeIds must contain the page/table-row/key-value IDs that support the answer.
 3. Never invent an ID. IDs are printed directly in the JSON.
 4. ONLY status found may contain a non-null value. For ambiguous, conflicting, or illegible,
    value MUST be null. Preserve competing possibilities under alternatives.
-5. Do not calculate derived values. Extract only values explicitly stated in the document.
+5. Fixed claim values must be extracted from explicit document language. Do not invent missing
+   values or compute a value merely because it seems commercially obvious. Preserve formulas,
+   relative dates, recurring date phrases, and schedules in dynamicFindings when an exact fixed
+   value is not stated. Downstream deterministic code may derive display candidates.
 6. Dates must be YYYY-MM-DD when the exact calendar date is stated.
 7. For ambiguous/conflicting claims, cite the relevant nodes, explain the uncertainty, and put
    each supported possibility in alternatives. Never choose a convenient representative value.
@@ -290,6 +357,13 @@ Do not drop free-rent rows, partial final rows, option-term rows, CAM-estimate r
 conditions, or amortized charge rows. Do not calculate missing dates or amounts; preserve the
 period labels exactly as stated and mark the finding ambiguous/conflicting if the document's
 own schedule conflicts.
+
+For expense/CAM clauses, create focused dynamic findings for commercially separate obligations
+even when the fixed scalar field is null. In a gross/full-service lease, "included in monthly/base
+rent" is a meaningful expense rule and belongs in expenses_recoveries, cam_rules, taxes,
+insurance, utilities, or repairs_maintenance as applicable. In net/NNN leases, extract tenant
+payment/reimbursement duties, reconciliation mechanics, caps, exclusions, audit rights, and
+administrative or management fees separately.
 
 Do not create a dynamic duplicate of a fixed field. Do not hide a real term because no fixed field
 exists. Do not combine unrelated provisions into one generic finding. Every dynamic finding must

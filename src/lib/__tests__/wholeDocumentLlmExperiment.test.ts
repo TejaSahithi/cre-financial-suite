@@ -95,5 +95,11 @@ describe("whole-document LLM experiment", () => {
     expect(prompt).toContain("Do not place a fact in a fixed field merely because similar words appear");
     expect(prompt).toContain("ONLY status found may contain a non-null value");
     expect(prompt).toContain("Do not confuse monthly base rent");
+    expect(prompt).toContain("commencement_date and start_date are the same lease-admin concept");
+    expect(prompt).toContain("expiration_date and end_date are the same lease-admin concept");
+    expect(prompt).toContain("Do not convert \"year to year\"");
+    expect(prompt).toContain("Full-service/gross means certain costs may be included in base rent");
+    expect(prompt).toContain("cam_amount is a numeric dollar amount only");
+    expect(prompt).toContain("Every operational");
   });
 });
