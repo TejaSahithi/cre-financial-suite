@@ -156,6 +156,16 @@ describe("leaseReviewCurrentPolicy", () => {
     expect(source).toContain("ExtractionTimelinePanel");
     expect(LEASE_REVIEW_TABS.at(-1)).toEqual({ key: "extraction_timeline", label: "Extraction Timeline" });
   });
+
+  it("approval gate honors alias reviews and reviewer-corrected validation errors", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/pages/LeaseReview.jsx"), "utf8");
+
+    expect(source).toContain("const reviewKeys = [...new Set([key, ...getFieldAliases(key)])]");
+    expect(source).toContain("const reviewClearsAutomatedValidation");
+    expect(source).toContain("existingValidationErrors.length > 0 && !reviewClearsAutomatedValidation");
+    expect(source).toContain("reviewStatus === REVIEW_STATUSES.EDITED && reviewClearsAutomatedValidation");
+    expect(source).toContain("explicit reviewer decision; downstream treats value as not approved");
+  });
 });
 
 describe("Phase 39: profile detection reconciliation", () => {

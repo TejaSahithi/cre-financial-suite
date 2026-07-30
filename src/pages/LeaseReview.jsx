@@ -1348,8 +1348,34 @@ export default function LeaseReview() {
       const isRequired = requiredFieldKeySet.has(key);
       const isDynamic = !fieldDef.key;
       
-      const review = fieldReviews[key];
+      const reviewKeys = [...new Set([key, ...getFieldAliases(key)])];
+      const reviewKey = reviewKeys.find((candidateKey) => fieldReviews[candidateKey]) || key;
+      const review = fieldReviews[reviewKey];
       const reviewStatus = review?.status || "pending";
+      const reviewResolved = isResolvedReview(review);
+      const reviewValue = review?.value;
+      const reviewEvidence = {
+        sourceText: review?.source_text ?? review?.exact_source_text ?? null,
+        sourcePage: review?.source_page ?? review?.page_number ?? null,
+        extractionStatus: review?.extraction_status ?? null,
+        evidenceType: review?.evidence_type ?? null,
+        sourceTextQuality: review?.source_text_quality ?? null,
+        sourceFieldKeys: review?.source_field_keys ?? null,
+        derivationTrace: review?.derivation_trace ?? null,
+      };
+      const reviewHasValue = isMeaningfulValue(reviewValue);
+      const reviewHasEvidence = hasValidSourceEvidence({
+        value: reviewValue,
+        ...reviewEvidence,
+      });
+      const reviewHasOverride = review?.evidence_override === true || String(review?.note || "").trim().length > 0;
+      const reviewClearsAutomatedValidation =
+        reviewResolved &&
+        reviewStatus !== REVIEW_STATUSES.N_A &&
+        (
+          reviewStatus === REVIEW_STATUSES.MANUAL_REQUIRED ||
+          (reviewHasValue && (reviewHasEvidence || reviewHasOverride))
+        );
       
       if (reviewStatus === REVIEW_STATUSES.N_A) {
         return; // already marked N/A - doesn't block
@@ -1359,7 +1385,7 @@ export default function LeaseReview() {
         ...(Array.isArray(row?.validation_errors) ? row.validation_errors : []),
         ...(Array.isArray(row?.validationErrors) ? row.validationErrors : []),
       ];
-      if (existingValidationErrors.length > 0) {
+      if (existingValidationErrors.length > 0 && !reviewClearsAutomatedValidation) {
         if (isRequired) {
           validationBlockers.push({ key, label: fieldDef.label || key, reason: existingValidationErrors.join(", ") });
           requiredBlockers.push(key);
@@ -1373,15 +1399,12 @@ export default function LeaseReview() {
       if (['accepted', 'approved'].includes(reviewStatus)) {
         return; // already approved - doesn't block
       }
+      if (reviewStatus === REVIEW_STATUSES.EDITED && reviewClearsAutomatedValidation) {
+        return; // reviewer-corrected value/evidence is authoritative
+      }
       
       if (reviewStatus === REVIEW_STATUSES.MANUAL_REQUIRED) {
-        if (isRequired) {
-          requiredBlockers.push(key);
-          requiredBlockerDetails.push({ key, label: fieldDef.label || key, reason: "Manual Review Required" });
-        } else {
-          optionalUnresolved.push(key);
-        }
-        return;
+        return; // explicit reviewer decision; downstream treats value as not approved
       }
 
       if (isRequired && (lease?.extraction_data?.conflicts?.[key] || row?.evidence_type === "conflict") && !isResolvedReview(review)) {
