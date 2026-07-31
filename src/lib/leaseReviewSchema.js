@@ -66,6 +66,7 @@ export const LEASE_REVIEW_TABS = [
   { key: "signatures", label: "Signatures" },
   { key: "documents_exhibits", label: "Documents / Exhibits" },
   { key: "clause_records", label: "Clause Records" },
+  { key: "material_terms", label: "Material Terms" },
   { key: "budget_preview", label: "Budget Preview" },
   { key: "extraction_debug", label: "Extraction Debug" },
   { key: "extraction_timeline", label: "Extraction Timeline" },

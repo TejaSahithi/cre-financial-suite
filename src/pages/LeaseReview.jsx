@@ -1180,8 +1180,10 @@ export default function LeaseReview() {
   );
   const workflowExpenseTermsFound = Number(mappingWorkflowSummary.lease_expense_terms_found ?? 0) || 0;
   const workflowCamTermsFound = Number(mappingWorkflowSummary.cam_terms_found ?? 0) || 0;
-  const effectiveExpenseTermsFound = Math.max(Number(ruleSetSummary?.expense?.total ?? 0) || 0, workflowExpenseTermsFound);
-  const effectiveCamTermsFound = Math.max(Number(ruleSetSummary?.cam?.total ?? 0) || 0, workflowCamTermsFound);
+  const normalizedExpenseTermsFound = Number(normalized.expenseRules?.length ?? 0) || 0;
+  const normalizedCamTermsFound = Number(normalized.camRules?.length ?? 0) || 0;
+  const effectiveExpenseTermsFound = Math.max(Number(ruleSetSummary?.expense?.total ?? 0) || 0, workflowExpenseTermsFound, normalizedExpenseTermsFound);
+  const effectiveCamTermsFound = Math.max(Number(ruleSetSummary?.cam?.total ?? 0) || 0, workflowCamTermsFound, normalizedCamTermsFound);
 
   // Validation checks (kept for summary panel).
   // For each field, prefer the stored leases-table column but fall back to
@@ -1189,12 +1191,20 @@ export default function LeaseReview() {
   // before the abstract has been approved and columns written.
   const validationChecks = [];
   const src = leaseFull ?? lease;
+  const canonicalSummaryValue = (key, fallbackValue = null) => {
+    const row = standardRowByKey.get(key) || reviewRowByKey.get(key);
+    if (row) {
+      const rowValue = row.normalized_value ?? row.normalizedValue ?? row.value;
+      if (isMeaningfulValue(rowValue)) return rowValue;
+    }
+    return isMeaningfulValue(fallbackValue) ? fallbackValue : readFieldValue(src, key);
+  };
   const commencementValue =
-    lease.commencement_date || lease.start_date ||
-    readFieldValue(src, "commencement_date") || readFieldValue(src, "start_date");
+    canonicalSummaryValue("commencement_date", lease.commencement_date || lease.start_date) ||
+    canonicalSummaryValue("start_date", lease.start_date || lease.commencement_date);
   const expirationValue =
-    lease.expiration_date || lease.end_date ||
-    readFieldValue(src, "expiration_date") || readFieldValue(src, "end_date");
+    canonicalSummaryValue("expiration_date", lease.expiration_date || lease.end_date) ||
+    canonicalSummaryValue("end_date", lease.end_date || lease.expiration_date);
   if (commencementValue && expirationValue) {
     const startOk = new Date(commencementValue) < new Date(expirationValue);
     validationChecks.push({
@@ -1205,14 +1215,6 @@ export default function LeaseReview() {
         : "Expiration date is on/before commencement",
     });
   }
-  const canonicalSummaryValue = (key, fallbackValue = null) => {
-    const row = reviewRowByKey.get(key);
-    if (row) {
-      const rowValue = row.normalized_value ?? row.value;
-      return isMeaningfulValue(rowValue) ? rowValue : null;
-    }
-    return isMeaningfulValue(fallbackValue) ? fallbackValue : readFieldValue(src, key);
-  };
   const summaryTenantName = canonicalSummaryValue("tenant_name", lease.tenant_name);
   const summaryLeaseType = canonicalSummaryValue("lease_type", lease.lease_type);
   const summaryLeaseDate = canonicalSummaryValue("lease_date", lease.lease_date);
@@ -1228,7 +1230,7 @@ export default function LeaseReview() {
       detail: `$${Number(summaryAnnualRent).toLocaleString()}`,
     });
   }
-  const sf = lease.total_sf || lease.square_footage || readFieldValue(src, "square_footage");
+  const sf = canonicalSummaryValue("square_footage", lease.total_sf || lease.square_footage);
   if (sf) {
     validationChecks.push({
       pass: Number(sf) > 0,
@@ -1255,7 +1257,7 @@ export default function LeaseReview() {
   });
   const passCount = validationChecks.filter((v) => v.pass).length;
 
-  const totalSf = lease.total_sf || lease.square_footage || readFieldValue(src, "square_footage");
+  const totalSf = canonicalSummaryValue("square_footage", lease.total_sf || lease.square_footage);
 
   const scopedStakeholders = stakeholders.filter(
     (s) => !s.property_id || !lease.property_id || s.property_id === lease.property_id,
@@ -3409,7 +3411,7 @@ export default function LeaseReview() {
 
         {/* Business tabs - one spreadsheet-style table per section. */}
         {LEASE_REVIEW_TABS
-          .filter((t) => !["summary", "rent_charges", "expenses_recoveries", "cam_rules", "clause_records", "critical_dates", "documents_exhibits", "budget_preview", "extraction_debug", "extraction_timeline"].includes(t.key))
+          .filter((t) => !["summary", "rent_charges", "expenses_recoveries", "cam_rules", "clause_records", "material_terms", "critical_dates", "documents_exhibits", "budget_preview", "extraction_debug", "extraction_timeline"].includes(t.key))
           .map((tab) => (
             <TabsContent key={tab.key} value={tab.key} className="mt-4 space-y-3">
               <div className="flex justify-end">
@@ -3444,6 +3446,10 @@ export default function LeaseReview() {
 
         <TabsContent value="clause_records" className="mt-4 space-y-3">
           <LeaseReviewTabTable rows={enterpriseTabs.clause_records || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} />
+        </TabsContent>
+
+        <TabsContent value="material_terms" className="mt-4 space-y-3">
+          <LeaseReviewTabTable rows={enterpriseTabs.material_terms || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} />
         </TabsContent>
 
         <TabsContent value="critical_dates" className="mt-4 space-y-3">

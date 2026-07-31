@@ -105,12 +105,10 @@ function isParagraphLikeReviewValue(value) {
 }
 
 function clauseValueLabel(row) {
-  const title = compactText(row?.title || row?.clauseType);
-  if (title && !/^extracted clause$/i.test(title)) return title;
   const text = compactText(row?.summary || row?.sourceText);
   if (!text) return "Supporting clause";
-  const sentence = text.match(/^[^.!?]{1,180}[.!?]?/)?.[0] || text;
-  return sentence.length > 96 ? `${sentence.slice(0, 95).trimEnd()}...` : sentence;
+  const sentence = text.match(/^[^.!?]{1,220}[.!?]?/)?.[0] || text;
+  return sentence.length > 140 ? `${sentence.slice(0, 139).trimEnd()}...` : sentence;
 }
 
 const CLAUSE_DOMAIN_TAB_RULES = [
@@ -416,6 +414,12 @@ function recoverDateFromSourceText(text) {
   return toIsoDate(explicitMonthDate || text);
 }
 
+function isLabelOnlyDynamicValue(label, value, key = null) {
+  const normalizedValue = normalizePlaceholderComparable(value);
+  if (!normalizedValue) return false;
+  const candidates = [label, key, titleize(key)].filter(Boolean).map(normalizePlaceholderComparable);
+  return candidates.includes(normalizedValue);
+}
 function recoverStandardValueFromEvidence(canonicalKey, evidence) {
   const text = recoveryEvidenceText(evidence);
   if (!text) return null;
@@ -1194,6 +1198,13 @@ export function normalizeDynamicFindings(lease) {
 
     const tabKey = routeDynamicRowToTab(item);
     const confidence = typeof item.confidence === "number" ? item.confidence : null;
+    const label = item.label || titleize(item.item_type || item.field_key || "Finding");
+    const rawDynamicValue = item.normalized_value ?? item.value ?? null;
+    const labelOnlyValue = isLabelOnlyDynamicValue(label, rawDynamicValue, candidateKey);
+    const dynamicValue = labelOnlyValue ? null : rawDynamicValue;
+    const dynamicReviewReason = labelOnlyValue
+      ? "Extracted value repeated the row label, not a lease value. Review the cited source text."
+      : (item.review_reason ?? item.reviewReason ?? item.requires_review_reason ?? item.requiresReviewReason ?? null);
     const declaredValueType = String(item.value_type ?? item.valueType ?? item.data_type ?? item.dataType ?? "").trim().toLowerCase();
     const valueType = /(schedule|table|matrix|ledger)/i.test(declaredValueType)
       ? "schedule"
@@ -1213,7 +1224,7 @@ export function normalizeDynamicFindings(lease) {
       typeLabel: "Dynamic",
       key: item.item_id || item.id || `dynamic-${rows.length}`,
       fieldKey: item.field_key || item.item_type || null,
-      label: item.label || titleize(item.item_type || item.field_key || "Finding"),
+      label,
       category: item.business_area || item.display_tab || item.item_type || "unknown_needs_review",
       type: valueType || "text",
       dataType: valueType || "text",
@@ -1221,9 +1232,9 @@ export function normalizeDynamicFindings(lease) {
       value_type: item.value_type ?? item.valueType ?? valueType ?? "text",
       tabKey,
       editable: false,
-      value: item.normalized_value ?? item.value ?? null,
-      normalizedValue: item.normalized_value ?? item.value ?? null,
-      normalized_value: item.normalized_value ?? item.value ?? null,
+      value: dynamicValue,
+      normalizedValue: dynamicValue,
+      normalized_value: dynamicValue,
       sourcePage: item.source_page ?? item.page_number ?? null,
       source_page: item.source_page ?? item.page_number ?? null,
       page_number: item.source_page ?? item.page_number ?? null,
@@ -1231,7 +1242,7 @@ export function normalizeDynamicFindings(lease) {
       source_text: sourceText,
       confidence,
       confidencePercent: normalizeConfidencePercent(confidence),
-      status: normalizeRowStatus(item.review_status || item.status || item.extraction_status),
+      status: labelOnlyValue ? "needs_review" : normalizeRowStatus(item.review_status || item.status || item.extraction_status),
       // Phase 40: dynamic-finding items don't carry the same structured
       // extraction-status/evidence-quality metadata standard fields do, so
       // resolveLeaseReviewExtractionMode's inputs can't be built reliably
@@ -1240,6 +1251,9 @@ export function normalizeDynamicFindings(lease) {
       extraction_mode: EXTRACTION_MODES.UNKNOWN,
       mapsToExistingField: Boolean(item.maps_to_existing_field),
       createsDynamicRow: true,
+      reviewReason: dynamicReviewReason,
+      review_reason: dynamicReviewReason,
+      validationMessage: dynamicReviewReason,
       defaultVisible: true,
       advanced: false,
     });
@@ -1394,7 +1408,7 @@ function isRetainableHighValueLegalClause(row, semanticKey) {
   return /\b(?:exclusive use|co-tenancy|continuous operation|go dark|relocation|radius restriction|non-compete|indemnif|holdover|subordination|estoppel|guaranty|default remedies|early termination|renewal option)\b/i.test(text);
 }
 
-function shouldKeepClauseRecord(row, { profile } = {}) {
+function shouldKeepClauseRecord(row, { profile, preserveFinancialClauses = false } = {}) {
   if (!cleanDocumentItemSource(row?.clause_text)) return false;
 
   // Assignment clause behavior was intentionally broadened in Phase 44A; keep
@@ -1405,7 +1419,7 @@ function shouldKeepClauseRecord(row, { profile } = {}) {
   const semanticKey = clauseSemanticFieldKey(row);
   const type = row?.clause_type;
 
-  if (isExpenseCamRentOrSecurityClause(row)) return false;
+  if (isExpenseCamRentOrSecurityClause(row) && !preserveFinancialClauses) return false;
   if (CLAUSE_DUPLICATE_TYPES.has(type)) return false;
   if (semanticKey && getFieldContract(semanticKey) && !isRetainableHighValueLegalClause(row, semanticKey)) return false;
   if (isGenericLegalBoilerplateClause(row) && !isRetainableHighValueLegalClause(row, semanticKey)) return false;
@@ -1597,10 +1611,10 @@ export function computeFallbackClauseRows(lease) {
 
 /** Phase-6 UI shape, sync/payload-only (no `lease_clauses` DB table rows —
  *  ClauseRecordsTable layers those in separately since that query is async). */
-export function normalizeClauseRecords(lease, { profile = resolveCurrentReviewProfile(lease) } = {}) {
+export function normalizeClauseRecords(lease, { profile = resolveCurrentReviewProfile(lease), preserveFinancialClauses = false } = {}) {
   const rows = computeFallbackClauseRows(lease)
     .filter((c) => cleanDocumentItemSource(c.clause_text))
-    .filter((c) => shouldKeepClauseRecord(c, { profile }));
+    .filter((c) => shouldKeepClauseRecord(c, { profile, preserveFinancialClauses }));
   return rows.map((c) => ({
     clauseType: c.clause_type,
     title: c.clause_title,
@@ -2033,7 +2047,101 @@ export function normalizeApprovalBlockers(lease, standardFields, currentReviewPo
 
 // ── Debug counts ───────────────────────────────────────────────────────────
 
-export function buildRowsByTab({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates }) {
+function materialTermValue(row) {
+  return row?.displayValue ?? row?.display_value ?? row?.normalizedValue ?? row?.normalized_value ?? row?.value ?? row?.summary ?? null;
+}
+
+function materialTermSourceText(row) {
+  return row?.sourceText ?? row?.source_text ?? row?.exact_source_text ?? row?.source_clause ?? row?.summary ?? null;
+}
+
+function materialTermPage(row) {
+  return row?.sourcePage ?? row?.source_page ?? row?.page_number ?? null;
+}
+
+function materialTermDedupeKey(row, sourceKind) {
+  return [
+    sourceKind,
+    normalizeComparableText(row?.fieldKey || row?.field_key || row?.canonicalKey || row?.category || row?.label || row?.title || row?.clauseType),
+    normalizeComparableText(materialTermValue(row)),
+    normalizeComparableText(materialTermSourceText(row)).slice(0, 180),
+  ].join("|");
+}
+
+function makeMaterialTermRow(row, sourceKind, index) {
+  const value = materialTermValue(row);
+  const sourceText = materialTermSourceText(row);
+  const page = materialTermPage(row);
+  const label = row?.label || row?.title || row?.clauseType || row?.category || row?.fieldKey || row?.canonicalKey || "Lease term";
+  return {
+    ...row,
+    rowType: "material_term",
+    typeLabel: "Material Term",
+    key: `material-${sourceKind}-${row?.key || row?.id || row?.fieldKey || row?.canonicalKey || index}`,
+    fieldKey: row?.fieldKey || row?.field_key || row?.canonicalKey || row?.category || null,
+    field_key: row?.field_key || row?.fieldKey || row?.canonicalKey || row?.category || null,
+    label,
+    tabKey: "material_terms",
+    category: row?.category || sourceKind,
+    editable: false,
+    value,
+    normalizedValue: value,
+    normalized_value: value,
+    displayValue: value,
+    display_value: value,
+    sourceText,
+    source_text: sourceText,
+    sourcePage: page,
+    source_page: page,
+    page_number: page,
+    status: row?.status || row?.review_status || "needs_review",
+    extractionMode: row?.extractionMode || row?.extraction_mode || EXTRACTION_MODES.UNKNOWN,
+    extraction_mode: row?.extraction_mode || row?.extractionMode || EXTRACTION_MODES.UNKNOWN,
+    confidence: row?.confidence ?? null,
+    confidencePercent: row?.confidencePercent ?? normalizeConfidencePercent(row?.confidence),
+    materialSource: sourceKind,
+    mappedRowType: row?.rowType || sourceKind,
+    defaultVisible: true,
+    advanced: false,
+  };
+}
+
+export function buildMaterialTermLedger({ standardFields = [], dynamicFindings = [], expenseRules = [], camRules = [], clauseRecords = [] } = {}) {
+  const seen = new Set();
+  const terms = [];
+  const add = (row, sourceKind) => {
+    if (!row || typeof row !== "object") return;
+    const value = materialTermValue(row);
+    const sourceText = materialTermSourceText(row);
+    if (!isMeaningfulValue(value) && !sourceText) return;
+    if (row.invalidValueRejected && !sourceText) return;
+    const key = materialTermDedupeKey(row, sourceKind);
+    if (seen.has(key)) return;
+    seen.add(key);
+    terms.push(makeMaterialTermRow(row, sourceKind, terms.length));
+  };
+
+  standardFields.forEach((row) => add(row, "canonical_field"));
+  expenseRules.forEach((row) => add(row, "expense_rule"));
+  camRules.forEach((row) => add(row, "cam_rule"));
+  dynamicFindings.forEach((row) => add(row, "dynamic_finding"));
+  clauseRecords.forEach((row) => add({
+    ...row,
+    key: row.key || `${row.clauseType || "clause"}-${row.sourcePage ?? "p"}`,
+    label: row.title || row.clauseType || "Lease clause",
+    value: clauseValueLabel(row),
+    normalized_value: clauseValueLabel(row),
+    sourceText: row.sourceText,
+    source_text: row.sourceText,
+    sourcePage: row.sourcePage,
+    source_page: row.sourcePage,
+    status: row.reviewStatus || row.status || "pending",
+    extractionMode: EXTRACTION_MODES.UNKNOWN,
+  }, "clause"));
+
+  return terms;
+}
+export function buildRowsByTab({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates, materialTerms = [] }) {
   const tabs = LEASE_REVIEW_CANONICAL_TABS.reduce((acc, tab) => {
     acc[tab.key] = [];
     return acc;
@@ -2102,6 +2210,8 @@ export function buildRowsByTab({ standardFields, dynamicFindings, expenseRules, 
     }
   }
 
+  for (const row of materialTerms) if (tabs.material_terms) tabs.material_terms.push(row);
+
   for (const row of criticalDates) {
     if (!tabs.critical_dates.some((existing) => existing.canonicalKey === row.canonicalKey)) {
       tabs.critical_dates.push(toReadOnlyReference(row, "critical_dates"));
@@ -2153,7 +2263,7 @@ export function buildReadinessSummary({ standardFields, dynamicFindings, expense
   };
 }
 
-export function buildDebugCounts({ standardFields, dynamicFindings, clauseRecords, expenseRules, camRules = [], criticalDates, approvalBlockers, tabs = {} }) {
+export function buildDebugCounts({ standardFields, dynamicFindings, clauseRecords, expenseRules, camRules = [], criticalDates, materialTerms = [], approvalBlockers, tabs = {} }) {
   const visibleRows = Object.values(tabs).flat();
   return {
     standard_fields_total: standardFields.length,
@@ -2167,6 +2277,7 @@ export function buildDebugCounts({ standardFields, dynamicFindings, clauseRecord
     expense_rules_count: expenseRules.length,
     cam_rules_count: camRules.length,
     critical_dates_count: criticalDates.length,
+    material_terms_count: materialTerms.length,
     visible_rows_count: visibleRows.length,
     approval_blockers_count: approvalBlockers.missingFields.length + approvalBlockers.warnings.length,
   };
@@ -2192,25 +2303,34 @@ export function normalizeLeaseReviewData(lease, { fieldReviews, allowNoProviderC
     legacyRequiredFieldKeys: REQUIRED_FIELD_KEYS,
   });
   const dynamicFindings = normalizeDynamicFindings(lease);
-  const clauseRecords = normalizeClauseRecords(lease, { profile: currentReviewPolicy.profile });
   const downstreamApproved = isLeaseApprovedForDownstream(lease);
-  // Expense/CAM rules, critical-date records, and budget/rent projections
-  // are downstream operating artifacts. Lease facts remain visible for
-  // human review, but these artifacts are not published until the abstract
-  // approval boundary has been crossed.
-  const allRuleRows = downstreamApproved ? normalizeExpenseRuleFallback(lease) : [];
+  // Lease-derived expense/CAM obligations are review facts, so reviewers must
+  // see them before approval. Only downstream publication to lease_expense_rules,
+  // CAM, and Budget remains gated by the abstract approval boundary.
+  const rawRuleRows = normalizeExpenseRuleFallback(lease);
+  const allRuleRows = rawRuleRows.map((row) => downstreamApproved ? row : {
+    ...row,
+    publicationStatus: "review_only_until_abstract_approval",
+    validationMessage: row.validationMessage || "Review-only until the lease abstract is approved; approval publishes this obligation to Lease Expense Rules.",
+  });
+  const hasStructuredRuleEvidence = allRuleRows.some((row) => row.sourceText || row.source_text || isMeaningfulValue(row.value ?? row.normalized_value));
+  const clauseRecords = normalizeClauseRecords(lease, {
+    profile: currentReviewPolicy.profile,
+    preserveFinancialClauses: !hasStructuredRuleEvidence,
+  });
   const expenseRules = allRuleRows.filter((row) => row.rowType !== "cam_rule");
   const camRules = allRuleRows.filter((row) => row.rowType === "cam_rule");
   const criticalDates = downstreamApproved ? normalizeCriticalDates(standardFields) : [];
   const approvalBlockers = normalizeApprovalBlockers(lease, standardFields, currentReviewPolicy);
-  const tabs = buildRowsByTab({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates });
+  const materialTerms = buildMaterialTermLedger({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords });
+  const tabs = buildRowsByTab({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates, materialTerms });
   if (!downstreamApproved) {
     tabs.critical_dates = [];
     tabs.budget_preview = [];
   }
   const readinessSummary = buildReadinessSummary({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates, approvalBlockers, tabs, currentReviewPolicy });
   const budgetPreview = tabs.budget_preview || [];
-  const debugCounts = buildDebugCounts({ standardFields, dynamicFindings, clauseRecords, expenseRules, camRules, criticalDates, approvalBlockers, tabs });
+  const debugCounts = buildDebugCounts({ standardFields, dynamicFindings, clauseRecords, expenseRules, camRules, criticalDates, materialTerms, approvalBlockers, tabs });
 
   return {
     readinessSummary,
@@ -2221,6 +2341,7 @@ export function normalizeLeaseReviewData(lease, { fieldReviews, allowNoProviderC
     expenseRules,
     camRules,
     criticalDates,
+    materialTerms,
     approvalBlockers,
     currentReviewPolicy,
     downstreamApproved,

@@ -13,6 +13,7 @@ const TYPE_META = {
   expense_rule: { label: "Expense Rule", className: "bg-amber-50 text-amber-800 border-amber-100" },
   cam_rule: { label: "CAM Rule", className: "bg-cyan-50 text-cyan-700 border-cyan-100" },
   clause: { label: "Clause", className: "bg-slate-100 text-slate-700 border-slate-200" },
+  material_term: { label: "Material Term", className: "bg-indigo-50 text-indigo-700 border-indigo-100" },
   read_only_reference: { label: "Reference", className: "bg-slate-50 text-slate-600 border-slate-200" },
 };
 

@@ -7,7 +7,9 @@ export function EnterpriseCoverageDashboard({ coverage, approval }) {
   if (!coverage) return null;
 
   const isApprovalReady = approval?.eligible;
-  const isComputationReady = coverage.configured > 0 && coverage.blocking === 0;
+  const approvalBlockingCount =
+    typeof approval?.blockingIssueCount === "number" ? approval.blockingIssueCount : coverage.blocking;
+  const isComputationReady = coverage.configured > 0 && approvalBlockingCount === 0;
 
   const renderMetric = (label, value, variant = "default", helpText = null) => {
     if (value === undefined || value === null) {
@@ -66,11 +68,21 @@ export function EnterpriseCoverageDashboard({ coverage, approval }) {
           {renderMetric("Resolved", coverage.resolved, "success")}
           {renderMetric("Needs Review", coverage.needsReview, coverage.needsReview > 0 ? "warning" : "default")}
           {renderMetric("Conflicts", coverage.conflicts, coverage.conflicts > 0 ? "danger" : "default")}
-          {renderMetric("Missing Required", coverage.missing, coverage.missing > 0 ? "danger" : "default")}
+          {renderMetric(
+            "Missing / Not Found",
+            coverage.missing,
+            coverage.missing > 0 ? "warning" : "default",
+            "Total configured canonical fields not resolved. This includes optional or non-applicable fields, not only approval-required fields.",
+          )}
           {renderMetric("Missing Evidence", coverage.missingSourceEvidence, coverage.missingSourceEvidence > 0 ? "warning" : "default")}
           {renderMetric("Invalid Projections", coverage.invalid, coverage.invalid > 0 ? "danger" : "default")}
           {renderMetric("Legacy Fallbacks", coverage.legacyFallbacks, coverage.legacyFallbacks > 0 ? "warning" : "default")}
-          {renderMetric("Blocking Total", coverage.blocking, coverage.blocking > 0 ? "danger" : "success")}
+          {renderMetric(
+            "Approval Blockers",
+            approvalBlockingCount,
+            approvalBlockingCount > 0 ? "danger" : "success",
+            "Hard blockers used by the approval gate for this document/profile.",
+          )}
         </div>
       </CardContent>
     </Card>

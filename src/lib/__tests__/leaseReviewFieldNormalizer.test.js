@@ -7,6 +7,7 @@ import {
   isSignatureDateSourcedFromLeaseReference,
   resolveLeaseReviewExtractionMode,
   normalizeClauseRecords,
+  normalizeDynamicFindings,
 } from "@/lib/leaseReviewFieldNormalizer";
 import { isMarkupArtifactValue, EXTRACTION_MODES, REVIEW_STATUSES } from "@/lib/leaseReviewSchema";
 
@@ -114,7 +115,7 @@ describe("leaseReviewFieldNormalizer smoke test", () => {
     expect(expiration.validationMessage).toMatch(/stated initial lease term/i);
   });
 
-  it("does not publish downstream rules, critical dates, or budget preview before approval", () => {
+  it("shows lease-derived expense rules for review before approval without opening downstream tabs", () => {
     const lease = {
       id: "pending-downstream-lease",
       abstract_status: "review_required",
@@ -124,11 +125,18 @@ describe("leaseReviewFieldNormalizer smoke test", () => {
           expiration_date: "2029-01-31",
         },
         workflow_output: {
-          expense_rules: [{
-            rule_key: "cam-rule",
-            expense_category: "cam",
-            normalized_rule: "Tenant reimburses CAM",
-          }],
+          expense_rules: [
+            {
+              rule_key: "tax-rule",
+              expense_category: "real_estate_taxes",
+              normalized_rule: "Tenant reimburses real estate taxes",
+            },
+            {
+              rule_key: "cam-rule",
+              expense_category: "common_area_maintenance",
+              normalized_rule: "Tenant reimburses CAM",
+            },
+          ],
         },
       },
     };
@@ -136,8 +144,16 @@ describe("leaseReviewFieldNormalizer smoke test", () => {
     const result = normalizeLeaseReviewData(lease);
 
     expect(result.downstreamApproved).toBe(false);
-    expect(result.expenseRules).toEqual([]);
-    expect(result.camRules).toEqual([]);
+    expect(result.expenseRules).toHaveLength(1);
+    expect(result.camRules).toHaveLength(1);
+    expect(result.expenseRules[0].publicationStatus).toBe("review_only_until_abstract_approval");
+    expect(result.camRules[0].publicationStatus).toBe("review_only_until_abstract_approval");
+    expect(result.tabs.expenses_recoveries.some((row) => row.rowType === "expense_rule" && row.category === "real_estate_taxes")).toBe(true);
+    expect(result.tabs.cam_rules.some((row) => row.rowType === "cam_rule" && row.category === "common_area_maintenance")).toBe(true);
+    expect(result.materialTerms.some((row) => row.materialSource === "expense_rule")).toBe(true);
+    expect(result.materialTerms.some((row) => row.materialSource === "cam_rule")).toBe(true);
+    expect(result.tabs.material_terms.some((row) => row.materialSource === "expense_rule")).toBe(true);
+    expect(result.tabs.material_terms.some((row) => row.materialSource === "cam_rule")).toBe(true);
     expect(result.criticalDates).toEqual([]);
     expect(result.tabs.critical_dates).toEqual([]);
     expect(result.tabs.budget_preview).toEqual([]);
@@ -1407,6 +1423,48 @@ describe("amendment placeholder recovery", () => {
     expect(row.value).toBeNull();
     expect(row.invalidValueRejected).toBe(true);
     expect(row.validationMessage).toMatch(/matched the field label/i);
+  });
+
+  it("does not display label-only dynamic findings as extracted values", () => {
+    const rows = normalizeDynamicFindings({
+      extraction_data: {
+        workflow_output: {
+          extracted_document_items: [{
+            item_type: "custom_operating_condition",
+            label: "Custom Operating Condition",
+            value: "Custom Operating Condition",
+            source_text: "Tenant fails to perform any other covenant, condition or agreement contained in this Lease not covered by the preceding subsections, where such failure continues for thirty (30) days after notice thereof from Landlord to Tenant",
+            source_page: 10,
+            confidence: 0.98,
+          }],
+        },
+      },
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].value).toBeNull();
+    expect(rows[0].status).toBe("needs_review");
+    expect(rows[0].reviewReason).toMatch(/repeated the row label/i);
+  });
+
+  it("uses clause source text instead of clause title as the displayed clause value", () => {
+    const result = normalizeLeaseReviewData({
+      extraction_data: {
+        workflow_output: {
+          lease_clauses: [{
+            clause_type: "landlord_consent_for_transfer",
+            title: "Landlord Consent For Transfer",
+            source_text: "Tenant shall not make any Transfer without the prior consent of Landlord, which Landlord shall not unreasonably withhold or delay.",
+            source_page: 7,
+            confidence: 0.99,
+          }],
+        },
+      },
+    });
+
+    const row = result.tabs.clause_records.find((item) => item.fieldKey === "landlord_consent_for_transfer");
+    expect(row.value).toMatch(/Tenant shall not make any Transfer/);
+    expect(row.value).not.toBe("Landlord Consent For Transfer");
   });
 });
 describe("Phase 5F reviewer projection authority", () => {

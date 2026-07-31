@@ -201,6 +201,7 @@ export const LEASE_REVIEW_CANONICAL_TABS = [
   { key: "signatures", label: "Signatures" },
   { key: "documents_exhibits", label: "Documents / Exhibits" },
   { key: "clause_records", label: "Clause Records", readOnly: true },
+  { key: "material_terms", label: "Material Terms", readOnly: true },
   { key: "budget_preview", label: "Budget Preview", readOnly: true },
   { key: "extraction_debug", label: "Extraction Debug", readOnly: true },
 ];

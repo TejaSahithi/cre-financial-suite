@@ -79,6 +79,13 @@ export function normalizeDynamicKey(value) {
     .replace(/^_+|_+$/g, "");
 }
 
+function isLabelOnlyDynamicValue(label, value, key = null) {
+  const normalizedValue = normalizeDynamicKey(value);
+  if (!normalizedValue) return false;
+  const candidates = [label, key, titleizeFieldKey(key)].filter(Boolean).map(normalizeDynamicKey);
+  return candidates.includes(normalizedValue);
+}
+
 const FIXED_FIELD_DYNAMIC_SUPPRESSION_KEYS = new Set([
   "tenant_name", "landlord_name", "landlord_address", "tenant_address", "property_name", "property_address",
   "premises_address", "suite_number", "square_footage", "rentable_area_sqft", "tenant_rsf", "permitted_use",
@@ -417,7 +424,16 @@ export function buildDynamicDocumentFieldsByTab(lease) {
     // value. Reviewer can fill the value once the row is visible.
     if (!hasValue && !sourceText) continue;
     const key = normalizeDynamicKey(item?.field_key || item?.key || item?.item_type);
-    if (shouldSuppressDynamicReviewItem(key, item, value, sourceText, staticKeys)) continue;
+    const label = item?.label || titleizeFieldKey(item?.section_title || item?.field_key || item?.item_type || key);
+    const labelOnlyValue = isLabelOnlyDynamicValue(label, value, key);
+    const displayValue = labelOnlyValue ? null : value;
+    const reviewReason = item?.review_reason ?? item?.reviewReason ?? item?.requires_review_reason ?? item?.requiresReviewReason
+      ?? (labelOnlyValue
+        ? "Extracted value repeated the row label, not a lease value. Review the cited source text."
+        : item?.possible_canonical_match
+          ? `Possible match for existing field "${titleizeFieldKey(item.possible_canonical_match)}" -- review before treating as a separate item.`
+          : null);
+    if (shouldSuppressDynamicReviewItem(key, item, displayValue, sourceText, staticKeys)) continue;
     const mapsToFixedField = item?.maps_to_fixed_field === true || staticKeys.has(key);
     const createsDynamicRow = item?.creates_dynamic_row !== false && !mapsToFixedField;
     if (!key || !createsDynamicRow) continue;
@@ -438,7 +454,7 @@ export function buildDynamicDocumentFieldsByTab(lease) {
     // Different values for the same key are still shown (keyCounts renames them
     // key_2, key_3 etc.) so genuine conflicts remain visible.
     const normalizedKey = key.startsWith("clause_") ? key.slice(7) : key;
-    const signature = [normalizedKey, String(value ?? sourceText ?? "").slice(0, 180)].join("|");
+    const signature = [normalizedKey, String(displayValue ?? sourceText ?? "").slice(0, 180)].join("|");
     if (seenSignatures.has(signature)) continue;
     seenSignatures.add(signature);
     seenNormalizedKeys.add(normalizedKey);
@@ -452,8 +468,8 @@ export function buildDynamicDocumentFieldsByTab(lease) {
       id: uniqueKey,
       field_key: uniqueKey,
       original_field_key: key,
-      label: item?.label || titleizeFieldKey(item?.section_title || item?.field_key || item?.item_type || key),
-      field_label: item?.label || titleizeFieldKey(item?.section_title || item?.field_key || item?.item_type || key),
+      label,
+      field_label: label,
       tab,
       category: tab,
       type: valueType,
@@ -464,18 +480,18 @@ export function buildDynamicDocumentFieldsByTab(lease) {
       allowCalculatedAccept: canAcceptCalculatedReviewField({ key }),
       dynamic_document_item: true,
       is_dynamic: true,
-      normalized_value: value,
-      raw_value: item?.raw_value ?? item?.rawValue ?? value,
+      normalized_value: displayValue,
+      raw_value: labelOnlyValue ? null : (item?.raw_value ?? item?.rawValue ?? displayValue),
       page_number: normalizeSourcePage(item?.source_page ?? item?.page_number ?? item?.page),
       source_text: sourceText,
       confidence: typeof item?.confidence === "number" ? item.confidence : null,
-      status: item?.extraction_status ?? item?.review_status ?? null,
-      extraction_status: item?.extraction_status ?? item?.review_status ?? null,
+      status: labelOnlyValue ? "needs_review" : (item?.extraction_status ?? item?.review_status ?? null),
+      extraction_status: labelOnlyValue ? "needs_review" : (item?.extraction_status ?? item?.review_status ?? null),
       source_file_id: lease?.source_file_id ?? lease?.extraction_data?.source_file_id ?? lease?.uploaded_files?.id ?? lease?.uploaded_file?.id ?? null,
-      evidence_type: normalizeEvidenceType(item?.evidence_type ?? item?.extraction_status ?? item?.review_status, { value, sourceText }),
+      evidence_type: normalizeEvidenceType(item?.evidence_type ?? item?.extraction_status ?? item?.review_status, { value: displayValue, sourceText }),
       source_text_quality: resolveSourceTextQuality({
-        value,
-        rawValue: item?.raw_value ?? item?.rawValue ?? value,
+        value: displayValue,
+        rawValue: labelOnlyValue ? null : (item?.raw_value ?? item?.rawValue ?? displayValue),
         sourceText,
         sourcePage: item?.source_page ?? item?.page_number ?? item?.page,
         extractionStatus: item?.extraction_status ?? item?.review_status ?? null,
@@ -486,11 +502,8 @@ export function buildDynamicDocumentFieldsByTab(lease) {
       }),
       source_field_keys: item?.source_field_keys ?? item?.sourceFieldKeys ?? [],
       derivation_trace: item?.derivation_trace ?? item?.derivationTrace ?? null,
-      requires_review: Boolean(item?.requires_review ?? item?.requiresReview ?? item?.possible_canonical_match ?? false),
-      review_reason: item?.review_reason ?? item?.reviewReason ?? item?.requires_review_reason ?? item?.requiresReviewReason
-        ?? (item?.possible_canonical_match
-          ? `Possible match for existing field "${titleizeFieldKey(item.possible_canonical_match)}" -- review before treating as a separate item.`
-          : null),
+      requires_review: Boolean(labelOnlyValue || (item?.requires_review ?? item?.requiresReview ?? item?.possible_canonical_match ?? false)),
+      review_reason: reviewReason,
       possible_canonical_match: item?.possible_canonical_match ?? null,
       approval_blocking_reason: item?.approval_blocking_reason ?? item?.approvalBlockingReason ?? null,
     });
