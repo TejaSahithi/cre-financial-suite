@@ -14,6 +14,7 @@ const browserRuleFunctions = [
   "reject-lease-expense-rule",
   "mark-lease-expense-rule-not-applicable",
   "publish-lease-expense-rule-to-cam",
+  "sync-approved-lease-expense-rules",
   "update-lease-expense-rule",
   "update-lease-expense-rule-amount",
   "update-lease-expense-rule-set-status",
@@ -42,6 +43,19 @@ Deno.test("list-lease-expense-rule-sets answers OPTIONS before user authorizatio
   assert(optionsIndex < authIndex, "OPTIONS must return before user authorization");
   assertEquals(functionSource.includes('headers: corsHeaders'), true);
   assertEquals(functionSource.includes("await assertPageAccess("), true);
+});
+
+Deno.test("sync-approved-lease-expense-rules answers OPTIONS before user authorization", async () => {
+  const syncSource = await Deno.readTextFile(
+    new URL("functions/sync-approved-lease-expense-rules/index.ts", root),
+  );
+  const optionsIndex = syncSource.indexOf('req.method === "OPTIONS"');
+  const authIndex = syncSource.indexOf("await verifyUser(req)");
+  assert(optionsIndex >= 0, "OPTIONS handler must exist");
+  assert(authIndex >= 0, "user authorization must exist");
+  assert(optionsIndex < authIndex, "OPTIONS must return before user authorization");
+  assertEquals(syncSource.includes('headers: corsHeaders'), true);
+  assertEquals(syncSource.includes("await assertPageAccess("), true);
 });
 
 Deno.test("rule list and save require an approved abstract state", async () => {

@@ -48,6 +48,25 @@ Deno.test("authoritative workflow selection prefers source output containing exp
   assertEquals(selected.expense_rules[0].expense_category, "common_area_maintenance");
 });
 
+Deno.test("authoritative workflow selection unwraps nested workflow_output payloads", () => {
+  const selected = getAuthoritativeWorkflowOutput(
+    {
+      extraction_data: {
+        workflow_output: {
+          workflow_output: {
+            expense_rule_source: "whole_document_llm_expense_obligations",
+            expense_rules: [{ expense_category: "utilities" }],
+          },
+        },
+      },
+    },
+    null,
+  );
+
+  assertEquals(selected.expense_rule_source, "whole_document_llm_expense_obligations");
+  assertEquals(selected.expense_rules[0].expense_category, "utilities");
+});
+
 Deno.test("workflow keeps the exact LLM expense candidate without TypeScript semantic projection", () => {
   const clauseText =
     "Tenant shall pay its proportionate share of all common area maintenance expenses as Additional Rent.";
@@ -98,4 +117,56 @@ Deno.test("approved publication payload remains needs-review and unpublished", (
   assertEquals(prepared.rule.published_to_cam, false);
   assertEquals(prepared.rule.extraction_status, "inferred");
   assertEquals(prepared.clause.page_number, null);
+});
+
+Deno.test("approved publication ignores coverage gaps before persistence", () => {
+  const prepared = __test__.prepareRulePayload(
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      tenant_id: null,
+      property_id: null,
+      building_id: null,
+      unit_id: null,
+    },
+    "22222222-2222-4222-8222-222222222222",
+    {
+      rule_type: "coverage_gap",
+      expense_category: "common_area_maintenance",
+      source_clause: "Original lease required to confirm CAM treatment.",
+      generation_source: "original_lease_required",
+    },
+  );
+
+  assert(prepared);
+  assertEquals(__test__.isSourceBackedExpenseRule(prepared.rule), false);
+});
+
+
+Deno.test("source-backed TypeScript workflow rules are valid fallback", () => {
+  const workflow = {
+    expense_rule_source: "typescript_schema_expense_rules_fallback",
+    expense_rules: [{
+      expense_category: "real_estate_taxes",
+      source_clause: "Tenant shall reimburse Landlord for Tenant's share of real estate taxes.",
+      source_page: 8,
+      generation_source: "typescript_schema_workflow",
+    }],
+  };
+
+  assertEquals(__test__.shouldPublishWorkflowExpenseRules(workflow), true);
+  assertEquals(__test__.isSourceBackedExpenseRule(workflow.expense_rules[0]), true);
+});
+
+Deno.test("template checklist expense rows are not valid publication fallback", () => {
+  const workflow = {
+    expense_rules: [{
+      expense_category: "common_area_maintenance",
+      source_clause: "Template CAM checklist row",
+      source_page: 1,
+      generation_source: "template_checklist",
+    }],
+  };
+
+  assertEquals(__test__.shouldPublishWorkflowExpenseRules(workflow), false);
+  assertEquals(__test__.isSourceBackedExpenseRule(workflow.expense_rules[0]), false);
 });

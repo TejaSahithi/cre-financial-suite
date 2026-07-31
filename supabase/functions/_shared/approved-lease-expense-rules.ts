@@ -53,6 +53,7 @@ function humanize(value: unknown): string | null {
 
 function unwrapWorkflowOutput(value: any): any {
   if (!isObject(value)) return null;
+  if (isObject(value.workflow_output)) return value.workflow_output;
   if (Array.isArray(value.records) && isObject(value.records[0])) return value.records[0];
   return value;
 }
@@ -72,6 +73,7 @@ export function getAuthoritativeWorkflowOutput(lease: any, fileRecord: any): any
   const candidates = [
     lease?.extraction_data?.workflow_output,
     lease?.workflow_output,
+    lease?.abstract_snapshot?.workflow_output,
     lease?.abstract_snapshot?.metadata?.workflow_output,
     fileRecord?.ui_review_payload?.metadata?.workflow_output,
     firstReviewRecord?.workflow_output,
@@ -95,6 +97,23 @@ export function getAuthoritativeWorkflowOutput(lease: any, fileRecord: any): any
         Object.keys(workflow?.lease_fields || {}).length,
     }))
     .sort((left, right) => right.score - left.score || left.index - right.index)[0].workflow;
+}
+
+function isSourceBackedExpenseRule(rule: any): boolean {
+  if (!isObject(rule)) return false;
+  const ruleType = normalizeToken(rule?.rule_type || rule?.row_type);
+  const generationSource = normalizeToken(rule?.generation_source);
+  if (ruleType === "coverage_gap" || ["original_lease_required", "template_checklist", "coverage_gap"].includes(generationSource)) return false;
+  const sourceText = exactSourceText(rule);
+  const category = normalizeToken(rule?.expense_category || rule?.normalized_key || rule?.category);
+  return Boolean(sourceText && category && !BASE_RENT_KEYS.has(category));
+}
+
+function shouldPublishWorkflowExpenseRules(workflow: any): boolean {
+  const source = normalizeToken(workflow?.expense_rule_source);
+  if (source === "whole_document_llm_expense_obligations") return true;
+  const rules = asArray(workflow?.expense_rules);
+  return rules.some(isSourceBackedExpenseRule);
 }
 
 export function isLeaseApprovedForExpensePublication(lease: any): boolean {
@@ -524,10 +543,9 @@ export async function publishApprovedLeaseExpenseArtifacts({
   const { sourceFileId, fileRecord } = await findSourceFile(supabaseAdmin, orgId, lease);
   const storedWorkflow = getAuthoritativeWorkflowOutput(lease, fileRecord);
   const expenseRuleSource = cleanText(storedWorkflow?.expense_rule_source);
-  const usesCanonicalLlmExpenseRules =
-    expenseRuleSource === "whole_document_llm_expense_obligations";
+  const hasPublishableWorkflowExpenseRules = shouldPublishWorkflowExpenseRules(storedWorkflow);
   if (!force && Number(existingRuleCount || 0) > 0) {
-    const existingCamProfileResult = usesCanonicalLlmExpenseRules
+    const existingCamProfileResult = hasPublishableWorkflowExpenseRules
       ? await persistCamProfile(
         supabaseAdmin,
         orgId,
@@ -545,7 +563,7 @@ export async function publishApprovedLeaseExpenseArtifacts({
       rules_generated: 0,
       regenerated: false,
       expense_rule_source: expenseRuleSource || null,
-      reason: usesCanonicalLlmExpenseRules
+      reason: hasPublishableWorkflowExpenseRules
         ? null
         : "legacy_rules_already_persisted_reextraction_recommended",
       cam_profile_persisted: existingCamProfileResult.persisted,
@@ -554,11 +572,14 @@ export async function publishApprovedLeaseExpenseArtifacts({
   }
 
   const workflow = storedWorkflow;
-  const expenseRules = usesCanonicalLlmExpenseRules
-    ? asArray(workflow?.expense_rules)
+  const expenseRules = hasPublishableWorkflowExpenseRules
+    ? asArray(workflow?.expense_rules).filter(isSourceBackedExpenseRule)
     : [];
+  const publicationExtractionVersion = expenseRuleSource === "whole_document_llm_expense_obligations"
+    ? "whole_document_llm_expense_obligations_v1"
+    : "typescript_schema_expense_rules_fallback_v1";
 
-  const camProfileResult = usesCanonicalLlmExpenseRules
+  const camProfileResult = hasPublishableWorkflowExpenseRules
     ? await persistCamProfile(
       supabaseAdmin,
       orgId,
@@ -587,7 +608,7 @@ export async function publishApprovedLeaseExpenseArtifacts({
       cam_profile_error: camProfileResult.error ?? null,
       reason: !fileRecord && !storedWorkflow
         ? "approved_lease_source_not_found"
-        : !usesCanonicalLlmExpenseRules
+        : !hasPublishableWorkflowExpenseRules
           ? "approved_lease_reextraction_required"
           : "no_source_backed_expense_rules",
     };
@@ -617,7 +638,7 @@ export async function publishApprovedLeaseExpenseArtifacts({
     p_rule_set_id: existingSet?.id ?? null,
     p_version: existingSet?.version ?? 1,
     p_status: "draft",
-    p_extraction_version: "whole_document_llm_expense_obligations_v1",
+    p_extraction_version: publicationExtractionVersion,
     p_property_id: lease?.property_id ?? null,
     p_rules: prepared.map((item) => item.rule),
     p_values: prepared.map((item) => item.value).filter(Boolean),
@@ -652,4 +673,6 @@ export const __test__ = {
   prepareRulePayload,
   dedupePreparedRules,
   resolveExpenseCategoryIds,
+  isSourceBackedExpenseRule,
+  shouldPublishWorkflowExpenseRules,
 };
