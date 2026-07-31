@@ -345,6 +345,109 @@ function findSecurityDepositFallback(lease) {
   return null;
 }
 
+function normalizePlaceholderComparable(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isFieldLabelPlaceholderValue(canonicalKey, value, contract) {
+  const normalizedValue = normalizePlaceholderComparable(value);
+  if (!normalizedValue) return false;
+  const labelCandidates = new Set([
+    canonicalKey,
+    titleize(canonicalKey),
+    contract?.label,
+    contract?.displayLabel,
+    ...(Array.isArray(contract?.aliases) ? contract.aliases : []),
+    ...getFieldAliases(canonicalKey),
+  ].filter(Boolean).map(normalizePlaceholderComparable));
+  return labelCandidates.has(normalizedValue);
+}
+
+const REVIEW_STREET_ADDRESS_PATTERN = /\b\d{1,6}\s+[A-Z0-9][A-Za-z0-9.'#\-]*(?:\s+[A-Z0-9][A-Za-z0-9.'#\-]*){0,8}\s+(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Drive|Dr\.?|Lane|Ln\.?|Way|Parkway|Pkwy\.?|Highway|Hwy\.?|Court|Ct\.?|Circle|Cir\.?|Trail|Terrace|Ter\.?|Place|Pl\.?|Center)\b(?:\s*,\s*[^.;\n]{2,80})?/i;
+const REVIEW_MONTH_DATE_PATTERN = /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?\s*,\s*\d{4}\b/i;
+
+function recoveryEvidenceText(evidence) {
+  const uniqueParts = [];
+  const seen = new Set();
+  for (const part of [
+    evidence?.sourceText,
+    evidence?.source_text,
+    evidence?.sourceClause,
+    evidence?.source_clause,
+    evidence?.rawValue,
+    evidence?.raw_value,
+  ]) {
+    const text = compactText(part);
+    if (!text) continue;
+    const comparable = normalizePlaceholderComparable(text);
+    if (seen.has(comparable)) continue;
+    seen.add(comparable);
+    uniqueParts.push(text);
+  }
+  return compactText(uniqueParts.join(" "));
+}
+
+function cleanRecoveredAddress(value) {
+  const text = compactText(value);
+  if (!text) return null;
+  return text
+    .replace(/\s+\b(?:for the lease|the notice address|landlord|tenant|assignee|assignor)\b[\s\S]*$/i, "")
+    .replace(/[),.;:]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function propertyAddressEvidenceIsWrongPartyAddress(evidence) {
+  const text = recoveryEvidenceText(evidence);
+  if (!text) return false;
+  const premisesContext = /\b(?:premises|demised premises|leased premises|lease of approximately|located at|located in|property located|shopping center known as)\b/i.test(text);
+  if (premisesContext) return false;
+  return /\b(?:tenant contact|tenant information|tenant address|landlord address|notice address|assignee address|assignor address|mailing address)\b/i.test(text);
+}
+
+function recoverDateFromSourceText(text) {
+  const explicitMonthDate = text.match(REVIEW_MONTH_DATE_PATTERN)?.[0];
+  return toIsoDate(explicitMonthDate || text);
+}
+
+function recoverStandardValueFromEvidence(canonicalKey, evidence) {
+  const text = recoveryEvidenceText(evidence);
+  if (!text) return null;
+
+  if (canonicalKey === "property_address") {
+    if (propertyAddressEvidenceIsWrongPartyAddress(evidence)) return null;
+    if (!/\b(?:premises|demised premises|leased premises|lease of approximately|located at|located in|property located|shopping center known as)\b/i.test(text)) return null;
+    return cleanRecoveredAddress(text.match(REVIEW_STREET_ADDRESS_PATTERN)?.[0]);
+  }
+
+  if (canonicalKey === "assignee_notice_address" || canonicalKey.endsWith("_address")) {
+    return cleanRecoveredAddress(text.match(REVIEW_STREET_ADDRESS_PATTERN)?.[0]);
+  }
+
+  if (canonicalKey === "expiration_date" || canonicalKey === "end_date" || canonicalKey.endsWith("_date")) {
+    return recoverDateFromSourceText(text);
+  }
+
+  if (canonicalKey === "square_footage" || canonicalKey === "building_rsf") {
+    const match = text.match(/\b([0-9][0-9,]*(?:\.\d+)?)\s*(?:rentable\s+)?(?:square\s*feet|sq\.?\s*ft\.?|sf|rsf)\b/i);
+    if (!match) return null;
+    const parsed = Number(String(match[1]).replace(/,/g, ""));
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  if (/amount|deposit|rent|fee|allowance/i.test(canonicalKey)) {
+    const amount = moneyNumber(text);
+    return amount != null && amount > 0 ? amount : null;
+  }
+
+  return null;
+}
 function standardFieldFallback(lease, canonicalKey, { value, evidence, allowNoProviderCoreFallbacks = false } = {}) {
   if (!allowNoProviderCoreFallbacks) return null;
   if (canonicalKey === "property_address") {
@@ -647,6 +750,7 @@ function shouldBlankUnsupportedStandardValue(canonicalKey, value, evidence, revi
   if (!isMeaningfulValue(value)) return false;
   if (review?.status === REVIEW_STATUSES.EDITED) return false;
   if (consentEvidenceSemanticallySupportsValue(canonicalKey, value, evidence)) return false;
+  if (canonicalKey === "property_address" && propertyAddressEvidenceIsWrongPartyAddress(evidence)) return true;
   const quality = resolveSourceTextQuality({ ...(evidence || {}), value });
   if (quality === SOURCE_TEXT_QUALITIES.INCONSISTENT || quality === SOURCE_TEXT_QUALITIES.MISSING) return true;
   return !hasValidSourceEvidence({ ...(evidence || {}), value });
@@ -874,7 +978,45 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
     // a general "field is fine" signal.
     let invalidValueRejected = false;
     let evidenceOverrideReason = null;
-    if (isMarkupArtifactValue(value)) {
+    if (isFieldLabelPlaceholderValue(canonicalKey, value, contract)) {
+      const recoveredValue = recoverStandardValueFromEvidence(canonicalKey, evidence);
+      if (isMeaningfulValue(recoveredValue)) {
+        value = recoveredValue;
+        confidence = Math.max(typeof confidence === "number" ? confidence : 0, 0.9);
+        fallbackReviewReason = "Recovered normalized value from the cited source text because the extracted value only repeated the field label.";
+        fallbackSourceProvider = fallbackSourceProvider || "source_text_placeholder_recovery";
+        const recoveredSourceText = evidence?.sourceText ?? evidence?.source_text ?? null;
+        const recoveredSourceClause = evidence?.sourceClause ?? evidence?.source_clause ?? recoveredSourceText;
+        evidence = {
+          ...(evidence || {}),
+          value,
+          rawValue: value,
+          raw_value: value,
+          sourceText: recoveredSourceText,
+          source_text: recoveredSourceText,
+          sourceClause: recoveredSourceClause,
+          source_clause: recoveredSourceClause,
+          extractionStatus: EXTRACTION_STATUSES.EXTRACTED,
+          extraction_status: EXTRACTION_STATUSES.EXTRACTED,
+          evidenceType: "extracted",
+          evidence_type: "extracted",
+          sourceTextQuality: SOURCE_TEXT_QUALITIES.PARTIAL,
+          source_text_quality: SOURCE_TEXT_QUALITIES.PARTIAL,
+          reviewReason: fallbackReviewReason,
+          review_reason: fallbackReviewReason,
+        };
+      } else {
+        evidenceOverrideReason = "Extracted value matched the field label, not a lease value. Needs re-extraction or manual review.";
+        invalidValueRejected = true;
+        value = null;
+        evidence = {
+          ...(evidence || {}),
+          requiresReview: true,
+          reviewReason: evidenceOverrideReason,
+        };
+      }
+    }
+    if (!evidenceOverrideReason && isMarkupArtifactValue(value)) {
       evidenceOverrideReason = `Extracted value "${value}" was a layout/markup artifact, not a real field value, and was rejected.`;
       invalidValueRejected = true;
       value = null;
@@ -940,7 +1082,7 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
         "Source text describes when the original lease was entered into, not this document's signature date. Needs manual verification.";
     }
     const hasValue = isMeaningfulValue(value);
-    const status = statusOverride || (evidenceOverrideReason && !hasValue && evidence?.sourceText
+    const status = statusOverride || (evidenceOverrideReason && !invalidValueRejected && !hasValue && evidence?.sourceText
       ? "needs_review"
       : computeFieldStatus({
         hasValue,

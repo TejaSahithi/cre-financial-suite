@@ -126,7 +126,10 @@ function semanticBlocksFromUploadedFile(uploadedFile: any) {
     const records = uploadedFile?.ui_review_payload?.records ?? uploadedFile?.ui_review_payload?.rows ?? [];
     for (const record of records) {
       for (const field of record?.standard_fields ?? []) {
-        const text = [field?.label, field?.source_text, field?.value].filter(Boolean).join(" ");
+        const sourceText = String(field?.source_text ?? field?.sourceText ?? "").trim();
+        const value = String(field?.value ?? field?.normalized_value ?? field?.normalizedValue ?? "").trim();
+        const label = String(field?.label ?? field?.field_label ?? "").trim();
+        const text = sourceText || (value && value.toLowerCase() !== label.toLowerCase() ? value : "");
         if (text.trim()) blocks.push({ blockId: `legacy-field:${field.field_key ?? blocks.length}`, text, pageNumber: field?.source_page ?? null, sectionKey: null, heading: null, documentId: uploadedFile?.id ?? null });
       }
     }

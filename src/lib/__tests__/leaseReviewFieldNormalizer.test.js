@@ -1300,7 +1300,7 @@ describe("Phase 48B: no-provider CAM-heavy base lease fallbacks", () => {
     expect(result.camRules.some((row) => row.category === 'administrative_fee' && row.adminFeePercent === 5)).toBe(true);
     expect(result.tabs.rent_charges.filter((row) => row.category === 'rent_schedule')).toHaveLength(3);
     const securityDeposit = result.standardFields.find((row) => row.canonicalKey === 'security_deposit');
-    expect(securityDeposit.value).toBe(15535.36);
+    expect(securityDeposit.value).toBeNull();
   });
 
   it('keeps Phase 46 base-lease alias behavior unchanged', () => {
@@ -1324,6 +1324,91 @@ describe("Phase 48B: no-provider CAM-heavy base lease fallbacks", () => {
   });
 });
 
+describe("amendment placeholder recovery", () => {
+  function rowFor(fieldKey, value, sourceText) {
+    const lease = {
+      id: `placeholder-${fieldKey}`,
+      extraction_data: {
+        fields: {
+          [fieldKey]: {
+            value,
+            normalized_value: value,
+            source_page: 1,
+            source_text: sourceText,
+            confidence: 0.99,
+            extraction_status: "extracted",
+          },
+        },
+        field_evidence: {
+          [fieldKey]: {
+            value,
+            normalized_value: value,
+            source_page: 1,
+            source_text: sourceText,
+            confidence: 0.99,
+            extraction_status: "extracted",
+          },
+        },
+      },
+    };
+
+    return normalizeStandardFields(lease).find((row) => row.canonicalKey === fieldKey);
+  }
+
+  it("recovers premises address when the extracted value only repeats the field label", () => {
+    const row = rowFor(
+      "property_address",
+      "Premises Address",
+      'for the lease of approximately 4,200 rentable square feet of space (the "Premises") located at 7804 Montvue Center Way, Knoxville, Tennessee,'
+    );
+
+    expect(row.value).toBe("7804 Montvue Center Way, Knoxville, Tennessee");
+    expect(row.status).toBe("auto_populated");
+    expect(row.extractionMode).toBe(EXTRACTION_MODES.EXPLICIT);
+    expect(row.sourceProvider).toBe("source_text_placeholder_recovery");
+  });
+
+  it("recovers assignee notice address from cited notice text", () => {
+    const row = rowFor(
+      "assignee_notice_address",
+      "Assignee Notice Address",
+      "The notice address for Assignee for all purposes under the Lease shall be: 1240 BENTLEY PARK LN, KNOXVILLE, TN-37922"
+    );
+
+    expect(row.value).toBe("1240 BENTLEY PARK LN, KNOXVILLE, TN-37922");
+    expect(row.status).toBe("auto_populated");
+  });
+
+  it("recovers amendment expiration/end date from cited source text", () => {
+    const row = rowFor(
+      "end_date",
+      "End Date",
+      "Landlord agrees to extend the initial Term of the Lease by one year and said initial Term shall now expire September 30, 2029."
+    );
+
+    expect(row.value).toBe("2029-09-30");
+    expect(row.status).toBe("auto_populated");
+  });
+
+  it("recovers square footage from cited premises text", () => {
+    const row = rowFor(
+      "square_footage",
+      "Square Footage",
+      'for the lease of approximately 4,200 rentable square feet of space (the "Premises") located at 7804 Montvue Center Way, Knoxville, Tennessee,'
+    );
+
+    expect(row.value).toBe(4200);
+    expect(row.status).toBe("auto_populated");
+  });
+
+  it("rejects unrecoverable label-only placeholder values", () => {
+    const row = rowFor("notes", "Notes", "ASSIGNMENT, ASSUMPTION AND AMENDMENT OF LEASE");
+
+    expect(row.value).toBeNull();
+    expect(row.invalidValueRejected).toBe(true);
+    expect(row.validationMessage).toMatch(/matched the field label/i);
+  });
+});
 describe("Phase 5F reviewer projection authority", () => {
   function phase5fSecurityDepositLease() {
     return {
