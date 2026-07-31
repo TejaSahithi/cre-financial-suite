@@ -938,37 +938,6 @@ export default function LeaseReview() {
     },
   });
   const approvedRuleSet = ruleSetSummary?.ruleSet?.status === "approved" ? ruleSetSummary.ruleSet : null;
-  const workflowExpenseRulesCount = useMemo(() => {
-    const workflow = leaseFull?.extraction_data?.workflow_output || lease?.extraction_data?.workflow_output || null;
-    const output = Array.isArray(workflow?.records) ? workflow.records[0] : workflow;
-    return Array.isArray(output?.expense_rules) ? output.expense_rules.length : 0;
-  }, [leaseFull, lease]);
-
-  const workflowRulePersistAttemptsRef = useRef(new Set());
-  useEffect(() => {
-    const leaseForRules = leaseFull || lease;
-    if (!leaseForRules?.id || workflowExpenseRulesCount === 0) return;
-    if (ruleSetSummary?.tableMissing || ruleSetSummary?.ruleSet?.id) return;
-
-    const attemptKey = leaseForRules.id + ":" + workflowExpenseRulesCount;
-    if (workflowRulePersistAttemptsRef.current.has(attemptKey)) return;
-    workflowRulePersistAttemptsRef.current.add(attemptKey);
-
-    leaseExpenseRuleService.persistExpenseRulesFromWorkflow({
-      lease: leaseForRules,
-      status: "draft",
-      createdFrom: "workflow_upload",
-    }).then((result) => {
-      if ((result?.rules?.length || 0) > 0) {
-        queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-summary", leaseForRules.id] });
-        queryClient.invalidateQueries({ queryKey: ["lease-expense-rules-detail", leaseForRules.id] });
-        queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
-      }
-    }).catch((error) => {
-      console.warn("[LeaseReview] workflow expense rule draft persistence skipped:", error?.message || error);
-    });
-  }, [leaseFull, lease, workflowExpenseRulesCount, ruleSetSummary?.ruleSet?.id, ruleSetSummary?.tableMissing, queryClient]);
-
   // Detect assignment/amendment-only documents so the rule-readiness banner
   // says something accurate. Phase 39: derive this from
   // normalized.currentReviewPolicy.profile (leaseReviewCurrentPolicy.js)
@@ -1886,35 +1855,40 @@ export default function LeaseReview() {
     }
   };
 
-  const runPostApprovalExpenseRuleSync = async (approvedLease) => {
+  const runPostApprovalExpenseRuleSync = async (approvedLease, approvalExpenseRuleSync = null) => {
     if (isStalePayload || !approvedLease?.id) return;
 
     let persisted = null;
     try {
-      const loadedLeaseForRules = leaseFull || lease || {};
-      const leaseForRuleSync = {
-        ...loadedLeaseForRules,
-        ...approvedLease,
-        extraction_data: approvedLease.extraction_data || loadedLeaseForRules.extraction_data || null,
-      };
-      const workflowPersisted = await leaseExpenseRuleService.persistExpenseRulesFromWorkflow({
-        lease: leaseForRuleSync,
-        status: "draft",
-        createdFrom: "primary_workflow_approval",
-        suppressHttpError: true,
-      });
-      const workflowPersistedCount = workflowPersisted?.rules?.length || 0;
+      const publication =
+        approvalExpenseRuleSync?.status && approvalExpenseRuleSync.status !== "failed"
+          ? approvalExpenseRuleSync
+          : await leaseExpenseRuleService.syncApprovedLeaseExpenseRules({
+            leaseId: approvedLease.id,
+          });
+      const workflowPersistedCount = Number(publication?.rules_persisted || 0);
 
       if (workflowPersistedCount > 0) {
         persisted = {
-          source: "primary_workflow_approval",
+          source: publication?.regenerated
+            ? "approved_workflow_regeneration"
+            : "primary_workflow_approval",
           persistedRulesCount: workflowPersistedCount,
-          ruleSetId: workflowPersisted?.ruleSet?.id || null,
+          ruleSetId: publication?.rule_set_id || null,
         };
       } else {
-        console.warn("[LeaseReview] primary workflow did not include expense_rules; no abstract-field fallback was run", {
+        console.warn("[LeaseReview] approved lease expense publication produced no rules", {
           lease_id: approvedLease.id,
+          publication,
         });
+        toast.warning(
+          publication?.reason === "approved_lease_source_not_found"
+            ? "Lease approved, but its source document link must be repaired before expense rules can be generated."
+            : publication?.reason === "approved_lease_reextraction_required"
+              ? "Lease approved, but this extraction predates canonical LLM expense obligations. Re-extract the lease to generate expense rules."
+            : "Lease approved, but no source-backed expense/CAM rules were generated. Use Sync Approved Rules to retry.",
+          { duration: 8000 },
+        );
       }
       console.log("[LeaseReview] post-approval expense rule sync", persisted);
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rules", approvedLease.id] });
@@ -2113,7 +2087,7 @@ export default function LeaseReview() {
       // publication attempt before navigating away so the browser cannot
       // cancel the request. A publication failure still does not roll back
       // the already-approved lease.
-      await runPostApprovalExpenseRuleSync(approvedLease).catch((postApprovalErr) => {
+      await runPostApprovalExpenseRuleSync(approvedLease, approvalResult.expense_rule_sync).catch((postApprovalErr) => {
         console.warn("[LeaseReview] post-approval expense sync failed:", postApprovalErr?.message || postApprovalErr);
       });
       queryClient.invalidateQueries({ queryKey: ["Expense"] });

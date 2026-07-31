@@ -2,8 +2,8 @@
 
 import type { FieldDef } from "../schemas.ts";
 
-export const WHOLE_DOCUMENT_SCHEMA_VERSION = "lease-whole-document-v3-cre-executive";
-export const WHOLE_DOCUMENT_SCHEMA_NAME = "lease_whole_document_v3_cre_executive";
+export const WHOLE_DOCUMENT_SCHEMA_VERSION = "lease-whole-document-v4-expense-obligations";
+export const WHOLE_DOCUMENT_SCHEMA_NAME = "lease_whole_document_v4_expense_obligations";
 
 export type WholeDocumentFieldStatus =
   | "found"
@@ -42,10 +42,42 @@ export interface WholeDocumentDynamicFinding {
   uncertaintyReason: string | null;
 }
 
+export interface WholeDocumentExpenseRuleCandidate {
+  category: string;
+  subcategory: string | null;
+  obligationKind: "cam" | "operating_expense" | "tax" | "insurance" | "utility" | "repair_maintenance" | "service" | "other";
+  responsibleParty: "tenant" | "landlord" | "shared" | "third_party" | "conditional" | "not_stated";
+  paymentTreatment: "included_in_base_rent" | "reimbursable" | "tenant_direct_contract" | "separately_billed" | "not_applicable" | "conditional" | "not_stated";
+  recoverableFromTenant: "yes" | "no" | "conditional" | "not_stated";
+  camEligible: "yes" | "no" | "conditional" | "not_stated";
+  recoveryMethod: "included_in_rent" | "pro_rata_share" | "base_year" | "expense_stop" | "fixed_amount" | "actual_usage" | "direct_bill" | "reconciliation" | "tenant_direct_contract" | "other" | "not_stated";
+  allocationBasis: string | null;
+  includedInBaseRent: "yes" | "no" | "conditional" | "not_stated";
+  amount: number | null;
+  amountFrequency: "monthly" | "quarterly" | "annual" | "one_time" | "usage_based" | "triggered" | "not_stated";
+  tenantSharePercent: number | null;
+  baseYear: string | null;
+  baseYearAmount: number | null;
+  expenseStopAmount: number | null;
+  capType: string | null;
+  capAmount: number | null;
+  capPercent: number | null;
+  grossUpPercent: number | null;
+  adminFeePercent: number | null;
+  reconciliationRequired: "yes" | "no" | "conditional" | "not_stated";
+  reconciliationFrequency: string | null;
+  status: "found" | "ambiguous" | "conflicting" | "illegible";
+  sourceNodeIds: string[];
+  sourceQuote: string | null;
+  confidence: number;
+  uncertaintyReason: string | null;
+}
+
 export interface WholeDocumentExtractionResponse {
   claims: WholeDocumentFieldResult[];
   notStatedFieldKeys: string[];
   dynamicFindings: WholeDocumentDynamicFinding[];
+  expenseRuleCandidates: WholeDocumentExpenseRuleCandidate[];
 }
 
 export function buildWholeDocumentJsonSchema(
@@ -55,7 +87,7 @@ export function buildWholeDocumentJsonSchema(
   return {
     type: "object",
     additionalProperties: false,
-    required: ["claims", "notStatedFieldKeys", "dynamicFindings"],
+    required: ["claims", "notStatedFieldKeys", "dynamicFindings", "expenseRuleCandidates"],
     properties: {
       claims: {
         type: "array",
@@ -170,6 +202,103 @@ export function buildWholeDocumentJsonSchema(
           },
         },
       },
+      expenseRuleCandidates: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "category",
+            "subcategory",
+            "obligationKind",
+            "responsibleParty",
+            "paymentTreatment",
+            "recoverableFromTenant",
+            "camEligible",
+            "recoveryMethod",
+            "allocationBasis",
+            "includedInBaseRent",
+            "amount",
+            "amountFrequency",
+            "tenantSharePercent",
+            "baseYear",
+            "baseYearAmount",
+            "expenseStopAmount",
+            "capType",
+            "capAmount",
+            "capPercent",
+            "grossUpPercent",
+            "adminFeePercent",
+            "reconciliationRequired",
+            "reconciliationFrequency",
+            "status",
+            "sourceNodeIds",
+            "sourceQuote",
+            "confidence",
+            "uncertaintyReason",
+          ],
+          properties: {
+            category: { type: "string" },
+            subcategory: { anyOf: [{ type: "string" }, { type: "null" }] },
+            obligationKind: {
+              type: "string",
+              enum: ["cam", "operating_expense", "tax", "insurance", "utility", "repair_maintenance", "service", "other"],
+            },
+            responsibleParty: {
+              type: "string",
+              enum: ["tenant", "landlord", "shared", "third_party", "conditional", "not_stated"],
+            },
+            paymentTreatment: {
+              type: "string",
+              enum: ["included_in_base_rent", "reimbursable", "tenant_direct_contract", "separately_billed", "not_applicable", "conditional", "not_stated"],
+            },
+            recoverableFromTenant: {
+              type: "string",
+              enum: ["yes", "no", "conditional", "not_stated"],
+            },
+            camEligible: {
+              type: "string",
+              enum: ["yes", "no", "conditional", "not_stated"],
+            },
+            recoveryMethod: {
+              type: "string",
+              enum: ["included_in_rent", "pro_rata_share", "base_year", "expense_stop", "fixed_amount", "actual_usage", "direct_bill", "reconciliation", "tenant_direct_contract", "other", "not_stated"],
+            },
+            allocationBasis: { anyOf: [{ type: "string" }, { type: "null" }] },
+            includedInBaseRent: {
+              type: "string",
+              enum: ["yes", "no", "conditional", "not_stated"],
+            },
+            amount: { anyOf: [{ type: "number" }, { type: "null" }] },
+            amountFrequency: {
+              type: "string",
+              enum: ["monthly", "quarterly", "annual", "one_time", "usage_based", "triggered", "not_stated"],
+            },
+            tenantSharePercent: { anyOf: [{ type: "number" }, { type: "null" }] },
+            baseYear: { anyOf: [{ type: "string" }, { type: "null" }] },
+            baseYearAmount: { anyOf: [{ type: "number" }, { type: "null" }] },
+            expenseStopAmount: { anyOf: [{ type: "number" }, { type: "null" }] },
+            capType: { anyOf: [{ type: "string" }, { type: "null" }] },
+            capAmount: { anyOf: [{ type: "number" }, { type: "null" }] },
+            capPercent: { anyOf: [{ type: "number" }, { type: "null" }] },
+            grossUpPercent: { anyOf: [{ type: "number" }, { type: "null" }] },
+            adminFeePercent: { anyOf: [{ type: "number" }, { type: "null" }] },
+            reconciliationRequired: {
+              type: "string",
+              enum: ["yes", "no", "conditional", "not_stated"],
+            },
+            reconciliationFrequency: { anyOf: [{ type: "string" }, { type: "null" }] },
+            status: {
+              type: "string",
+              enum: ["found", "ambiguous", "conflicting", "illegible"],
+            },
+            sourceNodeIds: { type: "array", items: { type: "string" } },
+            sourceQuote: { anyOf: [{ type: "string" }, { type: "null" }] },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+            uncertaintyReason: { anyOf: [{ type: "string" }, { type: "null" }] },
+          },
+        },
+      },
     },
   };
 }
@@ -218,9 +347,12 @@ Perform these review passes silently before producing the JSON response:
    limits, frequency, deadlines, and remedies.
 7. Review every table, exhibit, schedule, signature block, and cross-reference.
 8. Extract the fixed-schema claims.
-9. Conduct a second, independent completeness sweep for every commercially meaningful term that
+9. Extract every expense, CAM, tax, insurance, utility, repair, maintenance, and service
+   obligation into expenseRuleCandidates. This is the authoritative expense-rule candidate
+   output; do not rely on dynamicFindings to carry these obligations.
+10. Conduct a second, independent completeness sweep for every commercially meaningful term that
    does not fit the fixed schema and report each one in dynamicFindings.
-10. Challenge every proposed value against competing evidence and common field-confusion risks.
+11. Challenge every proposed value against competing evidence and common field-confusion risks.
 
 CRE EXECUTIVE EXTRACTION PLAYBOOK
 
@@ -369,16 +501,42 @@ period labels exactly as stated and mark the finding ambiguous/conflicting if th
 own schedule conflicts.
 
 For expense/CAM clauses, create focused dynamic findings for commercially separate obligations
-even when the fixed scalar field is null. In a gross/full-service lease, "included in monthly/base
-rent" is a meaningful expense rule and belongs in expenses_recoveries, cam_rules, taxes,
-insurance, utilities, or repairs_maintenance as applicable. In net/NNN leases, extract tenant
-payment/reimbursement duties, reconciliation mechanics, caps, exclusions, audit rights, and
-administrative or management fees separately.
+only when they express a commercially meaningful concept that cannot be represented by
+expenseRuleCandidates. Do not duplicate an expenseRuleCandidate in dynamicFindings.
 
 Do not create a dynamic duplicate of a fixed field. Do not hide a real term because no fixed field
 exists. Do not combine unrelated provisions into one generic finding. Every dynamic finding must
 have exact evidence and a concise businessMeaning explaining its operational or economic effect.
 For an uncertain dynamic finding, value must be null and uncertaintyReason must explain why.
+
+EXPENSE-RULE CANDIDATE CONTRACT
+
+expenseRuleCandidates is mandatory and may contain ANY NUMBER of source-backed obligations.
+Create one candidate per distinct obligation actually stated in the document. A clause naming
+electricity, water, sewer, taxes, and insurance produces separate candidates. A CAM clause with
+a base-year mechanism, cap, reconciliation, audit right, exclusions, or administrative fee may
+produce separate focused candidates when those terms have different evidence or business effect.
+
+The category string is dynamic and is not limited to a predefined taxonomy. Use a concise,
+stable snake_case business category such as common_area_maintenance, operating_expenses,
+real_estate_taxes, property_insurance, electricity, water, sewer, hvac, janitorial,
+roof_repairs, or capital_replacements. Use subcategory when the clause is narrower.
+
+For every candidate:
+- Quote the complete controlling sentence, table row, or label/value line verbatim.
+- Provide only sourceNodeIds printed in the compact document.
+- Determine responsibility and economic treatment from the cited language, definitions, and
+  controlling cross-references—not from the general lease type or market custom.
+- Use not_stated or conditional when the evidence does not establish an attribute.
+- Never treat landlord-paid costs as tenant-recoverable without explicit pass-through language.
+- Never treat tenant-direct obligations as CAM reimbursements.
+- Never combine taxes, insurance, utilities, repairs, maintenance, or services into a generic
+  operating-expense row when the document states distinct treatment.
+- Do not calculate a missing amount, percentage, cap, base year, or expense stop.
+- For ambiguous/conflicting/illegible candidates, retain the candidate with null unsupported
+  numeric attributes, cite the evidence, and explain uncertaintyReason.
+- Return an empty array when the document contains no source-backed expense obligation. Never
+  create checklist placeholders or inferred rules merely because the lease is gross, net, or NNN.
 
 Use businessArea to recommend the most relevant Lease Review tab:
 parties_premises, dates_term, rent_charges, expenses_recoveries, cam_rules, taxes, insurance,

@@ -371,6 +371,13 @@ verify_jwt = true
 enabled = true
 verify_jwt = false
 
+[functions.sync-approved-lease-expense-rules]
+enabled = true
+# Browser OPTIONS preflights do not include Authorization. Authentication,
+# organization isolation, approval status, and page access are enforced inside
+# the function before any source document is read or rule is persisted.
+verify_jwt = false
+
 [functions.save-lease-review-draft]
 enabled = true
 verify_jwt = true

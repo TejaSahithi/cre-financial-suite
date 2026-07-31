@@ -29,6 +29,7 @@ import {
   WHOLE_DOCUMENT_SCHEMA_VERSION,
   type WholeDocumentExtractionResponse,
   type WholeDocumentDynamicFinding,
+  type WholeDocumentExpenseRuleCandidate,
   type WholeDocumentFieldResult,
 } from "./whole-document-schema.ts";
 
@@ -387,6 +388,157 @@ function buildDynamicItems(args: {
   return { items, rejected };
 }
 
+function normalizeExpenseCategory(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function buildExpenseRuleCandidates(args: {
+  candidates: WholeDocumentExpenseRuleCandidate[];
+  compact: CompactLeaseDocument;
+}): { rules: any[]; rejected: Array<Record<string, unknown>> } {
+  const rules: any[] = [];
+  const rejected: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+
+  for (const candidate of args.candidates || []) {
+    const category = normalizeExpenseCategory(candidate?.category);
+    if (!category) {
+      rejected.push({ category: candidate?.category ?? null, reason: "missing_expense_category" });
+      continue;
+    }
+
+    const evidence = verifyEvidence(candidate as any, args.compact);
+    if (!evidence.nodeIdsValid || !evidence.quoteVerified) {
+      rejected.push({
+        category,
+        reason: evidence.evidenceErrors.join("; "),
+      });
+      continue;
+    }
+
+    const sourceText = String(candidate.sourceQuote || "").trim();
+    const subcategory = normalizeExpenseCategory(candidate.subcategory) || null;
+    const dedupeKey = `${category}|${subcategory || ""}|${normalizeEvidenceText(sourceText)}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    const status = candidate.status === "found"
+      ? "extracted"
+      : candidate.status === "conflicting"
+        ? "conflict_detected"
+        : "needs_review";
+    const includedInBaseRent =
+      candidate.includedInBaseRent === "yes"
+        ? true
+        : candidate.includedInBaseRent === "no"
+          ? false
+          : null;
+    const recoverable =
+      candidate.recoverableFromTenant === "not_stated"
+        ? "conditional"
+        : candidate.recoverableFromTenant;
+    const camEligible =
+      candidate.camEligible === "not_stated"
+        ? "conditional"
+        : candidate.camEligible;
+    const reconciliationRequired =
+      candidate.reconciliationRequired === "yes"
+        ? true
+        : candidate.reconciliationRequired === "no"
+          ? false
+          : null;
+    const amount = candidate.amount != null && Number.isFinite(Number(candidate.amount))
+      ? Number(candidate.amount)
+      : null;
+
+    rules.push({
+      expense_category: category,
+      expense_subcategory: subcategory,
+      category_name: String(candidate.category || category),
+      responsibility:
+        candidate.responsibleParty === "not_stated" ||
+        candidate.responsibleParty === "conditional"
+          ? "unknown"
+          : candidate.responsibleParty,
+      operational_responsibility:
+        candidate.responsibleParty === "not_stated" ||
+        candidate.responsibleParty === "conditional"
+          ? "unknown"
+          : candidate.responsibleParty,
+      payment_treatment:
+        candidate.paymentTreatment === "not_stated" ||
+        candidate.paymentTreatment === "conditional"
+          ? "not_applicable"
+          : candidate.paymentTreatment,
+      recoverable_from_tenant: recoverable,
+      recoverable_flag: recoverable === "yes",
+      cam_eligible: camEligible,
+      included_in_base_rent: includedInBaseRent,
+      included_in_rent: includedInBaseRent,
+      recovery_method:
+        candidate.recoveryMethod === "not_stated"
+          ? "manual_review"
+          : candidate.recoveryMethod,
+      allocation_basis: candidate.allocationBasis,
+      explicit_charge_amount: amount,
+      fixed_monthly_amount: candidate.amountFrequency === "monthly" ? amount : null,
+      billing_frequency:
+        candidate.amountFrequency === "not_stated"
+          ? null
+          : candidate.amountFrequency,
+      tenant_share_percent: candidate.tenantSharePercent,
+      base_year: candidate.baseYear,
+      base_year_amount: candidate.baseYearAmount,
+      expense_stop_amount: candidate.expenseStopAmount,
+      cap_type: candidate.capType,
+      cap_amount: candidate.capAmount,
+      cap_percent: candidate.capPercent,
+      is_subject_to_cap: Boolean(candidate.capType || candidate.capAmount != null || candidate.capPercent != null),
+      gross_up_percent: candidate.grossUpPercent,
+      gross_up_applicable: candidate.grossUpPercent != null,
+      admin_fee_percent: candidate.adminFeePercent,
+      admin_fee_applicable: candidate.adminFeePercent != null,
+      reconciliation_required: reconciliationRequired,
+      reconciliation_frequency: candidate.reconciliationFrequency,
+      obligation_kind: candidate.obligationKind,
+      source_clause: sourceText,
+      exact_source_text: sourceText,
+      source_page: evidence.sourcePage,
+      source_node_ids: candidate.sourceNodeIds,
+      confidence_score: Math.max(0, Math.min(1, Number(candidate.confidence) || 0)),
+      confidence: Math.max(0, Math.min(1, Number(candidate.confidence) || 0)),
+      extraction_status: status,
+      status,
+      review_status: "needs_review",
+      approval_status: "draft",
+      row_status: "needs_review",
+      published_to_cam: false,
+      editable: true,
+      requires_review: true,
+      review_reason:
+        candidate.uncertaintyReason ||
+        "LLM-extracted lease expense obligation requires approval before downstream publication.",
+      notes: candidate.uncertaintyReason,
+      generation_source: "whole_document_llm_expense_obligation_v1",
+      extraction_method: "whole_document_llm_v2",
+      quote_verified: true,
+      clauses: [{
+        clause_type: `${candidate.obligationKind}_obligation`,
+        clause_text: sourceText,
+        page_number: evidence.sourcePage,
+        confidence: Math.max(0, Math.min(1, Number(candidate.confidence) || 0)),
+        source_node_ids: candidate.sourceNodeIds,
+      }],
+    });
+  }
+
+  return { rules, rejected };
+}
+
 function envBoundedInt(name: string, fallback: number, min: number, max: number): number {
   const raw = Number(Deno.env.get(name));
   if (!Number.isFinite(raw)) return fallback;
@@ -571,7 +723,8 @@ async function runWholeDocumentLlmOnCompact(args: {
     response.status !== "success" ||
     !Array.isArray(response.data?.claims) ||
     !Array.isArray(response.data?.notStatedFieldKeys) ||
-    !Array.isArray(response.data?.dynamicFindings)
+    !Array.isArray(response.data?.dynamicFindings) ||
+    !Array.isArray(response.data?.expenseRuleCandidates)
   ) {
     return failureResult(
       args.startedAt,
@@ -715,6 +868,10 @@ async function runWholeDocumentLlmOnCompact(args: {
     compact,
     fixedFieldKeys: new Set(args.fields.map(([fieldKey]) => fieldKey)),
   });
+  const expenseRuleResult = buildExpenseRuleCandidates({
+    candidates: response.data.expenseRuleCandidates,
+    compact,
+  });
   const record: ExtractedRecord = { rowIndex: 0, fields: extractedFields };
   const rows = flattenRecords([record], args.moduleType);
   computeDerivedFields(rows, args.moduleType);
@@ -782,6 +939,10 @@ async function runWholeDocumentLlmOnCompact(args: {
           dynamic_findings_returned_count: response.data.dynamicFindings.length,
           dynamic_items_published_count: dynamicResult.items.length,
           rejected_dynamic_findings: dynamicResult.rejected,
+          expense_rule_candidates: expenseRuleResult.rules,
+          expense_rule_candidates_returned_count: response.data.expenseRuleCandidates.length,
+          expense_rule_candidates_published_count: expenseRuleResult.rules.length,
+          rejected_expense_rule_candidates: expenseRuleResult.rejected,
           fixed_claims_returned_count: response.data.claims.length,
           not_stated_field_count: response.data.notStatedFieldKeys.length,
           compact_document: {
@@ -822,6 +983,7 @@ function mergeSectionedWholeDocumentResults(args: {
   const warnings = [...args.sectionWarnings];
   const validationErrors: ValidationError[] = [];
   const dynamicItems: any[] = [];
+  const expenseRuleCandidates: any[] = [];
   let llmCallCount = 0;
   let inputTokens = 0;
   let outputTokens = 0;
@@ -847,6 +1009,9 @@ function mergeSectionedWholeDocumentResults(args: {
       sectionFailureCount++;
     }
     if (Array.isArray(debug.dynamic_items)) dynamicItems.push(...debug.dynamic_items);
+    if (Array.isArray(debug.expense_rule_candidates)) {
+      expenseRuleCandidates.push(...debug.expense_rule_candidates);
+    }
 
     const row = result.rows?.[0] ?? {};
     const fieldSources = debug.merged_field_sources ?? {};
@@ -983,6 +1148,18 @@ function mergeSectionedWholeDocumentResults(args: {
     sample_values: item.value == null ? [] : [String(item.value)],
     confidence: item.confidence,
   }));
+  const dedupedExpenseRuleCandidates = Array.from(
+    new Map(
+      expenseRuleCandidates.map((rule) => [
+        [
+          normalizeExpenseCategory(rule?.expense_category),
+          normalizeExpenseCategory(rule?.expense_subcategory),
+          normalizeEvidenceText(String(rule?.exact_source_text || rule?.source_clause || "")),
+        ].join("|"),
+        rule,
+      ]),
+    ).values(),
+  );
 
   return {
     rows,
@@ -1036,6 +1213,9 @@ function mergeSectionedWholeDocumentResults(args: {
           dynamic_items: dynamicItems,
           dynamic_findings_returned_count: dynamicItems.length,
           dynamic_items_published_count: dynamicItems.length,
+          expense_rule_candidates: dedupedExpenseRuleCandidates,
+          expense_rule_candidates_returned_count: expenseRuleCandidates.length,
+          expense_rule_candidates_published_count: dedupedExpenseRuleCandidates.length,
           compact_document: {
             source: args.parentCompact.source,
             version: args.parentCompact.version,
@@ -1192,6 +1372,7 @@ export const __test__ = {
   normalizeDynamicFieldKey,
   validateDynamicValue,
   buildDynamicItems,
+  buildExpenseRuleCandidates,
   buildCompactSections,
   mergeSectionedWholeDocumentResults,
 };

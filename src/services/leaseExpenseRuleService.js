@@ -17,8 +17,6 @@ import {
   isProtectedHumanRule,
   deriveRuleSetStatusFromRules
 } from "./utils/leaseExpenseRuleStatus";
-import { extractDocumentTextCandidate } from "./utils/documentTextCandidate";
-
 import {
   deriveRuleCamEligible,
   deriveRuleIncludedInBaseRent,
@@ -31,7 +29,6 @@ import {
 
 import {
   asNumber,
-  asArray,
   normalizeFrequency,
   normalizeRuleSource,
   normalizeCategoryKey,
@@ -545,62 +542,6 @@ function buildRuleSetEntriesFromServerPayload(payload = {}) {
     });
 }
 
-function unwrapWorkflowOutput(workflow) {
-  if (!workflow || typeof workflow !== "object") return null;
-  if (Array.isArray(workflow?.records) && workflow.records[0]) return workflow.records[0];
-  return workflow;
-}
-
-export function getLeaseWorkflowOutput(lease) {
-  const candidates = [
-    lease?.extraction_data?.workflow_output,
-    lease?.workflow_output,
-    lease?.abstract_snapshot?.extraction_data?.workflow_output,
-    lease?.abstract_snapshot?.workflow_output,
-    lease?.abstract_snapshot?.metadata?.workflow_output,
-  ];
-  for (const candidate of candidates) {
-    const workflow = unwrapWorkflowOutput(candidate);
-    if (workflow && typeof workflow === "object") return workflow;
-  }
-  return null;
-}
-
-export function getUploadedFileWorkflowOutput(fileRecord) {
-  const firstReviewRecord =
-    fileRecord?.ui_review_payload?.records?.[0] ||
-    fileRecord?.ui_review_payload?.rows?.[0] ||
-    null;
-  const firstNormalizedRecord =
-    fileRecord?.normalized_output?.records?.[0] ||
-    fileRecord?.normalized_output?.rows?.[0] ||
-    null;
-  const firstParsedRecord = Array.isArray(fileRecord?.parsed_data)
-    ? fileRecord.parsed_data[0]
-    : fileRecord?.parsed_data;
-  const candidates = [
-    fileRecord?.ui_review_payload?.metadata?.workflow_output,
-    firstReviewRecord?.workflow_output,
-    fileRecord?.normalized_output?.metadata?.workflow_output,
-    fileRecord?.normalized_output?.workflow_output,
-    firstNormalizedRecord?.workflow_output,
-    firstParsedRecord?.workflow_output,
-  ];
-  for (const candidate of candidates) {
-    const workflow = unwrapWorkflowOutput(candidate);
-    if (workflow && typeof workflow === "object") return workflow;
-  }
-  return null;
-}
-
-function getLeaseWorkflowExpenseRules(lease) {
-  return asArray(getLeaseWorkflowOutput(lease)?.expense_rules);
-}
-
-function hasWorkflowExpenseRules(lease) {
-  return getLeaseWorkflowExpenseRules(lease).length > 0;
-}
-
 function isMissingExpenseRuleTable(error) {
   if (!error) return false;
   const code = String(error.code || "").toUpperCase();
@@ -611,31 +552,12 @@ function isMissingExpenseRuleTable(error) {
 }
 
 export const leaseExpenseRuleService = {
-  async hydrateLeaseExpenseRuleWorkflow(lease) {
-    if (!lease?.id || getLeaseWorkflowExpenseRules(lease).length > 0) return lease;
-    const sourceFileId = lease?.source_file_id || lease?.extraction_data?.source_file_id || null;
-    if (!sourceFileId || !supabase) return lease;
-
-    try {
-      const { data: fileRecord, error } = await supabase
-        .from("uploaded_files")
-        .select("ui_review_payload, normalized_output, parsed_data")
-        .eq("id", sourceFileId)
-        .maybeSingle();
-      if (error) throw error;
-      const workflowOutput = getUploadedFileWorkflowOutput(fileRecord);
-      if (!workflowOutput || asArray(workflowOutput?.expense_rules).length === 0) return lease;
-      return {
-        ...lease,
-        extraction_data: {
-          ...(lease.extraction_data || {}),
-          workflow_output: workflowOutput,
-        },
-      };
-    } catch (error) {
-      devWarn("[leaseExpenseRuleService] authoritative uploaded-file workflow lookup failed:", error?.message || error);
-      return lease;
-    }
+  async syncApprovedLeaseExpenseRules({ leaseId, force = false } = {}) {
+    if (!leaseId) throw new Error("leaseId is required");
+    return invokeEdgeFunction("sync-approved-lease-expense-rules", {
+      lease_id: leaseId,
+      force,
+    });
   },
 
   async loadRuleSet(leaseId) {
@@ -662,185 +584,12 @@ export const leaseExpenseRuleService = {
     }
   },
 
-  // Diagnostic: dump the full state of the lease expense-rule pipeline for
-  // a single lease. Used by the backfill UI before each persist attempt so
-  // we can see EXACTLY where rules come from (or fail to come from). Pure
-  // read-only — does not write anything.
-  async diagnoseExpenseRulePipeline(lease) {
-    if (!lease?.id) return { error: "no_lease_id" };
-    const extraction = lease.extraction_data || {};
-    const workflow = extraction.workflow_output || null;
-    const wfRecord = Array.isArray(workflow?.records) ? workflow.records[0] : workflow;
-    const expenseRules = asArray(wfRecord?.expense_rules);
-    const camProfile = wfRecord?.cam_profile || null;
-    const clauses = asArray(wfRecord?.lease_clauses);
-    const sourceFileId = lease.source_file_id ?? extraction.source_file_id ?? null;
-
-    let sourceTextLength = 0;
-    let sourceTextField = null;
-    let uploadedFile = null;
-    if (sourceFileId) {
-      try {
-        const { data } = await supabase
-          .from("uploaded_files")
-          .select("id, normalized_output, parsed_data, docling_raw, ui_review_payload, status")
-          .eq("id", sourceFileId)
-          .maybeSingle();
-        uploadedFile = data || null;
-        if (uploadedFile) {
-          const candidates = [
-            ...(uploadedFile?.docling_raw?._whole_document_llm_compact
-              ? [["docling_raw._whole_document_llm_compact", uploadedFile.docling_raw]]
-              : []),
-            ["normalized_output.raw_text", uploadedFile?.normalized_output?.raw_text],
-            ["normalized_output.text", uploadedFile?.normalized_output?.text],
-            ["parsed_data.raw_text", uploadedFile?.parsed_data?.raw_text],
-            ["parsed_data.text", uploadedFile?.parsed_data?.text],
-            ["parsed_data.full_text", uploadedFile?.parsed_data?.full_text],
-            ["docling_raw.full_text", uploadedFile?.docling_raw?.full_text],
-            ["docling_raw.markdown", uploadedFile?.docling_raw?.markdown],
-            ["docling_raw.text", uploadedFile?.docling_raw?.text],
-            ["docling_raw.body", uploadedFile?.docling_raw?.body],
-          ];
-          for (const [field, value] of candidates) {
-            const trimmed = extractDocumentTextCandidate(value);
-            if (trimmed) {
-              sourceTextLength = trimmed.length;
-              sourceTextField = field;
-              break;
-            }
-          }
-        }
-      } catch (err) {
-        devWarn("[diagnose] uploaded_files lookup failed:", err?.message || err);
-      }
-    }
-
-    // Existing persisted rules for this lease, loaded through the server
-    // rule-list function so diagnostics do not hit protected tables directly.
-    let existingRuleSets = [];
-    let existingRules = [];
-    try {
-      const persisted = await this.loadRuleSet(lease.id);
-      existingRuleSets = persisted?.ruleSet ? [persisted.ruleSet] : [];
-      existingRules = persisted?.rules || [];
-    } catch (err) {
-      devWarn("[diagnose] rule lookup failed:", err?.message || err);
-    }
-
-    return {
-      lease_id: lease.id,
-      tenant_name: lease.tenant_name,
-      approved_lease_abstract_id: lease.approved_lease_abstract_id || lease.abstract_snapshot?.id || null,
-      org_id: lease.org_id,
-      property_id: lease.property_id,
-      building_id: lease.building_id,
-      unit_id: lease.unit_id,
-      tenant_id: lease.tenant_id,
-      abstract_status: lease.abstract_status,
-      // Workflow payload state
-      has_workflow_output: !!workflow,
-      workflow_record_count: Array.isArray(workflow?.records) ? workflow.records.length : (workflow ? 1 : 0),
-      expense_rules_count: expenseRules.length,
-      expense_rule_categories: expenseRules.map((r) => r?.expense_category).filter(Boolean),
-      cam_profile_present: !!camProfile,
-      clause_records_count: clauses.length,
-      // Source text state
-      source_file_id: sourceFileId,
-      source_file_found: !!uploadedFile,
-      source_file_status: uploadedFile?.status || null,
-      source_text_length: sourceTextLength,
-      source_text_field: sourceTextField,
-      // Persisted state
-      existing_rule_sets_count: existingRuleSets.length,
-      existing_rule_sets: existingRuleSets,
-      existing_rules_count: existingRules.length,
-    };
-  },
-
-  // Fast path used during Lease Approval. Reads the expense_rules array
-  // the workflow extractor already produced (lives on
-  // `lease.extraction_data.workflow_output.expense_rules`) and persists it
-  // to `lease_expense_rule_sets` + `lease_expense_rules` without re-running
-  // the LLM. Idempotent: if an existing rule set is provided, the rules are
-  // upserted onto it; otherwise a new versioned set is created.
-  //
-  // Filters out anything that maps to base rent — base rent is a rent
-  // schedule concept, not a lease expense rule (per product spec).
-  // Returns whatever saveRuleSet returns ({ ruleSet, rules }).
-  async persistExpenseRulesFromWorkflow({
-    lease,
-    categories = [],
-    status = "draft",
-    existingRuleSetId = null,
-    createdFrom = "workflow",
-    approver = null,
-    suppressHttpError = false,
-  } = {}) {
-    const tag = `[persistExpenseRulesFromWorkflow lease=${lease?.id}]`;
-    if (!supabase || !lease?.id) {
-      devWarn(`${tag} skipped: no supabase or no lease.id`);
-      return { ruleSet: null, rules: [] };
-    }
-    const hydratedLease = await this.hydrateLeaseExpenseRuleWorkflow(lease);
-    const workflowRules = getLeaseWorkflowExpenseRules(hydratedLease);
-    devLog(`${tag} workflow_rules received: ${workflowRules.length}`);
-    if (workflowRules.length === 0) {
-      const wfOut = hydratedLease?.extraction_data?.workflow_output;
-      devWarn(`${tag} no workflow expense_rules. extraction_data keys=`, Object.keys(hydratedLease?.extraction_data || {}), "workflow_output keys=", wfOut ? Object.keys(wfOut) : null);
-      return { ruleSet: null, rules: [] };
-    }
-
-    // Strip base_rent / base rent / rent rules. saveRuleSet's resolver will
-    // also drop unmappable rules but skipping here keeps the audit log clean.
-    const BASE_RENT_KEYS = new Set(["base_rent", "rent", "minimum_rent", "fixed_rent"]);
-    const filtered = workflowRules.filter((r) => {
-      const key = String(r?.expense_category || r?.normalized_key || "").toLowerCase();
-      return !BASE_RENT_KEYS.has(key);
-    });
-    devLog(`${tag} after base-rent strip: ${filtered.length} rules; categories=`, filtered.map((r) => r?.expense_category));
-
-    // Reshape workflow rule → the shape saveRuleSet expects. Most fields
-    // are passed through; we just bridge a few aliases the persister reads.
-    const rules = filtered.map((r) => ({
-      ...r,
-      normalized_key: r.expense_category || r.normalized_key,
-      category_name: r.category_name || r.expense_subcategory || null,
-      confidence: r.confidence_score ?? r.confidence ?? null,
-      source: r.exact_source_text || r.source_clause || r.notes || null,
-      frequency: r.billing_frequency || null,
-      mentioned_in_lease: r.extraction_status !== "not_found",
-    }));
-
-    // The server-owned save path is the mechanical writer. Do not read
-    // protected rule-set tables directly from the browser while deciding
-    // whether to create or update rows; RLS intentionally blocks those calls.
-    let targetRuleSetId = existingRuleSetId;
-
-    let result = { ruleSet: null, rules: [] };
-    try {
-      result = await this.saveRuleSet({
-        lease: hydratedLease,
-        rules,
-        status,
-        existingRuleSetId: targetRuleSetId,
-        categories,
-        createdFrom,
-        approver,
-        suppressHttpError,
-      });
-      devLog(`${tag} saveRuleSet returned ${result?.rules?.length || 0} persisted rules; ruleSet=`, result?.ruleSet?.id);
-    } catch (err) {
-      console.error(`${tag} saveRuleSet THREW:`, err?.message || err, err?.details || "", err?.code || "");
-      throw err;
-    }
-    return result;
-  },
-
+  // Low-level compatibility writer retained for explicit rule-set editing.
+  // Lease extraction and approval do not call this browser path; their sole
+  // publisher is approved-lease-expense-rules.ts.
   async saveRuleSet({ lease, rules = [], status = "draft", existingRuleSetId = null, categories = [], createdFrom = "workflow", approver = null, suppressHttpError = false }) {
     if (!supabase || !lease?.id) throw new Error("Lease is required to save expense rules");
 
-    const tag = `[saveRuleSet lease=${lease?.id}]`;
     const orgId = await resolveWorkflowOrgId(lease);
     if (!orgId) {
       throw new Error("Unable to resolve organization for lease expense rules");
@@ -1171,10 +920,6 @@ export const leaseExpenseRuleService = {
     }
 
     return groups;
-  },
-
-  async ensureApprovedRuleSet() {
-    throw new Error("Expense rules must be persisted from primary workflow_output.expense_rules via persistExpenseRulesFromWorkflow().");
   },
 
   getOperationalResponsibility(rule) {

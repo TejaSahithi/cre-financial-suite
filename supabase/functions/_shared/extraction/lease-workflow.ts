@@ -3925,10 +3925,34 @@ function deriveExpenseRules(
     };
   });
 
-  const sourceBackedRules = rules.filter((rule) => {
+  const sourceBackedRules = rules.flatMap((rule) => {
     const sourcePage = asNumber(rule.source_page);
     const sourceClause = cleanSourceText(rule.source_clause);
-    return Boolean(sourceClause) && sourcePage != null && sourcePage > 0 && !isWeakExpenseRuleSourceText(sourceClause);
+    if (!sourceClause || isWeakExpenseRuleSourceText(sourceClause)) return [];
+    if (sourcePage != null && sourcePage > 0) return [rule];
+
+    // OCR and parser transformations can preserve the exact lease clause while
+    // losing its page anchor. That is an evidence-quality problem, not proof
+    // that the expense obligation does not exist. Keep the rule visible as a
+    // review candidate and prevent it from flowing to CAM until a reviewer
+    // confirms/corrects the citation. The previous filter deleted these rules
+    // outright, which made approved leases with real CAM/insurance/utilities
+    // language appear to contain no expense terms at all.
+    return [{
+      ...rule,
+      source_page: null,
+      extraction_status: "missing_source_evidence",
+      status: "missing_source_evidence",
+      review_status: "needs_review",
+      approval_status: "draft",
+      published_to_cam: false,
+      requires_review: true,
+      review_reason: "Exact lease language was found, but its source page could not be verified.",
+      notes: [
+        cleanText(rule.notes),
+        "Source page missing; verify the clause citation before approval.",
+      ].filter(Boolean).join(" "),
+    }];
   });
 
   return finalizeDerivedExpenseRules(sourceBackedRules);
@@ -4374,7 +4398,8 @@ function isExpenseRuleRecoveryMethodSpecific(value: unknown) {
 function scoreExpenseRuleCandidate(rule: Record<string, unknown>) {
   const confidence = normalizeConfidenceScore(rule?.confidence_score) ?? 0;
   const sourceText = normalizeExpenseRuleSourceText(rule);
-  const hasPage = Number.isFinite(Number(rule?.source_page));
+  const sourcePage = asNumber(rule?.source_page);
+  const hasPage = sourcePage != null && sourcePage > 0;
   return (
     (hasPage ? 200 : 0) +
     (isWeakExpenseRuleSourceText(sourceText) ? 0 : 160) +
@@ -4392,8 +4417,10 @@ function finalizeDerivedExpenseRules(rules: Record<string, unknown>[]) {
     if (EXCLUDED_EXPENSE_RULE_KEYS.has(canonical.canonicalKey)) continue;
 
     const exactSourceText = normalizeExpenseRuleSourceText(rule);
+    const sourcePage = asNumber(rule?.source_page);
     const hasStrongEvidence =
-      Number.isFinite(Number(rule?.source_page)) &&
+      sourcePage != null &&
+      sourcePage > 0 &&
       !isWeakExpenseRuleSourceText(exactSourceText);
     const explicitExtractionStatus = normalizeToken(rule?.extraction_status || rule?.status);
     const extractionStatus =
@@ -4587,6 +4614,7 @@ export function runLeaseWorkflowStage4Derivation(args: {
   doclingRaw?: Record<string, unknown> | null;
   documentSubtype?: string | null;
   documentProfileOverride?: string | null;
+  llmExpenseRuleCandidates?: any[];
   stage1: LeaseWorkflowStage1Output;
   stage2: LeaseWorkflowStage2Output;
   stage3: LeaseWorkflowStage3Output;
@@ -4642,7 +4670,13 @@ export function runLeaseWorkflowStage4Derivation(args: {
     generic_source_text_rejected: genericSourceTextRejected,
     extracted_document_items_count: extractedDocumentItems.length,
   });
-  let expenseRules = deriveExpenseRules(row, leaseFields, clauses, doclingRaw);
+  // Expense-rule semantics have one owner: the strict whole-document LLM
+  // response. An absent candidate array is a contract/version problem, not
+  // permission to regenerate obligations with a keyword blueprint.
+  const usesDirectLlmExpenseRules = Array.isArray(args.llmExpenseRuleCandidates);
+  let expenseRules = usesDirectLlmExpenseRules
+    ? [...(args.llmExpenseRuleCandidates || [])]
+    : [];
   const signals = inferLeaseSignals(fullText, row);
   const finalLeaseType = classifyLeaseType(fullText, expenseRules, signals);
   const finalLeaseTypeCanonical = normalizeLeaseTypeValue(finalLeaseType);
@@ -4685,7 +4719,6 @@ export function runLeaseWorkflowStage4Derivation(args: {
       confidence_score: finalLeaseTypeCanonical ? 0.86 : 0.5,
       source_clause: leaseFields.lease_type?.source_clause ?? leaseTypeSnippet,
     };
-    expenseRules = deriveExpenseRules(row, leaseFields, clauses, doclingRaw);
   }
 
   // â”€â”€ Assignment / amendment short-circuit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -4717,7 +4750,9 @@ export function runLeaseWorkflowStage4Derivation(args: {
     .filter((pattern) => pattern.test(fullText))
     .length;
   const assignmentExpenseShortCircuitApplied =
-    isAssignmentOrAmendment && explicitExpenseClauseCount === 0;
+    !usesDirectLlmExpenseRules &&
+    isAssignmentOrAmendment &&
+    explicitExpenseClauseCount === 0;
   const templateRulesSkippedCount = assignmentExpenseShortCircuitApplied ? expenseRules.length : 0;
 
   if (assignmentExpenseShortCircuitApplied) {
@@ -4827,7 +4862,7 @@ export function runLeaseWorkflowStage4Derivation(args: {
   // Classification. Source snippets are preserved so nothing is silently
   // dropped â€” the reviewer still sees what was detected.
   let expenseRulesDemotedForMappingFailure = 0;
-  if (coreMappingFailed && !assignmentExpenseShortCircuitApplied) {
+  if (!usesDirectLlmExpenseRules && coreMappingFailed && !assignmentExpenseShortCircuitApplied) {
     expenseRules = expenseRules.map((rule: any) => {
       const isCoverageGap = rule?.rule_type === "coverage_gap" || rule?.generation_source === "original_lease_required";
       if (isCoverageGap) return rule;
@@ -4849,10 +4884,20 @@ export function runLeaseWorkflowStage4Derivation(args: {
     });
   }
 
-  const leaseExpenseTermsFound = coreMappingFailed ? 0 : countClauseBackedExpenseTerms(leaseFields, clauses);
-  const camTermsFound = coreMappingFailed ? 0 : clauses.filter((clause) =>
-    clause.clause_text && ["cam_recoveries", "operating_expense_recovery", "lease_expense_structure"].includes(clause.clause_type)
-  ).length + (leaseFields.cam_treatment?.source_clause ? 1 : 0);
+  const leaseExpenseTermsFound = usesDirectLlmExpenseRules
+    ? expenseRules.length
+    : coreMappingFailed
+      ? 0
+      : countClauseBackedExpenseTerms(leaseFields, clauses);
+  const camTermsFound = usesDirectLlmExpenseRules
+    ? expenseRules.filter((rule: any) =>
+      ["cam", "operating_expense"].includes(String(rule?.obligation_kind || ""))
+    ).length
+    : coreMappingFailed
+      ? 0
+      : clauses.filter((clause) =>
+        clause.clause_text && ["cam_recoveries", "operating_expense_recovery", "lease_expense_structure"].includes(clause.clause_type)
+      ).length + (leaseFields.cam_treatment?.source_clause ? 1 : 0);
   const camProfile = deriveCamProfile(leaseFields, expenseRules);
   const budgetPreview = deriveBudgetPreview(leaseFields, expenseRules, camProfile);
   const budgetHandoffReadiness = buildBudgetHandoffReadiness(row, leaseFields, expenseRules, budgetPreview);
@@ -4873,6 +4918,9 @@ export function runLeaseWorkflowStage4Derivation(args: {
     extracted_document_items: extractedDocumentItems,
     clause_records: extractedDocumentItems,
     expense_rules: expenseRules,
+    expense_rule_source: usesDirectLlmExpenseRules
+      ? "whole_document_llm_expense_obligations"
+      : "llm_expense_candidates_unavailable",
     cam_profile: camProfile,
     budget_preview: budgetPreview,
     budget_handoff_readiness: budgetHandoffReadiness,
@@ -4893,6 +4941,9 @@ export function runLeaseWorkflowStage4Derivation(args: {
       clause_count: clauses.filter((clause) => clause.clause_text).length,
       extracted_document_item_count: extractedDocumentItems.length,
       expense_rule_count: expenseRules.length,
+      expense_rule_source: usesDirectLlmExpenseRules
+        ? "whole_document_llm_expense_obligations"
+        : "llm_expense_candidates_unavailable",
       validation_error_count: validations.filter((item) => item.pass === false).length,
       budget_handoff_ready: budgetHandoffReadiness.ready,
       budget_handoff_blocker_count: budgetHandoffReadiness.blocked_reasons.length,
@@ -4923,16 +4974,8 @@ export function runLeaseWorkflowStage4Derivation(args: {
       // (in normalize-pdf-output's extractionDebug) reflects what RAN.
       vision_pages_available: pdfPageCountTotal,
       fixed_fields_extracted: Object.values(leaseFields).filter((field) => field.extraction_status === "extracted").length,
-      extracted_source_backed_count: Object.values(leaseFields).filter((field) =>
-        field.extraction_status === "extracted" &&
-        !isBlank(field.value) &&
-        Number.isFinite(Number(field.confidence_score)) &&
-        (!isBlank(field.source_clause) || Number.isFinite(Number(field.source_page)))
-      ).length,
-      missing_source_evidence_count: Object.values(leaseFields).filter((field) => field.extraction_status === "missing_source_evidence").length,
       calculated_count: Object.values(leaseFields).filter((field) => field.extraction_status === "calculated").length,
       manual_count: Object.values(leaseFields).filter((field) => field.extraction_status === "manual_required").length,
-      not_found_count: Object.values(leaseFields).filter((field) => field.extraction_status === "not_found").length,
       dynamic_items_extracted: extractedDocumentItems.length,
       dynamic_items_displayed: extractedDocumentItems.filter((item) => item.creates_dynamic_row && item.display_tab !== "clause_records").length,
       mapped_items_count: extractedDocumentItems.filter((item) => item.maps_to_fixed_field).length,
@@ -4956,8 +4999,6 @@ export function runLeaseWorkflowStage4Derivation(args: {
       fields_rejected_missing_source_count: fieldsRejectedMissingSourceCount,
       fields_rejected_generic_source_count: genericSourceTextRejected,
       expense_rules_generated_count: expenseRules.length,
-      lease_expense_terms_found: leaseExpenseTermsFound,
-      cam_terms_found: camTermsFound,
       real_expense_rules_count: coreMappingFailed
         ? 0
         : expenseRules.filter((r: any) => r?.rule_type !== "coverage_gap" && r?.generation_source !== "original_lease_required").length,
@@ -4968,12 +5009,9 @@ export function runLeaseWorkflowStage4Derivation(args: {
 }
 
 /**
- * Unchanged public entry point -- every existing caller (buildReviewPayload,
- * tests, etc.) keeps calling this exactly as before, in one invocation, with
- * IDENTICAL output. It's now a thin composition of the 4 stage functions
- * above rather than one monolithic body. The new bounded-enrich-stage
- * handlers in normalize-pdf-output/index.ts call the 4 stage functions
- * directly instead, one per Edge Function invocation.
+ * Public composition entry point. Review fields still use the four bounded
+ * enrichment stages, while expense obligations must enter through
+ * `llmExpenseRuleCandidates`; this layer does not semantically recreate them.
  */
 export function buildLeaseWorkflowAbstraction(args: {
   row: Record<string, unknown>;
@@ -4989,6 +5027,11 @@ export function buildLeaseWorkflowAbstraction(args: {
    *  existing dedup logic in buildUniversalDocumentItems. Undefined/empty
    *  preserves existing behavior exactly. */
   factLedgerDynamicItems?: any[];
+  /** Canonical expense obligations returned by the same whole-document LLM
+   *  call that extracts Lease Review fields. When present (including an
+   *  empty array), these are authoritative. When absent, the workflow emits
+   *  no expense rules and reports an incompatible extraction contract. */
+  llmExpenseRuleCandidates?: any[];
 }) {
   const stage1 = runLeaseWorkflowStage1Clauses({ doclingRaw: args?.doclingRaw });
   const stage2 = runLeaseWorkflowStage2Fields({
@@ -5013,6 +5056,9 @@ export function buildLeaseWorkflowAbstraction(args: {
     doclingRaw: args?.doclingRaw,
     documentSubtype: args?.documentSubtype,
     documentProfileOverride: args?.documentProfileOverride,
+    ...(Array.isArray(args?.llmExpenseRuleCandidates)
+      ? { llmExpenseRuleCandidates: args.llmExpenseRuleCandidates }
+      : {}),
     stage1,
     stage2,
     stage3,

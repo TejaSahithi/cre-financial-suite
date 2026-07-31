@@ -7,6 +7,7 @@ import {
   buildWholeDocumentJsonSchema,
   buildWholeDocumentSystemPrompt,
 } from "../../../supabase/functions/_shared/extraction/whole-document-llm/whole-document-schema.ts";
+import { __test__ as extractorTest } from "../../../supabase/functions/_shared/extraction/whole-document-llm/extractor.ts";
 
 describe("whole-document LLM experiment", () => {
   it("preserves complete page and table evidence without the legacy 3K page cap", () => {
@@ -67,7 +68,12 @@ describe("whole-document LLM experiment", () => {
     ] as any;
     const schema = buildWholeDocumentJsonSchema(fields) as any;
 
-    expect(schema.required).toEqual(["claims", "notStatedFieldKeys", "dynamicFindings"]);
+    expect(schema.required).toEqual([
+      "claims",
+      "notStatedFieldKeys",
+      "dynamicFindings",
+      "expenseRuleCandidates",
+    ]);
     expect(schema.properties.claims.type).toBe("array");
     expect(schema.properties.claims.items.properties.fieldKey.enum).toEqual([
       "tenant_name",
@@ -79,6 +85,9 @@ describe("whole-document LLM experiment", () => {
     ]);
     expect(schema.properties.dynamicFindings.type).toBe("array");
     expect(schema.properties.dynamicFindings.items.properties.suggestedFieldKey.enum).toBeUndefined();
+    expect(schema.properties.expenseRuleCandidates.type).toBe("array");
+    expect(schema.properties.expenseRuleCandidates.items.properties.category.enum).toBeUndefined();
+    expect(schema.properties.expenseRuleCandidates.items.additionalProperties).toBe(false);
     expect(schema.properties).not.toHaveProperty("tenant_name");
   });
 
@@ -92,6 +101,7 @@ describe("whole-document LLM experiment", () => {
     expect(prompt).toContain("Build and apply the document's defined-term dictionary");
     expect(prompt).toContain("second, independent completeness sweep");
     expect(prompt).toContain("dynamicFindings is mandatory and may contain ANY NUMBER");
+    expect(prompt).toContain("expenseRuleCandidates is mandatory and may contain ANY NUMBER");
     expect(prompt).toContain("Do not place a fact in a fixed field merely because similar words appear");
     expect(prompt).toContain("ONLY status found may contain a non-null value");
     expect(prompt).toContain("Do not confuse monthly base rent");
@@ -101,5 +111,64 @@ describe("whole-document LLM experiment", () => {
     expect(prompt).toContain("Full-service/gross means certain costs may be included in base rent");
     expect(prompt).toContain("cam_amount is a numeric dollar amount only");
     expect(prompt).toContain("Every operational");
+  });
+
+  it("turns a grounded expense obligation from the same LLM response into a review candidate", () => {
+    const sourceQuote =
+      "Tenant shall pay its proportionate share of Common Area Maintenance Costs as Additional Rent.";
+    const compact = buildCompactLeaseDocument({
+      page_count: 1,
+      pages: [{ page: 7, text: sourceQuote }],
+      text_blocks: [],
+      tables: [],
+      fields: [],
+    });
+
+    const result = extractorTest.buildExpenseRuleCandidates({
+      compact,
+      candidates: [{
+        category: "common area maintenance",
+        subcategory: null,
+        obligationKind: "cam",
+        responsibleParty: "tenant",
+        paymentTreatment: "reimbursable",
+        recoverableFromTenant: "yes",
+        camEligible: "yes",
+        recoveryMethod: "pro_rata_share",
+        allocationBasis: "pro_rata_share",
+        includedInBaseRent: "no",
+        amount: null,
+        amountFrequency: "not_stated",
+        tenantSharePercent: null,
+        baseYear: null,
+        baseYearAmount: null,
+        expenseStopAmount: null,
+        capType: null,
+        capAmount: null,
+        capPercent: null,
+        grossUpPercent: null,
+        adminFeePercent: null,
+        reconciliationRequired: "yes",
+        reconciliationFrequency: "annual",
+        status: "found",
+        sourceNodeIds: ["page:7"],
+        sourceQuote,
+        confidence: 0.96,
+        uncertaintyReason: null,
+      }],
+    });
+
+    expect(result.rejected).toEqual([]);
+    expect(result.rules).toHaveLength(1);
+    expect(result.rules[0]).toMatchObject({
+      expense_category: "common_area_maintenance",
+      obligation_kind: "cam",
+      source_page: 7,
+      exact_source_text: sourceQuote,
+      generation_source: "whole_document_llm_expense_obligation_v1",
+      review_status: "needs_review",
+      approval_status: "draft",
+      published_to_cam: false,
+    });
   });
 });

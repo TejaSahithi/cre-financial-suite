@@ -7,6 +7,7 @@ import {
   generateApprovedRentSchedule,
   validateApprovalPayload,
 } from "../_shared/lease-approval-workflow.ts";
+import { publishApprovedLeaseExpenseArtifacts } from "../_shared/approved-lease-expense-rules.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -119,6 +120,34 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // Publish lease-derived expense/CAM artifacts only after the approval RPC
+    // has committed. The publisher materializes the exact LLM expense-rule
+    // candidates captured during extraction; it does not run another model
+    // call or reinterpret fields with TypeScript. Publication failure does
+    // not roll back the approved abstract, but it is returned to the UI as
+    // an explicit retryable status.
+    let expenseRuleSync: Record<string, unknown>;
+    try {
+      expenseRuleSync = await publishApprovedLeaseExpenseArtifacts({
+        supabaseAdmin,
+        orgId,
+        lease: data?.lease || approvedLeasePreview,
+        actorUserId: user.id,
+        actorEmail: user.email || null,
+      });
+    } catch (expenseRuleError) {
+      console.error(
+        `[approve-lease-workflow] approved expense-rule publication failed: ${expenseRuleError?.message || expenseRuleError}`,
+      );
+      expenseRuleSync = {
+        status: "failed",
+        lease_id: payload.leaseId,
+        rules_persisted: 0,
+        retryable: true,
+        message: expenseRuleError?.message || "Approved expense-rule publication failed",
+      };
+    }
+
     // Generate the approved rent schedule synchronously, in the same request,
     // instead of relying on the client to fire-and-forget a compute-lease
     // call after redirecting. Reuses compute-lease's existing
@@ -132,7 +161,12 @@ Deno.serve(async (req: Request) => {
       req,
     });
 
-    return jsonResponse({ error: false, ...data, rent_schedule: rentSchedule });
+    return jsonResponse({
+      error: false,
+      ...data,
+      rent_schedule: rentSchedule,
+      expense_rule_sync: expenseRuleSync,
+    });
   } catch (err) {
     const message = err?.message || "Lease approval workflow failed";
     const status = /unauthorized|missing authorization/i.test(message)

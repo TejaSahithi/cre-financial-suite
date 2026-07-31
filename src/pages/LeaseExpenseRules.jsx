@@ -175,9 +175,15 @@ export default function LeaseExpenseRules() {
     return true;
   });
 
+  const approvedSelectorFilteredLeases = selectorFilteredLeases.filter(
+    isApprovedLeaseForExpenseRuleSync,
+  );
+  const approvedLeaseIdSet = new Set(
+    approvedSelectorFilteredLeases.map((lease) => lease.id),
+  );
   const leaseIds = leaseIdParam
-    ? [leaseIdParam]
-    : selectorFilteredLeases.map((lease) => lease.id);
+    ? approvedLeaseIdSet.has(leaseIdParam) ? [leaseIdParam] : []
+    : approvedSelectorFilteredLeases.map((lease) => lease.id);
 
 
 
@@ -395,21 +401,25 @@ export default function LeaseExpenseRules() {
 
       for (const lease of candidates) {
         try {
-          let persisted = await leaseExpenseRuleService.persistExpenseRulesFromWorkflow({
-            lease,
-            categories,
-            status: "draft",
-            createdFrom: "approved_lease_rules_backfill",
-            suppressHttpError: true,
+          const persisted = await leaseExpenseRuleService.syncApprovedLeaseExpenseRules({
+            leaseId: lease.id,
           });
 
-          const persistedCount = persisted?.rules?.length || 0;
+          const persistedCount = Number(persisted?.rules_persisted || 0);
 
           if (persistedCount > 0) {
             summary.repaired += 1;
             summary.rules += persistedCount;
           } else {
-            summary.empty.push(lease?.tenant_name || lease?.name || lease.id);
+            summary.empty.push({
+              lease: lease?.tenant_name || lease?.name || lease.id,
+              reason: persisted?.reason || persisted?.status || "no_rules_generated",
+              source_file_found: persisted?.source_file_found ?? null,
+              workflow_found: persisted?.workflow_found ?? null,
+              workflow_clauses_found: persisted?.workflow_clauses_found ?? null,
+              rules_generated: persisted?.rules_generated ?? 0,
+              expense_rule_source: persisted?.expense_rule_source ?? null,
+            });
           }
         } catch (error) {
           summary.failed.push({
@@ -433,9 +443,21 @@ export default function LeaseExpenseRules() {
       } else if (summary.checked === 0) {
         toast.info("No approved leases in this scope need expense-rule sync.");
       } else {
+        const missingSources = summary.empty.filter((item) => item.reason === "approved_lease_source_not_found").length;
+        const requiresReextraction = summary.empty.filter(
+          (item) => item.reason === "approved_lease_reextraction_required",
+        ).length;
+        const message = summary.empty.length > 0 && missingSources === summary.empty.length
+          ? "No rules were created because the approved leases are not linked to their source documents."
+          : summary.empty.length > 0 && requiresReextraction === summary.empty.length
+            ? "These approved leases use an older extraction contract. Re-extract them to generate canonical LLM expense rules."
+          : summary.empty.length > 0
+            ? "No source-backed expense/CAM clauses could be generated. Review the per-lease diagnostics in the console."
+            : "Approved lease expense-rule synchronization failed. Review the error details in the console.";
         toast.warning(
-          "No expense rules were created. The approved leases may not contain mapped expense/CAM terms yet.",
+          message,
         );
+        console.warn("[LeaseExpenseRules] approved lease rule sync produced no rows:", summary.empty);
       }
 
       if (summary.failed.length > 0) {

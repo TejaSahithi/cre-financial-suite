@@ -1016,16 +1016,28 @@ function buildMinimalReviewPayload(opts: {
   const factLedgerDynamicItems = Array.isArray(openaiFactLedgerDebug?.dynamic_items)
     ? openaiFactLedgerDebug.dynamic_items
     : [];
-  const minimalWorkflowOutput = extractionModuleType === "lease" && factLedgerDynamicItems.length > 0
+  const llmExpenseRuleCandidates = Array.isArray(openaiFactLedgerDebug?.expense_rule_candidates)
+    ? openaiFactLedgerDebug.expense_rule_candidates
+    : null;
+  const minimalWorkflowOutput = extractionModuleType === "lease" &&
+    (factLedgerDynamicItems.length > 0 || llmExpenseRuleCandidates !== null)
     ? {
       lease_fields: {},
       lease_clauses: [],
       clause_records: factLedgerDynamicItems,
       extracted_document_items: factLedgerDynamicItems,
+      expense_rules: llmExpenseRuleCandidates ?? [],
+      expense_rule_source: llmExpenseRuleCandidates !== null
+        ? "whole_document_llm_expense_obligations"
+        : null,
       summary: {
         extracted_document_item_count: factLedgerDynamicItems.length,
         clause_count: 0,
         dynamic_fact_ledger_item_count: factLedgerDynamicItems.length,
+        expense_rule_count: llmExpenseRuleCandidates?.length ?? 0,
+        expense_rule_source: llmExpenseRuleCandidates !== null
+          ? "whole_document_llm_expense_obligations"
+          : null,
         enrichment_status: "pending",
       },
     }
@@ -1596,6 +1608,9 @@ function buildReviewPayload(opts: {
         ...(openaiFactLedgerDebug?.document_profile ? { documentProfileOverride: openaiFactLedgerDebug.document_profile } : {}),
         ...(rowIndex === 0 && Array.isArray(openaiFactLedgerDebug?.dynamic_items)
           ? { factLedgerDynamicItems: openaiFactLedgerDebug.dynamic_items }
+          : {}),
+        ...(rowIndex === 0 && Array.isArray(openaiFactLedgerDebug?.expense_rule_candidates)
+          ? { llmExpenseRuleCandidates: openaiFactLedgerDebug.expense_rule_candidates }
           : {}),
       })
     )
@@ -2744,6 +2759,14 @@ async function handleBoundedEnrichStage(args: {
   const doclingRaw = (fileRecord.docling_raw ?? null) as Record<string, unknown> | null;
   const row = (normalizedOutput.rows[0] ?? {}) as Record<string, unknown>;
   const boundedResults = readBoundedStageResults(normalizedOutput);
+  const boundedExtractionDebug = (normalizedOutput.metadata as any)?.extractionDebug ?? {};
+  const boundedOpenaiDebug =
+    boundedExtractionDebug?.openai_fact_ledger ??
+    boundedExtractionDebug?.vertex_fact_ledger ??
+    null;
+  const boundedLlmExpenseRuleCandidates = Array.isArray(boundedOpenaiDebug?.expense_rule_candidates)
+    ? boundedOpenaiDebug.expense_rule_candidates
+    : null;
 
   // Lease Truth Assembly canonical fields, computed once from the SAME
   // already-persisted normalize-stage data every stage needs -- cheap
@@ -2837,7 +2860,17 @@ async function handleBoundedEnrichStage(args: {
         const stage2 = getCompletedStageData(boundedResults, "enrich_fields");
         const stage3 = getCompletedStageData(boundedResults, "enrich_items");
         if (!stage1 || !stage2 || !stage3) return jsonResponse({ error: true, error_code: "PRIOR_STAGE_MISSING", message: "prior workflow stages must complete before enrich_derivation" }, 422);
-        stageData = runLeaseWorkflowStage4Derivation({ row: effectiveRow, doclingRaw, documentSubtype, stage1, stage2, stage3 });
+        stageData = runLeaseWorkflowStage4Derivation({
+          row: effectiveRow,
+          doclingRaw,
+          documentSubtype,
+          stage1,
+          stage2,
+          stage3,
+          ...(boundedLlmExpenseRuleCandidates !== null
+            ? { llmExpenseRuleCandidates: boundedLlmExpenseRuleCandidates }
+            : {}),
+        });
         break;
       }
       case "enrich_truth_assembly": {

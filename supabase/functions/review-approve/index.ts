@@ -1346,57 +1346,10 @@ async function syncLeaseWorkflowArtifacts(supabaseAdmin: any, orgId: string, lea
     }
   }
 
-  if (workflowOutput?.cam_profile) {
-    // Pull the lease's property_id so the cam_profile is scoped properly.
-    let propertyId: string | null = null;
-    try {
-      const { data: leaseRow } = await supabaseAdmin
-        .from("leases")
-        .select("property_id")
-        .eq("id", leaseId)
-        .maybeSingle();
-      propertyId = leaseRow?.property_id ?? null;
-    } catch (_) {
-      propertyId = null;
-    }
-    const profilePayload = {
-      org_id: orgId,
-      lease_id: leaseId,
-      property_id: propertyId,
-      cam_structure: workflowOutput.cam_profile.cam_structure ?? null,
-      recovery_status: workflowOutput.cam_profile.recovery_status ?? null,
-      cam_start_date: workflowOutput.cam_profile.cam_start_date ?? null,
-      cam_end_date: workflowOutput.cam_profile.cam_end_date ?? null,
-      estimate_frequency: workflowOutput.cam_profile.estimate_frequency ?? null,
-      reconciliation_frequency: workflowOutput.cam_profile.reconciliation_frequency ?? null,
-      tenant_rsf: workflowOutput.cam_profile.tenant_rsf ?? null,
-      building_rsf: workflowOutput.cam_profile.building_rsf ?? null,
-      tenant_pro_rata_share: workflowOutput.cam_profile.tenant_pro_rata_share ?? null,
-      cam_cap_type: workflowOutput.cam_profile.cam_cap_type ?? null,
-      cam_cap_percent: workflowOutput.cam_profile.cam_cap_percent ?? null,
-      admin_fee_percent: workflowOutput.cam_profile.admin_fee_percent ?? null,
-      gross_up_percent: workflowOutput.cam_profile.gross_up_percent ?? null,
-      included_expenses: workflowOutput.cam_profile.included_expenses ?? [],
-      excluded_expenses: workflowOutput.cam_profile.excluded_expenses ?? [],
-      actual_cam_expense: workflowOutput.cam_profile.actual_cam_expense ?? null,
-      estimated_cam_billed: workflowOutput.cam_profile.estimated_cam_billed ?? null,
-      reconciliation_amount: workflowOutput.cam_profile.reconciliation_amount ?? null,
-      tenant_balance_due_or_credit: workflowOutput.cam_profile.tenant_balance_due_or_credit ?? null,
-      status: workflowOutput.cam_profile.status ?? "draft",
-      source: "document_review",
-    };
-
-    try {
-      await supabaseAdmin.from("cam_profiles").upsert(profilePayload, { onConflict: "lease_id" });
-    } catch (error) {
-      console.warn(`[review-approve] cam_profiles sync skipped: ${error?.message ?? error}`);
-    }
-  }
-
-  // Persist expense rules derived from the lease language. This is what
-  // populates the Expenses module (LeaseExpenseRules page) and gives CAM
-  // Setup its recoverable category list.
-  await syncLeaseExpenseRules(supabaseAdmin, orgId, leaseId, workflowOutput);
+  // Keep downstream financial artifacts behind the approval boundary.
+  // CAM profiles and lease-expense rule rows are published by
+  // approve-lease-workflow (or the approved-lease backfill endpoint), never
+  // while this function is preparing/updating a review draft.
 }
 
 /**
