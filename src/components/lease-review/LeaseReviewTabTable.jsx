@@ -155,12 +155,20 @@ function shouldShowRow(row, showAdvanced) {
   return false;
 }
 
+function rowMatchesBaseFilters(row, { needle = "", typeFilter = "all", statusFilter = "all", showAdvanced = true } = {}) {
+  if (!shouldShowRow(row, showAdvanced)) return false;
+  if (typeFilter !== "all" && row.rowType !== typeFilter) return false;
+  if (statusFilter !== "all" && row.status !== statusFilter) return false;
+  if (needle && !rowSearchText(row).includes(needle)) return false;
+  return true;
+}
+
 export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAction, onNavigateRules, reviewFields = {} }) {
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [showAdvanced, setShowAdvanced] = useState(true);
-  const [completenessFilter, setCompletenessFilter] = useState("filled");
+  const [completenessFilter, setCompletenessFilter] = useState("all");
 
   const typeOptions = useMemo(() => {
     return Array.from(new Set(rows.map((row) => row.rowType).filter(Boolean))).sort();
@@ -169,23 +177,20 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
     return Array.from(new Set(rows.map((row) => row.status).filter(Boolean))).sort();
   }, [rows]);
 
+  const baseFilteredRows = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return rows.filter((row) => rowMatchesBaseFilters(row, { needle, typeFilter, statusFilter, showAdvanced }));
+  }, [rows, query, typeFilter, statusFilter, showAdvanced]);
+
   const completenessCounts = useMemo(() => ({
-    all: rows.filter((row) => shouldShowRow(row, showAdvanced)).length,
-    filled: rows.filter((row) => shouldShowRow(row, showAdvanced) && rowMatchesCompletenessFilter(row, "filled")).length,
-    missing: rows.filter((row) => shouldShowRow(row, showAdvanced) && rowMatchesCompletenessFilter(row, "missing")).length,
-  }), [rows, showAdvanced]);
+    all: baseFilteredRows.length,
+    filled: baseFilteredRows.filter((row) => rowMatchesCompletenessFilter(row, "filled")).length,
+    missing: baseFilteredRows.filter((row) => rowMatchesCompletenessFilter(row, "missing")).length,
+  }), [baseFilteredRows]);
 
   const visibleRows = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return rows.filter((row) => {
-      if (!shouldShowRow(row, showAdvanced)) return false;
-      if (!rowMatchesCompletenessFilter(row, completenessFilter)) return false;
-      if (typeFilter !== "all" && row.rowType !== typeFilter) return false;
-      if (statusFilter !== "all" && row.status !== statusFilter) return false;
-      if (needle && !rowSearchText(row).includes(needle)) return false;
-      return true;
-    });
-  }, [rows, query, typeFilter, statusFilter, showAdvanced, completenessFilter]);
+    return baseFilteredRows.filter((row) => rowMatchesCompletenessFilter(row, completenessFilter));
+  }, [baseFilteredRows, completenessFilter]);
 
   return (
     <div className="space-y-2">

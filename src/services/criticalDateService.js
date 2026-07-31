@@ -30,6 +30,8 @@ const CRITICAL_DATE_COLUMNS_NO_OWNER_EMAIL =
   "id, org_id, lease_id, property_id, date_type, due_date, owner_name, status, completed_at, completed_by, reminder_days_before, note, source, created_at, updated_at";
 const CRITICAL_DATE_COLUMNS_NO_OWNERS =
   "id, org_id, lease_id, property_id, date_type, due_date, status, completed_at, completed_by, reminder_days_before, note, source, created_at, updated_at";
+const CRITICAL_DATE_COLUMNS_BASE =
+  "id, org_id, lease_id, property_id, date_type, due_date, status, reminder_days_before, note, source, created_at, updated_at";
 
 function isMissingOwnerEmailColumn(error) {
   const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`.toLowerCase();
@@ -41,8 +43,20 @@ function isMissingOwnerNameColumn(error) {
   return text.includes("owner_name") && (text.includes("does not exist") || text.includes("schema cache") || error?.code === "42703" || error?.code === "PGRST204");
 }
 
-function withOwnerEmailFallback(row) {
-  return { ...row, owner_email: row?.owner_email || null, owner_name: row?.owner_name || null };
+function isMissingCompletionColumn(error) {
+  const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`.toLowerCase();
+  const mentionsCompletionColumn = text.includes("completed_at") || text.includes("completed_by");
+  return mentionsCompletionColumn && (text.includes("does not exist") || text.includes("schema cache") || error?.code === "42703" || error?.code === "PGRST204");
+}
+
+function withCompatibilityFallbacks(row) {
+  return {
+    ...row,
+    owner_email: row?.owner_email || null,
+    owner_name: row?.owner_name || null,
+    completed_at: row?.completed_at || null,
+    completed_by: row?.completed_by || null,
+  };
 }
 
 export async function listCriticalDates({ orgId, propertyId, leaseId, status } = {}) {
@@ -68,11 +82,15 @@ export async function listCriticalDates({ orgId, propertyId, leaseId, status } =
     console.warn("[criticalDateService] owner_name column missing; retrying without owner columns.");
     ({ data, error } = await runQuery(CRITICAL_DATE_COLUMNS_NO_OWNERS));
   }
+  if (error && isMissingCompletionColumn(error)) {
+    console.warn("[criticalDateService] completion columns missing; retrying with base critical-date columns.");
+    ({ data, error } = await runQuery(CRITICAL_DATE_COLUMNS_BASE));
+  }
   if (error) {
     console.warn("[criticalDateService] list failed:", error.message);
     return [];
   }
-  return (data || []).map(withOwnerEmailFallback);
+  return (data || []).map(withCompatibilityFallbacks);
 }
 
 // Server-owned, audited CRUD (Phase 6D-4: manage_lease_critical_date RPC /
@@ -98,7 +116,7 @@ export async function createCriticalDate(row) {
       note: row.note || null,
     },
   });
-  return withOwnerEmailFallback(data.row);
+  return withCompatibilityFallbacks(data.row);
 }
 
 export async function updateCriticalDate({ id, leaseId, ownerEmail, ownerName }) {
@@ -111,7 +129,7 @@ export async function updateCriticalDate({ id, leaseId, ownerEmail, ownerName })
     critical_date_id: id,
     patch: { owner_email: ownerEmail ?? null, owner_name: ownerName ?? null },
   });
-  return withOwnerEmailFallback(data.row);
+  return withCompatibilityFallbacks(data.row);
 }
 
 export async function markCriticalDateComplete({ id, leaseId, completedBy }) {
@@ -124,7 +142,7 @@ export async function markCriticalDateComplete({ id, leaseId, completedBy }) {
     critical_date_id: id,
     patch: { completed_by: completedBy || null },
   });
-  return withOwnerEmailFallback(data.row);
+  return withCompatibilityFallbacks(data.row);
 }
 
 export async function deleteCriticalDate({ id, leaseId }) {

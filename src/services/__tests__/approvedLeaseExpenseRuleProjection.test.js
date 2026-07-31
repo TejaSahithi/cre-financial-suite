@@ -102,6 +102,52 @@ describe("approved lease expense-rule projection", () => {
     })).toBe(true);
   });
 
+  it("builds publisher fallback rules from source-backed expense clauses when canonical expense_rules are absent", () => {
+    const clauseText =
+      "This is a Gross Lease. The Tenant is aware that in the Monthly Rent amount and payment that all CAM, property taxes, insurance, maintenance and utility and janitorial costs are included as shown on Summary page.";
+    const fallbackRules = __test__.fallbackExpenseRulesFromWorkflowEvidence({
+      lease_clauses: [{
+        clause_text: clauseText,
+        source_page: 5,
+        confidence: 0.98,
+      }],
+      expense_rules: [],
+    });
+
+    const categories = fallbackRules.map((rule) => rule.expense_category);
+    expect(categories).toEqual(expect.arrayContaining([
+      "common_area_maintenance",
+      "real_estate_taxes",
+      "property_insurance",
+      "repairs_maintenance",
+      "utilities",
+      "janitorial",
+    ]));
+
+    const camRule = fallbackRules.find((rule) => rule.expense_category === "common_area_maintenance");
+    expect(camRule).toMatchObject({
+      included_in_base_rent: true,
+      recoverable_from_tenant: false,
+      payment_treatment: "included_in_base_rent",
+      recovery_method: "included_in_base_rent",
+      source_page: 5,
+    });
+    expect(__test__.isSourceBackedExpenseRule(camRule)).toBe(true);
+
+    const prepared = __test__.prepareRulePayload(
+      { id: "11111111-1111-4111-8111-111111111111" },
+      "22222222-2222-4222-8222-222222222222",
+      camRule,
+    );
+    expect(prepared.rule).toMatchObject({
+      expense_category: "common_area_maintenance",
+      included_in_base_rent: true,
+      recoverable_from_tenant: "no",
+      payment_treatment: "included_in_base_rent",
+      review_status: "needs_review",
+      approval_status: "draft",
+    });
+  });
   it("resolves the required database category id without changing LLM semantics", async () => {
     const query = {
       select: vi.fn(() => query),

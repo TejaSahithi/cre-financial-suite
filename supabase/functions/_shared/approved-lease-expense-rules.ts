@@ -116,6 +116,161 @@ function shouldPublishWorkflowExpenseRules(workflow: any): boolean {
   return rules.some(isSourceBackedExpenseRule);
 }
 
+const FALLBACK_EXPENSE_CATEGORY_PATTERNS = [
+  { category: "common_area_maintenance", patterns: [/\bcam\b/i, /common\s+area\s+maintenance/i] },
+  { category: "operating_expenses", patterns: [/operating\s+expenses?/i] },
+  { category: "real_estate_taxes", patterns: [/real\s+estate\s+tax(?:es)?/i, /property\s+tax(?:es)?/i, /\btaxes\b/i] },
+  { category: "property_insurance", patterns: [/property\s+insurance/i, /insurance\s+premium/i, /\binsurance\b/i] },
+  { category: "utilities", patterns: [/utilit/i, /electric(?:ity)?/i, /water/i, /sewer/i, /gas/i, /hvac/i] },
+  { category: "janitorial", patterns: [/janitorial/i, /cleaning/i] },
+  { category: "repairs_maintenance", patterns: [/repair/i, /maintenance/i] },
+  { category: "management_fees", patterns: [/management\s+fee/i, /property\s+management/i] },
+  { category: "administrative_fees", patterns: [/admin(?:istrative)?\s+fee/i] },
+  { category: "trash_removal", patterns: [/trash/i, /refuse/i, /garbage/i] },
+  { category: "security", patterns: [/security\s+(?:service|services|guard|patrol|monitoring)/i] },
+  { category: "landscaping", patterns: [/landscap/i] },
+  { category: "snow_removal", patterns: [/snow\s+removal/i, /snow\s+plowing/i] },
+  { category: "parking", patterns: [/parking[\s\S]{0,120}(?:maintenance|repair|lighting|sweeping|striping|snow|operating\s+expense|cam)/i] },
+  { category: "late_fees", patterns: [/late\s+(?:fee|charge)/i] },
+];
+
+function workflowEvidenceText(item: any): string | null {
+  return cleanText(
+    item?.exact_source_text ??
+    item?.source_clause ??
+    item?.clause_text ??
+    item?.source_text ??
+    item?.evidence_text ??
+    item?.text ??
+    item?.summary,
+  ) || null;
+}
+
+function workflowEvidencePage(item: any): number | null {
+  return numberOrNull(item?.source_page ?? item?.page_number ?? item?.page);
+}
+
+function explicitExpenseCategory(item: any): string | null {
+  const token = normalizeToken(
+    item?.expense_category ??
+    item?.normalized_key ??
+    item?.category ??
+    item?.field_key ??
+    item?.item_type ??
+    item?.clause_type,
+  );
+  if (!token || BASE_RENT_KEYS.has(token)) return null;
+  if (FALLBACK_EXPENSE_CATEGORY_PATTERNS.some((entry) => entry.category === token)) return token;
+  if (token === "cam") return "common_area_maintenance";
+  if (token === "insurance") return "property_insurance";
+  if (token === "taxes") return "real_estate_taxes";
+  if (token === "maintenance") return "repairs_maintenance";
+  return null;
+}
+
+function categoriesFromEvidence(item: any, text: string): string[] {
+  const categories = new Set<string>();
+  const explicit = explicitExpenseCategory(item);
+  if (explicit) categories.add(explicit);
+  for (const entry of FALLBACK_EXPENSE_CATEGORY_PATTERNS) {
+    if (entry.patterns.some((pattern) => pattern.test(text))) categories.add(entry.category);
+  }
+  return [...categories];
+}
+
+function treatmentFromEvidence(text: string) {
+  const lower = text.toLowerCase();
+  const included = /(?:included|comprise|covers?|full[-\s]?service|gross\s+lease)[\s\S]{0,140}(?:base\s+rent|monthly\s+rent|rent|cam|tax(?:es)?|insurance|maintenance|utilit|janitorial)/i.test(text)
+    || /(?:cam|tax(?:es)?|insurance|maintenance|utilit|janitorial)[\s\S]{0,140}(?:included\s+in|part\s+of)[\s\S]{0,80}(?:base\s+rent|monthly\s+rent|rent)/i.test(text);
+  const tenantDirect = /tenant\s+(?:shall|must|will|agrees\s+to|is\s+responsible\s+for)[\s\S]{0,120}(?:pay|contract|maintain|provide|obtain).{0,80}(?:direct|directly|at\s+tenant'?s\s+(?:sole\s+)?(?:cost|expense))/i.test(text);
+  const reimbursable = /(?:reimburse|reimbursement|additional\s+rent|pro\s*rata|proportionate\s+share|pass[-\s]?through|separately\s+billed|pay\s+landlord)/i.test(lower);
+  if (included) {
+    return {
+      included_in_base_rent: true,
+      recoverable_from_tenant: false,
+      cam_eligible: false,
+      payment_treatment: "included_in_base_rent",
+      recovery_method: "included_in_base_rent",
+      lease_treatment: "included_in_rent",
+      recoverable_flag: false,
+    };
+  }
+  if (tenantDirect) {
+    return {
+      included_in_base_rent: false,
+      recoverable_from_tenant: false,
+      cam_eligible: false,
+      payment_treatment: "tenant_direct_contract",
+      recovery_method: "tenant_direct_contract",
+      lease_treatment: "tenant_direct",
+      recoverable_flag: false,
+    };
+  }
+  if (reimbursable) {
+    return {
+      included_in_base_rent: false,
+      recoverable_from_tenant: true,
+      cam_eligible: true,
+      payment_treatment: "reimbursable",
+      recovery_method: /pro\s*rata|proportionate\s+share/i.test(text) ? "pro_rata_share" : "manual_review",
+      lease_treatment: "tenant_recovery",
+      recoverable_flag: true,
+    };
+  }
+  return {
+    recoverable_from_tenant: "conditional",
+    cam_eligible: "conditional",
+    payment_treatment: "reimbursable",
+    recovery_method: "manual_review",
+    lease_treatment: "manual_review",
+    recoverable_flag: "conditional",
+  };
+}
+
+function workflowEvidenceItems(workflow: any): any[] {
+  return [
+    ...asArray(workflow?.lease_clauses),
+    ...asArray(workflow?.clause_records),
+    ...asArray(workflow?.extracted_document_items),
+    ...asArray(workflow?.dynamic_items),
+  ];
+}
+
+function fallbackExpenseRulesFromWorkflowEvidence(workflow: any): any[] {
+  const rows: any[] = [];
+  const seen = new Set<string>();
+  for (const item of workflowEvidenceItems(workflow)) {
+    if (!isObject(item)) continue;
+    const sourceText = workflowEvidenceText(item);
+    if (!sourceText) continue;
+    const categories = categoriesFromEvidence(item, sourceText);
+    if (categories.length === 0) continue;
+    const page = workflowEvidencePage(item);
+    const treatment = treatmentFromEvidence(sourceText);
+    for (const category of categories) {
+      const key = [category, page ?? "no_page", stableHash(sourceText)].join("|");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({
+        expense_category: category,
+        source_clause: sourceText,
+        exact_source_text: sourceText,
+        source_text: sourceText,
+        source_page: page,
+        page_number: page,
+        confidence_score: numberOrNull(item?.confidence_score ?? item?.confidence) ?? 0.72,
+        extraction_status: page == null ? "missing_source_evidence" : "extracted",
+        review_status: "needs_review",
+        approval_status: "draft",
+        generation_source: "typescript_schema_workflow_evidence_fallback",
+        notes: "Generated from source-backed workflow clause because no canonical expense_rules payload was available.",
+        ...treatment,
+      });
+    }
+  }
+  return rows;
+}
+
 export function isLeaseApprovedForExpensePublication(lease: any): boolean {
   const abstractStatus = normalizeToken(lease?.abstract_status);
   const leaseStatus = normalizeToken(lease?.status);
@@ -543,7 +698,9 @@ export async function publishApprovedLeaseExpenseArtifacts({
   const { sourceFileId, fileRecord } = await findSourceFile(supabaseAdmin, orgId, lease);
   const storedWorkflow = getAuthoritativeWorkflowOutput(lease, fileRecord);
   const expenseRuleSource = cleanText(storedWorkflow?.expense_rule_source);
-  const hasPublishableWorkflowExpenseRules = shouldPublishWorkflowExpenseRules(storedWorkflow);
+  const workflowExpenseRules = asArray(storedWorkflow?.expense_rules).filter(isSourceBackedExpenseRule);
+  const fallbackExpenseRules = workflowExpenseRules.length > 0 ? [] : fallbackExpenseRulesFromWorkflowEvidence(storedWorkflow);
+  const hasPublishableWorkflowExpenseRules = workflowExpenseRules.length > 0 || fallbackExpenseRules.length > 0 || shouldPublishWorkflowExpenseRules(storedWorkflow);
   if (!force && Number(existingRuleCount || 0) > 0) {
     const existingCamProfileResult = hasPublishableWorkflowExpenseRules
       ? await persistCamProfile(
@@ -572,9 +729,9 @@ export async function publishApprovedLeaseExpenseArtifacts({
   }
 
   const workflow = storedWorkflow;
-  const expenseRules = hasPublishableWorkflowExpenseRules
-    ? asArray(workflow?.expense_rules).filter(isSourceBackedExpenseRule)
-    : [];
+  const expenseRules = workflowExpenseRules.length > 0
+    ? workflowExpenseRules
+    : fallbackExpenseRules;
   const publicationExtractionVersion = expenseRuleSource === "whole_document_llm_expense_obligations"
     ? "whole_document_llm_expense_obligations_v1"
     : "typescript_schema_expense_rules_fallback_v1";
@@ -601,6 +758,7 @@ export async function publishApprovedLeaseExpenseArtifacts({
       workflow_rules_found: asArray(storedWorkflow?.expense_rules).length,
       workflow_clauses_found: asArray(storedWorkflow?.lease_clauses).length,
       rules_generated: expenseRules.length,
+      fallback_rules_generated: fallbackExpenseRules.length,
       rules_persisted: 0,
       regenerated: false,
       expense_rule_source: expenseRuleSource || null,
@@ -675,4 +833,5 @@ export const __test__ = {
   resolveExpenseCategoryIds,
   isSourceBackedExpenseRule,
   shouldPublishWorkflowExpenseRules,
+  fallbackExpenseRulesFromWorkflowEvidence,
 };
