@@ -4,7 +4,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { assertPageAccess, getUserOrgId, verifyUser } from "../_shared/supabase.ts";
 import { publishApprovedLeaseExpenseArtifacts } from "../_shared/approved-lease-expense-rules.ts";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function errorStatus(message: string) {
   if (/unauthorized|missing authorization/i.test(message)) return 401;

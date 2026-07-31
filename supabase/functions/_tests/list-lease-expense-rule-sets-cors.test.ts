@@ -58,6 +58,21 @@ Deno.test("sync-approved-lease-expense-rules answers OPTIONS before user authori
   assertEquals(syncSource.includes("await assertPageAccess("), true);
 });
 
+Deno.test("approved lease expense sync accepts standard Supabase UUIDs", async () => {
+  const syncSource = await Deno.readTextFile(
+    new URL("functions/sync-approved-lease-expense-rules/index.ts", root),
+  );
+  const sharedPublisherSource = await Deno.readTextFile(
+    new URL("functions/_shared/approved-lease-expense-rules.ts", root),
+  );
+  const standardUuidRegex = "const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;";
+  const truncatedUuidRegex = "const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;";
+
+  assertEquals(syncSource.includes(standardUuidRegex), true);
+  assertEquals(sharedPublisherSource.includes(standardUuidRegex), true);
+  assertEquals(syncSource.includes(truncatedUuidRegex), false);
+  assertEquals(sharedPublisherSource.includes(truncatedUuidRegex), false);
+});
 Deno.test("rule list and save require an approved abstract state", async () => {
   const saveSource = await Deno.readTextFile(
     new URL("functions/save-lease-expense-rule-set/index.ts", root),
