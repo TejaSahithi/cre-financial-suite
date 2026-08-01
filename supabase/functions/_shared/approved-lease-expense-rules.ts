@@ -554,8 +554,8 @@ function dedupePreparedRules(prepared: any[]) {
       Math.round((item.rule?.confidence_score || 0) * 100);
     const currentScore = current
       ? (current.rule?.exact_source_text?.length || 0) +
-        (current.clause?.page_number ? 1000 : 0) +
-        Math.round((current.rule?.confidence_score || 0) * 100)
+      (current.clause?.page_number ? 1000 : 0) +
+      Math.round((current.rule?.confidence_score || 0) * 100)
       : -1;
     if (!current || score >= currentScore) byKey.set(item.ruleKey, item);
   }
