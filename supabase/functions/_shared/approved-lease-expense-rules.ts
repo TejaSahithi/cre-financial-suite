@@ -321,12 +321,27 @@ export function isLeaseApprovedForExpensePublication(lease: any): boolean {
     Boolean(lease?.abstract_approved_at);
 }
 
+function sourceFileIdCandidates(lease: any): string[] {
+  const sourceDocument = lease?.abstract_snapshot?.source_document ?? {};
+  const candidates = [
+    lease?.source_file_id,
+    lease?.extraction_data?.source_file_id,
+    lease?.extraction_data?.uploaded_file_id,
+    sourceDocument?.file_id,
+    sourceDocument?.uploaded_file_id,
+    sourceDocument?.source_file_id,
+    lease?.abstract_snapshot?.uploaded_file_id,
+    lease?.abstract_snapshot?.source_file_id,
+  ];
+  return Array.from(new Set(
+    candidates
+      .map((value) => String(value ?? "").trim())
+      .filter((value) => UUID_RE.test(value)),
+  ));
+}
+
 async function findSourceFile(supabaseAdmin: any, orgId: string, lease: any) {
-  let sourceFileId =
-    lease?.source_file_id ??
-    lease?.extraction_data?.source_file_id ??
-    lease?.abstract_snapshot?.source_document?.file_id ??
-    null;
+  let sourceFileId: string | null = null;
 
   const loadFile = async (fileId: unknown) => {
     if (!fileId || !UUID_RE.test(String(fileId))) return null;
@@ -340,7 +355,15 @@ async function findSourceFile(supabaseAdmin: any, orgId: string, lease: any) {
     return fileRecord ?? null;
   };
 
-  let fileRecord = await loadFile(sourceFileId);
+  let fileRecord = null;
+  for (const candidate of sourceFileIdCandidates(lease)) {
+    fileRecord = await loadFile(candidate);
+    if (fileRecord) {
+      sourceFileId = candidate;
+      break;
+    }
+  }
+
   if (!fileRecord) {
     const { data: links, error: linkError } = await supabaseAdmin
       .from("document_links")
@@ -876,5 +899,6 @@ export const __test__ = {
   isSourceBackedExpenseRule,
   shouldPublishWorkflowExpenseRules,
   fallbackExpenseRulesFromWorkflowEvidence,
+  sourceFileIdCandidates,
   workflowFromFactLedgerDebug,
 };

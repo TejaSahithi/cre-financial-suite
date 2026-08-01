@@ -171,6 +171,24 @@ Deno.test("template checklist expense rows are not valid publication fallback", 
   assertEquals(__test__.isSourceBackedExpenseRule(workflow.expense_rules[0]), false);
 });
 
+Deno.test("approved source resolver reads uploaded_file_id from abstract snapshot", () => {
+  const fileId = "33333333-3333-4333-8333-333333333333";
+  assertEquals(
+    __test__.sourceFileIdCandidates({
+      source_file_id: null,
+      extraction_data: {},
+      abstract_snapshot: {
+        source_document: {
+          uploaded_file_id: fileId,
+          source_file_id: fileId,
+        },
+        uploaded_file_id: fileId,
+      },
+    }),
+    [fileId],
+  );
+});
+
 Deno.test("authoritative workflow selection can publish LLM expense candidates from fact-ledger diagnostics", () => {
   const quote = "Tenant shall reimburse Landlord for insurance premiums as Additional Rent.";
   const selected = getAuthoritativeWorkflowOutput(
