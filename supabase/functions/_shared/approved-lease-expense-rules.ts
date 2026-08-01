@@ -345,12 +345,26 @@ async function findSourceFile(supabaseAdmin: any, orgId: string, lease: any) {
 
   const loadFile = async (fileId: unknown) => {
     if (!fileId || !UUID_RE.test(String(fileId))) return null;
-    const { data: fileRecord, error: fileError } = await supabaseAdmin
+    const baseSelect = "id, org_id, document_subtype, ui_review_payload, normalized_output, parsed_data, status";
+    const withDoclingSelect = `${baseSelect}, docling_raw`;
+    let { data: fileRecord, error: fileError } = await supabaseAdmin
       .from("uploaded_files")
-      .select("id, org_id, document_subtype, ui_review_payload, normalized_output, parsed_data, docling_raw, status")
+      .select(withDoclingSelect)
       .eq("org_id", orgId)
       .eq("id", fileId)
       .maybeSingle();
+
+    if (fileError && /docling_raw|schema cache|column/i.test(String(fileError.message || fileError.details || ""))) {
+      const fallback = await supabaseAdmin
+        .from("uploaded_files")
+        .select(baseSelect)
+        .eq("org_id", orgId)
+        .eq("id", fileId)
+        .maybeSingle();
+      fileRecord = fallback.data;
+      fileError = fallback.error;
+    }
+
     if (fileError) throw new Error(`Could not load the approved lease source document: ${fileError.message}`);
     return fileRecord ?? null;
   };

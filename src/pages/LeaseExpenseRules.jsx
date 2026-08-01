@@ -461,7 +461,12 @@ export default function LeaseExpenseRules() {
       }
 
       if (summary.failed.length > 0) {
-        toast.error(`${summary.failed.length} lease${summary.failed.length === 1 ? "" : "s"} could not be synced. Check console logs for details.`);
+        const firstFailure = summary.failed[0]?.message;
+        toast.error(
+          firstFailure
+            ? `${summary.failed.length} lease${summary.failed.length === 1 ? "" : "s"} could not be synced: ${firstFailure}`
+            : `${summary.failed.length} lease${summary.failed.length === 1 ? "" : "s"} could not be synced. Check console logs for details.`,
+        );
         console.warn("[LeaseExpenseRules] approved lease rule sync failures:", summary.failed);
       }
     },

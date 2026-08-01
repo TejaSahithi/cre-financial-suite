@@ -58,9 +58,14 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: false, ...result });
   } catch (error) {
     const message = error?.message || "Could not synchronize approved lease expense rules";
+    console.error("[sync-approved-lease-expense-rules] failed", {
+      message,
+      stack: error?.stack || null,
+    });
     return jsonResponse({
       error: true,
       message,
+      details: error?.details || error?.hint || null,
       error_code: "SYNC_APPROVED_LEASE_EXPENSE_RULES_FAILED",
     }, errorStatus(message));
   }
