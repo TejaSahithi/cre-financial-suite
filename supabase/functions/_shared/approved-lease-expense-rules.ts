@@ -54,8 +54,42 @@ function humanize(value: unknown): string | null {
 function unwrapWorkflowOutput(value: any): any {
   if (!isObject(value)) return null;
   if (isObject(value.workflow_output)) return value.workflow_output;
+  if (isObject(value.metadata?.workflow_output)) return value.metadata.workflow_output;
   if (Array.isArray(value.records) && isObject(value.records[0])) return value.records[0];
   return value;
+}
+
+function readFactLedgerDebug(value: any): any {
+  if (!isObject(value)) return null;
+  const debug =
+    value?.openai_fact_ledger || value?.vertex_fact_ledger
+      ? value
+      : value?.metadata?.extractionDebug ??
+        value?.metadata?.extraction_debug ??
+        value?.extractionDebug ??
+        value?.extraction_debug ??
+        null;
+  if (!isObject(debug)) return null;
+  return debug.openai_fact_ledger ?? debug.vertex_fact_ledger ?? null;
+}
+
+function workflowFromFactLedgerDebug(value: any): any {
+  const ledger = readFactLedgerDebug(value);
+  if (!isObject(ledger)) return null;
+  const expenseRules = asArray(ledger.expense_rule_candidates);
+  const dynamicItems = asArray(ledger.dynamic_items);
+  const leaseClauses = asArray(ledger.lease_clauses);
+  if (expenseRules.length === 0 && dynamicItems.length === 0 && leaseClauses.length === 0) return null;
+  return {
+    expense_rule_source: expenseRules.length > 0
+      ? "whole_document_llm_expense_obligations"
+      : "whole_document_llm_debug_evidence",
+    expense_rules: expenseRules,
+    dynamic_items: dynamicItems,
+    lease_clauses: leaseClauses,
+    lease_fields: ledger.validated_field_values ?? ledger.merged_field_sources ?? {},
+    cam_profile: ledger.cam_profile ?? null,
+  };
 }
 
 export function getAuthoritativeWorkflowOutput(lease: any, fileRecord: any): any {
@@ -72,15 +106,23 @@ export function getAuthoritativeWorkflowOutput(lease: any, fileRecord: any): any
     : fileRecord?.parsed_data;
   const candidates = [
     lease?.extraction_data?.workflow_output,
+    workflowFromFactLedgerDebug(lease?.extraction_data?.extraction_debug),
+    workflowFromFactLedgerDebug(lease?.extraction_data),
     lease?.workflow_output,
     lease?.abstract_snapshot?.workflow_output,
     lease?.abstract_snapshot?.metadata?.workflow_output,
+    workflowFromFactLedgerDebug(lease?.abstract_snapshot),
     fileRecord?.ui_review_payload?.metadata?.workflow_output,
+    workflowFromFactLedgerDebug(fileRecord?.ui_review_payload),
     firstReviewRecord?.workflow_output,
+    workflowFromFactLedgerDebug(firstReviewRecord),
     fileRecord?.normalized_output?.metadata?.workflow_output,
     fileRecord?.normalized_output?.workflow_output,
+    workflowFromFactLedgerDebug(fileRecord?.normalized_output),
     firstNormalizedRecord?.workflow_output,
+    workflowFromFactLedgerDebug(firstNormalizedRecord),
     firstParsedRecord?.workflow_output,
+    workflowFromFactLedgerDebug(firstParsedRecord),
   ];
   const workflows = candidates.map(unwrapWorkflowOutput).filter(Boolean);
   if (workflows.length === 0) return null;
@@ -834,4 +876,5 @@ export const __test__ = {
   isSourceBackedExpenseRule,
   shouldPublishWorkflowExpenseRules,
   fallbackExpenseRulesFromWorkflowEvidence,
+  workflowFromFactLedgerDebug,
 };

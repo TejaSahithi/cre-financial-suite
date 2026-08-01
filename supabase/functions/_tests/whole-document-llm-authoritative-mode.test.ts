@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
@@ -93,4 +93,64 @@ Deno.test("whole-document LLM typed validator accepts common lease value formats
     valid: true,
     value: "triple_net",
   });
+});
+Deno.test("whole-document LLM expense candidates recover evidence by quote when node ids are stale", () => {
+  const quote = "Tenant shall reimburse Landlord for Tenant's proportionate share of common area maintenance expenses.";
+  const compact = {
+    version: "lease-compact-document-v1",
+    source: "azure_full_layout",
+    pageCount: 9,
+    nodes: [{ id: "page:7", kind: "page", page: 7, text: `Section 5. ${quote}` }],
+    tables: [],
+    keyValues: [],
+    diagnostics: {
+      characterCount: quote.length,
+      nodeCount: 1,
+      tableCount: 0,
+      tableRowCount: 0,
+      keyValueCount: 0,
+      inputWasTruncated: false,
+    },
+  };
+
+  const result = wholeDocumentExtractorTestHooks.buildExpenseRuleCandidates({
+    compact,
+    candidates: [{
+      category: "common area maintenance",
+      subcategory: null,
+      obligationKind: "cam",
+      responsibleParty: "tenant",
+      paymentTreatment: "reimbursable",
+      recoverableFromTenant: "yes",
+      camEligible: "yes",
+      recoveryMethod: "pro_rata_share",
+      allocationBasis: "proportionate share",
+      includedInBaseRent: "no",
+      amount: null,
+      amountFrequency: "not_stated",
+      tenantSharePercent: null,
+      baseYear: null,
+      baseYearAmount: null,
+      expenseStopAmount: null,
+      capType: null,
+      capAmount: null,
+      capPercent: null,
+      grossUpPercent: null,
+      adminFeePercent: null,
+      reconciliationRequired: "conditional",
+      reconciliationFrequency: null,
+      status: "found",
+      sourceNodeIds: ["stale-node-id"],
+      sourceQuote: quote,
+      confidence: 0.91,
+      uncertaintyReason: null,
+    }],
+  });
+
+  assertEquals(result.rejected, []);
+  assertEquals(result.rules.length, 1);
+  assertEquals(result.rules[0].expense_category, "common_area_maintenance");
+  assertEquals(result.rules[0].source_page, 7);
+  assertEquals(result.rules[0].source_node_ids, ["page:7"]);
+  assertEquals(result.rules[0].source_evidence_recovered, true);
 });

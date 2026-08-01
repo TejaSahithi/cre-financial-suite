@@ -1,5 +1,5 @@
 // @ts-nocheck
-// v4 — lease_date in dates group; monthly_rent min=1; lease_type enum description
+// v4 - lease_date in dates group; monthly_rent min=1; lease_type enum description
 /**
  * review-approve
  *
@@ -359,7 +359,7 @@ Deno.serve(async (req: Request) => {
 
     // P0.6: lease-module approval goes through the two-finalizer gate
     // (extraction readiness, then approval) instead of the plain FSM
-    // setStatus() sequence — this is what actually prevents approving a
+    // setStatus() sequence - this is what actually prevents approving a
     // file whose review_readiness never reached 'ready'. Non-lease modules
     // are out of P0's scope (no review_readiness concept applies to them)
     // and keep the original setStatus("approved") path unchanged.
@@ -426,7 +426,7 @@ Deno.serve(async (req: Request) => {
       // 'pending'). Artifact fan-out (CAM/clause sync) stays a best-effort,
       // non-transactional step (porting its ~2000-line matching/decision
       // engine to SQL is P1+ scope, same precedent as
-      // persist_lease_extraction_merge/review_expense_classification) — but
+      // persist_lease_extraction_merge/review_expense_classification) - but
       // its outcome is now explicitly tracked via artifact_sync_status
       // rather than silently conflated with the approval itself.
       let leaseStoreResult: unknown = null;
@@ -953,7 +953,7 @@ async function ensureLeaseReviewDrafts(
         // is read first and overlaid back onto the fresh payload afterward.
         // field_reviews is confirmed (by reading every migration that
         // targets an extraction_data sub-key) to be the SOLE human-owned key
-        // inside extraction_data — no other sub-key is written by any RPC.
+        // inside extraction_data - no other sub-key is written by any RPC.
         const { data: existingLeaseRow } = await supabaseAdmin
           .from("leases")
           .select("extraction_data")
@@ -1068,7 +1068,7 @@ function buildEmptyLeaseReviewRow() {
   // Empty row when extraction produced no structured fields. EVERY field
   // stays null so downstream readers can't mistake a UI placeholder for
   // extracted lease data. The "Lease Review Draft" string used to live in
-  // tenant_name and silently became the tenant's name on the lease row —
+  // tenant_name and silently became the tenant's name on the lease row -
   // that regression is what this nullification prevents.
   return {
     tenant_name: null,
@@ -1198,7 +1198,7 @@ function buildLeaseReviewDraftPayload(
     // Write null when extraction returned no tenant_name. The previous
     // fallback wrote the literal string "Lease Review Draft" which the
     // resolver then displayed as the extracted tenant. Lease list views
-    // can show "Untitled draft" — that's a display decision, not data.
+    // can show "Untitled draft" - that's a display decision, not data.
     tenant_name: row.tenant_name ?? null,
     start_date: normalizeDate(row.start_date ?? row.lease_start),
     end_date: normalizeDate(row.end_date ?? row.lease_end),
@@ -1291,7 +1291,7 @@ function buildLeaseReviewDraftPayload(
       reviewed_at: reviewedOutput?.reviewed_at ?? now,
       reviewed_by: reviewedOutput?.reviewed_by ?? user.id,
       // Preserve prior reviewer decisions exactly across an automated
-      // re-run — see the allowUpdate call site's comment. Only overlaid
+      // re-run - see the allowUpdate call site's comment. Only overlaid
       // when the caller actually found an existing non-empty value; a
       // fresh/first-time draft build (existingFieldReviews undefined) does
       // not add this key at all, matching pre-Phase-4E payload shape.
@@ -1350,469 +1350,6 @@ async function syncLeaseWorkflowArtifacts(supabaseAdmin: any, orgId: string, lea
   // CAM profiles and lease-expense rule rows are published by
   // approve-lease-workflow (or the approved-lease backfill endpoint), never
   // while this function is preparing/updating a review draft.
-}
-
-/**
- * Persist workflow_output.expense_rules into lease_expense_rule_sets +
- * lease_expense_rules. Idempotent: if a rule set already exists for this
- * lease+version we keep it and refresh the child rows.
- *
- * Each expense_rule from the workflow maps a string category (e.g. "cam",
- * "real_estate_taxes") to a row in the org's expense_categories taxonomy.
- * Missing categories are auto-created with a stable normalized_key so the
- * caller never has to bootstrap the taxonomy by hand.
- */
-async function syncLeaseExpenseRules(supabaseAdmin: any, orgId: string, leaseId: string, workflowOutput: any) {
-  const expenseRules = Array.isArray(workflowOutput?.expense_rules) ? workflowOutput.expense_rules : [];
-  if (expenseRules.length === 0) return;
-
-  try {
-    const { data: leaseRow } = await supabaseAdmin
-      .from("leases")
-      .select("id, tenant_id, property_id, building_id, unit_id")
-      .eq("id", leaseId)
-      .maybeSingle();
-
-    // 1. Ensure a draft rule set exists.
-    let ruleSetId: string | null = null;
-    let ruleSetStatus = "draft";
-    const { data: existingSets } = await supabaseAdmin
-      .from("lease_expense_rule_sets")
-      .select("id, status, version")
-      .eq("lease_id", leaseId)
-      .neq("status", "archived")
-      .order("version", { ascending: false })
-      .limit(1);
-    if (existingSets && existingSets[0]?.id) {
-      ruleSetId = existingSets[0].id;
-      ruleSetStatus = existingSets[0].status || "draft";
-    } else {
-      const { data: created, error: createErr } = await supabaseAdmin
-        .from("lease_expense_rule_sets")
-        .insert({
-          org_id: orgId,
-          lease_id: leaseId,
-          version: 1,
-          status: "draft",
-        })
-        .select("id")
-        .single();
-      if (createErr || !created?.id) {
-        console.warn(`[review-approve] lease_expense_rule_sets insert skipped: ${createErr?.message ?? createErr}`);
-        return;
-      }
-      ruleSetId = created.id;
-    }
-    if (!ruleSetId) return;
-
-    // 2. Resolve / create expense_categories for every category string.
-    const categoryKeys = Array.from(new Set(
-      expenseRules
-        .map((r: any) => normalizeCategoryKey(r?.expense_category || r?.category || r?.key))
-        .filter(Boolean),
-    ));
-    if (categoryKeys.length === 0) return;
-
-    // Pull both org-scoped categories AND system_default categories so we
-    // don't duplicate the global taxonomy per-org.
-    const { data: existingCategories } = await supabaseAdmin
-      .from("expense_categories")
-      .select("id, normalized_key, category_name, subcategory_name, org_id, is_system_default")
-      .or(`org_id.eq.${orgId},org_id.is.null`)
-      .in("normalized_key", categoryKeys);
-    const categoryByKey = new Map<string, any>();
-    for (const cat of existingCategories || []) {
-      if (cat?.normalized_key && !categoryByKey.has(String(cat.normalized_key))) {
-        categoryByKey.set(String(cat.normalized_key), cat);
-      }
-    }
-    const missingKeys = categoryKeys.filter((k) => !categoryByKey.has(k));
-    if (missingKeys.length > 0) {
-      const insertCats = missingKeys.map((k) => ({
-        org_id: orgId,
-        normalized_key: k,
-        category_name: humanizeFieldName(k),
-        subcategory_name: humanizeFieldName(k),
-      }));
-      const { data: insertedCats, error: insertCatsErr } = await supabaseAdmin
-        .from("expense_categories")
-        .insert(insertCats)
-        .select("id, normalized_key");
-      if (insertCatsErr) {
-        console.warn(`[review-approve] expense_categories insert skipped: ${insertCatsErr.message}`);
-      } else {
-        for (const cat of insertedCats || []) {
-          if (cat?.normalized_key) categoryByKey.set(String(cat.normalized_key), cat);
-        }
-      }
-    }
-
-    // 3. Replace existing rules for this rule set with the workflow output.
-    await supabaseAdmin
-      .from("lease_expense_rules")
-      .delete()
-      .eq("rule_set_id", ruleSetId);
-
-    const rulePayloads = expenseRules
-      .map((rule: any) => {
-        const key = normalizeCategoryKey(rule?.expense_category || rule?.category || rule?.key);
-        const category = key ? categoryByKey.get(key) : null;
-        if (!category?.id) return null;
-        const recoveryMethod = String(rule?.recovery_method || "").toLowerCase();
-        const status = mapRuleStatus(rule);
-        const recoverableFromTenant = deriveExpenseRuleRecoverableFromTenant(rule);
-        const camEligible = deriveExpenseRuleCamEligible(rule);
-        const paymentTreatment = deriveExpenseRulePaymentTreatment(rule);
-        const includedInBaseRent = deriveExpenseRuleIncludedInBaseRent(rule);
-        const exactSourceText = deriveExpenseRuleSourceText(rule);
-        const reviewStatus = deriveExpenseRuleReviewStatus(rule, status);
-        const approvalStatus = deriveExpenseRuleApprovalStatus(rule, ruleSetStatus);
-
-        // Lease-derivation publish guard. The inbound `published_to_cam`
-        // flag is trusted only if the rule independently passes the
-        // publishable contract; otherwise we force it to false. This
-        // prevents template/checklist/amount-only/keyword-fallback rows
-        // from leaking into CAM via the server-side insert path.
-        const isPublishable = isExpenseRulePublishable(rule, {
-          reviewStatus,
-          approvalStatus,
-          rowStatus: status,
-          recoverableFromTenant,
-          camEligible,
-          paymentTreatment,
-          includedInBaseRent,
-          exactSourceText,
-        });
-        const requestedPublished = Boolean(rule?.published_to_cam);
-        const publishedToCam = requestedPublished && isPublishable;
-        if (requestedPublished && !isPublishable) {
-          console.warn(
-            `[review-approve] forced published_to_cam=false for category="${category.normalized_key}" (lease ${leaseId}) — rule failed publishable contract`,
-          );
-        }
-
-        return {
-          rule_set_id: ruleSetId,
-          expense_category_id: category.id,
-          lease_id: leaseId,
-          tenant_id: leaseRow?.tenant_id ?? null,
-          property_id: leaseRow?.property_id ?? null,
-          building_id: leaseRow?.building_id ?? null,
-          unit_id: leaseRow?.unit_id ?? null,
-          expense_category: deriveExpenseRuleCategoryName(rule),
-          expense_subcategory: deriveExpenseRuleSubcategoryName(rule),
-          operational_responsibility: deriveExpenseRuleOperationalResponsibility(rule),
-          responsibility: deriveExpenseRuleResponsibility(rule),
-          payment_treatment: paymentTreatment,
-          included_in_base_rent: includedInBaseRent,
-          recoverable_from_tenant: recoverableFromTenant,
-          cam_eligible: camEligible,
-          billing_treatment: deriveExpenseRuleBillingTreatment(rule),
-          recovery_method: deriveExpenseRuleRecoveryMethod(rule),
-          allocation_basis: deriveExpenseRuleAllocationBasis(rule),
-          row_status: status,
-          mentioned_in_lease: Boolean(rule?.mentioned_in_lease ?? status !== "not_mentioned"),
-          is_recoverable: ["yes", "conditional"].includes(recoverableFromTenant),
-          is_excluded: Boolean(rule?.is_excluded || rule?.excluded_from_recovery),
-          is_controllable: Boolean(rule?.is_controllable),
-          is_subject_to_cap: Boolean(rule?.is_subject_to_cap || rule?.cap_type),
-          cap_type: rule?.cap_type ?? null,
-          cap_value: toNumberOrNull(rule?.cap_value ?? rule?.cap_amount),
-          cap_amount: toNumberOrNull(rule?.cap_amount ?? rule?.cap_value),
-          cap_percent: toNumberOrNull(rule?.cap_percent),
-          has_base_year: Boolean(rule?.has_base_year || rule?.base_year_type),
-          base_year_type: rule?.base_year_type ?? null,
-          base_year: rule?.base_year ?? rule?.base_year_type ?? null,
-          base_year_amount: toNumberOrNull(rule?.base_year_amount),
-          expense_stop_amount: toNumberOrNull(rule?.expense_stop_amount),
-          gross_up_applicable: Boolean(rule?.gross_up_applicable),
-          gross_up_percent: toNumberOrNull(rule?.gross_up_percent),
-          admin_fee_applicable: Boolean(rule?.admin_fee_applicable),
-          admin_fee_percent: toNumberOrNull(rule?.admin_fee_percent),
-          billing_frequency: rule?.billing_frequency ?? rule?.frequency ?? null,
-          reconciliation_required: deriveExpenseRuleReconciliationRequired(rule),
-          reconciliation_frequency: deriveExpenseRuleReconciliationFrequency(rule),
-          source_page: toNumberOrNull(rule?.source_page),
-          exact_source_text: exactSourceText,
-          confidence_score: toNumberOrNull(rule?.confidence_score ?? rule?.confidence),
-          extraction_status: deriveExpenseRuleExtractionStatus(rule, status),
-          review_status: reviewStatus,
-          approval_status: approvalStatus,
-          published_to_cam: publishedToCam,
-          notes: rule?.notes ?? exactSourceText,
-          confidence: toNumberOrNull(rule?.confidence ?? rule?.confidence_score),
-          source: "lease_workflow",
-        };
-      })
-      .filter(Boolean);
-
-    if (rulePayloads.length > 0) {
-      const { data: insertedRules, error: insertRulesErr } = await supabaseAdmin
-        .from("lease_expense_rules")
-        .insert(rulePayloads)
-        .select("id, expense_category_id");
-      if (insertRulesErr) {
-        console.warn(`[review-approve] lease_expense_rules insert skipped: ${insertRulesErr.message}`);
-        return;
-      }
-
-      // 4. Persist supporting clauses if present, keyed back to the rule row.
-      const clausePayloads: any[] = [];
-      for (let i = 0; i < expenseRules.length; i += 1) {
-        const rule = expenseRules[i];
-        const inserted = insertedRules?.[i];
-        const text = rule?.source_clause ?? rule?.clause_text ?? rule?.notes;
-        if (!inserted?.id || !text) continue;
-        clausePayloads.push({
-          lease_expense_rule_id: inserted.id,
-          lease_id: leaseId,
-          page_number: toNumberOrNull(rule?.source_page),
-          clause_type: rule?.clause_type ?? "supporting_text",
-          clause_text: String(text).slice(0, 4000),
-          confidence: toNumberOrNull(rule?.confidence ?? rule?.confidence_score),
-        });
-      }
-      if (clausePayloads.length > 0) {
-        await supabaseAdmin
-          .from("lease_expense_rule_clauses")
-          .insert(clausePayloads)
-          .then(() => {})
-          .catch((err: any) => console.warn(`[review-approve] rule clauses skipped: ${err?.message ?? err}`));
-      }
-    }
-  } catch (error: any) {
-    console.warn(`[review-approve] expense rule sync skipped: ${error?.message ?? error}`);
-  }
-}
-
-function normalizeCategoryKey(value: unknown): string | null {
-  if (value == null) return null;
-  const cleaned = String(value).trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-  return cleaned || null;
-}
-
-function normalizeText(value: unknown): string {
-  return String(value ?? "").trim().toLowerCase();
-}
-
-function deriveExpenseRuleCategoryName(rule: any): string | null {
-  const raw = rule?.expense_category ?? rule?.category ?? rule?.key ?? null;
-  return raw ? humanizeFieldName(String(raw)) : null;
-}
-
-function deriveExpenseRuleSubcategoryName(rule: any): string | null {
-  return rule?.expense_subcategory ? humanizeFieldName(String(rule.expense_subcategory)) : null;
-}
-
-function deriveExpenseRuleIncludedInBaseRent(rule: any): boolean {
-  return Boolean(
-    rule?.included_in_base_rent ??
-    rule?.included_in_rent ??
-    /included/.test(normalizeText(rule?.lease_treatment))
-  );
-}
-
-function normalizeExpenseRuleDecision(value: unknown, fallback: string | null = null): string | null {
-  if (value === null || value === undefined || value === "") return fallback;
-  if (typeof value === "boolean") return value ? "yes" : "no";
-  const normalized = normalizeText(value);
-  if (["yes", "true", "recoverable", "approved"].includes(normalized)) return "yes";
-  if (["no", "false", "non_recoverable", "excluded"].includes(normalized)) return "no";
-  if (["conditional", "shared"].includes(normalized)) return "conditional";
-  return fallback;
-}
-
-function deriveExpenseRuleOperationalResponsibility(rule: any): string {
-  const explicit = normalizeText(rule?.operational_responsibility ?? rule?.responsibility);
-  if (["landlord", "owner"].includes(explicit)) return "landlord";
-  if (["tenant", "tenant_direct", "tenant_direct_contract"].includes(explicit)) return "tenant";
-  if (["shared", "joint"].includes(explicit)) return "shared";
-  if (deriveExpenseRuleIncludedInBaseRent(rule)) return "landlord";
-  if (rule?.is_excluded || rule?.excluded_from_recovery) return "tenant";
-  if (["yes", "conditional"].includes(deriveExpenseRuleRecoverableFromTenant(rule))) return "landlord";
-  return "unknown";
-}
-
-function deriveExpenseRulePaymentTreatment(rule: any): string {
-  const explicit = normalizeText(rule?.payment_treatment);
-  if (["included_in_base_rent", "separately_billed", "tenant_direct_contract", "reimbursable", "not_applicable"].includes(explicit)) {
-    return explicit;
-  }
-  if (deriveExpenseRuleIncludedInBaseRent(rule)) return "included_in_base_rent";
-  if (normalizeText(rule?.recovery_method) === "tenant_direct_contract" || rule?.is_excluded || rule?.excluded_from_recovery) {
-    return "tenant_direct_contract";
-  }
-  if (["yes", "conditional"].includes(deriveExpenseRuleRecoverableFromTenant(rule))) return "reimbursable";
-  if (rule?.separately_billed === true) return "separately_billed";
-  return "not_applicable";
-}
-
-function deriveExpenseRuleRecoverableFromTenant(rule: any): string {
-  const explicit = normalizeExpenseRuleDecision(rule?.recoverable_from_tenant);
-  if (explicit) return explicit;
-  if (typeof rule?.recoverable_flag === "boolean") return rule.recoverable_flag ? "yes" : "no";
-  if (typeof rule?.is_recoverable === "boolean") return rule.is_recoverable ? "yes" : "no";
-  const classification = normalizeText(rule?.rule_classification);
-  if (classification === "conditional") return "conditional";
-  if (classification === "recoverable") return "yes";
-  if (["non_recoverable", "excluded"].includes(classification)) return "no";
-  if (deriveExpenseRuleIncludedInBaseRent(rule)) return "no";
-  return "no";
-}
-
-function deriveExpenseRuleCamEligible(rule: any): string {
-  const explicit = normalizeExpenseRuleDecision(rule?.cam_eligible);
-  if (explicit) return explicit;
-
-  const paymentTreatment = deriveExpenseRulePaymentTreatment(rule);
-  const recoverable = deriveExpenseRuleRecoverableFromTenant(rule);
-  if (paymentTreatment === "included_in_base_rent" || paymentTreatment === "tenant_direct_contract") return "no";
-  if (recoverable === "no") return "no";
-  return recoverable === "yes" ? "yes" : "conditional";
-}
-
-function deriveExpenseRuleBillingTreatment(rule: any): string {
-  const explicit = normalizeText(rule?.billing_treatment);
-  if (["included", "direct_bill", "cam_estimate", "reconciliation", "none"].includes(explicit)) return explicit;
-  const paymentTreatment = deriveExpenseRulePaymentTreatment(rule);
-  const recoveryMethod = normalizeText(rule?.recovery_method);
-  if (paymentTreatment === "included_in_base_rent") return "included";
-  if (["direct_bill", "actual_usage", "tenant_direct_contract"].includes(recoveryMethod)) return "direct_bill";
-  if (["base_year", "expense_stop", "base_year_excess", "expense_stop_excess"].includes(recoveryMethod)) return "reconciliation";
-  if (["fixed_monthly", "pro_rata_share", "monthly_reimbursement", "pass_through"].includes(recoveryMethod)) return "cam_estimate";
-  return "none";
-}
-
-function deriveExpenseRuleResponsibility(rule: any): string {
-  return deriveExpenseRuleOperationalResponsibility(rule);
-}
-
-function deriveExpenseRuleRecoveryMethod(rule: any): string | null {
-  return rule?.recovery_method ??
-    (rule?.base_year || rule?.base_year_type ? "base_year" : null) ??
-    (rule?.expense_stop_amount ? "expense_stop" : null) ??
-    (deriveExpenseRuleIncludedInBaseRent(rule) ? "included_in_rent" : null) ??
-    ((rule?.billing_frequency ?? rule?.frequency) === "monthly" ? "monthly_reimbursement" : null) ??
-    (deriveExpenseRuleRecoverableFromTenant(rule) ? "pass_through" : null);
-}
-
-function deriveExpenseRuleAllocationBasis(rule: any): string | null {
-  return rule?.allocation_basis ?? rule?.allocation_method ?? rule?.pro_rata_basis ?? "pro_rata_share";
-}
-
-function deriveExpenseRuleSourceText(rule: any): string | null {
-  return rule?.exact_source_text ?? rule?.source_clause ?? rule?.clause_text ?? rule?.notes ?? null;
-}
-
-function deriveExpenseRuleReconciliationRequired(rule: any): boolean {
-  if (typeof rule?.reconciliation_required === "boolean") return rule.reconciliation_required;
-  return ["base_year", "expense_stop", "pass_through"].includes(normalizeText(deriveExpenseRuleRecoveryMethod(rule)));
-}
-
-function deriveExpenseRuleReconciliationFrequency(rule: any): string | null {
-  return rule?.reconciliation_frequency ?? (deriveExpenseRuleReconciliationRequired(rule) ? "annual" : null);
-}
-
-function deriveExpenseRuleExtractionStatus(rule: any, rowStatus: string): string {
-  if (rule?.extraction_status) return String(rule.extraction_status);
-  return rowStatus === "not_mentioned" ? "not_found" : "extracted";
-}
-
-function deriveExpenseRuleReviewStatus(rule: any, rowStatus: string): string {
-  if (rule?.review_status) return String(rule.review_status);
-  if (["mapped", "manually_added"].includes(rowStatus)) return "approved";
-  if (rowStatus === "not_mentioned") return "not_found";
-  return "needs_review";
-}
-
-function deriveExpenseRuleApprovalStatus(rule: any, ruleSetStatus: string): string {
-  if (rule?.approval_status) return String(rule.approval_status);
-  if (deriveExpenseRuleReviewStatus(rule, mapRuleStatus(rule)) !== "approved") return "draft";
-  return ruleSetStatus === "approved" ? "approved" : "draft";
-}
-
-function mapRuleStatus(rule: any): string {
-  if (!rule?.mentioned_in_lease) return "not_mentioned";
-  if (rule?.status === "approved" || rule?.status === "confirmed") return "mapped";
-  if (rule?.recoverable_flag === true || rule?.is_recoverable === true) return "mapped";
-  return "needs_review";
-}
-
-// Generic boilerplate that should NOT count as lease clause evidence.
-// Mirrors the GENERIC_SOURCE_PATTERNS / isWeakSourceText logic in
-// src/services/leaseExpenseRuleService.js so the server enforces the
-// same lease-derivation contract.
-const REVIEW_APPROVE_GENERIC_SOURCE_PATTERNS = [
-  /included in base rent under/i,
-  /recoverable under/i,
-  /explicit recurring charge extracted/i,
-  /lease mentions this category/i,
-  /direct reimbursement obligation/i,
-  /mixed included and recoverable treatment/i,
-  /tenant pays directly under the lease/i,
-  /fixed cam amount extracted/i,
-  /percentage rent rules were extracted/i,
-  /billable exception charge under/i,
-  /derived from extracted/i,
-  /inferred from lease language matching keyword/i,
-];
-
-function isWeakExpenseRuleSourceText(text: string | null | undefined): boolean {
-  const normalized = String(text || "").trim();
-  if (!normalized || normalized.length < 18) return true;
-  return REVIEW_APPROVE_GENERIC_SOURCE_PATTERNS.some((pattern) => pattern.test(normalized));
-}
-
-// Server-side mirror of isRuleCamPublishable (src/services/leaseExpenseRuleService.js).
-// A rule may publish to CAM only when:
-// - review_status = approved AND approval_status = approved
-// - recoverable_from_tenant = yes AND cam_eligible = yes
-// - not included_in_base_rent, payment_treatment is not tenant_direct_contract
-// - is_excluded is not true
-// - row_status not in rejected/not_found/not_mentioned/not_applicable/unmapped
-// - AND either: non-weak exact_source_text OR manual override with non-empty notes
-function isExpenseRulePublishable(rule: any, derived: {
-  reviewStatus: string;
-  approvalStatus: string;
-  rowStatus: string;
-  recoverableFromTenant: string;
-  camEligible: string;
-  paymentTreatment: string;
-  includedInBaseRent: boolean;
-  exactSourceText: string | null;
-}): boolean {
-  const reviewStatus = derived.reviewStatus === "reviewed" ? "approved" : derived.reviewStatus;
-  if (reviewStatus !== "approved") return false;
-  if (derived.approvalStatus !== "approved") return false;
-  if (derived.recoverableFromTenant !== "yes") return false;
-  if (derived.camEligible !== "yes") return false;
-  if (derived.includedInBaseRent) return false;
-  if (derived.paymentTreatment === "included_in_base_rent") return false;
-  if (derived.paymentTreatment === "tenant_direct_contract") return false;
-  if (rule?.is_excluded || rule?.excluded_from_recovery) return false;
-  if (["rejected", "not_found", "not_mentioned", "not_applicable", "unmapped"].includes(derived.rowStatus)) return false;
-
-  const trimmedSource = String(derived.exactSourceText || "").trim();
-  const hasLeaseEvidence = trimmedSource.length > 0 && !isWeakExpenseRuleSourceText(trimmedSource);
-
-  const createdFrom = normalizeText(rule?.created_from);
-  const generationSource = normalizeText(rule?.generation_source);
-  const isManualOverride =
-    createdFrom === "manual" ||
-    createdFrom === "user_override" ||
-    generationSource === "manual" ||
-    generationSource === "user_override" ||
-    normalizeText(rule?.row_status) === "manually_added";
-  const overrideNote = String(rule?.notes || rule?.manual_cam_reason || "").trim();
-  const hasManualOverrideWithNote = isManualOverride && overrideNote.length > 0;
-
-  return hasLeaseEvidence || hasManualOverrideWithNote;
-}
-
-function toNumberOrNull(value: unknown): number | null {
-  if (value == null || value === "") return null;
-  const n = Number(String(value).replace(/[$,%\s,]/g, ""));
-  return Number.isFinite(n) ? n : null;
 }
 
 async function insertLeaseDraft(supabaseAdmin: any, payload: Record<string, unknown>) {
@@ -1927,7 +1464,7 @@ function buildPerFieldEvidence(workflowOutput: any, row: Record<string, unknown>
 }
 
 /**
- * Read every lease_field's confidence_score and emit a key→0-100 map.
+ * Read every lease_field's confidence_score and emit a key->0-100 map.
  * normalize-pdf-output writes lease_field.confidence_score as a 0-1 float;
  * the UI expects 0-100 so we scale here.
  */

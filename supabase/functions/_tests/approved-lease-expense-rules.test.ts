@@ -170,3 +170,67 @@ Deno.test("template checklist expense rows are not valid publication fallback", 
   assertEquals(__test__.shouldPublishWorkflowExpenseRules(workflow), false);
   assertEquals(__test__.isSourceBackedExpenseRule(workflow.expense_rules[0]), false);
 });
+
+Deno.test("authoritative workflow selection can publish LLM expense candidates from fact-ledger diagnostics", () => {
+  const quote = "Tenant shall reimburse Landlord for insurance premiums as Additional Rent.";
+  const selected = getAuthoritativeWorkflowOutput(
+    {
+      extraction_data: {
+        extraction_debug: {
+          openai_fact_ledger: {
+            expense_rule_candidates: [{
+              expense_category: "property_insurance",
+              source_clause: quote,
+              exact_source_text: quote,
+              source_page: 11,
+              recoverable_from_tenant: "yes",
+              cam_eligible: "yes",
+              generation_source: "whole_document_llm_expense_obligation_v1",
+            }],
+            dynamic_items: [],
+            validated_field_values: { tenant_name: { value: "Acme" } },
+          },
+        },
+      },
+    },
+    null,
+  );
+
+  assertEquals(selected.expense_rule_source, "whole_document_llm_expense_obligations");
+  assertEquals(selected.expense_rules.length, 1);
+  assertEquals(selected.expense_rules[0].expense_category, "property_insurance");
+  assertEquals(__test__.isSourceBackedExpenseRule(selected.expense_rules[0]), true);
+});
+
+Deno.test("authoritative workflow selection can build fallback rules from LLM dynamic CAM evidence", () => {
+  const quote = "Tenant shall pay its pro rata share of common area maintenance expenses annually.";
+  const selected = getAuthoritativeWorkflowOutput(
+    {},
+    {
+      ui_review_payload: {
+        metadata: {
+          extractionDebug: {
+            openai_fact_ledger: {
+              expense_rule_candidates: [],
+              dynamic_items: [{
+                field_key: "cam_reimbursement_clause",
+                business_area: "cam_rules",
+                value: "Tenant pays CAM pro rata",
+                exact_source_text: quote,
+                source_text: quote,
+                source_page: 6,
+                confidence: 0.88,
+              }],
+            },
+          },
+        },
+      },
+    },
+  );
+
+  const fallbackRules = __test__.fallbackExpenseRulesFromWorkflowEvidence(selected);
+  assertEquals(selected.expense_rule_source, "whole_document_llm_debug_evidence");
+  assertEquals(fallbackRules.length, 1);
+  assertEquals(fallbackRules[0].expense_category, "common_area_maintenance");
+  assertEquals(__test__.isSourceBackedExpenseRule(fallbackRules[0]), true);
+});

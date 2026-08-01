@@ -222,6 +222,19 @@ function normalizeEvidenceText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function findQuoteInEvidenceMap(
+  quote: string,
+  evidenceMap: Map<string, { text: string; page: number | null }>,
+): { id: string; page: number | null } | null {
+  if (!quote) return null;
+  for (const [id, node] of evidenceMap.entries()) {
+    if (normalizeEvidenceText(node.text).includes(quote)) {
+      return { id, page: node.page ?? null };
+    }
+  }
+  return null;
+}
+
 function verifyEvidence(
   result: WholeDocumentFieldResult,
   compact: CompactLeaseDocument,
@@ -230,21 +243,27 @@ function verifyEvidence(
   nodeIdsValid: boolean;
   sourcePage: number | null;
   evidenceErrors: string[];
+  recoveredNodeId?: string | null;
+  quoteRecoveredFromUncitedNode?: boolean;
 } {
   const evidenceMap = compactDocumentEvidenceMap(compact);
   const nodeIds = Array.isArray(result.sourceNodeIds) ? result.sourceNodeIds : [];
   const validNodes = nodeIds.map((id) => evidenceMap.get(id)).filter(Boolean) as Array<{ text: string; page: number | null }>;
   const nodeIdsValid = nodeIds.length > 0 && validNodes.length === nodeIds.length;
   const quote = normalizeEvidenceText(String(result.sourceQuote ?? ""));
-  const quoteVerified = !!quote && validNodes.some((node) => normalizeEvidenceText(node.text).includes(quote));
+  const quoteVerifiedInCitedNodes = !!quote && validNodes.some((node) => normalizeEvidenceText(node.text).includes(quote));
+  const recoveredQuoteNode = quoteVerifiedInCitedNodes ? null : findQuoteInEvidenceMap(quote, evidenceMap);
+  const quoteVerified = quoteVerifiedInCitedNodes || Boolean(recoveredQuoteNode);
   const evidenceErrors: string[] = [];
   if (!nodeIdsValid) evidenceErrors.push("one or more sourceNodeIds do not exist in the compact document");
-  if (!quoteVerified) evidenceErrors.push("sourceQuote was not found verbatim in the cited source nodes");
+  if (!quoteVerified) evidenceErrors.push("sourceQuote was not found verbatim in the compact document");
   return {
     quoteVerified,
     nodeIdsValid,
-    sourcePage: validNodes.find((node) => node.page != null)?.page ?? null,
+    sourcePage: validNodes.find((node) => node.page != null)?.page ?? recoveredQuoteNode?.page ?? null,
     evidenceErrors,
+    recoveredNodeId: recoveredQuoteNode?.id ?? null,
+    quoteRecoveredFromUncitedNode: Boolean(recoveredQuoteNode),
   };
 }
 
@@ -493,7 +512,7 @@ function buildExpenseRuleCandidates(args: {
     }
 
     const evidence = verifyEvidence(candidate as any, args.compact);
-    if (!evidence.nodeIdsValid || !evidence.quoteVerified) {
+    if (!evidence.quoteVerified) {
       rejected.push({
         category,
         reason: evidence.evidenceErrors.join("; "),
@@ -535,6 +554,10 @@ function buildExpenseRuleCandidates(args: {
     const amount = candidate.amount != null && Number.isFinite(Number(candidate.amount))
       ? Number(candidate.amount)
       : null;
+
+    const sourceNodeIds = evidence.recoveredNodeId && !evidence.nodeIdsValid
+      ? [evidence.recoveredNodeId]
+      : candidate.sourceNodeIds;
 
     rules.push({
       expense_category: category,
@@ -589,7 +612,7 @@ function buildExpenseRuleCandidates(args: {
       source_clause: sourceText,
       exact_source_text: sourceText,
       source_page: evidence.sourcePage,
-      source_node_ids: candidate.sourceNodeIds,
+      source_node_ids: sourceNodeIds,
       confidence_score: Math.max(0, Math.min(1, Number(candidate.confidence) || 0)),
       confidence: Math.max(0, Math.min(1, Number(candidate.confidence) || 0)),
       extraction_status: status,
@@ -607,12 +630,13 @@ function buildExpenseRuleCandidates(args: {
       generation_source: "whole_document_llm_expense_obligation_v1",
       extraction_method: "whole_document_llm_v2",
       quote_verified: true,
+      source_evidence_recovered: Boolean(evidence.quoteRecoveredFromUncitedNode),
       clauses: [{
         clause_type: `${candidate.obligationKind}_obligation`,
         clause_text: sourceText,
         page_number: evidence.sourcePage,
         confidence: Math.max(0, Math.min(1, Number(candidate.confidence) || 0)),
-        source_node_ids: candidate.sourceNodeIds,
+        source_node_ids: sourceNodeIds,
       }],
     });
   }
