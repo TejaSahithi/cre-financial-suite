@@ -115,7 +115,7 @@ describe("leaseReviewFieldNormalizer smoke test", () => {
     expect(expiration.validationMessage).toMatch(/stated initial lease term/i);
   });
 
-  it("shows lease-derived expense rules for review before approval without opening downstream tabs", () => {
+  it("hides lease-derived expense rules before approval unless diagnostic fallback rows are requested", () => {
     const lease = {
       id: "pending-downstream-lease",
       abstract_status: "review_required",
@@ -144,19 +144,19 @@ describe("leaseReviewFieldNormalizer smoke test", () => {
     const result = normalizeLeaseReviewData(lease);
 
     expect(result.downstreamApproved).toBe(false);
-    expect(result.expenseRules).toHaveLength(1);
-    expect(result.camRules).toHaveLength(1);
-    expect(result.expenseRules[0].publicationStatus).toBe("review_only_until_abstract_approval");
-    expect(result.camRules[0].publicationStatus).toBe("review_only_until_abstract_approval");
-    expect(result.tabs.expenses_recoveries.some((row) => row.rowType === "expense_rule" && row.category === "real_estate_taxes")).toBe(true);
-    expect(result.tabs.cam_rules.some((row) => row.rowType === "cam_rule" && row.category === "common_area_maintenance")).toBe(true);
-    expect(result.materialTerms.some((row) => row.materialSource === "expense_rule")).toBe(true);
-    expect(result.materialTerms.some((row) => row.materialSource === "cam_rule")).toBe(true);
-    expect(result.tabs.material_terms.some((row) => row.materialSource === "expense_rule")).toBe(true);
-    expect(result.tabs.material_terms.some((row) => row.materialSource === "cam_rule")).toBe(true);
+    expect(result.expenseRules).toEqual([]);
+    expect(result.camRules).toEqual([]);
+    expect(result.tabs.expenses_recoveries.some((row) => row.rowType === "expense_rule")).toBe(false);
+    expect(result.tabs.cam_rules.some((row) => row.rowType === "cam_rule")).toBe(false);
+    expect(result.materialTerms.some((row) => row.materialSource === "expense_rule")).toBe(false);
+    expect(result.materialTerms.some((row) => row.materialSource === "cam_rule")).toBe(false);
     expect(result.criticalDates).toEqual([]);
     expect(result.tabs.critical_dates).toEqual([]);
     expect(result.tabs.budget_preview).toEqual([]);
+
+    const diagnostic = normalizeLeaseReviewData(lease, { allowDiagnosticExpenseRuleFallbacks: true });
+    expect(diagnostic.expenseRules).toHaveLength(1);
+    expect(diagnostic.camRules).toHaveLength(1);
   });
 
   it("derives monthly rent from annual rent with source lineage when monthly rent is missing", () => {
@@ -400,7 +400,7 @@ describe("enterprise lease abstract row model", () => {
           ],
         },
       },
-    });
+    }, { allowDiagnosticExpenseRuleFallbacks: true });
     expect(result.tabs.expenses_recoveries.some((row) => row.rowType === "expense_rule" && row.category === "real_estate_taxes")).toBe(true);
     expect(result.tabs.cam_rules.some((row) => row.rowType === "cam_rule" && row.category === "common_area_maintenance")).toBe(true);
     expect(result.debugCounts.expense_rules_count).toBe(1);
@@ -1239,7 +1239,7 @@ describe("Phase 48B: no-provider CAM-heavy base lease fallbacks", () => {
   });
 
   it('creates CAM and expense recovery fallback rules with evidence from stored text', () => {
-    const result = normalizeLeaseReviewData(camHeavyLease());
+    const result = normalizeLeaseReviewData(camHeavyLease(), { allowDiagnosticExpenseRuleFallbacks: true });
     expect(result.camRules.some((row) => row.category === 'common_area_maintenance_estimate' && row.value === '$5.25 per leasable square foot' && row.sourcePage === 14)).toBe(true);
     expect(result.camRules.some((row) => row.category === 'common_area_maintenance' && row.responsibleParty === 'tenant')).toBe(true);
     expect(result.camRules.some((row) => row.category === 'administrative_fee' && row.adminFeePercent === 5)).toBe(true);
@@ -1284,7 +1284,7 @@ describe("Phase 48B: no-provider CAM-heavy base lease fallbacks", () => {
           ],
         },
       },
-    }));
+    }), { allowDiagnosticExpenseRuleFallbacks: true });
     expect(result.camRules.filter((row) => row.category === 'common_area_maintenance_estimate')).toHaveLength(1);
   });
 
@@ -1307,7 +1307,7 @@ describe("Phase 48B: no-provider CAM-heavy base lease fallbacks", () => {
   });
 
   it('keeps Craven-style fallback rows intact when Clause Records are filtered', () => {
-    const result = normalizeLeaseReviewData(camHeavyLease());
+    const result = normalizeLeaseReviewData(camHeavyLease(), { allowDiagnosticExpenseRuleFallbacks: true });
     expect(result.clauseRecords).toEqual([]);
     expect(result.expenseRules.some((row) => row.category === 'real_estate_taxes')).toBe(true);
     expect(result.expenseRules.some((row) => row.category === 'insurance_premiums')).toBe(true);

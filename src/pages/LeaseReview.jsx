@@ -895,7 +895,7 @@ export default function LeaseReview() {
   // optional side feature.
   const { data: ruleSetSummary } = useQuery({
     queryKey: ["lease-expense-rule-summary", leaseId],
-    enabled: !!leaseId,
+    enabled: !!leaseId && normalized.downstreamApproved,
     retry: false,
     queryFn: async () => {
       const EMPTY = { ruleSet: null, expense: { total: 0, approved: 0 }, cam: { total: 0, approved: 0 }, tableMissing: false };

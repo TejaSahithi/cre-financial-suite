@@ -96,6 +96,86 @@ function failureResult(
   };
 }
 
+const NUMBER_WORDS: Record<string, number> = {
+  zero: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+};
+
+function normalizeEnumToken(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function coerceNumberValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const wordMatch = raw.toLowerCase().match(/\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b/);
+  if (wordMatch && /percent|per\s*cent|%/i.test(raw)) return NUMBER_WORDS[wordMatch[1]];
+  const parenNegative = /^\s*\(/.test(raw) && /\)\s*$/.test(raw);
+  const match = raw.replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  if (!Number.isFinite(parsed)) return null;
+  return parenNegative ? -Math.abs(parsed) : parsed;
+}
+
+function coerceBooleanValue(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return null;
+  if (["true", "yes", "y", "required", "applicable", "included", "present"].includes(raw)) return true;
+  if (["false", "no", "n", "not_required", "not required", "not_applicable", "not applicable", "none", "absent"].includes(raw)) return false;
+  return null;
+}
+
+function coerceDateValue(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const raw = value.trim();
+  if (!raw) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const slash = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})$/);
+  if (slash) {
+    const year = slash[3].length === 2 ? Number(`20${slash[3]}`) : Number(slash[3]);
+    const month = Number(slash[1]);
+    const day = Number(slash[2]);
+    return isoDateIfReal(year, month, day);
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return isoDateIfReal(parsed.getUTCFullYear(), parsed.getUTCMonth() + 1, parsed.getUTCDate());
+}
+
+function isoDateIfReal(year: number, month: number, day: number): string | null {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+  if (year < 1900 || year > 2200 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) return null;
+  return parsed.toISOString().slice(0, 10);
+}
+
 function validateTypedValue(
   value: unknown,
   def: FieldDef,
@@ -103,36 +183,37 @@ function validateTypedValue(
   if (value == null || value === "") return { valid: false, reason: "value is null or empty" };
 
   if (def.type === "string") {
-    return typeof value === "string" && value.trim()
-      ? { valid: true, value: value.trim() }
-      : { valid: false, reason: "expected a non-empty string" };
+    if (typeof value === "string" && value.trim()) return { valid: true, value: value.trim() };
+    if (typeof value === "number" || typeof value === "boolean") return { valid: true, value: String(value) };
+    return { valid: false, reason: "expected a non-empty string" };
   }
   if (def.type === "number") {
-    if (typeof value !== "number" || !Number.isFinite(value)) {
-      return { valid: false, reason: "expected a finite number" };
-    }
-    if (def.min != null && value < def.min) return { valid: false, reason: `number is below minimum ${def.min}` };
-    if (def.max != null && value > def.max) return { valid: false, reason: `number is above maximum ${def.max}` };
-    return { valid: true, value };
+    const numeric = coerceNumberValue(value);
+    if (numeric == null) return { valid: false, reason: "expected a finite number" };
+    if (def.min != null && numeric < def.min) return { valid: false, reason: `number is below minimum ${def.min}` };
+    if (def.max != null && numeric > def.max) return { valid: false, reason: `number is above maximum ${def.max}` };
+    return { valid: true, value: numeric };
   }
   if (def.type === "boolean") {
-    return typeof value === "boolean"
-      ? { valid: true, value }
-      : { valid: false, reason: "expected a boolean" };
+    const booleanValue = coerceBooleanValue(value);
+    return booleanValue == null
+      ? { valid: false, reason: "expected a boolean" }
+      : { valid: true, value: booleanValue };
   }
   if (def.type === "enum") {
-    return typeof value === "string" && (def.enumValues ?? []).includes(value)
-      ? { valid: true, value }
+    if (typeof value !== "string") return { valid: false, reason: `expected one of: ${(def.enumValues ?? []).join(", ")}` };
+    const exact = (def.enumValues ?? []).find((candidate) => candidate === value.trim());
+    if (exact) return { valid: true, value: exact };
+    const normalized = normalizeEnumToken(value);
+    const normalizedMatch = (def.enumValues ?? []).find((candidate) => normalizeEnumToken(candidate) === normalized);
+    return normalizedMatch
+      ? { valid: true, value: normalizedMatch }
       : { valid: false, reason: `expected one of: ${(def.enumValues ?? []).join(", ")}` };
   }
   if (def.type === "date") {
-    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-      return { valid: false, reason: "expected an ISO date (YYYY-MM-DD)" };
-    }
-    const parsed = new Date(`${value}T00:00:00Z`);
-    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
-      ? { valid: true, value }
-      : { valid: false, reason: "expected a real calendar date" };
+    const iso = coerceDateValue(value);
+    if (!iso) return { valid: false, reason: "expected an ISO date (YYYY-MM-DD)" };
+    return { valid: true, value: iso };
   }
   return { valid: false, reason: `unsupported field type ${String((def as any).type)}` };
 }
@@ -836,7 +917,15 @@ async function runWholeDocumentLlmOnCompact(args: {
       continue;
     }
 
-    const typed = validateTypedValue(fieldResult.value, def);
+    let typed = validateTypedValue(fieldResult.value, def);
+    let valueCoercedFromRaw = false;
+    if (!typed.valid && fieldResult.rawValue != null && fieldResult.rawValue !== fieldResult.value) {
+      const rawTyped = validateTypedValue(fieldResult.rawValue, def);
+      if (rawTyped.valid) {
+        typed = rawTyped;
+        valueCoercedFromRaw = true;
+      }
+    }
     if (!typed.valid) {
       validationErrors.push({
         field: fieldKey,
@@ -849,6 +938,14 @@ async function runWholeDocumentLlmOnCompact(args: {
 
     const evidence = verifyEvidence(fieldResult, compact);
     const extracted = extractedFieldFromResult(fieldResult, typed.value, evidence);
+    if (valueCoercedFromRaw || typed.value !== fieldResult.value) {
+      (extracted as any).normalizationTrace = {
+        original_value: fieldResult.value,
+        raw_value: fieldResult.rawValue,
+        normalized_value: typed.value,
+        reason: valueCoercedFromRaw ? "coerced_from_raw_value" : "coerced_from_structured_value",
+      };
+    }
     extractedFields[fieldKey] = extracted;
     if (evidence.quoteVerified && evidence.nodeIdsValid) evidenceVerifiedCount++;
     if (extracted.requiresReview) needsReviewCount++;

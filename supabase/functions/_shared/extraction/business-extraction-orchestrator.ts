@@ -41,7 +41,9 @@ function leaseLegacyFallbackEnabled(): boolean {
   // lease requests to the primary OpenAI strategy first. This flag only
   // controls whether a fallback-eligible primary failure may then publish the
   // legacy TypeScript/rule/table result.
-  return true;
+  const canonicalFlag = Deno.env.get("LEASE_ENABLE_TYPESCRIPT_SCHEMA_FALLBACK");
+  if (canonicalFlag != null) return canonicalFlag === "true";
+  return Deno.env.get("LEASE_ENABLE_TYPESCRIPT_LEGACY_FALLBACK") === "true";
 }
 
 function stampLegacyFallbackDisabled(result: ExtractionPipelineResult, reason: string): ExtractionPipelineResult {

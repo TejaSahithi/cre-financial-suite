@@ -2,7 +2,7 @@ import React, { useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useLeaseExpenseRules } from "@/components/lease-review/SpecializedTables";
-import { normalizeExpenseRuleRows, normalizeExpenseRuleFallback } from "@/lib/leaseReviewFieldNormalizer";
+import { isLeaseApprovedForDownstream, normalizeExpenseRuleRows } from "@/lib/leaseReviewFieldNormalizer";
 
 function formatValue(value) {
   if (value === null || value === undefined || value === "") return "—";
@@ -16,18 +16,19 @@ function formatValue(value) {
  * Rich path: leaseExpenseRuleService.loadRuleSet() (same hook
  * ExpenseRulesTable/CamRulesTable already use, reused via
  * useLeaseExpenseRules() — not reimplemented), normalized via
- * normalizeExpenseRuleRows(). Falls back to the synchronous
- * workflow_output.expense_rules union while the DB query is loading or if
- * it errors, so this section never regresses to fully empty.
+ * normalizeExpenseRuleRows(). It intentionally does not fall back to raw
+ * workflow_output or no-provider rows; lease expense/CAM rules become visible
+ * only after lease approval publishes them to the persisted rule tables.
  */
 export default function CamExpenseRulesPanel({ lease }) {
-  const { data, isLoading, error } = useLeaseExpenseRules(lease);
+  const leaseApproved = isLeaseApprovedForDownstream(lease);
+  const { data, isLoading, error } = useLeaseExpenseRules(lease, { enabled: leaseApproved });
   const rows = useMemo(() => {
     if (Array.isArray(data?.rules) && data.rules.length > 0) {
       return normalizeExpenseRuleRows(data.rules);
     }
-    return normalizeExpenseRuleFallback(lease);
-  }, [data, lease]);
+    return [];
+  }, [data]);
 
   return (
     <Card>
@@ -41,7 +42,11 @@ export default function CamExpenseRulesPanel({ lease }) {
         <Badge className="bg-slate-100 text-slate-700">{rows.length} rules</Badge>
       </CardHeader>
       <CardContent>
-        {isLoading && rows.length === 0 ? (
+        {!leaseApproved ? (
+          <p className="text-sm text-slate-500">
+            Lease expense/CAM rules appear after the lease abstract is approved.
+          </p>
+        ) : isLoading && rows.length === 0 ? (
           <p className="text-sm text-slate-500">Loading expense rules…</p>
         ) : rows.length === 0 ? (
           <p className="text-sm text-slate-500">

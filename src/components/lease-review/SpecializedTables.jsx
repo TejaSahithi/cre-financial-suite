@@ -28,7 +28,7 @@ import {
   readFieldValue,
   resolveSourceTextQuality,
 } from "@/lib/leaseReviewSchema";
-import { computeFallbackClauseRows } from "@/lib/leaseReviewFieldNormalizer";
+import { computeFallbackClauseRows, isLeaseApprovedForDownstream } from "@/lib/leaseReviewFieldNormalizer";
 
 const dollars = (v) => {
   const n = Number(v);
@@ -153,12 +153,12 @@ export function RentScheduleTable({ leaseId }) {
 }
 
 // ─── Expense Rules / CAM Rules ────────────────────────────────────────
-export function useLeaseExpenseRules(leaseOrId) {
+export function useLeaseExpenseRules(leaseOrId, { enabled = true } = {}) {
   const leaseId = leaseOrId && typeof leaseOrId === "object" ? leaseOrId.id : leaseOrId;
 
   return useQuery({
     queryKey: ["lease-expense-rules-detail", leaseId],
-    enabled: !!leaseId && !!supabase,
+    enabled: enabled && !!leaseId && !!supabase,
     queryFn: () => leaseExpenseRuleService.loadRuleSet(leaseId),
     retry: false,
   });
@@ -222,7 +222,9 @@ function ExpenseRuleSubsetTable({ leaseId, lease, kind }) {
   const navigate = useNavigate();
   const effectiveLease = lease || (leaseId ? { id: leaseId } : null);
   const effectiveLeaseId = effectiveLease?.id || leaseId;
-  const { data, isLoading, error } = useLeaseExpenseRules(effectiveLease);
+  const leaseApprovalKnown = Boolean(lease && typeof lease === "object");
+  const leaseApproved = !leaseApprovalKnown || isLeaseApprovedForDownstream(lease);
+  const { data, isLoading, error } = useLeaseExpenseRules(effectiveLease, { enabled: leaseApproved });
   const ruleSet = data?.ruleSet || null;
   const rules = useMemo(() => selectLeaseReviewExpenseRuleRows(data?.rules || [], kind), [data, kind]);
   const title = kind === "cam" ? "CAM Rules" : "Expense Rules";
@@ -252,7 +254,11 @@ function ExpenseRuleSubsetTable({ leaseId, lease, kind }) {
         </div>
       </CardHeader>
       <CardContent>
-        {isLoading ? (
+        {!leaseApproved ? (
+          <p className="text-sm text-slate-500">
+            Lease expense rules appear after the lease abstract is approved.
+          </p>
+        ) : isLoading ? (
           <div className="flex items-center gap-2 text-sm text-slate-500">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading...
           </div>

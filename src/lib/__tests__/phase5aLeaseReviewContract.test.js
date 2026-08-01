@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizeLeaseReviewData } from "../leaseReviewFieldNormalizer";
+import { normalizeLeaseReviewData as normalizeLeaseReviewDataBase } from "../leaseReviewFieldNormalizer";
+
+function normalizeLeaseReviewData(lease, options = {}) {
+  return normalizeLeaseReviewDataBase(lease, { allowDiagnosticExpenseRuleFallbacks: true, ...options });
+}
 
 function extracted(value, sourcePage, sourceText, confidence = 0.95, extra = {}) {
   return {

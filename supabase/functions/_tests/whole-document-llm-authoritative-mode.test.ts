@@ -1,6 +1,6 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   getWholeDocumentLlmMode,
   isWholeDocumentLlmActive,
@@ -64,4 +64,33 @@ Deno.test("whole-document LLM splits oversize compact documents into bounded sec
     const promptChars = "small prompt".length + JSON.stringify({ compactDocument: section }).length;
     assert(promptChars <= 90_000, `section prompt exceeded budget: ${promptChars}`);
   }
+});
+
+Deno.test("whole-document LLM typed validator accepts common lease value formats", () => {
+  const validate = wholeDocumentExtractorTestHooks.validateTypedValue;
+
+  assertEquals(validate("$5.25 per leasable square foot", { type: "number", labels: [], description: "CAM amount" }), {
+    valid: true,
+    value: 5.25,
+  });
+  assertEquals(validate("five percent", { type: "number", min: 0, max: 100, labels: [], description: "Admin fee" }), {
+    valid: true,
+    value: 5,
+  });
+  assertEquals(validate("Yes", { type: "boolean", labels: [], description: "Insurance required" }), {
+    valid: true,
+    value: true,
+  });
+  assertEquals(validate("not applicable", { type: "boolean", labels: [], description: "Option present" }), {
+    valid: true,
+    value: false,
+  });
+  assertEquals(validate("1/31/2029", { type: "date", labels: [], description: "Expiration" }), {
+    valid: true,
+    value: "2029-01-31",
+  });
+  assertEquals(validate("Triple Net", { type: "enum", enumValues: ["gross", "modified_gross", "triple_net"], labels: [], description: "Lease type" }), {
+    valid: true,
+    value: "triple_net",
+  });
 });

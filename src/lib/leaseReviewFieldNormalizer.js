@@ -1937,7 +1937,7 @@ export function normalizeCriticalDates(standardFields) {
   return CRITICAL_DATE_KEYS.map((key) => byKey.get(key)).filter(Boolean);
 }
 
-function isLeaseApprovedForDownstream(lease) {
+export function isLeaseApprovedForDownstream(lease) {
   const abstractStatus = String(lease?.abstract_status || "").trim().toLowerCase();
   const leaseStatus = String(lease?.status || "").trim().toLowerCase();
   return abstractStatus === "approved"
@@ -2291,7 +2291,7 @@ export function buildDebugCounts({ standardFields, dynamicFindings, clauseRecord
  * is NOT included here; those stay in their existing async react-query hooks
  * and get layered on top by the components that already load them.
  */
-export function normalizeLeaseReviewData(lease, { fieldReviews, allowNoProviderCoreFallbacks = false } = {}) {
+export function normalizeLeaseReviewData(lease, { fieldReviews, allowNoProviderCoreFallbacks = false, allowDiagnosticExpenseRuleFallbacks = false } = {}) {
   const effectiveFieldReviews = fieldReviews ?? lease?.extraction_data?.field_reviews ?? {};
   const standardFields = normalizeStandardFields(lease, {
     fieldReviews: effectiveFieldReviews,
@@ -2304,15 +2304,11 @@ export function normalizeLeaseReviewData(lease, { fieldReviews, allowNoProviderC
   });
   const dynamicFindings = normalizeDynamicFindings(lease);
   const downstreamApproved = isLeaseApprovedForDownstream(lease);
-  // Lease-derived expense/CAM obligations are review facts, so reviewers must
-  // see them before approval. Only downstream publication to lease_expense_rules,
-  // CAM, and Budget remains gated by the abstract approval boundary.
-  const rawRuleRows = normalizeExpenseRuleFallback(lease);
-  const allRuleRows = rawRuleRows.map((row) => downstreamApproved ? row : {
-    ...row,
-    publicationStatus: "review_only_until_abstract_approval",
-    validationMessage: row.validationMessage || "Review-only until the lease abstract is approved; approval publishes this obligation to Lease Expense Rules.",
-  });
+  // Expense/CAM obligations are extracted from the lease document, but they
+  // become visible in the normal UI only after lease abstract approval publishes
+  // them to the persisted lease_expense_rule tables. Keep raw workflow/no-provider
+  // rows available only for explicit diagnostics.
+  const allRuleRows = allowDiagnosticExpenseRuleFallbacks ? normalizeExpenseRuleFallback(lease) : [];
   const hasStructuredRuleEvidence = allRuleRows.some((row) => row.sourceText || row.source_text || isMeaningfulValue(row.value ?? row.normalized_value));
   const clauseRecords = normalizeClauseRecords(lease, {
     profile: currentReviewPolicy.profile,

@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { normalizeLeaseReviewData } from "../leaseReviewFieldNormalizer";
+import { normalizeLeaseReviewData as normalizeLeaseReviewDataBase } from "../leaseReviewFieldNormalizer";
 import { splitRulesForLeaseReview } from "../../services/utils/leaseExpenseRuleTaxonomy";
 import { mergeLatestExtraction } from "../../components/lease-review/utils/applyLatestExtractionMerge";
 import { resolveBudgetPreviewInputs } from "../../components/lease-review/utils/budgetPreviewInputs";
+
+function normalizeLeaseReviewData(lease, options = {}) {
+  return normalizeLeaseReviewDataBase(lease, { allowDiagnosticExpenseRuleFallbacks: true, ...options });
+}
 
 function extracted(value, page = 1, text = "Sanitized source clause.", confidence = 0.95, extra = {}) {
   return {
