@@ -252,3 +252,22 @@ Deno.test("authoritative workflow selection can build fallback rules from LLM dy
   assertEquals(fallbackRules[0].expense_category, "common_area_maintenance");
   assertEquals(__test__.isSourceBackedExpenseRule(fallbackRules[0]), true);
 });
+
+Deno.test("approved publication fallback can build rules from stored raw document text", () => {
+  const rules = __test__.fallbackExpenseRulesFromRawDocument({
+    docling_raw: {
+      pages: [{
+        page: 7,
+        text: "Tenant shall pay Tenant's pro rata share of Common Area Maintenance, real estate taxes, and property insurance as Additional Rent.",
+      }],
+      text_blocks: [],
+    },
+  });
+
+  assert(rules.length >= 3);
+  assert(rules.some((rule) => rule.expense_category === "common_area_maintenance"));
+  assert(rules.some((rule) => rule.expense_category === "real_estate_taxes"));
+  assert(rules.some((rule) => rule.expense_category === "property_insurance"));
+  assertEquals(rules[0].source_page, 7);
+  assertEquals(__test__.isSourceBackedExpenseRule(rules[0]), true);
+});

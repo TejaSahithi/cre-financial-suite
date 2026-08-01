@@ -278,6 +278,107 @@ function workflowEvidenceItems(workflow: any): any[] {
   ];
 }
 
+function rawDocumentPayloads(fileRecord: any): any[] {
+  return [fileRecord?.docling_raw, fileRecord?.azure_raw_response]
+    .filter(isObject);
+}
+
+function rawDocumentItems(fileRecord: any): any[] {
+  const items: any[] = [];
+  const seen = new Set<string>();
+  for (const raw of rawDocumentPayloads(fileRecord)) {
+    for (const page of asArray(raw?.pages)) {
+      const text = cleanText(page?.text ?? page?.content ?? page?.markdown);
+      if (!text) continue;
+      const pageNumber = numberOrNull(page?.page ?? page?.page_number ?? page?.pageNumber);
+      const key = `page|${pageNumber ?? ""}|${stableHash(text)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({ text, source_text: text, source_page: pageNumber, clause_type: "raw_document_page" });
+    }
+
+    for (const block of asArray(raw?.text_blocks)) {
+      const text = cleanText(block?.text ?? block?.content);
+      if (!text) continue;
+      const pageNumber = numberOrNull(block?.page ?? block?.page_number ?? block?.pageNumber);
+      const key = `block|${pageNumber ?? ""}|${stableHash(text)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({ text, source_text: text, source_page: pageNumber, clause_type: cleanText(block?.type) || "raw_document_block" });
+    }
+
+    const fullText = cleanText(raw?.full_text ?? raw?.markdown);
+    if (fullText && items.length === 0) {
+      const key = `full|${stableHash(fullText)}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        items.push({ text: fullText, source_text: fullText, source_page: null, clause_type: "raw_document_text" });
+      }
+    }
+  }
+  return items;
+}
+
+function snippetForCategory(text: string, category: string): string {
+  const patterns = FALLBACK_EXPENSE_CATEGORY_PATTERNS.find((entry) => entry.category === category)?.patterns || [];
+  const normalized = cleanText(text);
+  if (!normalized) return "";
+  const matches = patterns
+    .map((pattern) => {
+      const match = normalized.match(pattern);
+      return match?.index ?? -1;
+    })
+    .filter((index) => index >= 0)
+    .sort((left, right) => left - right);
+  const anchor = matches[0] ?? 0;
+  const start = Math.max(0, anchor - 450);
+  const end = Math.min(normalized.length, anchor + 1200);
+  return cleanText(normalized.slice(start, end));
+}
+
+function fallbackExpenseRulesFromEvidenceItems(items: any[], generationSource: string, notes: string): any[] {
+  const rows: any[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (!isObject(item)) continue;
+    const sourceText = workflowEvidenceText(item);
+    if (!sourceText) continue;
+    const categories = categoriesFromEvidence(item, sourceText);
+    if (categories.length === 0) continue;
+    const page = workflowEvidencePage(item);
+    for (const category of categories) {
+      const snippet = snippetForCategory(sourceText, category) || sourceText;
+      const treatment = treatmentFromEvidence(snippet);
+      const key = [category, page ?? "no_page", stableHash(snippet)].join("|");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({
+        expense_category: category,
+        source_clause: snippet,
+        exact_source_text: snippet,
+        source_text: snippet,
+        source_page: page,
+        page_number: page,
+        confidence_score: numberOrNull(item?.confidence_score ?? item?.confidence) ?? 0.66,
+        extraction_status: page == null ? "missing_source_evidence" : "extracted",
+        review_status: "needs_review",
+        approval_status: "draft",
+        generation_source: generationSource,
+        notes,
+        ...treatment,
+      });
+    }
+  }
+  return rows;
+}
+
+function fallbackExpenseRulesFromRawDocument(fileRecord: any): any[] {
+  return fallbackExpenseRulesFromEvidenceItems(
+    rawDocumentItems(fileRecord),
+    "typescript_schema_raw_document_fallback",
+    "Generated from stored raw document text because no canonical LLM expense_rules payload was available.",
+  );
+}
 function fallbackExpenseRulesFromWorkflowEvidence(workflow: any): any[] {
   const rows: any[] = [];
   const seen = new Set<string>();
@@ -779,7 +880,13 @@ export async function publishApprovedLeaseExpenseArtifacts({
   const expenseRuleSource = cleanText(storedWorkflow?.expense_rule_source);
   const workflowExpenseRules = asArray(storedWorkflow?.expense_rules).filter(isSourceBackedExpenseRule);
   const fallbackExpenseRules = workflowExpenseRules.length > 0 ? [] : fallbackExpenseRulesFromWorkflowEvidence(storedWorkflow);
-  const hasPublishableWorkflowExpenseRules = workflowExpenseRules.length > 0 || fallbackExpenseRules.length > 0 || shouldPublishWorkflowExpenseRules(storedWorkflow);
+  const rawDocumentFallbackRules = workflowExpenseRules.length > 0 || fallbackExpenseRules.length > 0
+    ? []
+    : fallbackExpenseRulesFromRawDocument(fileRecord);
+  const hasPublishableWorkflowExpenseRules = workflowExpenseRules.length > 0 ||
+    fallbackExpenseRules.length > 0 ||
+    rawDocumentFallbackRules.length > 0 ||
+    shouldPublishWorkflowExpenseRules(storedWorkflow);
   if (!force && Number(existingRuleCount || 0) > 0) {
     const existingCamProfileResult = hasPublishableWorkflowExpenseRules
       ? await persistCamProfile(
@@ -810,10 +917,14 @@ export async function publishApprovedLeaseExpenseArtifacts({
   const workflow = storedWorkflow;
   const expenseRules = workflowExpenseRules.length > 0
     ? workflowExpenseRules
-    : fallbackExpenseRules;
+    : fallbackExpenseRules.length > 0
+      ? fallbackExpenseRules
+      : rawDocumentFallbackRules;
   const publicationExtractionVersion = expenseRuleSource === "whole_document_llm_expense_obligations"
     ? "whole_document_llm_expense_obligations_v1"
-    : "typescript_schema_expense_rules_fallback_v1";
+    : rawDocumentFallbackRules.length > 0
+      ? "typescript_schema_raw_document_fallback_v1"
+      : "typescript_schema_expense_rules_fallback_v1";
 
   const camProfileResult = hasPublishableWorkflowExpenseRules
     ? await persistCamProfile(
@@ -838,6 +949,7 @@ export async function publishApprovedLeaseExpenseArtifacts({
       workflow_clauses_found: asArray(storedWorkflow?.lease_clauses).length,
       rules_generated: expenseRules.length,
       fallback_rules_generated: fallbackExpenseRules.length,
+      raw_document_fallback_rules_generated: rawDocumentFallbackRules.length,
       rules_persisted: 0,
       regenerated: false,
       expense_rule_source: expenseRuleSource || null,
@@ -896,7 +1008,7 @@ export async function publishApprovedLeaseExpenseArtifacts({
     rules_persisted: Number(saved?.rule_count ?? prepared.length),
     rule_set_id: saved?.rule_set_id ?? existingSet?.id ?? null,
     regenerated: false,
-    expense_rule_source: expenseRuleSource,
+    expense_rule_source: expenseRuleSource || (rawDocumentFallbackRules.length > 0 ? "typescript_schema_raw_document_fallback" : null),
     cam_profile_persisted: camProfileResult.persisted,
     cam_profile_error: camProfileResult.error ?? null,
   };
@@ -913,6 +1025,7 @@ export const __test__ = {
   isSourceBackedExpenseRule,
   shouldPublishWorkflowExpenseRules,
   fallbackExpenseRulesFromWorkflowEvidence,
+  fallbackExpenseRulesFromRawDocument,
   sourceFileIdCandidates,
   workflowFromFactLedgerDebug,
 };
