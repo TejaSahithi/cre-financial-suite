@@ -18,7 +18,7 @@ import { createPageUrl } from "@/utils";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { toast } from "sonner";
 
-const systemFields = ["expense_date", "category", "amount", "vendor", "recoverable_flag", "description", "gl_code", "invoice_number"];
+const systemFields = ["expense_date", "category", "expense_subcategory", "amount", "vendor", "recoverable_flag", "description", "gl_code", "invoice_number"];
 
 const IMPORT_TEMPLATES = {
   generic: {
@@ -249,6 +249,7 @@ export default function BulkImport() {
         headers.forEach(c => {
           const lower = c.toLowerCase();
           if (lower.includes('date')) autoMap[c] = 'expense_date';
+          else if (lower.includes('subcategory') || lower.includes('sub category') || lower.includes('service type')) autoMap[c] = 'expense_subcategory';
           else if (lower.includes('category') || lower.includes('type')) autoMap[c] = 'category';
           else if (lower.includes('amount') || lower.includes('cost') || lower.includes('total')) autoMap[c] = 'amount';
           else if (lower.includes('vendor') || lower.includes('supplier') || lower.includes('payee')) autoMap[c] = 'vendor';
@@ -380,7 +381,9 @@ export default function BulkImport() {
       vendor: row.vendor || "",
       description: row.description || "",
       classification: row.recoverable_flag?.toLowerCase().includes('non') ? 'non_recoverable' : row.recoverable_flag?.toLowerCase().includes('cond') ? 'conditional' : 'recoverable',
-      source: "import",
+      source: "bulk_import",
+      source_type: "bulk_import",
+      ...(row.expense_subcategory ? { expense_subcategory: row.expense_subcategory } : {}),
       ...(row.gl_code ? { gl_code: row.gl_code } : {}),
       ...(row.invoice_number ? { invoice_number: row.invoice_number } : {}),
       ...(effectivePortfolioId ? { portfolio_id: effectivePortfolioId } : {}),

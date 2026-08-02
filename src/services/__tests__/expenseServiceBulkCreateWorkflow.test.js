@@ -83,7 +83,9 @@ describe('expenseService.bulkCreateExpensesWorkflow', () => {
         vendor: 'AZ Air Systems',
         description: 'Monthly HVAC service',
         classification: 'recoverable',
-        source: 'import',
+        source: 'bulk_import',
+        source_type: 'bulk_import',
+        expense_subcategory: 'repairs',
         gl_code: '5400',
         invoice_number: 'INV-2026-001',
         property_id: 'property-1',
@@ -95,7 +97,8 @@ describe('expenseService.bulkCreateExpensesWorkflow', () => {
         vendor: 'SafeGuard Insurance',
         description: 'Annual property insurance premium',
         classification: 'recoverable',
-        source: 'import',
+        source: 'bulk_import',
+        source_type: 'bulk_import',
         property_id: 'property-1',
       },
     ];
@@ -107,11 +110,15 @@ describe('expenseService.bulkCreateExpensesWorkflow', () => {
     expect(fnName).toBe('bulk-create-expenses');
     expect(payload.expenses).toHaveLength(2);
     expect(payload.expenses[0].amount).toBe(1250);
+    expect(payload.expenses[0].source).toBe('bulk_import');
+    expect(payload.expenses[0].source_type).toBe('bulk_import');
+    expect(payload.expenses[0].expense_subcategory).toBe('repairs');
     expect(payload.expenses[0].gl_code).toBe('5400');
     expect(payload.expenses[0].invoice_number).toBe('INV-2026-001');
     expect(payload.expenses[1].vendor).toBe('SafeGuard Insurance');
-    // approval_status/review_status are not part of BulkImport's payload.
+    // Bulk rows use the same canonical actual-expense payload shape as manual and invoice rows.
     expect(payload.expenses[0].approval_status).toBeUndefined();
+    expect(payload.expenses[0].approved_status).toBeUndefined();
     expect(result.created_count).toBe(2);
   });
 });

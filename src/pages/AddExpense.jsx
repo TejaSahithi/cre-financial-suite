@@ -61,12 +61,16 @@ function buildInitialForm(scope) {
     date: "",
     amount: "",
     category: "",
+    expense_subcategory: "",
+    gl_code: "",
+    invoice_number: "",
     vendor: "",
     vendor_id: "",
     tenant_name: "",
     tenant_id: "",
     lease_id: "",
     source: "manual",
+    source_file_id: "",
     description: "",
     classification: "recoverable",
     portfolio_id: scope.portfolioId || "",
@@ -144,12 +148,16 @@ export default function AddExpense() {
       date: editingExpense.date || "",
       amount: editingExpense.amount ?? "",
       category: editingExpense.category || "",
+      expense_subcategory: editingExpense.expense_subcategory || "",
+      gl_code: editingExpense.gl_code || "",
+      invoice_number: editingExpense.invoice_number || "",
       vendor: editingExpense.vendor || "",
       vendor_id: editingExpense.vendor_id || "",
       tenant_name: editingExpense.tenant_name || "",
       tenant_id: editingExpense.tenant_id || "",
       lease_id: editingExpense.lease_id || "",
       source: editingExpense.source || "manual",
+      source_file_id: editingExpense.source_file_id || "",
       description: editingExpense.description || "",
       classification: editingExpense.classification || "recoverable",
       portfolio_id: editingExpense.portfolio_id || "",
@@ -379,6 +387,9 @@ export default function AddExpense() {
       date: candidate.date || current.date,
       amount: candidate.amount || current.amount,
       category: candidate.category || current.category,
+      expense_subcategory: candidate.expense_subcategory || current.expense_subcategory,
+      gl_code: candidate.gl_code || current.gl_code,
+      invoice_number: candidate.invoice_number || current.invoice_number,
       vendor: matchedVendor?.name || candidate.vendor || current.vendor,
       vendor_id: matchedVendor?.id || current.vendor_id,
       tenant_name:
@@ -424,6 +435,8 @@ export default function AddExpense() {
         { page: "AddExpense", action: "invoice_upload" }
       );
       if (!upload?.file_id) throw new Error("Invoice upload completed without a file id.");
+
+      setForm((current) => ({ ...current, source_file_id: upload.file_id }));
 
       if (upload.storage_path) {
         const { data: signedData } = await supabase.storage
@@ -671,6 +684,21 @@ export default function AddExpense() {
           </div>
 
           <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label>Subcategory</Label>
+              <Input value={form.expense_subcategory} onChange={(event) => setForm((current) => ({ ...current, expense_subcategory: event.target.value }))} placeholder="Optional subcategory..." />
+            </div>
+            <div>
+              <Label>GL Code</Label>
+              <Input value={form.gl_code} onChange={(event) => setForm((current) => ({ ...current, gl_code: event.target.value }))} placeholder="Optional GL code..." />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label>Invoice Number</Label>
+              <Input value={form.invoice_number} onChange={(event) => setForm((current) => ({ ...current, invoice_number: event.target.value }))} placeholder="Optional invoice #..." />
+            </div>
             <div>
               <Label>Building</Label>
               <Select value={form.building_id || "__all__"} onValueChange={(value) => setForm((current) => ({ ...current, building_id: value === "__all__" ? "" : value, unit_id: "" }))}>

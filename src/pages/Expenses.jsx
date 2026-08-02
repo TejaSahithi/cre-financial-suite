@@ -60,6 +60,7 @@ import {
 import { createPageUrl, downloadCSV } from "@/utils";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { resolveTenantForExpense } from "@/lib/tenantResolver";
+import { getEffectiveApprovalStatus } from "@/lib/ruleStatus";
 
 function normalizeExpenseDate(value) {
   if (!value) return null;
@@ -345,8 +346,8 @@ export default function Expenses() {
           : (classification.recoverability_result || effectiveRecovery),
         classification: effectiveRecovery === "excluded" ? "non_recoverable" : effectiveRecovery,
         approved_status: preferBaseWorkflow
-          ? (linkedExpense.approved_status || classification.approved_status)
-          : (classification.approved_status || linkedExpense.approved_status),
+          ? (getEffectiveApprovalStatus(linkedExpense) || getEffectiveApprovalStatus(classification))
+          : (getEffectiveApprovalStatus(classification) || getEffectiveApprovalStatus(linkedExpense)),
         rule_source: preferBaseWorkflow
           ? (linkedExpense.rule_source || classification.rule_source)
           : (classification.rule_source || linkedExpense.rule_source),
@@ -553,7 +554,7 @@ export default function Expenses() {
         patch: {
           recovery_status: recoveryStatus,
           classification,
-          approved_status: expense.approved_status === "approved" ? "approved" : undefined,
+          approved_status: getEffectiveApprovalStatus(expense) === "approved" ? "approved" : undefined,
           rule_source: "manual",
           recovery_reason: "Manual review update from Actual Expenses",
         },
@@ -970,7 +971,7 @@ export default function Expenses() {
                         </TableCell>
                         <TableCell className="text-[10px] text-slate-500">{expense.rule_source || "—"}</TableCell>
                         <TableCell className="text-[10px] text-slate-500">{expense.confidence_score != null ? `${Math.round(Number(expense.confidence_score) * 100)}%` : "—"}</TableCell>
-                        <TableCell className="text-[10px] text-slate-500">{expense.approved_status || "draft"}</TableCell>
+                        <TableCell className="text-[10px] text-slate-500">{getEffectiveApprovalStatus(expense) || "draft"}</TableCell>
                         <TableCell>
                           <span className={`text-[9px] font-semibold ${expense.is_controllable !== false ? "text-emerald-600" : "text-slate-400"}`}>
                             {expense.is_controllable !== false ? "CTRL" : "NON"}
@@ -1007,11 +1008,11 @@ export default function Expenses() {
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem
                                   onClick={() => approveExpense(expense)}
-                                  disabled={expense.approved_status === "approved"}
+                                  disabled={getEffectiveApprovalStatus(expense) === "approved"}
                                   className="text-emerald-700 focus:text-emerald-800"
                                 >
                                   <ClipboardCheck className="mr-2 h-3.5 w-3.5" />
-                                  {expense.approved_status === "approved" ? "Already approved" : "Approve expense"}
+                                  {getEffectiveApprovalStatus(expense) === "approved" ? "Already approved" : "Approve expense"}
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => promptForAmount(expense)}>
                                   <CircleDollarSign className="mr-2 h-3.5 w-3.5" />

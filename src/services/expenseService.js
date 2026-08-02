@@ -1,4 +1,4 @@
-import {
+﻿import {
   toNumber,
   asNumberOrNull,
   normalizeText,
@@ -69,6 +69,82 @@ const baseExpenseService = createEntityService("Expense");
 const baseLeaseService = createEntityService("Lease");
 
 const CONDITIONAL_KEYWORDS = ["subject to", "provided that", "unless", "if ", "condition", "gross-up", "base year", "cap"];
+const ACTUAL_EXPENSE_WORKFLOW_FIELDS = [
+  "date",
+  "expense_date",
+  "amount",
+  "category",
+  "expense_subcategory",
+  "vendor",
+  "vendor_name",
+  "vendor_id",
+  "description",
+  "classification",
+  "recovery_status",
+  "portfolio_id",
+  "property_id",
+  "building_id",
+  "unit_id",
+  "lease_id",
+  "tenant_id",
+  "tenant_name",
+  "attachment_url",
+  "gl_code",
+  "invoice_number",
+  "source",
+  "source_type",
+  "source_file_id",
+  "fiscal_year",
+  "month",
+  "approval_status",
+  "approved_status",
+  "review_status",
+  "service_period_start",
+  "service_period_end",
+  "billing_period_start",
+  "billing_period_end",
+  "confidence_score",
+  "is_controllable",
+];
+
+function monthFromExpenseDate(value) {
+  const date = expenseServiceDate({ date: value, expense_date: value });
+  if (!date) return null;
+  const month = Number(String(date).slice(5, 7));
+  return Number.isFinite(month) && month >= 1 && month <= 12 ? month : null;
+}
+
+function buildActualExpenseWorkflowPayload(expense = {}) {
+  const date = expense.date || expense.expense_date || expense.service_period_start || null;
+  const source = normalizeSourceType(expense) || "manual";
+  const approvalStatus = normalizeText(expense.approval_status || expense.approved_status) || null;
+  const reviewStatus = normalizeText(expense.review_status) || approvalStatus || null;
+  const recoveryStatus = normalizeText(expense.recovery_status || expense.classification) || null;
+
+  const normalized = {
+    ...expense,
+    date,
+    expense_date: expense.expense_date || date,
+    vendor_name: expense.vendor_name || expense.vendor || null,
+    source,
+    source_type: expense.source_type || source,
+    recovery_status: recoveryStatus,
+    approved_status: expense.approved_status || approvalStatus || null,
+    approval_status: approvalStatus,
+    review_status: reviewStatus,
+    service_period_start: expense.service_period_start || date,
+    service_period_end: expense.service_period_end || date,
+    billing_period_start: expense.billing_period_start || expense.service_period_start || date,
+    billing_period_end: expense.billing_period_end || expense.service_period_end || date,
+    month: expense.month || monthFromExpenseDate(date),
+  };
+
+  return Object.fromEntries(
+    ACTUAL_EXPENSE_WORKFLOW_FIELDS
+      .map((field) => [field, normalized[field]])
+      .filter(([, value]) => value !== undefined && value !== null)
+  );
+}
 
 
 
@@ -1344,7 +1420,7 @@ async function selectExpenseClassificationsForExpenseIds(expenseIds = [], column
   }
 
   if (!attemptedAtLeastOneLinkColumn) {
-    console.warn("[expenseService] expense_classifications id-link columns missing â€” treating as no persisted classifications.");
+    console.warn("[expenseService] expense_classifications id-link columns missing - treating as no persisted classifications.");
     return [];
   }
 
@@ -1403,19 +1479,8 @@ export const expenseService = {
   // unchanged -- not migrated in this pass.
   async createExpenseWorkflow(data) {
     const { expense } = await this.resolveExpenseLeaseLink(data);
-    const {
-      date, amount, category, vendor, vendor_id, description, classification,
-      portfolio_id, property_id, building_id, unit_id, attachment_url,
-      lease_id, tenant_id, source, fiscal_year, approval_status, review_status,
-      service_period_start, service_period_end,
-    } = expense;
     return invokeEdgeFunction("create-expense-workflow", {
-      expense: {
-        date, amount, category, vendor, vendor_id, description, classification,
-        portfolio_id, property_id, building_id, unit_id, attachment_url,
-        lease_id, tenant_id, source, fiscal_year, approval_status, review_status,
-        service_period_start, service_period_end,
-      },
+      expense: buildActualExpenseWorkflowPayload(expense),
     });
   },
 
@@ -1441,20 +1506,9 @@ export const expenseService = {
     const current = await baseExpenseService.get(id);
     const merged = { ...current, ...data, id };
     const { expense } = await this.resolveExpenseLeaseLink(merged);
-    const {
-      date, amount, category, vendor, vendor_id, description, classification,
-      portfolio_id, property_id, building_id, unit_id, attachment_url,
-      lease_id, tenant_id, source, fiscal_year,
-      service_period_start, service_period_end,
-    } = expense;
     const result = await invokeEdgeFunction("update-expense-details", {
       expense_id: id,
-      expense: {
-        date, amount, category, vendor, vendor_id, description, classification,
-        portfolio_id, property_id, building_id, unit_id, attachment_url,
-        lease_id, tenant_id, source, fiscal_year,
-        service_period_start, service_period_end,
-      },
+      expense: buildActualExpenseWorkflowPayload(expense),
     });
     clearCache();
     return result?.expense ?? null;
@@ -1490,16 +1544,7 @@ export const expenseService = {
     const expenses = [];
     for (const row of rows) {
       const { expense } = await this.resolveExpenseLeaseLink(row, leases);
-      const {
-        date, amount, category, vendor, description, classification, source,
-        gl_code, invoice_number, portfolio_id, property_id, building_id, unit_id,
-        lease_id, tenant_id, tenant_name, fiscal_year,
-      } = expense;
-      expenses.push({
-        date, amount, category, vendor, description, classification, source,
-        gl_code, invoice_number, portfolio_id, property_id, building_id, unit_id,
-        lease_id, tenant_id, tenant_name, fiscal_year,
-      });
+      expenses.push(buildActualExpenseWorkflowPayload(expense));
     }
     return invokeEdgeFunction("bulk-create-expenses", { expenses });
   },

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Feature: enterprise-readiness-hardening Phase 6X-3 (update_expense_details).
 // This wrapper fetches the current row via the generic entity service, merges
 // the edit, re-derives the lease link client-side (resolveExpenseLeaseLink,
-// unchanged), then hands a fixed 18-field whitelist to the edge function --
+// unchanged), then hands a canonical actual-expense whitelist to the edge function --
 // the real validation/idempotency/audit behavior is covered by
 // supabase/functions/_tests/update-expense-details.property.test.ts. This
 // test only proves the frontend call site sends the right shape and no
@@ -72,7 +72,7 @@ describe('expenseService.updateExpenseWorkflow', () => {
     expenseEntityMock.update.mockReset();
   });
 
-  it('fetches the current expense, merges the edit, and calls update-expense-details with the 18-field whitelist', async () => {
+  it('fetches the current expense, merges the edit, and calls update-expense-details with the canonical actual-expense payload', async () => {
     expenseEntityMock.get.mockResolvedValue({
       id: 'expense-1',
       org_id: '123e4567-e89b-12d3-a456-426614174000',
@@ -119,9 +119,10 @@ describe('expenseService.updateExpenseWorkflow', () => {
     expect(payload.expense.vendor).toBe('New Vendor');
     expect(payload.expense.category).toBe('CAM');
     expect(payload.expense.property_id).toBe('property-1');
-    // approval_status/review_status are deliberately excluded from the whitelist.
-    expect(payload.expense.approval_status).toBeUndefined();
-    expect(payload.expense.review_status).toBeUndefined();
+    // Status aliases stay synced so the grid and classification workflows read the same value.
+    expect(payload.expense.approval_status).toBe('pending');
+    expect(payload.expense.approved_status).toBe('pending');
+    expect(payload.expense.review_status).toBe('pending');
     expect(result.id).toBe('expense-1');
     expect(result.amount).toBe(1750);
 
