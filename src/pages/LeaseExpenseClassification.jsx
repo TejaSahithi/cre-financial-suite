@@ -19,6 +19,7 @@ import useOrgQuery from "@/hooks/useOrgQuery";
 import useOrgId from "@/hooks/useOrgId";
 import { buildHierarchyScope, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { expenseService } from "@/services/expenseService";
+import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { useAuth } from "@/lib/AuthContext";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { createPageUrl } from "@/utils";
@@ -80,7 +81,7 @@ function statusBadge(status) {
 function rowTypeLabel(rowType) {
   if (rowType === "matched_classification") return "Matched";
   if (rowType === "actual_missing_rule") return "Actual Missing Rule";
-  if (rowType === "rule_missing_actual") return "Rule Missing Actual";
+  if (rowType === "rule_missing_actual") return "Contract Rule - No Actual";
   return humanize(rowType);
 }
 
@@ -324,6 +325,17 @@ export default function LeaseExpenseClassification() {
     () => filteredRows.filter((row) => row.actualExpenseId).map((row) => row.id),
     [filteredRows]
   );
+
+  const selectedActionCounts = useMemo(() => {
+    const selectedRows = [...selectedIds]
+      .map((id) => rows.find((row) => row.id === id))
+      .filter(Boolean);
+    return {
+      finalize: selectedRows.filter((row) => row.canFinalize).length,
+      review: selectedRows.filter((row) => row.canSendToReview).length,
+      cam: selectedRows.filter((row) => row.canSendToCam).length,
+    };
+  }, [rows, selectedIds]);
 
   const runClassificationMutation = useMutation({
     mutationFn: () => expenseService.runExpenseClassification(scopePayload),
@@ -882,17 +894,17 @@ export default function LeaseExpenseClassification() {
               <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
               Run Classification
             </Button>
-            <Button size="sm" variant="outline" className="h-9 border-indigo-200 text-xs text-indigo-700 hover:bg-indigo-50" onClick={() => finalizeMutation.mutate(selectedIds)} disabled={finalizeMutation.isPending || selectedIds.size === 0}>
+            <Button size="sm" variant="outline" className="h-9 border-indigo-200 text-xs text-indigo-700 hover:bg-indigo-50" onClick={() => finalizeMutation.mutate(selectedIds)} disabled={finalizeMutation.isPending || selectedActionCounts.finalize === 0}>
               <Check className="mr-1.5 h-3.5 w-3.5" />
-              Finalize ({selectedIds.size})
+              Finalize ({selectedActionCounts.finalize})
             </Button>
-            <Button size="sm" variant="outline" className="h-9 border-amber-200 text-xs text-amber-700 hover:bg-amber-50" onClick={() => reviewMutation.mutate(selectedIds)} disabled={reviewMutation.isPending || selectedIds.size === 0}>
+            <Button size="sm" variant="outline" className="h-9 border-amber-200 text-xs text-amber-700 hover:bg-amber-50" onClick={() => reviewMutation.mutate(selectedIds)} disabled={reviewMutation.isPending || selectedActionCounts.review === 0}>
               <FileText className="mr-1.5 h-3.5 w-3.5" />
-              Send to Review ({selectedIds.size})
+              Send to Review ({selectedActionCounts.review})
             </Button>
-            <Button size="sm" className="h-9 bg-blue-600 text-xs hover:bg-blue-700" onClick={() => sendToCamMutation.mutate(selectedIds)} disabled={sendToCamMutation.isPending || selectedIds.size === 0}>
+            <Button size="sm" className="h-9 bg-blue-600 text-xs hover:bg-blue-700" onClick={() => sendToCamMutation.mutate(selectedIds)} disabled={sendToCamMutation.isPending || selectedActionCounts.cam === 0}>
               <ArrowRightCircle className="mr-1.5 h-3.5 w-3.5" />
-              Send to CAM ({selectedIds.size})
+              Send to CAM ({selectedActionCounts.cam})
             </Button>
           </div>
         </div>
@@ -983,9 +995,16 @@ export default function LeaseExpenseClassification() {
                     ) : (
                       filteredRows.map((row) => {
                         const isSelected = selectedIds.has(row.id);
+                        const hasActualExpense = Boolean(row.actualExpenseId);
                         const propertyLabel = row.property?.property_name || row.property?.name || "-";
                         const buildingLabel = row.building?.building_name || row.building?.name || "-";
                         const unitLabel = row.unit?.unit_number || row.unit?.unit_id_code || "-";
+                        const expenseDateLabel = hasActualExpense ? row.expenseDate || "-" : "No actual posted";
+                        const vendorLabel = hasActualExpense ? row.vendor || "-" : "Lease rule only";
+                        const canPublishContractRuleForCam =
+                          row.rowType === "rule_missing_actual" &&
+                          row.rule &&
+                          leaseExpenseRuleService.isRuleCamPublishable(row.rule);
 
                         return (
                           <TableRow key={row.id} className="group border-b-slate-100 transition-colors hover:bg-indigo-50/30">
@@ -998,8 +1017,12 @@ export default function LeaseExpenseClassification() {
                                 onChange={() => toggleRow(row.id)}
                               />
                             </TableCell>
-                            <TableCell className="text-xs text-slate-500">{row.expenseDate || "-"}</TableCell>
-                            <TableCell className="text-xs text-slate-500">{row.vendor}</TableCell>
+                            <TableCell className={`text-xs ${hasActualExpense ? "text-slate-500" : "text-slate-400"}`}>
+                              {expenseDateLabel}
+                            </TableCell>
+                            <TableCell className={`text-xs ${hasActualExpense ? "text-slate-500" : "text-slate-400"}`}>
+                              {vendorLabel}
+                            </TableCell>
                             <TableCell className="text-xs text-slate-500">
                               <div>{propertyLabel}</div>
                               <div className="text-[11px] text-slate-400">{buildingLabel} / {unitLabel}</div>
@@ -1078,10 +1101,10 @@ export default function LeaseExpenseClassification() {
                                       Send to CAM
                                     </DropdownMenuItem>
                                   )}
-                                  {row.rowType === "rule_missing_actual" && (
+                                  {canPublishContractRuleForCam && (
                                     <DropdownMenuItem onClick={() => publishRuleMutation.mutate(row.rule?.id)}>
                                       <ArrowRightCircle className="mr-2 h-4 w-4 text-blue-600" />
-                                      Publish Rule to CAM Setup
+                                      Enable Contract Rule for CAM
                                     </DropdownMenuItem>
                                   )}
                                   {row.rowType === "rule_missing_actual" && (
@@ -1090,10 +1113,10 @@ export default function LeaseExpenseClassification() {
                                       Add / Import Expense
                                     </DropdownMenuItem>
                                   )}
-                                  {(row.actualExpenseId || row.rowType === "rule_missing_actual") && (
+                                  {(row.actualExpenseId || canPublishContractRuleForCam) && (
                                     <DropdownMenuItem onClick={() => promptForAmount(row)}>
                                       <FileText className="mr-2 h-4 w-4 text-emerald-600" />
-                                      {row.rowType === "rule_missing_actual" ? "Add CAM Rule Amount" : row.amount ? "Edit Amount" : "Set Amount"}
+                                      {row.rowType === "rule_missing_actual" ? "Enter CAM Rule Amount" : row.amount ? "Edit Amount" : "Set Amount"}
                                     </DropdownMenuItem>
                                   )}
                                   {row.classificationRecord?.id && (

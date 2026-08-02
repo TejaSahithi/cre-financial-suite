@@ -116,6 +116,7 @@ export default function LeaseExpenseRules() {
   const leaseIdParam = useMemo(() => new URLSearchParams(location.search).get("lease_id") || null, [location.search]);
   const [editingRuleContext, setEditingRuleContext] = useState(null);
   const [editForm, setEditForm] = useState(null);
+  const [selectedRuleIds, setSelectedRuleIds] = useState(() => new Set());
 
   const { data: leases = [], isAdmin } = useOrgQuery("Lease");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
@@ -287,7 +288,7 @@ export default function LeaseExpenseRules() {
     console.groupEnd();
   }, [ruleSetsByLease, flattenedRows, statusFilter, search, scopeProperty, scopeBuilding, scopeUnit, leases, selectorFilteredLeases]);
 
-  const filteredRows = flattenedRows.filter(({ rule, lease }) => {
+  const filteredRows = useMemo(() => flattenedRows.filter(({ rule, lease }) => {
     if (search) {
       const haystack = [
         lease?.tenant_name,
@@ -319,9 +320,33 @@ export default function LeaseExpenseRules() {
     if (statusFilter === "needs_review") return needsReviewRule(rule);
     if (statusFilter === "approved") return isApprovedRule(rule);
     return true;
-  });
+  }), [flattenedRows, search, statusFilter]);
 
   const counts = useMemo(() => calculateRuleCounts(flattenedRows), [flattenedRows]);
+
+  const selectableRuleIds = useMemo(
+    () =>
+      filteredRows
+        .filter(({ rule }) => isUuid(rule?.id) && !isApprovedRule(rule))
+        .map(({ rule }) => rule.id),
+    [filteredRows],
+  );
+
+  const selectedVisibleCount = useMemo(
+    () => selectableRuleIds.filter((id) => selectedRuleIds.has(id)).length,
+    [selectableRuleIds, selectedRuleIds],
+  );
+
+  const allVisibleSelectableSelected =
+    selectableRuleIds.length > 0 && selectedVisibleCount === selectableRuleIds.length;
+
+  useEffect(() => {
+    setSelectedRuleIds((current) => {
+      const selectable = new Set(selectableRuleIds);
+      const next = new Set([...current].filter((id) => selectable.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [selectableRuleIds]);
 
   const persistedLeaseIdsWithRules = useMemo(() => {
     const ids = new Set();
@@ -488,6 +513,73 @@ export default function LeaseExpenseRules() {
     onError: (error) => toast.error(error?.message || "Could not review rule"),
   });
 
+  const bulkApproveRulesMutation = useMutation({
+    mutationFn: async () => {
+      const selected = new Set(selectedRuleIds);
+      const targets = filteredRows.filter(({ rule }) => selected.has(rule?.id));
+      const summary = { approved: 0, skipped: [], failed: [] };
+
+      for (const { rule, lease } of targets) {
+        try {
+          const persistedRule = await ensurePersistedRule(rule, lease);
+          const now = new Date().toISOString();
+          const approvalPreview = {
+            ...persistedRule,
+            review_status: "approved",
+            approval_status: "approved",
+            approved_by: persistedRule.approved_by || null,
+            approved_at: now,
+            updated_at: now,
+          };
+          const validation = getRuleValidation(approvalPreview);
+          if (!validation.canApprove) {
+            summary.skipped.push({
+              ruleId: persistedRule.id,
+              reason: validation.approvalBlockers[0] || "Rule is missing required approval evidence.",
+            });
+            continue;
+          }
+
+          await approveLeaseExpenseRule({
+            ruleId: persistedRule.id,
+            reason: "Bulk approved from Lease Expense Rules review",
+            idempotencyKey: createRuleReviewIdempotencyKey(persistedRule.id, "approve"),
+          });
+          summary.approved += 1;
+        } catch (error) {
+          summary.failed.push({
+            ruleId: rule?.id,
+            message: error?.message || "Could not approve rule",
+          });
+        }
+      }
+
+      return summary;
+    },
+    onSuccess: (summary) => {
+      invalidateRuleWorkflowQueries();
+      setSelectedRuleIds(new Set());
+
+      if (summary.approved > 0) {
+        toast.success(`Approved ${summary.approved} lease expense rule${summary.approved === 1 ? "" : "s"}.`);
+      }
+      if (summary.skipped.length > 0) {
+        toast.warning(`${summary.skipped.length} selected rule${summary.skipped.length === 1 ? "" : "s"} need edits before approval.`);
+        console.warn("[LeaseExpenseRules] bulk approve skipped rules:", summary.skipped);
+      }
+      if (summary.failed.length > 0) {
+        const firstFailure = summary.failed[0]?.message;
+        toast.error(
+          firstFailure
+            ? `${summary.failed.length} selected rule${summary.failed.length === 1 ? "" : "s"} failed: ${firstFailure}`
+            : `${summary.failed.length} selected rule${summary.failed.length === 1 ? "" : "s"} failed. Check console logs for details.`,
+        );
+        console.warn("[LeaseExpenseRules] bulk approve failed rules:", summary.failed);
+      }
+    },
+    onError: (error) => toast.error(error?.message || "Could not approve selected rules"),
+  });
+
   const ensurePersistedRule = async (rule, lease) => {
     if (isUuid(rule?.id)) {
       return rule;
@@ -557,6 +649,33 @@ export default function LeaseExpenseRules() {
       ruleId: rule.id,
       reason: "Marked not applicable from Lease Expense Rules review",
     }).then(() => toast.success("Rule marked N/A"));
+  };
+
+  const toggleRuleSelection = (ruleId, checked) => {
+    if (!ruleId) return;
+    setSelectedRuleIds((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(ruleId);
+      } else {
+        next.delete(ruleId);
+      }
+      return next;
+    });
+  };
+
+  const toggleAllVisibleRules = (checked) => {
+    setSelectedRuleIds((current) => {
+      const next = new Set(current);
+      for (const ruleId of selectableRuleIds) {
+        if (checked) {
+          next.add(ruleId);
+        } else {
+          next.delete(ruleId);
+        }
+      }
+      return next;
+    });
   };
 
   const saveRuleEdits = async () => {
@@ -694,6 +813,28 @@ export default function LeaseExpenseRules() {
             <TabsTrigger value="gaps" className="text-xs">Coverage Gaps / Needs Review ({coverageGapRows.length})</TabsTrigger>
           </TabsList>
         </Tabs>
+        <div className="ml-auto flex items-center gap-2">
+          {selectedRuleIds.size > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setSelectedRuleIds(new Set())}
+              disabled={bulkApproveRulesMutation.isPending}
+            >
+              Clear ({selectedRuleIds.size})
+            </Button>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => bulkApproveRulesMutation.mutate()}
+            disabled={selectedRuleIds.size === 0 || bulkApproveRulesMutation.isPending}
+          >
+            {bulkApproveRulesMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Approve Selected ({selectedRuleIds.size})
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -701,6 +842,16 @@ export default function LeaseExpenseRules() {
           <Table>
             <TableHeader>
               <TableRow className="bg-slate-50">
+                <TableHead className="w-10 text-center">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    checked={allVisibleSelectableSelected}
+                    disabled={selectableRuleIds.length === 0 || bulkApproveRulesMutation.isPending}
+                    onChange={(event) => toggleAllVisibleRules(event.target.checked)}
+                    aria-label="Select all visible lease expense rules"
+                  />
+                </TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Tenant</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Property</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Category</TableHead>
@@ -718,13 +869,13 @@ export default function LeaseExpenseRules() {
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={12} className="py-12 text-center">
+                  <TableCell colSpan={13} className="py-12 text-center">
                     <Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" />
                   </TableCell>
                 </TableRow>
               ) : filteredRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={12} className="py-12 text-center text-sm text-slate-400">
+                  <TableCell colSpan={13} className="py-12 text-center text-sm text-slate-400">
                     <div className="mx-auto flex max-w-2xl flex-col items-center gap-3">
                       {ruleSetLoadError ? (
                         <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-left text-red-700">
@@ -767,7 +918,10 @@ export default function LeaseExpenseRules() {
                     property={property}
                     category={category}
                     displayMode={displayMode}
-                    isUpdating={updateRuleMutation.isPending}
+                    isUpdating={updateRuleMutation.isPending || bulkApproveRulesMutation.isPending}
+                    isSelected={selectedRuleIds.has(rule.id)}
+                    canSelect={isUuid(rule?.id) && !isApprovedRule(rule)}
+                    onSelectChange={(checked) => toggleRuleSelection(rule.id, checked)}
                     onApprove={(r, l) => approveRule(r, l)}
                     onReject={(r, l) => rejectRule(r, l)}
                     onMarkNA={(r, l) => markNARule(r, l)}

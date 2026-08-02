@@ -42,6 +42,9 @@ export default function RuleTableRow({
   category,
   displayMode,
   isUpdating,
+  isSelected = false,
+  canSelect = false,
+  onSelectChange,
   onApprove,
   onReject,
   onMarkNA,
@@ -86,6 +89,16 @@ export default function RuleTableRow({
 
   return (
     <TableRow className="align-top hover:bg-slate-50">
+      <TableCell className="text-center align-middle">
+        <input
+          type="checkbox"
+          className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+          checked={isSelected}
+          disabled={!canSelect || isUpdating}
+          onChange={(event) => onSelectChange?.(event.target.checked)}
+          aria-label="Select lease expense rule"
+        />
+      </TableCell>
       <TableCell className="text-sm font-medium text-slate-900">
         {lease ? (
           <Link
