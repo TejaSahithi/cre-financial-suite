@@ -41,6 +41,7 @@ export function hasExplicitCamExclusion({ classification = {}, expense = {}, rul
 
 export function canSendClassificationToCam({ classification, expense, rule, manualReason = "" }) {
   const amount = toNumber(classification?.amount ?? expense?.amount);
+  const classificationStatus = normalizeText(classification?.classification_status);
   const recoverabilityResult = normalizeText(classification?.recoverability_result || classification?.recovery_status);
   const camEligible = normalizeText(classification?.cam_eligible);
   const paymentTreatment = normalizeText(leaseExpenseRuleService.getPaymentTreatment(rule));
@@ -48,12 +49,15 @@ export function canSendClassificationToCam({ classification, expense, rule, manu
   const hasRule = Boolean(classification?.lease_expense_rule_id || classification?.linked_expense_rule_id);
   const hasManualReason = Boolean(String(manualReason || "").trim());
   const explicitExclusion = hasExplicitCamExclusion({ classification, expense, rule });
+  const finalizedCamEligibleActual =
+    classificationStatus === "finalized" &&
+    recoverabilityResult === "recoverable" &&
+    camEligible === "yes";
 
   const automaticActualPath =
     hasActual &&
     hasRule &&
-    recoverabilityResult === "recoverable" &&
-    camEligible === "yes" &&
+    finalizedCamEligibleActual &&
     rule?.published_to_cam === true &&
     amount > 0 &&
     !isClassificationSentToCam(classification) &&
@@ -62,6 +66,7 @@ export function canSendClassificationToCam({ classification, expense, rule, manu
 
   const manualActualPath =
     hasActual &&
+    finalizedCamEligibleActual &&
     hasManualReason &&
     amount > 0 &&
     !isClassificationSentToCam(classification) &&

@@ -175,10 +175,11 @@ export default function ExpenseProjection() {
   const categoryData = useMemo(() => {
     const categories = {};
 
-    currentExpenses.forEach((expense) => {
+    expensesForProjection.forEach((expense) => {
       const category = expense.category || "other";
       if (!categories[category]) {
         categories[category] = {
+          all: 0,
           current: 0,
           prev: 0,
           budgeted: 0,
@@ -186,24 +187,9 @@ export default function ExpenseProjection() {
           recoverability: null,
         };
       }
-      categories[category].current += expense.amount || 0;
-      if (expense.recoverability && !categories[category].recoverability) {
-        categories[category].recoverability = expense.recoverability;
-      }
-    });
-
-    prevExpenses.forEach((expense) => {
-      const category = expense.category || "other";
-      if (!categories[category]) {
-        categories[category] = {
-          current: 0,
-          prev: 0,
-          budgeted: 0,
-          classification: expense.classification,
-          recoverability: null,
-        };
-      }
-      categories[category].prev += expense.amount || 0;
+      categories[category].all += expense.amount || 0;
+      if (expense.fiscal_year === currentYear) categories[category].current += expense.amount || 0;
+      if (expense.fiscal_year === prevYear) categories[category].prev += expense.amount || 0;
       if (expense.recoverability && !categories[category].recoverability) {
         categories[category].recoverability = expense.recoverability;
       }
@@ -213,26 +199,68 @@ export default function ExpenseProjection() {
       currentBudget.expense_items.forEach((item) => {
         const category = item.category || "other";
         if (!categories[category]) {
-          categories[category] = { current: 0, prev: 0, budgeted: 0, recoverability: null };
+          categories[category] = { all: 0, current: 0, prev: 0, budgeted: 0, recoverability: null };
         }
         categories[category].budgeted += item.amount || 0;
       });
     }
 
     return Object.entries(categories)
-      .sort(([, left], [, right]) => right.current - left.current)
+      .sort(([, left], [, right]) => right.all - left.all)
       .map(([category, values]) => {
         const projected =
           values.budgeted > 0 ? values.budgeted : values.prev > 0 ? values.prev * 1.03 : values.current;
         return { category, ...values, projected };
       });
-  }, [currentBudget, currentExpenses, prevExpenses]);
+  }, [currentBudget, currentYear, expensesForProjection, prevYear]);
 
   const totalCurrent = categoryData.reduce((sum, category) => sum + category.current, 0);
   const totalPrev = categoryData.reduce((sum, category) => sum + category.prev, 0);
   const totalBudgeted =
     currentBudget?.total_expenses || categoryData.reduce((sum, category) => sum + category.budgeted, 0);
   const totalProjected = categoryData.reduce((sum, category) => sum + category.projected, 0);
+  const totalFinalized = expensesForProjection.reduce((sum, expense) => sum + (expense.amount || 0), 0);
+  const camEligibleFinalized = expensesForProjection
+    .filter((expense) => normalizeProjectionText(expense.cam_eligible) === "yes")
+    .reduce((sum, expense) => sum + (expense.amount || 0), 0);
+  const sentToCamTotal = expensesForProjection
+    .filter((expense) => expense.sent_to_cam || normalizeProjectionText(expense.cam_status) === "sent")
+    .reduce((sum, expense) => sum + (expense.amount || 0), 0);
+
+  const yearlyChart = useMemo(() => {
+    const byYear = {};
+    expensesForProjection.forEach((expense) => {
+      const year = expense.fiscal_year || currentYear;
+      if (!byYear[year]) byYear[year] = { year: String(year), finalized: 0, recoverable: 0, nonRecoverable: 0 };
+      byYear[year].finalized += expense.amount || 0;
+      const recovery = normalizeProjectionText(expense.recoverability);
+      if (recovery === "recoverable") byYear[year].recoverable += expense.amount || 0;
+      if (recovery === "non_recoverable" || recovery === "excluded") byYear[year].nonRecoverable += expense.amount || 0;
+    });
+    return Object.values(byYear).sort((left, right) => Number(left.year) - Number(right.year));
+  }, [currentYear, expensesForProjection]);
+
+  const recoveryChart = useMemo(() => {
+    const buckets = {
+      recoverable: 0,
+      non_recoverable: 0,
+      conditional: 0,
+      excluded: 0,
+    };
+    expensesForProjection.forEach((expense) => {
+      const recovery = normalizeProjectionText(expense.recoverability);
+      if (recovery === "recoverable") buckets.recoverable += expense.amount || 0;
+      else if (recovery === "conditional") buckets.conditional += expense.amount || 0;
+      else if (recovery === "excluded") buckets.excluded += expense.amount || 0;
+      else buckets.non_recoverable += expense.amount || 0;
+    });
+    return [
+      { type: "Recoverable", amount: Math.round(buckets.recoverable) },
+      { type: "Non-Recoverable", amount: Math.round(buckets.non_recoverable) },
+      { type: "Conditional", amount: Math.round(buckets.conditional) },
+      { type: "Excluded", amount: Math.round(buckets.excluded) },
+    ];
+  }, [expensesForProjection]);
 
   const monthlyChart = useMemo(
     () =>
@@ -294,6 +322,39 @@ export default function ExpenseProjection() {
             </Link>
           </CardContent>
         </Card>
+      )}
+
+      {hasFinalizedData && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <Card className="border-l-4 border-l-slate-700">
+            <CardContent className="p-4">
+              <p className="text-[10px] font-semibold uppercase text-slate-500">Finalized Expense Total</p>
+              <p className="text-2xl font-bold text-slate-900">${totalFinalized.toLocaleString()}</p>
+              <p className="text-[10px] text-slate-500">all finalized rows in scope</p>
+            </CardContent>
+          </Card>
+          <Card className="border-l-4 border-l-indigo-500">
+            <CardContent className="p-4">
+              <p className="text-[10px] font-semibold uppercase text-slate-500">Finalized Rows</p>
+              <p className="text-2xl font-bold text-indigo-900">{expensesForProjection.length}</p>
+              <p className="text-[10px] text-slate-500">approved classifications</p>
+            </CardContent>
+          </Card>
+          <Card className="border-l-4 border-l-blue-500">
+            <CardContent className="p-4">
+              <p className="text-[10px] font-semibold uppercase text-slate-500">CAM-Eligible Finalized</p>
+              <p className="text-2xl font-bold text-blue-900">${camEligibleFinalized.toLocaleString()}</p>
+              <p className="text-[10px] text-slate-500">ready for CAM workflow</p>
+            </CardContent>
+          </Card>
+          <Card className="border-l-4 border-l-emerald-500">
+            <CardContent className="p-4">
+              <p className="text-[10px] font-semibold uppercase text-slate-500">Sent to CAM</p>
+              <p className="text-2xl font-bold text-emerald-900">${sentToCamTotal.toLocaleString()}</p>
+              <p className="text-[10px] text-slate-500">posted to CAM input</p>
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       {hasFinalizedData && (
@@ -378,6 +439,43 @@ export default function ExpenseProjection() {
         </Card>
       </div>
 
+      {hasFinalizedData && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Finalized Expenses by Year</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ResponsiveContainer width="100%" height={260}>
+                <BarChart data={yearlyChart}>
+                  <XAxis dataKey="year" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`} />
+                  <Tooltip formatter={(value) => `$${Number(value).toLocaleString()}`} />
+                  <Legend />
+                  <Bar dataKey="recoverable" name="Recoverable" fill="#10b981" radius={[2, 2, 0, 0]} barSize={24} />
+                  <Bar dataKey="nonRecoverable" name="Non-Recoverable / Excluded" fill="#f43f5e" radius={[2, 2, 0, 0]} barSize={24} />
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Recoverability Mix - All Finalized Rows</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ResponsiveContainer width="100%" height={260}>
+                <BarChart data={recoveryChart}>
+                  <XAxis dataKey="type" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`} />
+                  <Tooltip formatter={(value) => `$${Number(value).toLocaleString()}`} />
+                  <Bar dataKey="amount" name="Amount" fill="#2563eb" radius={[2, 2, 0, 0]} barSize={34} />
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Monthly Comparison - Current Year vs Prior Year vs Budget</CardTitle>
@@ -412,6 +510,7 @@ export default function ExpenseProjection() {
                 <TableRow className="bg-slate-50">
                   <TableHead className="text-[11px]">CATEGORY</TableHead>
                   <TableHead className="text-[11px]">RECOVERY</TableHead>
+                  <TableHead className="text-[11px] text-right">ALL FINALIZED</TableHead>
                   <TableHead className="text-[11px] text-right">ACTUAL {currentYear}</TableHead>
                   <TableHead className="text-[11px] text-right">ACTUAL {prevYear}</TableHead>
                   <TableHead className="text-[11px] text-right">BUDGET {currentYear}</TableHead>
@@ -447,6 +546,7 @@ export default function ExpenseProjection() {
                           {category.recoverability ? category.recoverability.replace(/_/g, " ") : "-"}
                         </Badge>
                       </TableCell>
+                      <TableCell className="text-sm font-mono text-right text-slate-900">${category.all.toLocaleString()}</TableCell>
                       <TableCell className="text-sm font-mono text-right">${category.current.toLocaleString()}</TableCell>
                       <TableCell className="text-sm font-mono text-right text-slate-400">${category.prev.toLocaleString()}</TableCell>
                       <TableCell className="text-sm font-mono text-right text-blue-600">${category.budgeted.toLocaleString()}</TableCell>
@@ -470,7 +570,7 @@ export default function ExpenseProjection() {
                 })}
                 {categoryData.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8 text-sm text-slate-400">
+                    <TableCell colSpan={9} className="text-center py-8 text-sm text-slate-400">
                       No expense data
                     </TableCell>
                   </TableRow>
@@ -479,6 +579,7 @@ export default function ExpenseProjection() {
                   <TableRow className="bg-slate-50 font-bold">
                     <TableCell className="text-sm">TOTAL</TableCell>
                     <TableCell className="text-sm text-slate-400">-</TableCell>
+                    <TableCell className="text-sm font-mono text-right text-slate-900">${totalFinalized.toLocaleString()}</TableCell>
                     <TableCell className="text-sm font-mono text-right">${totalCurrent.toLocaleString()}</TableCell>
                     <TableCell className="text-sm font-mono text-right text-slate-400">${totalPrev.toLocaleString()}</TableCell>
                     <TableCell className="text-sm font-mono text-right text-blue-600">${totalBudgeted.toLocaleString()}</TableCell>

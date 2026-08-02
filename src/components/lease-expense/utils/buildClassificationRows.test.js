@@ -6,6 +6,7 @@ import {
   buildAmountBuckets,
   leaseCoversYear,
   isClassificationSentToCam,
+  isAutomaticCamReadyRow,
   buildClassificationRows
 } from './buildClassificationRows';
 
@@ -163,9 +164,73 @@ describe('buildClassificationRows', () => {
     expect(rows[0].canSendToCam).toBe(false);
     expect(rows[0].canSendToReview).toBe(true);
   });
+  it('allows finalized recoverable CAM-eligible rows to be sent even when the rule is not pre-published', () => {
+    const lease = {
+      id: 'lease-sendable',
+      property_id: 'property-1',
+      building_id: 'building-1',
+      unit_id: 'unit-1',
+      tenant_id: 'tenant-1',
+      tenant_name: 'Tenant One',
+      start_date: '2025-01-01',
+      end_date: '2025-12-31',
+    };
+    const rule = {
+      id: 'rule-sendable',
+      lease_id: 'lease-sendable',
+      property_id: 'property-1',
+      building_id: 'building-1',
+      unit_id: 'unit-1',
+      expense_category: 'insurance',
+      recoverable_from_tenant: 'yes',
+      cam_eligible: 'yes',
+      published_to_cam: false,
+    };
+    const actual = {
+      id: 'expense-sendable',
+      lease_id: 'lease-sendable',
+      property_id: 'property-1',
+      building_id: 'building-1',
+      unit_id: 'unit-1',
+      tenant_id: 'tenant-1',
+      category: 'insurance',
+      amount: 150,
+      date: '2025-08-03',
+      vendor: 'ABC',
+      approval_status: 'approved',
+      review_status: 'approved',
+    };
+    const classification = {
+      id: 'classification-sendable',
+      expense_id: 'expense-sendable',
+      lease_expense_rule_id: 'rule-sendable',
+      classification_status: 'finalized',
+      recoverability_result: 'recoverable',
+      cam_eligible: 'yes',
+      sent_to_cam: false,
+    };
+
+    const rows = buildClassificationRows({
+      approvedActuals: [actual],
+      approvedRules: [rule],
+      existingClassifications: [classification],
+      scopedLeases: [lease],
+      leases: [lease],
+      leaseById: new Map([[lease.id, lease]]),
+      propertyById: new Map(),
+      buildingById: new Map(),
+      unitById: new Map(),
+      tenantById: new Map([['tenant-1', { id: 'tenant-1', name: 'Tenant One' }]]),
+      scopeYear: '2025',
+    });
+
+    expect(rows[0].canSendToCam).toBe(true);
+    expect(isAutomaticCamReadyRow(rows[0])).toBe(false);
+    expect(rows[0].nextStep).toBe('Send to CAM');
+  });
   it('isClassificationSentToCam detects sent status', () => {
     expect(isClassificationSentToCam({ sent_to_cam: true })).toBe(true);
-    expect(isClassificationSentToCam({ cam_status: 'cam_ready' })).toBe(true);
+    expect(isClassificationSentToCam({ cam_status: 'cam_ready' })).toBe(false);
     expect(isClassificationSentToCam({ cam_status: 'needs_review' })).toBe(false);
   });
 });

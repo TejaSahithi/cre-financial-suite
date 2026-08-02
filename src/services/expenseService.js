@@ -2896,6 +2896,8 @@ export const expenseService = {
 
     const rule = ruleResult?.data || null;
 
+    const manualReason = String(reason || classification.manual_cam_reason || "").trim();
+
     // ── Hard-block CAM eligibility gate (Batch D, F12) ────────────────
     // Spec: CAM may only consume cam_eligible="yes" classifications. A manual
     // reason can no longer override this — the gate ran too loose, allowing
@@ -2908,11 +2910,11 @@ export const expenseService = {
         { reason: classification.cam_eligible || "missing_cam_eligible" },
       );
     }
-    if (rule && !isRuleCamEligible(rule, { scopeMatch: true })) {
-      const reason = getRuleCamExclusionReason(rule, { scopeMatch: true });
+    const ruleCamReason = rule ? getRuleCamExclusionReason(rule, { scopeMatch: true }) : null;
+    if (ruleCamReason && !(ruleCamReason === "not_published_to_cam" && manualReason)) {
       throw new CamEligibilityError(
-        `Cannot send to CAM: linked rule is not CAM-eligible (${reason}).`,
-        { reason },
+        `Cannot send to CAM: linked rule is not CAM-eligible (${ruleCamReason}).`,
+        { reason: ruleCamReason },
       );
     }
 
@@ -2947,10 +2949,11 @@ export const expenseService = {
 
     const isAutomatic =
       Boolean(rule) &&
-      classification.recoverability_result === "recoverable" &&
-      classification.cam_eligible === "yes" &&
+      normalizeText(classification.classification_status) === "finalized" &&
+      normalizeText(classification.recoverability_result) === "recoverable" &&
+      normalizeText(classification.cam_eligible) === "yes" &&
       rule.published_to_cam === true;
-    const manualReason = String(reason || classification.manual_cam_reason || "").trim();
+
     if (!isAutomatic && !manualReason) {
       throw new Error("Enter a reason before manually sending an unmatched or needs-review actual expense to CAM.");
     }

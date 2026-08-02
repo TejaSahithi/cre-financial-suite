@@ -32,6 +32,20 @@ describe('expenseService - CAM Classification Helpers', () => {
     expect(canSendClassificationToCam({ classification, expense, rule })).toBe(true);
   });
 
+  it('canSendClassificationToCam allows finalized CAM-eligible actuals with a manual reason when the rule is not pre-published', () => {
+    const classification = {
+      ...MOCK_CLASSIFICATION_RECORD,
+      classification_status: "finalized",
+      cam_eligible: "yes",
+      recoverability_result: "recoverable",
+      sent_to_cam: false,
+    };
+    const rule = { ...MOCK_APPROVED_CAM_RULE, recoverable_from_tenant: "yes", cam_eligible: "yes", published_to_cam: false };
+    const expense = { ...MOCK_ACTUAL_EXPENSE, amount: 1000 };
+
+    expect(canSendClassificationToCam({ classification, expense, rule })).toBe(false);
+    expect(canSendClassificationToCam({ classification, expense, rule, manualReason: "Reviewer approved CAM send" })).toBe(true);
+  });
   it('canSendClassificationToCam returns false for needs-review or missing-rule case', () => {
     const classification = {
       ...MOCK_CLASSIFICATION_RECORD,

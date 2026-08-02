@@ -46,7 +46,6 @@ export function isClassificationSentToCam(record = {}) {
   return Boolean(
     record?.sent_to_cam ||
     normalizeText(record?.cam_status) === "sent" ||
-    normalizeText(record?.cam_status) === "cam_ready" ||
     record?.sent_to_cam_at ||
     normalizeText(record?.next_step) === "sent to cam"
   );
@@ -133,16 +132,23 @@ export function hasExplicitCamExclusion(row) {
     Boolean(row?.rule?.is_excluded);
 }
 
-export function isAutomaticCamReadyRow(row) {
+export function canSendFinalizedActualToCam(row) {
   return Boolean(
     row?.actualExpenseId &&
     row?.rowType === "matched_classification" &&
     row?.classificationStatus === "finalized" &&
     row?.recoverabilityResult === "recoverable" &&
     row?.camEligible === "yes" &&
-    row?.rule?.published_to_cam === true &&
     row?.amount > 0 &&
+    !row?.sentToCam &&
     !hasExplicitCamExclusion(row)
+  );
+}
+
+export function isAutomaticCamReadyRow(row) {
+  return Boolean(
+    canSendFinalizedActualToCam(row) &&
+    row?.rule?.published_to_cam === true
   );
 }
 
@@ -313,7 +319,7 @@ export function buildClassificationRows({
         (hasMatchedRule
           ? (
             classificationStatus === "finalized"
-              ? (camEligible === "yes" && recoverabilityResult === "recoverable" && matchedRule?.published_to_cam === true ? "CAM Ready" : "Needs Review")
+              ? (camEligible === "yes" && recoverabilityResult === "recoverable" ? "Send to CAM" : "Ready for projection")
               : "Finalize row"
           )
           : "Needs Review"),
@@ -339,7 +345,7 @@ export function buildClassificationRows({
         row.recoverabilityResult === "needs_review" ||
         row.recoverabilityResult === "conditional" ||
         ["unmatched", "exception", "conditional"].includes(row.classificationStatus));
-    row.canSendToCam = isAutomaticCamReadyRow(row);
+    row.canSendToCam = canSendFinalizedActualToCam(row);
 
     const decisionObj = getCamDecision(row);
     row.camDecision = decisionObj.label;
