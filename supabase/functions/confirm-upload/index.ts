@@ -36,6 +36,7 @@ Deno.serve(async (req: Request) => {
 
     const body = await req.json().catch(() => ({}));
     const fileId = body.file_id;
+    const deferStore = body.defer_store === true;
     if (!fileId) {
       return jsonResponse({ error: true, error_code: "MISSING_FILE_ID", message: "file_id is required" }, 400);
     }
@@ -111,7 +112,11 @@ Deno.serve(async (req: Request) => {
       ingestResponse = await fetch(`${supabaseUrl}/functions/v1/ingest-file`, {
         method: "POST",
         headers: forwardHeaders,
-        body: JSON.stringify({ file_id: fileId, module_type: confirmedRow.module_type }),
+        body: JSON.stringify({
+          file_id: fileId,
+          module_type: confirmedRow.module_type,
+          ...(deferStore ? { defer_store: true } : {}),
+        }),
       });
     } catch (fetchErr: any) {
       console.error("[confirm-upload] ingest-file call failed:", fetchErr?.message);

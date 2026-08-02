@@ -56,6 +56,9 @@ const CATEGORIES = [
 
 const VENDOR_CATEGORIES = ["maintenance", "utilities", "insurance", "janitorial", "landscaping", "security", "legal", "accounting", "construction", "technology", "other"];
 
+const DOCUMENT_UPLOAD_ACCEPT = ".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.tsv,.png,.jpg,.jpeg,.tiff,.tif,.webp,.gif,.bmp";
+const DOCUMENT_UPLOAD_HELP_TEXT = "PDF, Word, Excel, CSV, text, or image files up to 50MB";
+
 function buildInitialForm(scope) {
   return {
     date: "",
@@ -116,6 +119,8 @@ export default function AddExpense() {
   const [invoiceExtractionStatus, setInvoiceExtractionStatus] = useState("");
   const [invoiceExtractionError, setInvoiceExtractionError] = useState("");
   const [extractedInvoiceName, setExtractedInvoiceName] = useState("");
+  const [pendingInvoiceUpload, setPendingInvoiceUpload] = useState(null);
+  const [invoiceDetailsVisible, setInvoiceDetailsVisible] = useState(!isInvoiceMode);
   const invoiceFileInputRef = useRef(null);
   const [showNewVendor, setShowNewVendor] = useState(false);
   const [newVendorForm, setNewVendorForm] = useState({
@@ -125,12 +130,22 @@ export default function AddExpense() {
     category: "other",
     payment_terms: "net_30",
   });
+
   const editingExpense = useMemo(
     () => expenses.find((expense) => expense.id === editExpenseId) || null,
     [expenses, editExpenseId]
   );
   const isEditing = Boolean(editExpenseId);
 
+  useEffect(() => {
+    setInvoiceDetailsVisible(isEditing || !isInvoiceMode);
+    if (!isInvoiceMode) {
+      setPendingInvoiceUpload(null);
+      setInvoiceExtractionStatus("");
+      setInvoiceExtractionError("");
+      setExtractedInvoiceName("");
+    }
+  }, [isEditing, isInvoiceMode]);
   useEffect(() => {
     if (isEditing) return;
     setForm((current) => ({
@@ -415,9 +430,11 @@ export default function AddExpense() {
     const file = event.target.files?.[0];
     if (!file) return;
     setUploading(true);
+    setInvoiceDetailsVisible(false);
     setInvoiceExtractionError("");
-    setInvoiceExtractionStatus("Uploading invoice securely…");
+    setInvoiceExtractionStatus("Uploading document securely...");
     setExtractedInvoiceName(file.name);
+    setPendingInvoiceUpload(null);
 
     try {
       const formData = new FormData();
@@ -432,11 +449,16 @@ export default function AddExpense() {
         "upload-handler",
         formData,
         {},
-        { page: "AddExpense", action: "invoice_upload" }
+        { page: "AddExpense", action: "expense_document_upload" }
       );
-      if (!upload?.file_id) throw new Error("Invoice upload completed without a file id.");
+      if (!upload?.file_id) throw new Error("Document upload completed without a file id.");
 
-      setForm((current) => ({ ...current, source_file_id: upload.file_id }));
+      setPendingInvoiceUpload({
+        file_id: upload.file_id,
+        file_name: upload.file_name || file.name,
+        storage_path: upload.storage_path || null,
+      });
+      setForm((current) => ({ ...current, source_file_id: upload.file_id, source: "invoice" }));
 
       if (upload.storage_path) {
         const { data: signedData } = await supabase.storage
@@ -445,48 +467,100 @@ export default function AddExpense() {
         setAttachmentUrl(signedData?.signedUrl || "");
       }
 
-      setInvoiceExtractionStatus("Reading invoice and mapping expense fields…");
-      let ingestError = null;
+      setInvoiceExtractionStatus("Document uploaded. Proceed with extraction or cancel.");
+      toast.success("Document uploaded. Choose Proceed with Extraction to map the fields.");
+    } catch (error) {
+      console.error("[AddExpense] expense document upload failed:", error);
+      const message = error?.message || "Document upload failed.";
+      setInvoiceExtractionError(message);
+      setInvoiceExtractionStatus("");
+      setPendingInvoiceUpload(null);
+      toast.error(message);
+    } finally {
+      setUploading(false);
+      if (event.target) event.target.value = "";
+    }
+  };
+
+  const handleProceedInvoiceExtraction = async () => {
+    const fileId = pendingInvoiceUpload?.file_id || form.source_file_id;
+    if (!fileId) {
+      toast.error("Choose a document before starting extraction.");
+      return;
+    }
+
+    setUploading(true);
+    setInvoiceDetailsVisible(true);
+    setInvoiceExtractionError("");
+    setInvoiceExtractionStatus("Reading document and mapping expense fields...");
+
+    let confirmError = null;
+    try {
       try {
         await invokeEdgeFunction(
-          "ingest-file",
-          {
-            file_id: upload.file_id,
-            module_type: "expenses",
-            defer_store: true,
-          },
+          "confirm-upload",
+          { file_id: fileId, defer_store: true },
           {},
-          { page: "AddExpense", action: "invoice_extract" }
+          { page: "AddExpense", action: "expense_document_confirm_extract" }
         );
       } catch (error) {
-        // The orchestrator request can time out while Azure/LLM processing
-        // continues in its downstream function. Poll the durable file row
-        // before treating the client-side request error as terminal.
         if (!/timeout|timed out|failed to send|network|fetch/i.test(String(error?.message || error))) {
           throw error;
         }
-        ingestError = error;
+        confirmError = error;
       }
+
       let extracted;
       try {
-        extracted = await waitForInvoiceExtraction(upload.file_id);
+        extracted = await waitForInvoiceExtraction(fileId);
       } catch (pollError) {
-        throw ingestError || pollError;
+        throw confirmError || pollError;
       }
+
       const { rows } = extracted;
       const candidate = buildInvoiceExpenseCandidate(rows[0], CATEGORIES);
       applyInvoiceCandidate(candidate);
-      setInvoiceExtractionStatus("Invoice fields extracted. Review them before saving.");
-      toast.success("Invoice extracted and the Add Expense form was prefilled.");
+      setInvoiceExtractionStatus("Document fields extracted. Review them before saving.");
+      toast.success("Document extracted and the Add Expense form was prefilled.");
     } catch (error) {
-      console.error("[AddExpense] invoice extraction failed:", error);
-      const message = error?.message || "Invoice extraction failed.";
+      console.error("[AddExpense] expense document extraction failed:", error);
+      const message = error?.message || "Document extraction failed.";
       setInvoiceExtractionError(message);
       setInvoiceExtractionStatus("");
       toast.error(message);
     } finally {
       setUploading(false);
-      event.target.value = "";
+    }
+  };
+
+  const handleCancelInvoiceUpload = async () => {
+    const fileId = pendingInvoiceUpload?.file_id || form.source_file_id;
+    setUploading(true);
+    setInvoiceExtractionError("");
+
+    try {
+      if (fileId) {
+        await invokeEdgeFunction(
+          "cancel-upload",
+          { file_id: fileId },
+          {},
+          { page: "AddExpense", action: "expense_document_cancel_upload" }
+        );
+      }
+      setPendingInvoiceUpload(null);
+      setInvoiceDetailsVisible(false);
+      setInvoiceExtractionStatus("");
+      setExtractedInvoiceName("");
+      setAttachmentUrl("");
+      setForm((current) => ({ ...current, source_file_id: "", source: "manual" }));
+      toast.success("Upload cancelled.");
+    } catch (error) {
+      console.error("[AddExpense] expense document cancel failed:", error);
+      const message = error?.message || "Could not cancel upload.";
+      setInvoiceExtractionError(message);
+      toast.error(message);
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -571,6 +645,7 @@ export default function AddExpense() {
   };
 
   const isValid = form.date && form.amount && form.category && form.vendor && form.property_id;
+  const showExpenseEntryForm = isEditing || !isInvoiceMode || invoiceDetailsVisible;
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
@@ -584,37 +659,59 @@ export default function AddExpense() {
 
       {isInvoiceMode && (
         <Card className="border-blue-200 bg-blue-50/50">
-          <CardContent className="p-5">
+          <CardContent className="p-5 space-y-4">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="font-semibold text-slate-900 flex items-center gap-2">
                   <FileUp className="w-5 h-5 text-blue-600" />
-                  Upload vendor invoice
+                  Upload vendor invoice or expense document
                 </p>
                 <p className="text-sm text-slate-600 mt-1">
-                  Azure Document Intelligence reads the invoice, then the expense extraction model maps its values into this form. Nothing is saved until you review and submit.
+                  Upload the source document first. Extraction starts only after you choose Proceed with Extraction, and nothing is saved until you review and submit.
                 </p>
+                <p className="text-xs text-slate-500 mt-2">{DOCUMENT_UPLOAD_HELP_TEXT}</p>
               </div>
-              <Button type="button" onClick={() => invoiceFileInputRef.current?.click()} disabled={uploading}>
-                {uploading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <FileUp className="w-4 h-4 mr-2" />}
-                {uploading ? "Extracting…" : "Choose Invoice"}
-              </Button>
+              {!pendingInvoiceUpload && (
+                <Button type="button" onClick={() => invoiceFileInputRef.current?.click()} disabled={uploading}>
+                  {uploading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <FileUp className="w-4 h-4 mr-2" />}
+                  {uploading ? "Uploading..." : "Choose Document"}
+                </Button>
+              )}
               <input
                 ref={invoiceFileInputRef}
                 type="file"
                 className="hidden"
-                accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.webp"
+                accept={DOCUMENT_UPLOAD_ACCEPT}
                 onChange={handleInvoiceUpload}
               />
             </div>
+
+            {pendingInvoiceUpload && !invoiceDetailsVisible && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-200 bg-white p-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-slate-900">{pendingInvoiceUpload.file_name || extractedInvoiceName}</p>
+                  <p className="text-xs text-slate-500">Ready for extraction. Review starts after you proceed.</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button type="button" variant="outline" onClick={handleCancelInvoiceUpload} disabled={uploading}>
+                    Cancel
+                  </Button>
+                  <Button type="button" onClick={handleProceedInvoiceExtraction} disabled={uploading}>
+                    {uploading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <FileUp className="w-4 h-4 mr-2" />}
+                    Proceed with Extraction
+                  </Button>
+                </div>
+              </div>
+            )}
+
             {invoiceExtractionStatus && (
-              <div className="mt-3 flex items-center gap-2 text-sm text-emerald-700">
+              <div className="flex items-center gap-2 text-sm text-emerald-700">
                 {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
                 <span>{invoiceExtractionStatus}{extractedInvoiceName ? ` (${extractedInvoiceName})` : ""}</span>
               </div>
             )}
             {invoiceExtractionError && (
-              <div className="mt-3 flex items-center gap-2 text-sm text-red-700">
+              <div className="flex items-center gap-2 text-sm text-red-700">
                 <AlertCircle className="w-4 h-4" />
                 <span>{invoiceExtractionError}</span>
               </div>
@@ -623,9 +720,11 @@ export default function AddExpense() {
         </Card>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Expense Details</CardTitle>
+      {showExpenseEntryForm && (
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Expense Details</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
@@ -830,11 +929,11 @@ export default function AddExpense() {
           <label className="flex items-center gap-3 cursor-pointer p-3 border border-dashed rounded-lg hover:bg-slate-50">
             <Paperclip className="w-5 h-5 text-slate-400" />
             <div>
-              <p className="text-sm font-medium text-blue-600">{attachmentUrl ? "File attached ✓" : "Attach Receipt or Invoice"}</p>
-              <p className="text-xs text-slate-400">PDF, PNG, JPG up to 10MB</p>
+              <p className="text-sm font-medium text-blue-600">{attachmentUrl ? "File attached" : "Attach Receipt or Invoice"}</p>
+              <p className="text-xs text-slate-400">{DOCUMENT_UPLOAD_HELP_TEXT}</p>
             </div>
             {uploading && <Loader2 className="w-4 h-4 animate-spin ml-auto" />}
-            <input type="file" className="hidden" accept=".pdf,.png,.jpg,.jpeg" onChange={handleAttachment} />
+            <input type="file" className="hidden" accept={DOCUMENT_UPLOAD_ACCEPT} onChange={handleAttachment} />
           </label>
         </CardContent>
       </Card>
@@ -864,6 +963,8 @@ export default function AddExpense() {
           {isEditing ? "Save Changes" : "Save & Approve"}
         </Button>
       </div>
+        </>
+      )}
 
       <Dialog open={showNewVendor} onOpenChange={setShowNewVendor}>
         <DialogContent>
