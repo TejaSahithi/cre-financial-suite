@@ -382,20 +382,71 @@ function conditionApplied(rule) {
   return CONDITIONAL_KEYWORDS.some((keyword) => source.includes(keyword) || notes.includes(keyword));
 }
 
+function isApprovedClassificationRecord(classification = null) {
+  if (!classification) return false;
+  const approval = getEffectiveApprovalStatus(classification);
+  const status = normalizeText(classification?.classification_status);
+  if (approval === "rejected" || status === "rejected") return false;
+  return approval === "approved" || ["finalized", "excluded"].includes(status);
+}
+
+function mergeActualExpenseWorkflowState(expense = {}, classification = null) {
+  if (!classification) return expense;
+
+  const classificationApproved = isApprovedClassificationRecord(classification);
+  const classificationRecovery =
+    classification.recoverability_result ||
+    classification.recovery_status ||
+    null;
+  const approvalStatus = classificationApproved
+    ? "approved"
+    : (expense.approval_status || expense.approved_status || classification.approved_status || null);
+  const reviewStatus = classificationApproved
+    ? "approved"
+    : (expense.review_status || classification.review_status || null);
+
+  return {
+    ...expense,
+    recovery_status: classificationRecovery || expense.recovery_status,
+    recoverability_result: classificationRecovery || expense.recoverability_result,
+    classification:
+      classificationRecovery === "excluded"
+        ? "non_recoverable"
+        : (classificationRecovery || expense.classification),
+    approval_status: approvalStatus,
+    approved_status: approvalStatus || expense.approved_status,
+    review_status: reviewStatus,
+    classification_status: classification.classification_status || expense.classification_status,
+    exception_type: classification.exception_type || expense.exception_type,
+    rule_source: classification.rule_source || expense.rule_source,
+    recovery_reason: classification.recovery_reason || classification.notes || expense.recovery_reason,
+    cam_eligible: classification.cam_eligible || expense.cam_eligible,
+    cam_status: classification.cam_status || expense.cam_status,
+    sent_to_cam: classification.sent_to_cam ?? expense.sent_to_cam,
+    linked_expense_rule_id:
+      classification.linked_expense_rule_id ||
+      classification.lease_expense_rule_id ||
+      classification.recovery_rule_id ||
+      expense.linked_expense_rule_id,
+    recovery_rule_id:
+      classification.recovery_rule_id ||
+      classification.lease_expense_rule_id ||
+      classification.linked_expense_rule_id ||
+      expense.recovery_rule_id,
+  };
+}
+
 function isApprovedExpenseRecord(expense, classification = null) {
   // Actual expense input gate for Expense Classification.
-  // Accept when any of approval_status / approved_status / review_status / status
-  // is explicitly approved (or finalized for "status"). Reject explicit-rejected,
-  // draft, needs-review, exception, and lease_rule_amount-sourced rows so that
-  // unapproved actuals and rule-amount inserts never enter the classification view.
-  // Use the centralized status helpers (src/lib/ruleStatus.js). Review uses
-  // the RAW reader because this function treats "reviewed" and "approved"
-  // separately (only "approved" passes; "reviewed" alone does not).
-  const approval = getEffectiveApprovalStatus(expense);
-  const review = getRawReviewStatus(expense);
-  const status = normalizeText(expense?.status);
-  const exceptionType = normalizeText(expense?.exception_type);
-  const source = normalizeText(expense?.source || expense?.source_type || expense?.cam_input_type);
+  // Merge any already-approved persisted classification first; legacy data can
+  // have expense.approval_status="needs_review" while the classification row is
+  // finalized/approved from the review workflow.
+  const effectiveExpense = mergeActualExpenseWorkflowState(expense, classification);
+  const approval = getEffectiveApprovalStatus(effectiveExpense);
+  const review = getRawReviewStatus(effectiveExpense);
+  const status = normalizeText(effectiveExpense?.status);
+  const exceptionType = normalizeText(effectiveExpense?.exception_type);
+  const source = normalizeText(effectiveExpense?.source || effectiveExpense?.source_type || effectiveExpense?.cam_input_type);
 
   if (source === "lease_rule_amount") return false;
   if (approval === "rejected" || review === "rejected" || status === "rejected") return false;
@@ -406,11 +457,6 @@ function isApprovedExpenseRecord(expense, classification = null) {
   if (approval === "approved") return true;
   if (review === "approved") return true;
   if (status === "approved" || status === "finalized") return true;
-  // "active" and "executed" are the standard lifecycle states for expenses
-  // that have been entered and confirmed in the system but may not have an
-  // explicit approval_status field set. Treat them as approved for
-  // classification eligibility — consistent with how the workflow summary
-  // and lease module treat these statuses.
   if (status === "active" || status === "executed") return true;
 
   return false;
@@ -1890,7 +1936,7 @@ export const expenseService = {
     // other field of a similarly-shaped patch object here) — passed through
     // as expensePatch below so the same RPC call that upserts the
     // classification row also updates expenses in the same transaction.
-    const updatedExpense = { ...expense, classification, recovery_status: effectiveRecoveryStatus, updated_at: now };
+    const updatedExpense = { ...expense, classification, recovery_status: effectiveRecoveryStatus, approval_status: effectiveApprovedStatus, approved_status: effectiveApprovedStatus, review_status: effectiveReviewStatus, updated_at: now };
 
     await upsertExpenseClassification({
       id: existingClassification?.id,
@@ -2029,6 +2075,7 @@ export const expenseService = {
       ...updatedExpense,
       recovery_status: effectiveRecoveryStatus,
       recoverability_result: effectiveRecoveryStatus,
+      approval_status: effectiveApprovedStatus,
       approved_status: effectiveApprovedStatus,
       review_status: effectiveReviewStatus,
       rule_source: effectiveRuleSource,
@@ -2153,7 +2200,13 @@ export const expenseService = {
         : await baseExpenseService.list();
 
     const actualExpenses = allExpenses.filter((expense) => normalizeSourceType(expense) !== "lease_import");
-    const approvedActualExpenses = actualExpenses.filter((expense) => isApprovedExpenseRecord(expense));
+    const existingClassificationsByExpenseId = new Map(
+      (await fetchExistingExpenseClassifications(actualExpenses.map((expense) => expense.id).filter(Boolean)))
+        .map((classification) => [classification.expense_id || classification.actual_expense_id, classification])
+    );
+    const approvedActualExpenses = actualExpenses
+      .map((expense) => mergeActualExpenseWorkflowState(expense, existingClassificationsByExpenseId.get(expense.id) || null))
+      .filter((expense) => isApprovedExpenseRecord(expense));
 
     if (!approvedActualExpenses.length) {
       return { updated: 0, needsReview: 0, classified: 0 };
@@ -2169,10 +2222,6 @@ export const expenseService = {
     const { rulesByLeaseId } = buildApprovedRuleLookups(rules, categories);
     const leaseById = buildLeaseLookup(allLeases);
     const orgIdFallback = await getCurrentOrgId();
-    const existingClassificationsByExpenseId = new Map(
-      (await fetchExistingExpenseClassifications(approvedActualExpenses.map((expense) => expense.id)))
-        .map((classification) => [classification.expense_id, classification])
-    );
 
     let updated = 0;
     let needsReview = 0;
@@ -2592,9 +2641,10 @@ export const expenseService = {
 
     // ── Hard-block eligibility gate (Batch D, F7) ──────────────────────
     // Refuse to finalize a row whose actual expense or linked rule fails
-    // the centralized eligibility helpers. Without this, the UI could
-    // finalize coverage-gap / original_lease_required / draft rows and the
-    // resulting state would diverge from the loader's view of the workspace.
+    // the centralized eligibility helpers. Use the effective workflow state
+    // because legacy data may have an approved classification beside a stale
+    // needs_review expense row.
+    expense = mergeActualExpenseWorkflowState(expense, classification);
     if (expense && !isActualClassificationEligible(expense, { scopeMatch: true })) {
       const reason = getActualClassificationExclusionReason(expense, { scopeMatch: true });
       throw new ClassificationEligibilityError(
@@ -2976,7 +3026,13 @@ export const expenseService = {
       ![rule?.row_status, rule?.status, rule?.extraction_status].some((value) => normalizeText(value) === "superseded")
     ).map((rule) => rule.lease_id).filter(Boolean));
 
-    const actualExpenses = scopedExpenses.filter((expense) => normalizeSourceType(expense) !== "lease_import");
+    const classificationByExpenseId = new Map(
+      (await fetchExistingExpenseClassifications(scopedExpenses.map((expense) => expense.id).filter(Boolean)))
+        .map((classification) => [classification.expense_id || classification.actual_expense_id, classification])
+    );
+    const actualExpenses = scopedExpenses
+      .filter((expense) => normalizeSourceType(expense) !== "lease_import")
+      .map((expense) => mergeActualExpenseWorkflowState(expense, classificationByExpenseId.get(expense.id) || null));
     const approvedActualById = new Map(actualExpenses.filter((expense) => isApprovedExpenseRecord(expense)).map((expense) => [String(expense.id), expense]));
     const needsReviewExpenses = actualExpenses.filter((expense) => normalizeText(expense.approved_status) === "needs_review" || normalizeText(expense.recovery_status) === "needs_review");
     const missingCategoryExpenses = actualExpenses.filter((expense) => !expense.category && !expense.expense_subcategory);
@@ -3110,20 +3166,24 @@ export const expenseService = {
     const approvedExpenses = [];
     const exclusions = { ...EMPTY_ACTUAL_EXCLUSIONS };
     let rawApprovedCount = 0;
+    const classificationByExpenseId = new Map(
+      (await fetchExistingExpenseClassifications((allExpenses || []).map((expense) => expense.id).filter(Boolean)))
+        .map((classification) => [classification.expense_id || classification.actual_expense_id, classification])
+    );
 
     for (const rawExpense of allExpenses || []) {
       if (normalizeSourceType(rawExpense) === "lease_import") continue;
 
-      const { expense: linkedExpense } = await this.resolveExpenseLeaseLink(rawExpense, allLeases);
+      const { expense: linkedBaseExpense } = await this.resolveExpenseLeaseLink(rawExpense, allLeases);
+      const linkedExpense = mergeActualExpenseWorkflowState(
+        linkedBaseExpense,
+        classificationByExpenseId.get(rawExpense.id) || classificationByExpenseId.get(linkedBaseExpense.id) || null,
+      );
 
       if (!isApprovedExpenseRecord(linkedExpense)) continue;
       const scopeMatch = expenseMatchesScope(linkedExpense, normalizedScope);
       rawApprovedCount += 1;
 
-      // Centralized eligibility check (scope + extended actual filters such as
-      // row_status / generation_source / draft / missing_amount). Keep the
-      // legacy isApprovedExpenseRecord above so coarse approval gating still
-      // runs first — the helper is the fine-grained gate.
       const reason = getActualClassificationExclusionReason(linkedExpense, { scopeMatch });
       if (reason === null) {
         approvedExpenses.push(linkedExpense);
@@ -3214,16 +3274,20 @@ export const expenseService = {
     ]);
 
     const leaseById = new Map((allLeases || []).map((lease) => [lease.id, lease]));
+    const classificationByExpenseId = new Map(
+      (await fetchExistingExpenseClassifications((allExpenses || []).map((expense) => expense.id).filter(Boolean)))
+        .map((classification) => [classification.expense_id || classification.actual_expense_id, classification])
+    );
     const { allApprovedRules: approvedRulesOrg } = await fetchApprovedClassificationRules({});
 
-    const approvedActualsOrg = (allExpenses || []).filter((expense) =>
-      normalizeSourceType(expense) !== "lease_import" && isApprovedExpenseRecord(expense)
-    );
+    const approvedActualsOrg = (allExpenses || [])
+      .map((expense) => mergeActualExpenseWorkflowState(expense, classificationByExpenseId.get(expense.id) || null))
+      .filter((expense) => normalizeSourceType(expense) !== "lease_import" && isApprovedExpenseRecord(expense));
 
     let allClassifications = [];
     try {
       allClassifications = await selectExpenseClassifications({
-        columns: ["id", "org_id", "expense_id", "actual_expense_id", "lease_expense_rule_id", "classification_key"],
+        columns: ["id", "org_id", "expense_id", "actual_expense_id", "lease_expense_rule_id", "classification_key", "classification_status"],
         apply: (query) => {
           if (orgId && orgId !== "__none__" && orgId !== null) {
             return query.eq("org_id", orgId);
