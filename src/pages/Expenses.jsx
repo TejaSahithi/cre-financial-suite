@@ -379,6 +379,9 @@ export default function Expenses() {
           ? (linkedExpense.recoverability_result || linkedExpense.recovery_status || effectiveRecovery)
           : (classification.recoverability_result || effectiveRecovery),
         classification: effectiveRecovery === "excluded" ? "non_recoverable" : effectiveRecovery,
+        approval_status: preferBaseWorkflow
+          ? (getEffectiveApprovalStatus(linkedExpense) || getEffectiveApprovalStatus(classification))
+          : (getEffectiveApprovalStatus(classification) || getEffectiveApprovalStatus(linkedExpense)),
         approved_status: preferBaseWorkflow
           ? (getEffectiveApprovalStatus(linkedExpense) || getEffectiveApprovalStatus(classification))
           : (getEffectiveApprovalStatus(classification) || getEffectiveApprovalStatus(linkedExpense)),
@@ -1000,8 +1003,6 @@ export default function Expenses() {
                             {(expense.recovery_status || expense.classification || "needs_review").replace("_", "-")}
                           </Badge>
                         </TableCell>
-                        <TableCell className="text-[10px] text-slate-500">{expense.rule_source || "—"}</TableCell>
-                        <TableCell className="text-[10px] text-slate-500">{expense.confidence_score != null ? `${Math.round(Number(expense.confidence_score) * 100)}%` : "—"}</TableCell>
                         <TableCell className="text-[10px] text-slate-500">{getEffectiveApprovalStatus(expense) || "draft"}</TableCell>
 
                         <TableCell className="text-[10px] text-slate-400 capitalize">{expense.source_type || expense.source}</TableCell>

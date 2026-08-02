@@ -223,8 +223,51 @@ export default function AddExpense() {
     },
   });
 
+  const ensureVendorForSave = async (writableOrgId) => {
+    const vendorName = String(form.vendor || "").trim();
+    if (!vendorName) return {};
+
+    const matchedVendor = form.vendor_id
+      ? vendors.find((vendor) => vendor.id === form.vendor_id)
+      : findEntityByName(vendors, vendorName, [(vendor) => vendor.name, (vendor) => vendor.company]);
+
+    if (matchedVendor?.id) {
+      return { vendor: matchedVendor.name || vendorName, vendor_id: matchedVendor.id };
+    }
+
+    const vendorCategory = VENDOR_CATEGORIES.includes(form.category) ? form.category : "other";
+    const createdVendor = await vendorService.create({
+      name: vendorName,
+      company: vendorName,
+      category: vendorCategory,
+      payment_terms: "net_30",
+      ...(writableOrgId ? { org_id: writableOrgId } : {}),
+      status: "active",
+    });
+
+    if (!createdVendor?.id) {
+      throw new Error(`Could not create vendor ${vendorName}`);
+    }
+
+    queryClient.setQueriesData({ queryKey: ["Vendor"] }, (current = []) =>
+      current.some((vendor) => vendor.id === createdVendor.id)
+        ? current
+        : [...current, createdVendor]
+    );
+    queryClient.invalidateQueries({ queryKey: ["Vendor"] });
+    setForm((current) => ({ ...current, vendor: createdVendor.name || vendorName, vendor_id: createdVendor.id }));
+    return { vendor: createdVendor.name || vendorName, vendor_id: createdVendor.id };
+  };
+
   const handleSubmit = async (addAnother, { saveAsDraft = false } = {}) => {
     const writableOrgId = await resolveWritableOrgId(orgId);
+    let resolvedVendorFields = {};
+    try {
+      resolvedVendorFields = await ensureVendorForSave(writableOrgId);
+    } catch (err) {
+      toast.error(`Could not create/link vendor: ${err?.message || "Unknown error"}`);
+      return;
+    }
     const property = form.property_id ? scope.propertyById.get(form.property_id) ?? null : null;
     
     // Respect the user's tenant selection. Only derive a lease when exactly
@@ -252,6 +295,7 @@ export default function AddExpense() {
           id: editExpenseId,
           data: {
             ...form,
+            ...resolvedVendorFields,
             amount: parseFloat(form.amount),
             attachment_url: attachmentUrl,
             ...(writableOrgId ? { org_id: writableOrgId } : {}),
@@ -285,6 +329,7 @@ export default function AddExpense() {
     createMutation.mutate(
       {
         ...form,
+        ...resolvedVendorFields,
         amount: parseFloat(form.amount),
         attachment_url: attachmentUrl,
         // Only set org_id if resolved — api.js handles the SuperAdmin fallback
@@ -314,8 +359,8 @@ export default function AddExpense() {
           if (addAnother) {
             setForm({
               ...buildInitialForm(scope),
-              vendor: form.vendor,
-              vendor_id: form.vendor_id,
+              vendor: resolvedVendorFields.vendor || form.vendor,
+              vendor_id: resolvedVendorFields.vendor_id || form.vendor_id,
               tenant_name: form.tenant_name,
               tenant_id: form.tenant_id,
               portfolio_id: property?.portfolio_id || form.portfolio_id || "",

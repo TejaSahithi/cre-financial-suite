@@ -2014,7 +2014,15 @@ export const expenseService = {
       classified_by: userId || existingClassification?.classified_by || null,
       notes: plainReason || existingClassification?.notes || null,
     }, {
-      expensePatch: { classification, recovery_status: effectiveRecoveryStatus },
+      expensePatch: {
+        classification,
+        recovery_status: effectiveRecoveryStatus,
+        approval_status: effectiveApprovedStatus,
+        approved_status: effectiveApprovedStatus,
+        review_status: effectiveReviewStatus,
+        approved_at: effectiveApprovedStatus === "approved" ? (existingClassification?.approved_at || now) : null,
+        approved_by: effectiveApprovedStatus === "approved" ? (userId || existingClassification?.approved_by || null) : null,
+      },
     });
 
     return {

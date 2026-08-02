@@ -101,6 +101,68 @@ describe('buildClassificationRows', () => {
     expect(rows[0].actualExpenseId).toBe('expense-1');
     expect(rows[0].leaseExpenseRuleId).toBe('rule-1');
   });
+  it('does not mark finalized conditional rows as sendable to CAM', () => {
+    const lease = {
+      id: 'lease-conditional',
+      property_id: 'property-1',
+      building_id: 'building-1',
+      unit_id: 'unit-1',
+      tenant_id: 'tenant-1',
+      tenant_name: 'Tenant One',
+      start_date: '2025-01-01',
+      end_date: '2025-12-31',
+    };
+    const rule = {
+      id: 'rule-conditional',
+      lease_id: 'lease-conditional',
+      property_id: 'property-1',
+      building_id: 'building-1',
+      unit_id: 'unit-1',
+      expense_category: 'insurance',
+      recoverable_from_tenant: 'conditional',
+      cam_eligible: 'conditional',
+      published_to_cam: true,
+    };
+    const actual = {
+      id: 'expense-conditional',
+      lease_id: 'lease-conditional',
+      property_id: 'property-1',
+      building_id: 'building-1',
+      unit_id: 'unit-1',
+      tenant_id: 'tenant-1',
+      category: 'insurance',
+      amount: 150,
+      date: '2025-08-03',
+      vendor: 'ABC',
+      approval_status: 'approved',
+    };
+    const classification = {
+      id: 'classification-conditional',
+      expense_id: 'expense-conditional',
+      lease_expense_rule_id: 'rule-conditional',
+      classification_status: 'finalized',
+      recoverability_result: 'conditional',
+      cam_eligible: 'conditional',
+    };
+
+    const rows = buildClassificationRows({
+      approvedActuals: [actual],
+      approvedRules: [rule],
+      existingClassifications: [classification],
+      scopedLeases: [lease],
+      leases: [lease],
+      leaseById: new Map([[lease.id, lease]]),
+      propertyById: new Map(),
+      buildingById: new Map(),
+      unitById: new Map(),
+      tenantById: new Map([['tenant-1', { id: 'tenant-1', name: 'Tenant One' }]]),
+      scopeYear: '2025',
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].canSendToCam).toBe(false);
+    expect(rows[0].canSendToReview).toBe(true);
+  });
   it('isClassificationSentToCam detects sent status', () => {
     expect(isClassificationSentToCam({ sent_to_cam: true })).toBe(true);
     expect(isClassificationSentToCam({ cam_status: 'cam_ready' })).toBe(true);

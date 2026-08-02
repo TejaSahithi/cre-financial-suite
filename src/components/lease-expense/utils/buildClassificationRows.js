@@ -337,18 +337,9 @@ export function buildClassificationRows({
       Boolean(row.actualExpenseId) &&
       (row.rowType === "actual_missing_rule" ||
         row.recoverabilityResult === "needs_review" ||
+        row.recoverabilityResult === "conditional" ||
         ["unmatched", "exception", "conditional"].includes(row.classificationStatus));
-    row.canSendToCam =
-      Boolean(row.actualExpenseId) &&
-      row.amount > 0 &&
-      !row.sentToCam &&
-      (
-        isAutomaticCamReadyRow(row) ||
-        (
-          ["actual_missing_rule", "matched_classification"].includes(row.rowType) &&
-          !hasExplicitCamExclusion(row)
-        )
-      );
+    row.canSendToCam = isAutomaticCamReadyRow(row);
 
     const decisionObj = getCamDecision(row);
     row.camDecision = decisionObj.label;
