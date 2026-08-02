@@ -5,7 +5,8 @@ import {
   toNumber,
   buildAmountBuckets,
   leaseCoversYear,
-  isClassificationSentToCam
+  isClassificationSentToCam,
+  buildClassificationRows
 } from './buildClassificationRows';
 
 describe('buildClassificationRows', () => {
@@ -37,6 +38,69 @@ describe('buildClassificationRows', () => {
     expect(leaseCoversYear({ start_date: "2020-01-01", end_date: "2025-12-31" }, 2026)).toBe(false);
   });
 
+
+  it('merges an approved actual and its approved lease rule into one classification row', () => {
+    const lease = {
+      id: 'lease-1',
+      property_id: 'property-1',
+      building_id: 'building-1',
+      unit_id: 'unit-1',
+      tenant_id: 'tenant-1',
+      tenant_name: 'Tenant One',
+      start_date: '2025-01-01',
+      end_date: '2025-12-31',
+    };
+    const rule = {
+      id: 'rule-1',
+      lease_id: 'lease-1',
+      property_id: 'property-1',
+      building_id: 'building-1',
+      unit_id: 'unit-1',
+      expense_category: 'insurance',
+      recoverable_from_tenant: 'yes',
+      cam_eligible: 'yes',
+    };
+    const actual = {
+      id: 'expense-1',
+      lease_id: 'lease-1',
+      property_id: 'property-1',
+      building_id: 'building-1',
+      unit_id: 'unit-1',
+      tenant_id: 'tenant-1',
+      category: 'insurance',
+      amount: 150,
+      date: '2025-08-03',
+      vendor: 'ABC',
+      approval_status: 'approved',
+    };
+    const classification = {
+      id: 'classification-1',
+      expense_id: 'expense-1',
+      lease_expense_rule_id: 'rule-1',
+      classification_status: 'matched',
+      recoverability_result: 'recoverable',
+      cam_eligible: 'yes',
+    };
+
+    const rows = buildClassificationRows({
+      approvedActuals: [actual],
+      approvedRules: [rule],
+      existingClassifications: [classification],
+      scopedLeases: [lease],
+      leases: [lease],
+      leaseById: new Map([[lease.id, lease]]),
+      propertyById: new Map(),
+      buildingById: new Map(),
+      unitById: new Map(),
+      tenantById: new Map([['tenant-1', { id: 'tenant-1', name: 'Tenant One' }]]),
+      scopeYear: '2025',
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].rowType).toBe('matched_classification');
+    expect(rows[0].actualExpenseId).toBe('expense-1');
+    expect(rows[0].leaseExpenseRuleId).toBe('rule-1');
+  });
   it('isClassificationSentToCam detects sent status', () => {
     expect(isClassificationSentToCam({ sent_to_cam: true })).toBe(true);
     expect(isClassificationSentToCam({ cam_status: 'cam_ready' })).toBe(true);

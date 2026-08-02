@@ -162,6 +162,7 @@ export function buildClassificationRows({
   const result = [];
   const classificationByExpenseId = new Map();
   const classificationByRuleId = new Map();
+  const ruleIdsLinkedToActuals = new Set();
   const approvedRuleById = new Map(approvedRules.map((rule) => [rule.id, rule]));
   const rulesByLeaseId = new Map();
   const usedRuleIds = new Set();
@@ -172,6 +173,8 @@ export function buildClassificationRows({
     if (expenseId) {
       const existing = classificationByExpenseId.get(expenseId) || null;
       classificationByExpenseId.set(expenseId, preferClassificationRecord(existing, classification));
+      const linkedRuleId = classification.lease_expense_rule_id || classification.linked_expense_rule_id || classification.recovery_rule_id;
+      if (linkedRuleId) ruleIdsLinkedToActuals.add(linkedRuleId);
     }
     if (classification.row_type === "rule_missing_actual" && classification.lease_expense_rule_id) {
       const existingByRule = classificationByRuleId.get(classification.lease_expense_rule_id) || null;
@@ -214,6 +217,7 @@ export function buildClassificationRows({
     const actualAmount = toNumber(expense.amount);
     const hasMatchedRule = Boolean(matchedRule);
     if (matchedRule?.id) usedRuleIds.add(matchedRule.id);
+    if (persistedRuleId && hasMatchedRule) usedRuleIds.add(persistedRuleId);
 
     const recoverabilityResult = hasMatchedRule
       ? normalizeText(
@@ -353,7 +357,7 @@ export function buildClassificationRows({
   }
 
   for (const rule of approvedRules) {
-    if (usedRuleIds.has(rule.id)) continue;
+    if (usedRuleIds.has(rule.id) || ruleIdsLinkedToActuals.has(rule.id)) continue;
     const lease = leaseById.get(rule.rule_set?.lease_id || rule.lease_id) || null;
     const property = propertyById.get(rule.property_id || rule.rule_set?.property_id || lease?.property_id) || null;
     const building = buildingById.get(rule.building_id || lease?.building_id) || null;

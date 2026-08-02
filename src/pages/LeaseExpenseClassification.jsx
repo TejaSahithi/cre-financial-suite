@@ -794,7 +794,8 @@ export default function LeaseExpenseClassification() {
 
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
           {[
-            { label: "Approved Actual Expenses", value: approvedActuals.length, color: "border-t-slate-400" },
+            { label: "Approved Expenses", value: approvedActuals.length, color: "border-t-slate-400" },
+            { label: "Total Expenses", value: fmt(totals.approvedActualTotal), color: "border-t-slate-500" },
             { label: "Approved Lease Rules", value: approvedRules.length, color: "border-t-slate-400" },
             { label: "Matched", value: counts.matched, color: "border-t-emerald-500" },
             { label: "Actuals Missing Rules", value: counts.actuals_missing_rules, color: "border-t-rose-500" },
@@ -820,7 +821,7 @@ export default function LeaseExpenseClassification() {
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Classification Trace</p>
-                <p className="text-sm font-semibold text-slate-900">Approved actuals -> lease rules -> CAM-ready costs</p>
+                <p className="text-sm font-semibold text-slate-900">Approved actuals to lease rules to CAM-ready costs</p>
               </div>
               <Badge className="bg-slate-100 text-slate-700">
                 {counts.sent_to_cam} sent to CAM
@@ -896,7 +897,7 @@ export default function LeaseExpenseClassification() {
           </div>
         </div>
 
-        {/* Summary bar — approved rules, approved expenses, matched, unmatched */}
+        {/* Summary bar: approved rules, approved expenses, matched, unmatched */}
         <div className="mb-3 grid grid-cols-4 gap-2 text-center text-xs">
           {[
             { label: "Approved Rules", value: approvedRules.length, colorBg: "bg-slate-50", colorText: "text-slate-900" },
@@ -952,33 +953,29 @@ export default function LeaseExpenseClassification() {
                           onChange={(event) => toggleAll(event.target.checked)}
                         />
                       </TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase text-slate-500">Row Type</TableHead>
                       <TableHead className="text-[10px] font-bold uppercase text-slate-500">Expense Date</TableHead>
                       <TableHead className="text-[10px] font-bold uppercase text-slate-500">Vendor</TableHead>
                       <TableHead className="text-[10px] font-bold uppercase text-slate-500">Property / Building / Unit</TableHead>
                       <TableHead className="text-[10px] font-bold uppercase text-slate-500">Lease / Tenant</TableHead>
                       <TableHead className="text-[10px] text-right font-bold uppercase text-slate-500">Actual Amount</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase text-slate-500">Approved Rule</TableHead>
+                      <TableHead className="text-[10px] font-bold uppercase text-slate-500">Category / Rule</TableHead>
                       <TableHead className="text-[10px] font-bold uppercase text-slate-500">Recoverability</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase text-slate-500">CAM</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase text-slate-500">CAM Decision</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase text-slate-500">Why</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase text-slate-500">Status</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase text-slate-500">Message</TableHead>
+                      <TableHead className="text-[10px] font-bold uppercase text-slate-500">CAM / Decision</TableHead>
+                      <TableHead className="text-[10px] font-bold uppercase text-slate-500">Status / Next Step</TableHead>
                       <TableHead className="w-10"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {isLoading ? (
                       <TableRow>
-                        <TableCell colSpan={15} className="py-16 text-center">
+                        <TableCell colSpan={11} className="py-16 text-center">
                           <Loader2 className="mx-auto h-6 w-6 animate-spin text-slate-300" />
                           <p className="mt-2 text-sm text-slate-400">Loading approved actuals, approved rules, and classification rows...</p>
                         </TableCell>
                       </TableRow>
                     ) : filteredRows.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={15} className="py-16 text-center">
+                        <TableCell colSpan={11} className="py-16 text-center">
                           <FileText className="mx-auto mb-3 h-10 w-10 text-slate-200" />
                           <p className="text-sm text-slate-400">No rows in this view.</p>
                         </TableCell>
@@ -1001,7 +998,6 @@ export default function LeaseExpenseClassification() {
                                 onChange={() => toggleRow(row.id)}
                               />
                             </TableCell>
-                            <TableCell className="text-xs font-medium text-slate-800">{rowTypeLabel(row.rowType)}</TableCell>
                             <TableCell className="text-xs text-slate-500">{row.expenseDate || "-"}</TableCell>
                             <TableCell className="text-xs text-slate-500">{row.vendor}</TableCell>
                             <TableCell className="text-xs text-slate-500">
@@ -1022,7 +1018,7 @@ export default function LeaseExpenseClassification() {
                                       : "No tenant linked"
                                   }
                                 >
-                                  — <span className="text-amber-500">⚠</span>
+                                  - <span className="text-amber-500">!</span>
                                 </div>
                               )}
                               {row.lease?.tenant_name && row.tenantResolution?.tenant?.name !== row.lease.tenant_name && (
@@ -1032,34 +1028,29 @@ export default function LeaseExpenseClassification() {
                             <TableCell className="text-right text-sm font-medium text-slate-700">
                               {row.actualExpenseId ? fmt(row.amount) : <span className="text-slate-300">-</span>}
                             </TableCell>
-                            <TableCell className="text-xs text-slate-600">{row.ruleLabel}</TableCell>
+                            <TableCell className="max-w-[220px] text-xs text-slate-600">
+                              <div className="font-medium text-slate-800">{row.ruleLabel}</div>
+                              <Badge variant="outline" className={`mt-1 border text-[10px] uppercase ${statusBadge(row.classificationStatus)}`}>
+                                {rowTypeLabel(row.rowType)}
+                              </Badge>
+                            </TableCell>
                             <TableCell>
                               <Badge variant="outline" className={`border text-[10px] uppercase ${recoverabilityBadge(row.recoverabilityResult)}`}>
                                 {humanize(row.recoverabilityResult)}
                               </Badge>
                             </TableCell>
-                            <TableCell>
+                            <TableCell title={row.camWhy}>
                               <Badge variant="outline" className={`border text-[10px] uppercase ${row.camEligible === "yes" ? "bg-blue-50 text-blue-700 border-blue-200" : row.camEligible === "conditional" ? "bg-sky-50 text-sky-700 border-sky-200" : "bg-slate-100 text-slate-500 border-slate-200"}`}>
                                 {humanize(row.camEligible)}
                               </Badge>
+                              <p className="mt-1 text-[11px] text-slate-500">{row.camDecision}</p>
                             </TableCell>
-                            <TableCell>
-                              <Badge variant="outline" className={`border text-[10px] uppercase ${row.camDecision === "Eligible" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : row.camDecision === "Excluded" ? "bg-rose-50 text-rose-700 border-rose-200" : row.camDecision === "CAM Ready" ? "bg-blue-50 text-blue-700 border-blue-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>
-                                {row.camDecision}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="max-w-[200px] text-xs text-slate-600">
-                              {row.camWhy}
-                            </TableCell>
-                            <TableCell>
+                            <TableCell className="max-w-[200px]" title={row.message}>
                               <Badge variant="outline" className={`border text-[10px] uppercase ${statusBadge(row.classificationStatus)}`}>
                                 {humanize(row.classificationStatus)}
                               </Badge>
+                              <p className="mt-1 text-[11px] text-slate-500">{row.nextStep}</p>
                               {row.sentToCam ? <p className="mt-1 text-[11px] text-blue-600">Sent to CAM</p> : null}
-                            </TableCell>
-                            <TableCell className="max-w-[320px] text-xs text-slate-600">
-                              <p>{row.message}</p>
-                              <p className="mt-1 text-[11px] text-slate-400">Next: {row.nextStep}</p>
                             </TableCell>
                             <TableCell className="pr-4 text-right">
                               <DropdownMenu>

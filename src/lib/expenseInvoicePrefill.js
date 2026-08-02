@@ -27,6 +27,9 @@ const CATEGORY_ALIASES = {
   electric: "electrical",
   electricity: "electrical",
   hvac: "hvac_maintenance",
+  repairs_maintenance_hvac: "hvac_maintenance",
+  repairs_and_maintenance_hvac: "hvac_maintenance",
+  repair_maintenance_hvac: "hvac_maintenance",
   landscaping_services: "landscaping",
   janitorial_services: "janitorial",
   cleaning_services: "cleaning",
@@ -131,6 +134,86 @@ function normalizeAmount(value) {
   return Number.isFinite(parsed) && parsed >= 0 ? String(parsed) : "";
 }
 
+function flattenText(value, depth = 0, seen = new WeakSet()) {
+  if (value == null || depth > 5) return [];
+  if (typeof value === "string" || typeof value === "number") return [String(value)];
+  if (typeof value !== "object") return [];
+  if (seen.has(value)) return [];
+  seen.add(value);
+  if (Array.isArray(value)) return value.flatMap((entry) => flattenText(entry, depth + 1, seen));
+  return Object.values(value).flatMap((entry) => flattenText(entry, depth + 1, seen));
+}
+
+function compactInvoiceText(...values) {
+  return flattenText(values)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function valueBetweenLabels(text, labelPattern, stopPattern) {
+  if (!text) return "";
+  const match = text.match(new RegExp(`${labelPattern}\\s*:?\\s*(.+?)(?=${stopPattern}|$)`, "i"));
+  return match?.[1]?.trim().replace(/[.;,\s]+$/, "") || "";
+}
+
+function valueAfterLabel(text, labelPattern) {
+  if (!text) return "";
+  const match = text.match(new RegExp(`${labelPattern}\\s*:?\\s*([A-Z0-9][A-Z0-9._/-]+)`, "i"));
+  return match?.[1]?.trim() || "";
+}
+
+function moneyAfterLabel(text, labelPattern) {
+  if (!text) return "";
+  const match = text.match(new RegExp(`${labelPattern}\\s*:?\\s*\\$?([0-9][0-9,]*(?:\\.[0-9]{2})?)`, "i"));
+  return match?.[1] || "";
+}
+
+function isBadInvoiceNumber(value) {
+  const raw = String(value || "").trim();
+  return !raw || raw.length > 40 || /approved|date|subtotal|total|tax|____/i.test(raw);
+}
+
+function isBadGlCode(value) {
+  const raw = String(value || "").trim();
+  return !raw || raw.length > 60 || /subtotal|total due|sales tax|approved by|invoice no|invoice date/i.test(raw);
+}
+
+function isBadDescription(value) {
+  const raw = String(value || "").trim();
+  return !raw || /^invoice\s+approved\s+by/i.test(raw) || /approved by:\s*_+/i.test(raw);
+}
+
+function textOverridesFromInvoice(row, sourceRecord) {
+  const text = compactInvoiceText(row, sourceRecord);
+  if (!text) return {};
+
+  const invoiceNumber = valueAfterLabel(text, "invoice\\s*(?:no\\.?|number|#)");
+  const invoiceDate = valueBetweenLabels(text, "invoice\\s+date", "\\s+(?:due\\s+date|bill\\s+to|service\\s+details|work\\s+order)");
+  const serviceDate = valueBetweenLabels(text, "service\\s+date", "\\s+(?:expense\\s+category|property\\s+id|requested\\s+by)");
+  const totalDue = moneyAfterLabel(text, "total\\s+due") || moneyAfterLabel(text, "amount\\s+due") || moneyAfterLabel(text, "invoice\\s+total");
+  const glCode = valueBetweenLabels(text, "gl\\s+account", "\\s+(?:department|lease\\s*/|approval\\s+status|subtotal|sales\\s+tax|total\\s+due)");
+  const category = valueBetweenLabels(text, "expense\\s+category", "\\s+(?:property\\s+id|requested\\s+by|service\\s+summary)");
+  const propertyName = valueBetweenLabels(text, "property\\s*:", "\\s+(?:service\\s+details|work\\s+order|service\\s+date)");
+  const allocation = valueBetweenLabels(text, "lease\\s*/\\s*tenant\\s+allocation", "\\s+(?:approval\\s+status|subtotal|sales\\s+tax|total\\s+due)");
+  const summary = valueBetweenLabels(text, "service\\s+summary", "\\s+(?:#\\s+description|expense\\s+coding|subtotal|sales\\s+tax|total\\s+due)");
+
+  let vendor = "";
+  const vendorMatch = text.match(/(?:not\s+for\s+payment\s+)?([A-Z][A-Z0-9 &.'-]+?(?:LLC|INC\.?|CORP\.?|COMPANY|CO\.?|SERVICES LLC))\s+\d{2,}/i);
+  if (vendorMatch?.[1]) vendor = vendorMatch[1].replace(/\s+/g, " ").trim();
+
+  return {
+    invoice_number: invoiceNumber,
+    date: invoiceDate || serviceDate,
+    amount: totalDue,
+    gl_code: glCode,
+    category,
+    property_name: propertyName,
+    vendor,
+    description: summary,
+    classification: /landlord\s+expense|owner\s+expense/i.test(allocation) ? "non_recoverable" : "",
+  };
+}
 function normalizeClassification(value) {
   const normalized = normalizeKey(value);
   if (["recoverable", "non_recoverable", "conditional"].includes(normalized)) return normalized;
@@ -143,24 +226,34 @@ export function normalizeExpenseCategory(value, allowedCategories = []) {
   if (!normalized) return "";
   if (allowedCategories.includes(normalized)) return normalized;
   const aliased = CATEGORY_ALIASES[normalized];
-  return aliased && allowedCategories.includes(aliased) ? aliased : "";
+  if (aliased && allowedCategories.includes(aliased)) return aliased;
+  if (normalized.includes("hvac") && allowedCategories.includes("hvac_maintenance")) return "hvac_maintenance";
+  if ((normalized.includes("repair") || normalized.includes("maintenance")) && allowedCategories.includes("general_repairs")) return "general_repairs";
+  if (normalized.includes("insurance") && allowedCategories.includes("insurance")) return "insurance";
+  if (normalized.includes("tax") && allowedCategories.includes("property_tax")) return "property_tax";
+  return "";
 }
 
-export function buildInvoiceExpenseCandidate(row, allowedCategories = []) {
+export function buildInvoiceExpenseCandidate(row, allowedCategories = [], sourceRecord = null) {
+  const overrides = textOverridesFromInvoice(row, sourceRecord);
+  const rawGlCode = String(firstValue(row, FIELD_ALIASES.gl_code) || "").trim();
+  const rawInvoiceNumber = String(firstValue(row, FIELD_ALIASES.invoice_number) || "").trim();
+  const rawDescription = String(firstValue(row, FIELD_ALIASES.description) || "").trim();
+
   return {
-    date: normalizeDate(firstValue(row, FIELD_ALIASES.date)),
-    amount: normalizeAmount(firstValue(row, FIELD_ALIASES.amount)),
-    category: normalizeExpenseCategory(firstValue(row, FIELD_ALIASES.category), allowedCategories),
+    date: normalizeDate(overrides.date || firstValue(row, FIELD_ALIASES.date)),
+    amount: normalizeAmount(overrides.amount || firstValue(row, FIELD_ALIASES.amount)),
+    category: normalizeExpenseCategory(overrides.category || firstValue(row, FIELD_ALIASES.category), allowedCategories),
     expense_subcategory: String(firstValue(row, FIELD_ALIASES.subcategory) || "").trim(),
-    gl_code: String(firstValue(row, FIELD_ALIASES.gl_code) || "").trim(),
-    vendor: String(firstValue(row, FIELD_ALIASES.vendor) || "").trim(),
-    description: String(firstValue(row, FIELD_ALIASES.description) || "").trim(),
-    classification: normalizeClassification(firstValue(row, FIELD_ALIASES.classification)),
-    property_name: String(firstValue(row, FIELD_ALIASES.property_name) || "").trim(),
+    gl_code: isBadGlCode(rawGlCode) ? String(overrides.gl_code || "").trim() : rawGlCode,
+    vendor: String(overrides.vendor || firstValue(row, FIELD_ALIASES.vendor) || "").trim(),
+    description: isBadDescription(rawDescription) ? String(overrides.description || "").trim() : rawDescription,
+    classification: normalizeClassification(overrides.classification || firstValue(row, FIELD_ALIASES.classification)),
+    property_name: String(overrides.property_name || firstValue(row, FIELD_ALIASES.property_name) || "").trim(),
     building_name: String(firstValue(row, FIELD_ALIASES.building_name) || "").trim(),
     unit_number: String(firstValue(row, FIELD_ALIASES.unit_number) || "").trim(),
     tenant_name: String(firstValue(row, FIELD_ALIASES.tenant_name) || "").trim(),
-    invoice_number: String(firstValue(row, FIELD_ALIASES.invoice_number) || "").trim(),
+    invoice_number: isBadInvoiceNumber(rawInvoiceNumber) ? String(overrides.invoice_number || "").trim() : rawInvoiceNumber,
   };
 }
 

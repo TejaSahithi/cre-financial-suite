@@ -341,7 +341,7 @@ export default function AddExpense() {
     while (Date.now() - startedAt <= timeoutMs) {
       const { data, error } = await supabase
         .from("uploaded_files")
-        .select("status,error_message,parsed_data,valid_data,normalized_output,ui_review_payload,reviewed_output,storage_path")
+        .select("status,error_message,parsed_data,valid_data,normalized_output,ui_review_payload,reviewed_output,storage_path,docling_raw,azure_raw_response")
         .eq("id", fileId)
         .single();
       if (error) throw error;
@@ -518,7 +518,7 @@ export default function AddExpense() {
       }
 
       const { rows } = extracted;
-      const candidate = buildInvoiceExpenseCandidate(rows[0], CATEGORIES);
+      const candidate = buildInvoiceExpenseCandidate(rows[0], CATEGORIES, extracted.record);
       applyInvoiceCandidate(candidate);
       setInvoiceExtractionStatus("Document fields extracted. Review them before saving.");
       toast.success("Document extracted and the Add Expense form was prefilled.");

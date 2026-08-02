@@ -42,6 +42,13 @@ describe('expenseService - CAM Classification Helpers', () => {
     expect(canSendClassificationToCam({ classification, expense, rule: null })).toBe(false);
   });
 
+
+  it('scoreRuleMatch uses lease rule expense_category when category_name is absent', () => {
+    const expense = { ...MOCK_ACTUAL_EXPENSE, category: "insurance", description: "Property insurance premium" };
+    const rule = { ...MOCK_APPROVED_CAM_RULE, category_name: null, expense_category: "insurance", expense_subcategory: null };
+
+    expect(scoreRuleMatch(expense, rule)).toBeGreaterThan(0);
+  });
   it('scoreRuleMatch scores direct recovery_rule_id match higher than a category-only match', () => {
     const directMatchExpense = { ...MOCK_ACTUAL_EXPENSE, recovery_rule_id: MOCK_APPROVED_CAM_RULE.id };
     const categoryOnlyExpense = { ...MOCK_ACTUAL_EXPENSE, recovery_rule_id: null };

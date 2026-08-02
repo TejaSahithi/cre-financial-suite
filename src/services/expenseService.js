@@ -290,7 +290,12 @@ function ruleCategoryTokens(rule) {
     rule?.category?.normalized_key,
     rule?.category?.category_name,
     rule?.category?.subcategory_name,
+    rule?.expense_category,
+    rule?.expense_subcategory,
+    rule?.subcategory_name,
     rule?.category_name,
+    rule?.category,
+    rule?.normalized_key,
   ]
     .map((value) => normalizeText(value).replace(/[^a-z0-9]+/g, "_"))
     .filter(Boolean);

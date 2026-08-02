@@ -222,6 +222,40 @@ export default function Expenses() {
     [selectorScopedExpenses]
   );
 
+  const updateScopeParams = ({ property = scopeProperty, building = scopeBuilding, unit = scopeUnit }) => {
+    const params = new URLSearchParams(location.search);
+    if (property && property !== "all") params.set("property", property);
+    else params.delete("property");
+
+    if (building && building !== "all") params.set("building", building);
+    else params.delete("building");
+
+    if (unit && unit !== "all") params.set("unit", unit);
+    else params.delete("unit");
+
+    navigate({
+      pathname: location.pathname,
+      search: params.toString() ? `?${params.toString()}` : "",
+    }, { replace: true });
+  };
+
+  const handleScopePropertyChange = (value) => {
+    setScopeProperty(value);
+    setScopeBuilding("all");
+    setScopeUnit("all");
+    updateScopeParams({ property: value, building: "all", unit: "all" });
+  };
+
+  const handleScopeBuildingChange = (value) => {
+    setScopeBuilding(value);
+    setScopeUnit("all");
+    updateScopeParams({ property: scopeProperty, building: value, unit: "all" });
+  };
+
+  const handleScopeUnitChange = (value) => {
+    setScopeUnit(value);
+    updateScopeParams({ property: scopeProperty, building: scopeBuilding, unit: value });
+  };
   const selectedPropertyId = scopeProperty !== "all" ? scopeProperty : scope.propertyId || null;
   const selectorScopedLeases = leases.filter((lease) => {
     if (
@@ -725,9 +759,9 @@ export default function Expenses() {
         selectedProperty={scopeProperty}
         selectedBuilding={scopeBuilding}
         selectedUnit={scopeUnit}
-        onPropertyChange={setScopeProperty}
-        onBuildingChange={setScopeBuilding}
-        onUnitChange={setScopeUnit}
+        onPropertyChange={handleScopePropertyChange}
+        onBuildingChange={handleScopeBuildingChange}
+        onUnitChange={handleScopeUnitChange}
       />
 
 
@@ -870,10 +904,7 @@ export default function Expenses() {
                   <TableHead className="text-[10px] font-bold tracking-wider">VENDOR</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider text-right">AMOUNT</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider">RECOVERY</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">RULE</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">CONF.</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider">APPROVAL</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">CTRL</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider">SOURCE</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider w-20"></TableHead>
                 </TableRow>
@@ -881,13 +912,13 @@ export default function Expenses() {
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                      <TableCell colSpan={18} className="text-center py-12">
+                      <TableCell colSpan={15} className="text-center py-12">
                         <Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" />
                       </TableCell>
                     </TableRow>
                   ) : filtered.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={18} className="text-center py-12 text-sm text-slate-400">
+                      <TableCell colSpan={15} className="text-center py-12 text-sm text-slate-400">
                         {scopedRuleSummary.total > 0
                           ? "No expense rows found yet. Lease rules are ready above; upload actual expenses or review the extracted rule set."
                           : "No expenses found"}
@@ -972,11 +1003,7 @@ export default function Expenses() {
                         <TableCell className="text-[10px] text-slate-500">{expense.rule_source || "—"}</TableCell>
                         <TableCell className="text-[10px] text-slate-500">{expense.confidence_score != null ? `${Math.round(Number(expense.confidence_score) * 100)}%` : "—"}</TableCell>
                         <TableCell className="text-[10px] text-slate-500">{getEffectiveApprovalStatus(expense) || "draft"}</TableCell>
-                        <TableCell>
-                          <span className={`text-[9px] font-semibold ${expense.is_controllable !== false ? "text-emerald-600" : "text-slate-400"}`}>
-                            {expense.is_controllable !== false ? "CTRL" : "NON"}
-                          </span>
-                        </TableCell>
+
                         <TableCell className="text-[10px] text-slate-400 capitalize">{expense.source_type || expense.source}</TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">
