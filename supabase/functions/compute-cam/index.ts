@@ -3,10 +3,10 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from "../_shared/supabase.ts";
 import { saveSnapshot, findMatchingCompletedSnapshot } from "../_shared/snapshot.ts";
 import { calculateCam } from "../_shared/cam-calculator.ts";
+import { assertValidScopeHierarchy, type ScopeLevel } from "../_shared/scope.ts";
+import { applySnapshotSeriesFilter, applySnapshotSeriesScopeFilter, buildSnapshotSeriesIdentity } from "../_shared/snapshot-identity.ts";
 
 const ENGINE_VERSION = "cam-v1.0";
-
-type ScopeLevel = "property" | "building" | "unit";
 
 function asNumber(value: unknown) {
   const num = Number(value);
@@ -98,13 +98,6 @@ function isExplicitWholeCategoryCamExclusion(rule: any, categoryName: string) {
   if (broadMixedCategories.has(category) && subcategory && subcategory !== category) return false;
 
   return true;
-}
-
-function isApprovedActualExpense(expense: any) {
-  const approval = normalizeText(expense?.approval_status || expense?.approved_status);
-  const review = normalizeText(expense?.review_status);
-  const status = normalizeText(expense?.status);
-  return approval === "approved" || review === "approved" || status === "approved" || status === "finalized";
 }
 
 function leaseOverlapsFiscalYear(lease: any, fiscalYear: number) {
@@ -272,6 +265,12 @@ async function fetchExpenses(supabaseAdmin: any, orgId: string, propertyId: stri
   return data ?? [];
 }
 
+// DIAGNOSTIC / AUDIT-MANIFEST ONLY as of the CAM publication boundary PR —
+// no longer feeds the calculation (see buildCamReadyExpenses below). Kept
+// so the snapshot's source_row_ids/source_counts manifest can still show
+// how many classifications exist in the "cam_ready" state at compute time,
+// for traceability, without treating expense_classifications as an
+// authoritative calculation input again.
 async function fetchCamReadyClassifications(supabaseAdmin: any, orgId: string, propertyId: string, fiscalYear: number) {
   const { data, error } = await supabaseAdmin
     .from("expense_classifications")
@@ -289,13 +288,21 @@ async function fetchCamReadyClassifications(supabaseAdmin: any, orgId: string, p
   return (data ?? []).filter((row: any) => rowMatchesFiscalYear(row, fiscalYear));
 }
 
+// The ONLY expense source consumed by the CAM calculation itself. Filters
+// on publication_status='published' (not merely status='cam_ready', which
+// a row can carry without ever having gone through the Send-to-CAM publish
+// step — see save_lease_rule_amount_cam_input and
+// send_expense_classification_to_cam_workflow, both in
+// 20260905000000_cam_publication_rpcs.sql) — a classification that is
+// finalized but not yet published, or whose publication was withdrawn,
+// must never reach this query.
 async function fetchCamReadyInputs(supabaseAdmin: any, orgId: string, propertyId: string, fiscalYear: number) {
   const { data, error } = await supabaseAdmin
     .from("cam_expense_inputs")
     .select("*")
     .eq("org_id", orgId)
     .eq("property_id", propertyId)
-    .eq("status", "cam_ready");
+    .eq("publication_status", "published");
 
   if (error) {
     console.warn("[compute-cam] cam_expense_inputs fetch warning:", error.message);
@@ -389,19 +396,26 @@ function camReadyExpenseFromRow(row: any, sourceLabel: string) {
   };
 }
 
+// CAM publication boundary: cam_expense_inputs (already filtered to
+// publication_status='published' by fetchCamReadyInputs) is the ONLY
+// expense source this function may read. expense_classifications is
+// deliberately NOT a parameter here anymore — a classification reaching
+// cam_status='cam_ready' is necessary but no longer sufficient; it must
+// have gone through the Send-to-CAM publish RPC and still be the active
+// (non-withdrawn) version. The dedupe-by-key logic is kept as a
+// defense-in-depth safety net even though the new partial unique index
+// (idx_cam_expense_inputs_classification_published /
+// idx_cam_expense_inputs_rule_amount_published) already guarantees at most
+// one published row per classification/rule+year at the database level.
 function buildCamReadyExpenses({
-  classifications,
   inputs,
-  expenses,
   units,
   leases,
   scopeLevel,
   scopeId,
   propertyId,
 }: {
-  classifications: any[];
   inputs: any[];
-  expenses: any[];
   units: any[];
   leases: any[];
   scopeLevel: ScopeLevel;
@@ -410,28 +424,12 @@ function buildCamReadyExpenses({
 }) {
   const rows: any[] = [];
   const seen = new Set<string>();
-  const expensesById = new Map((expenses ?? []).map((expense: any) => [String(expense.id), expense]));
 
-  const addRow = (row: any, sourceLabel: string, rowKind: "classification" | "input") => {
-    const camStatus = normalizeText(row?.cam_status || row?.status);
-    const camEligible = normalizeDecision(row?.cam_eligible || "yes");
+  const addRow = (row: any, sourceLabel: string) => {
     const inputType = normalizeText(row?.cam_input_type || row?.source || sourceLabel);
-    const camSource = normalizeText(row?.cam_source || row?.source);
-    if (camStatus !== "cam_ready" && normalizeText(row?.status) !== "cam_ready") return;
-    if (camEligible !== "yes") return;
+    if (row?.publication_status && row.publication_status !== "published") return;
     if (!camReadyRowMatchesScope(row, units, leases, scopeLevel, scopeId, propertyId)) return;
-
-    if (rowKind === "classification") {
-      const isManualReview = camSource === "manual_review";
-      if (inputType !== "actual_expense") return;
-      if (isManualReview && !String(row?.manual_cam_reason || row?.manual_cam_note || "").trim()) return;
-
-      const actualExpenseId = String(row?.expense_id || row?.actual_expense_id || "");
-      const actualExpense = actualExpenseId ? expensesById.get(actualExpenseId) : null;
-      if (!actualExpense || !isApprovedActualExpense(actualExpense)) return;
-    } else {
-      if (!["actual_expense", "lease_rule_amount"].includes(inputType)) return;
-    }
+    if (!["actual_expense", "lease_rule_amount"].includes(inputType)) return;
 
     const dedupeKey =
       row?.classification_result_id
@@ -446,8 +444,7 @@ function buildCamReadyExpenses({
     rows.push(camReadyExpenseFromRow(row, sourceLabel));
   };
 
-  for (const input of inputs) addRow(input, normalizeText(input?.source || "cam_expense_input"), "input");
-  for (const classification of classifications) addRow(classification, normalizeText(classification?.cam_source || "expense_classification"), "classification");
+  for (const input of inputs) addRow(input, normalizeText(input?.source || "cam_expense_input"));
 
   return rows.filter((row) => row.amount > 0 && row.category);
 }
@@ -666,17 +663,38 @@ Deno.serve(async (req: Request) => {
     await assertPageAccess(req, orgId, ["CAMCalculation", "CAMDashboard"], "write");
     await assertPropertyAccess(req, propertyId);
 
+    // ── Scope hierarchy validation ──────────────────────────────────────────
+    // Data-integrity check (admin client, not RLS): confirms scope_id is a
+    // real building/unit that belongs to *this* property and organization.
+    // Distinct from assertPropertyAccess above, which only checks whether
+    // the calling user may act on the property at all. Fails closed for an
+    // unknown scope_level, a missing scope_id at building/unit level, or a
+    // scope_id that belongs to a different property/org.
+    await assertValidScopeHierarchy(supabaseAdmin, orgId, propertyId, scopeLevel, scopeId);
+
+    // Canonical snapshot-series identity for this run — see
+    // _shared/snapshot-identity.ts. Built once, reused for every lookup
+    // below instead of each repeating its own org/property/engine/scope/
+    // year filter chain.
+    const seriesIdentity = buildSnapshotSeriesIdentity({
+      org_id: orgId,
+      property_id: propertyId,
+      engine_type: "cam",
+      scope_level: scopeLevel,
+      scope_id: scopeId,
+      fiscal_year: fiscalYear,
+    });
+
     // ── Lock check ───────────────────────────────────────────────────────────
     // Block recomputation when a completed snapshot is locked for this exact
-    // (org, property, engine, fiscal_year) scope. Scoped narrowly to avoid
-    // blocking other properties or fiscal years in the same org.
-    const { data: lockedSnap } = await supabaseAdmin
-      .from("computation_snapshots")
-      .select("id, locked_at")
-      .eq("org_id", orgId)
-      .eq("property_id", propertyId)
-      .eq("engine_type", "cam")
-      .eq("fiscal_year", fiscalYear)
+    // (org, property, engine, fiscal_year, scope) scope. Scoped narrowly so
+    // a locked building/unit run never blocks a different building/unit (or
+    // the property-level) run for the same property and year, and vice
+    // versa.
+    const { data: lockedSnap } = await applySnapshotSeriesFilter(
+      supabaseAdmin.from("computation_snapshots").select("id, locked_at"),
+      seriesIdentity,
+    )
       .eq("status", "completed")
       .not("locked_at", "is", null)
       .limit(1)
@@ -684,7 +702,7 @@ Deno.serve(async (req: Request) => {
 
     if (lockedSnap) {
       throw new Error(
-        `CAM snapshot for property ${propertyId} / fiscal year ${fiscalYear} is locked ` +
+        `CAM snapshot for property ${propertyId} / fiscal year ${fiscalYear} / scope ${scopeLevel}:${scopeId} is locked ` +
         `(locked at ${lockedSnap.locked_at}). Unlock the snapshot before recomputing.`,
       );
     }
@@ -763,9 +781,7 @@ Deno.serve(async (req: Request) => {
     // "conditional" on both axes, but the upstream throw made it dead
     // code that mis-represented the contract.
     const recoverableExpenses = buildCamReadyExpenses({
-      classifications: camReadyClassifications,
       inputs: camReadyInputs,
-      expenses,
       units,
       leases,
       scopeLevel,
@@ -809,12 +825,10 @@ Deno.serve(async (req: Request) => {
     });
 
     const historicalYears = collectHistoricalYears(fiscalYear, leaseConfigMap);
-    const { data: historicalSnapshots, error: historicalError } = await supabaseAdmin
-      .from("computation_snapshots")
-      .select("fiscal_year, outputs, computed_at")
-      .eq("org_id", orgId)
-      .eq("property_id", propertyId)
-      .eq("engine_type", "cam")
+    const { data: historicalSnapshots, error: historicalError } = await applySnapshotSeriesScopeFilter(
+      supabaseAdmin.from("computation_snapshots").select("fiscal_year, outputs, computed_at"),
+      seriesIdentity,
+    )
       .in("fiscal_year", historicalYears)
       .order("computed_at", { ascending: false });
 
@@ -847,6 +861,14 @@ Deno.serve(async (req: Request) => {
         historical_by_year: buildHistoricalIndex(historicalSnapshots ?? []),
       });
 
+    // Intentionally NOT scope-filtered: compute-budget does not support
+    // building/unit scope yet (that is a separate, not-yet-authorized PR),
+    // so every budget snapshot is inherently property-level regardless of
+    // what CAM scope is being computed here. This is a cross-engine
+    // reference used only for the display-only budgeted_cam output field,
+    // not part of compute-cam's own scope-collision surface — scoping it
+    // to compute-cam's scope_level/scope_id would just make it never match
+    // for building/unit runs. Out of scope for this PR by design.
     const { data: budgetSnapshot } = await supabaseAdmin
       .from("computation_snapshots")
       .select("id, outputs")
@@ -857,12 +879,14 @@ Deno.serve(async (req: Request) => {
       .order("computed_at", { ascending: false })
       .limit(1);
 
-    const { data: priorCamSnapshot } = await supabaseAdmin
-      .from("computation_snapshots")
-      .select("id, outputs")
-      .eq("org_id", orgId)
-      .eq("property_id", propertyId)
-      .eq("engine_type", "cam")
+    // Same series (org/property/engine/scope) as seriesIdentity, but the
+    // prior fiscal year — applySnapshotSeriesFilter can't be reused as-is
+    // since it pins the *current* fiscal_year; the scope-only variant plus
+    // an explicit year keeps this centralized without matching the wrong year.
+    const { data: priorCamSnapshot } = await applySnapshotSeriesScopeFilter(
+      supabaseAdmin.from("computation_snapshots").select("id, outputs"),
+      seriesIdentity,
+    )
       .eq("fiscal_year", fiscalYear - 1)
       .order("computed_at", { ascending: false })
       .limit(1);
@@ -877,6 +901,8 @@ Deno.serve(async (req: Request) => {
     const camPayload = {
       org_id: orgId,
       property_id: propertyId,
+      scope_level: scopeLevel,
+      scope_id: scopeId,
       fiscal_year: fiscalYear,
       annual_cam: round2(totalCam),
       cam_per_sf: round2(camPerSf),
@@ -892,7 +918,7 @@ Deno.serve(async (req: Request) => {
 
     const { error: camCalculationError } = await supabaseAdmin
       .from("cam_calculations")
-      .upsert(camPayload, { onConflict: "org_id,property_id,fiscal_year" });
+      .upsert(camPayload, { onConflict: "org_id,property_id,scope_level,scope_id,fiscal_year" });
 
 
     if (camCalculationError) {

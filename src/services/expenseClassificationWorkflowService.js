@@ -24,3 +24,15 @@ export async function reviewExpenseClassification({ classificationId, action, re
     approved_status: approvedStatus,
   });
 }
+
+// CAM publication boundary (withdraw_cam_expense_input,
+// 20260905000000_cam_publication_rpcs.sql): pulls back an actively
+// published cam_expense_inputs row without deleting it (marked
+// 'withdrawn'), returns the classification to review, and marks affected
+// CAM computation_snapshots stale (or restatement_required if locked).
+export async function withdrawCamExpenseInput({ classificationId, reason }) {
+  return invokeEdgeFunction("withdraw-cam-expense-input", {
+    classification_id: classificationId,
+    reason,
+  });
+}

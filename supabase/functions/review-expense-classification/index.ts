@@ -34,13 +34,22 @@ function validatePayload(body: Record<string, unknown> = {}) {
     }
   }
 
-  return { classificationId, action, recoveryStatus, approvedStatus };
+  const remainderAccepted = body.remainder_accepted === true;
+  let remainderReason = null;
+  if (remainderAccepted) {
+    remainderReason = String(body.remainder_reason || "").trim();
+    if (!remainderReason) {
+      throw new Error("remainder_reason is required when remainder_accepted is true");
+    }
+  }
+
+  return { classificationId, action, recoveryStatus, approvedStatus, remainderAccepted, remainderReason };
 }
 
 function errorStatus(message: string) {
   if (/unauthorized|missing authorization/i.test(message)) return 401;
   if (/access denied|permission/i.test(message)) return 403;
-  if (/required|not found|action must be|recovery_status must be|approved_status must be/i.test(message)) return 400;
+  if (/required|not found|action must be|recovery_status must be|approved_status must be|exceeds the approved expense amount|unallocated/i.test(message)) return 400;
   return 500;
 }
 
@@ -71,6 +80,8 @@ Deno.serve(async (req: Request) => {
       p_action: payload.action,
       p_recovery_status: payload.recoveryStatus,
       p_approved_status: payload.approvedStatus,
+      p_remainder_accepted: payload.remainderAccepted,
+      p_remainder_reason: payload.remainderReason,
     });
 
     if (error) {

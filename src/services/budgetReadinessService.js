@@ -12,11 +12,18 @@ export async function checkBudgetReadiness(supabase, { propertyId, fiscalYear, o
     supabase.from("leases").select("id, abstract_status").eq("property_id", propertyId).eq("status", "active"),
     supabase.from("lease_expense_rule_sets").select("id").eq("property_id", propertyId).eq("status", "approved"),
     supabase.from("expense_classifications").select("id, classification_status").eq("property_id", propertyId).eq("org_id", orgId),
+    // Required consequence of cam_calculations/computation_snapshots becoming
+    // scope-aware: a property can now have multiple completed "cam" snapshots
+    // for the same fiscal_year (property + any building/unit runs), so
+    // .maybeSingle() would start erroring as soon as a building/unit CAM run
+    // exists alongside the property one. Budget readiness has always meant
+    // "is the property-wide CAM data ready", so pin to property scope.
     supabase
       .from("computation_snapshots")
       .select("id, computed_at")
       .eq("engine_type", "cam")
       .eq("property_id", propertyId)
+      .eq("scope_level", "property")
       .eq("fiscal_year", fiscalYear)
       .order("computed_at", { ascending: false })
       .limit(1)

@@ -44,6 +44,7 @@ import {
   createExpenseClassificationCamSendIdempotencyKey,
   sendExpenseClassificationToCam,
   reviewExpenseClassification,
+  withdrawCamExpenseInput,
 } from "@/services/expenseClassificationWorkflowService";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveTableName } from "@/types";
@@ -2968,6 +2969,21 @@ export const expenseService = {
     });
     console.log(`[Diagnostics] Sent classification ${classification.id} to CAM via server workflow`);
     return result?.classification || result;
+  },
+
+  // Withdraws an actively published CAM input (withdraw_cam_expense_input)
+  // — never deletes it, returns the classification to review, and marks
+  // affected CAM snapshots stale/restatement-required. A later re-finalize
+  // + Send to CAM republishes a new, higher version.
+  async withdrawClassificationFromCam(classificationOrId, reason) {
+    const classificationId =
+      classificationOrId && typeof classificationOrId === "object" ? classificationOrId.id : classificationOrId;
+    if (!classificationId) throw new Error("A classification is required to withdraw from CAM.");
+    if (!String(reason || "").trim()) throw new Error("A reason is required to withdraw a published CAM input.");
+
+    const result = await withdrawCamExpenseInput({ classificationId, reason: reason.trim() });
+    console.log(`[Diagnostics] Withdrew classification ${classificationId} from CAM`);
+    return result;
   },
 
   async publishRuleToCamSetup(ruleId) {

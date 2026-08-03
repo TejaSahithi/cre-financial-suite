@@ -152,6 +152,38 @@ export function isAutomaticCamReadyRow(row) {
   );
 }
 
+// Publication-readiness checklist with exact blocking reasons — the
+// client-side mirror of deriveExpenseCamSendBlockers
+// (_shared/send-expense-classification-to-cam-workflow.ts) and
+// send_expense_classification_to_cam_workflow's own server-side checks
+// (20260905000000_cam_publication_rpcs.sql). Server-side remains
+// authoritative; this only drives what the UI shows so a reviewer can see
+// *why* Send to CAM is disabled without guessing.
+export function getCamPublicationReadiness(row) {
+  if (row?.sentToCam) {
+    return { ready: true, checks: [], blockers: [], alreadyPublished: true };
+  }
+
+  const isRuleGap = row?.rowType === "rule_missing_actual";
+  const expenseApproved = isRuleGap || Boolean(row?.actualExpenseId);
+  const ruleApproved = !row?.rule || row?.rule?.approval_status === "approved" || row?.rule?.published_to_cam === true;
+
+  const checks = [
+    { key: "expense_approved", label: "Expense approved", pass: expenseApproved },
+    { key: "rule_approved", label: "Lease rule approved", pass: ruleApproved },
+    { key: "finalized", label: "Classification finalized", pass: row?.classificationStatus === "finalized" },
+    { key: "amount_allocated", label: "Amount fully allocated", pass: Number(row?.amount) > 0 },
+    { key: "scope_validated", label: "Scope validated", pass: Boolean(row?.property || isRuleGap === false) },
+    { key: "conditions_resolved", label: "Conditions resolved", pass: row?.recoverabilityResult !== "conditional" },
+    { key: "duplicate_check", label: "Not already published", pass: !row?.sentToCam },
+    { key: "recoverable", label: "Recoverability is recoverable", pass: row?.recoverabilityResult === "recoverable" },
+    { key: "cam_eligible", label: "CAM eligibility is yes", pass: row?.camEligible === "yes" },
+  ];
+
+  const blockers = checks.filter((check) => !check.pass).map((check) => check.label);
+  return { ready: blockers.length === 0, checks, blockers, alreadyPublished: false };
+}
+
 export function buildClassificationRows({
   approvedActuals,
   approvedRules,

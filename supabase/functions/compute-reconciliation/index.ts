@@ -2,6 +2,7 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from "../_shared/supabase.ts";
 import { saveSnapshot, findMatchingCompletedSnapshot } from "../_shared/snapshot.ts";
+import { parseBudgetLineItemsByCategory } from "../_shared/budget-snapshot-parser.ts";
 
 const ENGINE_VERSION = "reconciliation-v1.0";
 
@@ -124,18 +125,14 @@ Deno.serve(async (req: Request) => {
       throw new Error(`Budget snapshot is required before reconciliation for property ${property_id} and fiscal year ${fiscal_year}`);
     }
 
-    // Build budget-by-category lookup from snapshot or fall back to even split
-    const budgetByCategory: Record<string, number> = {};
-    if (budgetSnapshot?.outputs?.line_items) {
-      for (const item of budgetSnapshot.outputs.line_items) {
-        const cat = item.category || "uncategorized";
-        budgetByCategory[cat] = (budgetByCategory[cat] || 0) + (Number(item.amount) || 0);
-      }
-    } else if (budgetSnapshot?.outputs?.by_category) {
-      for (const [cat, amt] of Object.entries(budgetSnapshot.outputs.by_category)) {
-        budgetByCategory[cat] = Number(amt) || 0;
-      }
-    }
+    // Budget-by-category lookup, keyed off the expense side of the budget
+    // snapshot's line_items (actuals/expenses categories below are
+    // expense-side facts; revenue variance is handled separately via
+    // summary.budget_revenue/actual_revenue further down). See
+    // _shared/budget-snapshot-parser.ts for the schema contract — this
+    // throws (caught by the outer try/catch as a 400) rather than silently
+    // producing wrong numbers for an unrecognized snapshot shape.
+    const budgetByCategory: Record<string, number> = parseBudgetLineItemsByCategory(budgetSnapshot.outputs);
 
     // ---------------------------------------------------------------
     // 6. Calculate variance by category

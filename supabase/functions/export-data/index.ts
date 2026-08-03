@@ -1,6 +1,8 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from "../_shared/supabase.ts";
+import { resolveBudgetIdentity } from "../_shared/budget-identity.ts";
+import { resolveBuildingUnitIds, applyBudgetScopeRowFilter } from "../_shared/budget-scope.ts";
 
 /**
  * Export Data Edge Function
@@ -316,20 +318,28 @@ async function fetchBudgetRevenueDetails({
   orgId,
   propertyId,
   fiscalYear,
+  budget,
+  buildingUnitIds,
 }: {
   supabaseAdmin: any;
   orgId: string;
   propertyId: string;
   fiscalYear: number;
+  budget?: any;
+  buildingUnitIds?: string[];
 }) {
-  const safeSelect = "property_id, lease_id, fiscal_year, month, type, amount, notes, date, tenant_name";
+  const safeSelect = "property_id, building_id, unit_id, lease_id, fiscal_year, month, type, amount, notes, date, tenant_name";
 
-  let result = await supabaseAdmin
+  let query = supabaseAdmin
     .from("revenues")
     .select(safeSelect)
     .eq("org_id", orgId)
     .eq("property_id", propertyId)
-    .eq("fiscal_year", fiscalYear)
+    .eq("fiscal_year", fiscalYear);
+  if (budget) {
+    query = applyBudgetScopeRowFilter(query, budget, buildingUnitIds ?? []);
+  }
+  let result = await query
     .order("date", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: true });
 
@@ -358,6 +368,8 @@ async function buildBudgetExportRows({
   fiscalYear,
   propertyName,
   snapshot,
+  budget,
+  buildingUnitIds,
 }: {
   supabaseAdmin: any;
   orgId: string;
@@ -365,57 +377,68 @@ async function buildBudgetExportRows({
   fiscalYear: number;
   propertyName: string;
   snapshot: any;
+  budget: any;
+  buildingUnitIds: string[];
 }): Promise<Record<string, any>[]> {
-  const [budgetRes, expensesRes, revenuesRes, leasesRes, camRes] = await Promise.all([
-    supabaseAdmin
-      .from("budgets")
-      .select("id, name, status, scope, period, generation_method, total_revenue, total_expenses, cam_total, noi, ai_insights, portfolio_id, property_id, building_id, unit_id")
-      .eq("org_id", orgId)
-      .eq("property_id", propertyId)
-      .eq("budget_year", fiscalYear)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    supabaseAdmin
-      .from("expenses")
-      .select("property_id, building_id, unit_id, category, amount, classification, vendor, fiscal_year, month, date, description, invoice_number, is_controllable")
-      .eq("org_id", orgId)
-      .eq("property_id", propertyId)
-      .eq("fiscal_year", fiscalYear)
-      .order("date", { ascending: true, nullsFirst: false })
-      .order("created_at", { ascending: true }),
+  // `budget` is already resolved (by budget_id, or by the full canonical
+  // (org, scope, scope_id, budget_year) identity) by the caller — never
+  // re-queried here by property_id+budget_year alone, which is exactly the
+  // ambiguous lookup this hardening PR removes. Detail rows
+  // (leases/expenses/revenues) are narrowed to the budget's own scope via
+  // applyBudgetScopeRowFilter, so a building/unit-scoped budget's export
+  // reports only that building/unit's rows, not the whole property's.
+  let expenseQuery = supabaseAdmin
+    .from("expenses")
+    .select("property_id, building_id, unit_id, category, amount, classification, vendor, fiscal_year, month, date, description, invoice_number, is_controllable")
+    .eq("org_id", orgId)
+    .eq("property_id", propertyId)
+    .eq("fiscal_year", fiscalYear);
+  expenseQuery = applyBudgetScopeRowFilter(expenseQuery, budget, buildingUnitIds)
+    .order("date", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: true });
+
+  let leaseQuery = supabaseAdmin
+    .from("leases")
+    .select("id, property_id, unit_id, tenant_name, start_date, end_date, monthly_rent, annual_rent, square_footage, status, lease_type, cam_amount, nnn_amount, escalation_rate, notes")
+    .eq("org_id", orgId)
+    .eq("property_id", propertyId);
+  leaseQuery = applyBudgetScopeRowFilter(leaseQuery, budget, buildingUnitIds)
+    .order("start_date", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: true });
+
+  const [expensesRes, revenuesRes, leasesRes, camRes] = await Promise.all([
+    expenseQuery,
     fetchBudgetRevenueDetails({
       supabaseAdmin,
       orgId,
       propertyId,
       fiscalYear,
+      budget,
+      buildingUnitIds,
     }),
-    supabaseAdmin
-      .from("leases")
-      .select("id, property_id, unit_id, tenant_name, start_date, end_date, monthly_rent, annual_rent, square_footage, status, lease_type, cam_amount, nnn_amount, escalation_rate, notes")
-      .eq("org_id", orgId)
-      .eq("property_id", propertyId)
-      .order("start_date", { ascending: true, nullsFirst: false })
-      .order("created_at", { ascending: true }),
+    leaseQuery,
+    // Scope-matched to THIS budget's own scope (property/building/unit) —
+    // never hardcoded to "property" — so a building/unit-scoped budget's
+    // export shows that scope's own CAM figures, not the whole property's.
     supabaseAdmin
       .from("computation_snapshots")
       .select("outputs, computed_at")
       .eq("org_id", orgId)
       .eq("property_id", propertyId)
       .eq("engine_type", "cam")
+      .eq("scope_level", budget.scope)
+      .eq("scope_id", budget.scope_id)
       .eq("fiscal_year", fiscalYear)
       .order("computed_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
   ]);
 
-  if (budgetRes.error) throw new Error(`Failed to fetch budget export data: ${budgetRes.error.message}`);
   if (expensesRes.error) throw new Error(`Failed to fetch expense detail: ${expensesRes.error.message}`);
   if (revenuesRes.error) throw new Error(`Failed to fetch revenue detail: ${revenuesRes.error.message}`);
   if (leasesRes.error) throw new Error(`Failed to fetch lease detail: ${leasesRes.error.message}`);
   if (camRes.error) throw new Error(`Failed to fetch CAM detail: ${camRes.error.message}`);
 
-  const budget = budgetRes.data ?? null;
   const expenses = expensesRes.data ?? [];
   const revenues = revenuesRes.data ?? [];
   const fiscalLeases = (leasesRes.data ?? []).filter((lease: any) =>
@@ -815,6 +838,7 @@ async function buildBudgetBookExportRows({
   fiscalYear,
   propertyName,
   budgetSnapshot,
+  budget,
 }: {
   supabaseAdmin: any;
   orgId: string;
@@ -822,30 +846,32 @@ async function buildBudgetBookExportRows({
   fiscalYear: number;
   propertyName: string;
   budgetSnapshot: any;
+  budget: any;
 }): Promise<Record<string, any>[]> {
   if (!budgetSnapshot?.outputs) {
     throw new Error(
-      `No budget snapshot found for property="${propertyId}" and fiscal_year=${fiscalYear}. Run compute-budget first.`,
+      `No budget snapshot found for budget_id="${budget?.id}" (scope="${budget?.scope}", scope_id="${budget?.scope_id}", fiscal_year=${fiscalYear}). Run compute-budget first.`,
     );
   }
 
-  // Phase 1 — parallel: budget record, CAM snapshot, reconciliation snapshot, property sqft
-  const [budgetRes, camRes, reconRes, propRes] = await Promise.all([
-    supabaseAdmin
-      .from("budgets")
-      .select("id, name, status, scope, period, generation_method, total_revenue, total_expenses, cam_total, noi, ai_insights")
-      .eq("org_id", orgId)
-      .eq("property_id", propertyId)
-      .eq("budget_year", fiscalYear)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+  // `budget` is already resolved by the caller (budget_id, or the full
+  // canonical identity) — never re-queried here by property_id+budget_year
+  // alone. The CAM snapshot is scope-matched to THIS budget's own scope,
+  // not hardcoded to "property". The reconciliation snapshot lookup below
+  // is intentionally left property-wide/unscoped — compute-reconciliation
+  // itself has no scope granularity (untouched by this PR, see the "do not
+  // modify reconciliation accounting" instruction), so there is exactly one
+  // reconciliation row per property/year regardless of which budget scope
+  // triggered this export.
+  const [camRes, reconRes, propRes] = await Promise.all([
     supabaseAdmin
       .from("computation_snapshots")
       .select("outputs, computed_at, engine_version, input_hash")
       .eq("org_id", orgId)
       .eq("property_id", propertyId)
       .eq("engine_type", "cam")
+      .eq("scope_level", budget.scope)
+      .eq("scope_id", budget.scope_id)
       .eq("fiscal_year", fiscalYear)
       .order("computed_at", { ascending: false })
       .limit(1)
@@ -868,7 +894,6 @@ async function buildBudgetBookExportRows({
       .maybeSingle(),
   ]);
 
-  const budget = budgetRes.data ?? null;
   const camSnapshot = camRes.data ?? null;
   const reconSnapshot = reconRes.data ?? null;
   const propertyRecord = propRes.data ?? null;
@@ -1082,45 +1107,128 @@ Deno.serve(async (req: Request) => {
     const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
 
     const body = await req.json();
-    const { export_type, property_id, fiscal_year, format, lease_id } = body;
+    const {
+      export_type,
+      property_id,
+      fiscal_year,
+      format,
+      lease_id,
+      budget_id,
+      scope: rawScope,
+      // Compact/CAM-style form { property_id, scope_level, scope_id } — the
+      // shape the shared PipelineActions component (src/components/
+      // PipelineActions.jsx) sends generically for every engine it drives,
+      // including its "Export Budget" quick action. Normalized into `scope`
+      // below so that action correctly targets a building/unit-scoped
+      // budget instead of silently falling through to the legacy
+      // property_id-only resolution path.
+      scope_level,
+      scope_id: rawScopeId,
+    } = body;
+    const scope = rawScope ?? scope_level;
+    const scope_id = rawScopeId;
 
     if (!export_type || !VALID_EXPORT_TYPES.includes(export_type)) {
       throw new Error(`Invalid or missing export_type. Must be one of: ${VALID_EXPORT_TYPES.join(", ")}`);
-    }
-    if (!property_id) {
-      throw new Error("property_id is required");
-    }
-    if (!fiscal_year) {
-      throw new Error("fiscal_year is required");
     }
     if (format && format !== "csv") {
       throw new Error('Only "csv" format is currently supported');
     }
 
+    const isBudgetExport = export_type === "budget" || export_type === "budget_book";
+
+    // ---------------------------------------------------------------
+    // Budget exports (budget / budget_book): budget_id is the primary
+    // identifier (hardening PR). Never re-derive "the" budget from
+    // property_id+fiscal_year alone with an implicit .limit(1)/ordering —
+    // that stopped being unambiguous once building/unit budgets can coexist
+    // with a property's own budget for the same year. Legacy callers that
+    // only send property_id+fiscal_year still resolve correctly, because
+    // resolveBudgetIdentity queries by the DB-enforced unique key
+    // (org_id, scope, scope_id, budget_year), never an ambiguous partial one.
+    // ---------------------------------------------------------------
+    let resolvedBudget: any = null;
+    let resolvedPropertyId = property_id;
+    let resolvedFiscalYear = fiscal_year;
+    let buildingUnitIds: string[] = [];
+
+    if (isBudgetExport) {
+      resolvedBudget = await resolveBudgetIdentity(supabaseAdmin, orgId, {
+        budget_id,
+        scope,
+        scope_id,
+        property_id,
+        fiscal_year,
+      });
+
+      // Portfolio-level budgets cannot exist yet (compute-budget's
+      // handleGenerate explicitly rejects portfolio-scope generation) — see
+      // the budget scope/period PR. Rather than half-supporting an export
+      // path that can never be exercised, fail closed the same way
+      // compute-budget does, instead of silently falling back to a
+      // property/portfolio-name guess.
+      if (resolvedBudget.scope === "portfolio") {
+        throw new Error(
+          "Portfolio-level budget export is not yet supported (no portfolio-scoped budget can exist yet — see compute-budget's generate handler).",
+        );
+      }
+
+      resolvedPropertyId = resolvedBudget.property_id;
+      resolvedFiscalYear = resolvedBudget.budget_year;
+
+      if (resolvedBudget.scope === "building") {
+        buildingUnitIds = await resolveBuildingUnitIds(supabaseAdmin, orgId, resolvedBudget.building_id);
+      }
+    } else {
+      if (!property_id) {
+        throw new Error("property_id is required");
+      }
+      if (!fiscal_year) {
+        throw new Error("fiscal_year is required");
+      }
+    }
+
     await assertPageAccess(req, orgId, EXPORT_PAGE_MAP[export_type as ExportType] ?? [], "read");
-    await assertPropertyAccess(req, property_id);
+    await assertPropertyAccess(req, resolvedPropertyId);
 
     const { data: property } = await supabaseAdmin
       .from("properties")
       .select("id, name")
-      .eq("id", property_id)
+      .eq("id", resolvedPropertyId)
       .eq("org_id", orgId)
       .single();
 
     if (!property) {
-      throw new Error(`Property not found or access denied: ${property_id}`);
+      throw new Error(`Property not found or access denied: ${resolvedPropertyId}`);
     }
 
-    const propertyName = property.name ?? property_id;
+    const propertyName = property.name ?? resolvedPropertyId;
     const engineType = ENGINE_TYPE_MAP[export_type as ExportType];
 
-    const { data: snapshot } = await supabaseAdmin
+    // engineType can resolve to "cam" (cam_calculation/cam_packet) or "lease"
+    // (rent_schedule) — both scope-aware engines that can now have multiple
+    // completed snapshots per property/year (property + building/unit). This
+    // export path has no scope_level/scope_id request parameter (it has
+    // always been a whole-property report), so pin to property scope to
+    // preserve the original single-row guarantee rather than erroring or
+    // picking whichever scope happened to compute most recently.
+    //
+    // Budget exports are the one exception: the "budget" engine_type
+    // snapshot is matched to the RESOLVED BUDGET's own scope (property,
+    // building, or unit) — pinning it to "property" here would silently
+    // show a building/unit-scoped budget export the wrong snapshot's line
+    // items (the whole property's, not that building/unit's own).
+    let snapshotQuery = supabaseAdmin
       .from("computation_snapshots")
       .select("id, outputs, computed_at, inputs, engine_version, input_hash")
       .eq("org_id", orgId)
-      .eq("property_id", property_id)
+      .eq("property_id", resolvedPropertyId)
       .eq("engine_type", engineType)
-      .eq("fiscal_year", fiscal_year)
+      .eq("fiscal_year", resolvedFiscalYear);
+    snapshotQuery = isBudgetExport
+      ? snapshotQuery.eq("scope_level", resolvedBudget.scope).eq("scope_id", resolvedBudget.scope_id)
+      : snapshotQuery.eq("scope_level", "property");
+    const { data: snapshot } = await snapshotQuery
       .order("computed_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -1131,8 +1239,8 @@ Deno.serve(async (req: Request) => {
       rows = await buildCamPacketExportRows({
         supabaseAdmin,
         orgId,
-        propertyId: property_id,
-        fiscalYear: fiscal_year,
+        propertyId: resolvedPropertyId,
+        fiscalYear: resolvedFiscalYear,
         propertyName,
         camSnapshot: snapshot,
         leaseId: lease_id ?? null,
@@ -1141,19 +1249,22 @@ Deno.serve(async (req: Request) => {
       rows = await buildBudgetExportRows({
         supabaseAdmin,
         orgId,
-        propertyId: property_id,
-        fiscalYear: fiscal_year,
+        propertyId: resolvedPropertyId,
+        fiscalYear: resolvedFiscalYear,
         propertyName,
         snapshot,
+        budget: resolvedBudget,
+        buildingUnitIds,
       });
     } else if (export_type === "budget_book") {
       rows = await buildBudgetBookExportRows({
         supabaseAdmin,
         orgId,
-        propertyId: property_id,
-        fiscalYear: fiscal_year,
+        propertyId: resolvedPropertyId,
+        fiscalYear: resolvedFiscalYear,
         propertyName,
         budgetSnapshot: snapshot,
+        budget: resolvedBudget,
       });
     } else if (snapshot?.outputs) {
       rows = flattenOutputs(export_type as ExportType, snapshot.outputs);
@@ -1206,7 +1317,7 @@ Deno.serve(async (req: Request) => {
 
     if (rows.length === 0) {
       throw new Error(
-        `No data found for export_type="${export_type}" (Engine: ${engineType}, Table: ${FALLBACK_TABLE_MAP[export_type as ExportType]}). Parameters: property="${property_id}", fiscal_year=${fiscal_year}, org_id="${orgId}". Rows found: 0.`,
+        `No data found for export_type="${export_type}" (Engine: ${engineType}, Table: ${FALLBACK_TABLE_MAP[export_type as ExportType]}). Parameters: property="${resolvedPropertyId}", fiscal_year=${resolvedFiscalYear}, org_id="${orgId}". Rows found: 0.`,
       );
     }
 
@@ -1217,7 +1328,7 @@ Deno.serve(async (req: Request) => {
     const metadataRows = [
       `# Export Date: ${exportDate}`,
       `# Property: ${escapeCSVValue(propertyName)}`,
-      `# Fiscal Year: ${fiscal_year}`,
+      `# Fiscal Year: ${resolvedFiscalYear}`,
       `# Export Type: ${formatHeader(export_type)}`,
       `# Rows: ${rows.length}`,
       `# Snapshot ID: ${escapeCSVValue(snapshot?.id ?? "")}`,
@@ -1225,6 +1336,11 @@ Deno.serve(async (req: Request) => {
       `# Engine Type: ${escapeCSVValue(engineType ?? "")}`,
       `# Engine Version: ${escapeCSVValue(snapshot?.engine_version ?? "")}`,
       `# Input Hash: ${escapeCSVValue(snapshot?.input_hash ?? "")}`,
+      ...(isBudgetExport ? [
+        `# Budget ID: ${escapeCSVValue(resolvedBudget.id)}`,
+        `# Budget Scope: ${escapeCSVValue(resolvedBudget.scope)}`,
+        `# Budget Scope ID: ${escapeCSVValue(resolvedBudget.scope_id)}`,
+      ] : []),
       ...(lease_id ? [`# Tenant Lease Filter: ${escapeCSVValue(lease_id)}`] : []),
       "",
     ];
@@ -1267,6 +1383,7 @@ Deno.serve(async (req: Request) => {
         format: "csv",
         row_count: rows.length,
         export_type,
+        ...(isBudgetExport ? { budget_id: resolvedBudget.id, scope: resolvedBudget.scope, scope_id: resolvedBudget.scope_id } : {}),
       }),
       {
         headers: { ...corsHeaders, "Content-Type": "application/json" },

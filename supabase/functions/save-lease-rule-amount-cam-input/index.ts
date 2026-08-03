@@ -21,7 +21,7 @@ function validatePayload(body: Record<string, unknown> = {}) {
 function errorStatus(message: string) {
   if (/unauthorized|missing authorization/i.test(message)) return 401;
   if (/access denied|permission/i.test(message)) return 403;
-  if (/required|not found|must be an object|is not permitted|non-negative|CAM-eligible/i.test(message)) return 400;
+  if (/required|not found|must be an object|is not permitted|non-negative|CAM-eligible|rule_type=fixed_charge/i.test(message)) return 400;
   return 500;
 }
 

@@ -306,3 +306,27 @@ export async function assertPropertyAccess(req: Request, propertyId?: string | n
     throw new Error("Access denied for the requested property");
   }
 }
+
+/**
+ * Portfolio-scope counterpart to assertPropertyAccess, for callers (like
+ * portfolio-level budgets) that have a portfolio_id instead of a
+ * property_id. Uses the same public.can_access_portfolio(portfolio_id) RPC
+ * already relied on by portfolio-intelligence's RLS policies (see
+ * _shared/portfolio-intelligence/portfolio-security-contract.ts).
+ */
+export async function assertPortfolioAccess(req: Request, portfolioId?: string | null): Promise<void> {
+  if (isInternalServiceRequest(req) || !portfolioId) {
+    return;
+  }
+
+  const scopedClient = createUserScopedClient(req);
+  const { data, error } = await scopedClient.rpc("can_access_portfolio", {
+    p_portfolio_id: portfolioId,
+  });
+  if (error) {
+    throw new Error(`Portfolio access check failed: ${error.message}`);
+  }
+  if (!data) {
+    throw new Error("Access denied for the requested portfolio");
+  }
+}

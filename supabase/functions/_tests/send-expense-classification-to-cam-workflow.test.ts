@@ -18,6 +18,10 @@ Deno.test("validateExpenseCamSendPayload requires classification_id and idempote
 });
 
 Deno.test("deriveExpenseCamSendBlockers allows automatic approved CAM-ready classification", () => {
+  // CAM publication boundary hardening (20260905000000_cam_publication_rpcs.sql):
+  // classification_status='finalized' and both the expense's and rule's own
+  // approval are now also required — this fixture reflects a genuinely
+  // ready-to-publish row, not just a CAM-eligible one.
   const blockers = deriveExpenseCamSendBlockers(
     {
       id: "classification-1",
@@ -26,10 +30,11 @@ Deno.test("deriveExpenseCamSendBlockers allows automatic approved CAM-ready clas
       amount: 100,
       recoverability_result: "recoverable",
       cam_eligible: "yes",
+      classification_status: "finalized",
       sent_to_cam: false,
     },
-    { id: "expense-1", amount: 100 },
-    { id: "rule-1", published_to_cam: true, payment_treatment: "reimbursable" },
+    { id: "expense-1", amount: 100, approval_status: "approved" },
+    { id: "rule-1", published_to_cam: true, payment_treatment: "reimbursable", approval_status: "approved" },
   );
 
   assertEquals(blockers, []);
@@ -42,10 +47,12 @@ Deno.test("deriveExpenseCamSendBlockers allows manual CAM send only with reason"
     amount: 100,
     recoverability_result: "needs_review",
     cam_eligible: "yes",
+    classification_status: "finalized",
   };
+  const expense = { id: "expense-1", amount: 100, approval_status: "approved" };
 
-  assertEquals(deriveExpenseCamSendBlockers(classification, { id: "expense-1", amount: 100 }, null), ["manual_reason_required"]);
-  assertEquals(deriveExpenseCamSendBlockers(classification, { id: "expense-1", amount: 100 }, null, "reviewed manually"), []);
+  assertEquals(deriveExpenseCamSendBlockers(classification, expense, null), ["manual_reason_required"]);
+  assertEquals(deriveExpenseCamSendBlockers(classification, expense, null, "reviewed manually"), []);
 });
 
 Deno.test("deriveExpenseCamSendBlockers handles already sent and blocking reasons", () => {

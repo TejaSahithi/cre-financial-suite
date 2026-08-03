@@ -118,13 +118,24 @@ export default function CreateBudget() {
   // compute-expense/compute-budget together elsewhere in the app, just
   // wired into this manual "Generate Budget" action too.
   const createMutation = useMutation({
-    mutationFn: async ({ propertyId, fiscalYear, allowGenerateWithoutCam, aiInsights }) => {
+    mutationFn: async ({ scope, portfolioId, propertyId, buildingId, unitId, fiscalYear, period, allowGenerateWithoutCam, aiInsights }) => {
+      // compute-revenue/compute-expense remain property-level-only engines
+      // (they have no building/unit granular calculation logic) — this is a
+      // documented limitation, not something this PR changes. compute-budget
+      // itself computes scope-filtered building/unit totals directly from
+      // the raw leases/expenses/revenues rows; these two calls only ensure
+      // the property-wide readiness snapshots exist.
       await invokeEdgeFunction("compute-revenue", { property_id: propertyId, fiscal_year: fiscalYear });
       await invokeEdgeFunction("compute-expense", { property_id: propertyId, fiscal_year: fiscalYear });
       return invokeEdgeFunction("compute-budget", {
         action: "generate",
-        property_id: propertyId,
+        scope,
+        portfolio_id: portfolioId || undefined,
+        property_id: propertyId || undefined,
+        building_id: buildingId || undefined,
+        unit_id: unitId || undefined,
         fiscal_year: fiscalYear,
+        period,
         allow_generate_without_cam: allowGenerateWithoutCam,
         ai_insights: aiInsights || null,
       });
@@ -139,9 +150,26 @@ export default function CreateBudget() {
   // server-owned via compute-budget, which enforces each transition's
   // precondition (e.g. "must be reviewed before approving", "cannot reject
   // an approved/locked/signed budget") instead of a client-side check.
+  // compute-budget looks budgets up by (org, scope, scope_id, budget_year)
+  // rather than property_id alone, so the full scope identity of the
+  // target budget row travels with every action, not just its property_id.
   const computeBudgetActionMutation = useMutation({
-    mutationFn: ({ action, propertyId, fiscalYear, reason }) =>
-      invokeEdgeFunction("compute-budget", { action, property_id: propertyId, fiscal_year: fiscalYear, reason }),
+    // budget_id is the primary identifier (hardening PR) — the scope
+    // fields still travel alongside it as a cross-check, so a stale/wrong
+    // budget object in client state is rejected instead of silently acting
+    // on whatever budget_id happens to resolve to.
+    mutationFn: ({ action, budget, fiscalYear, reason }) =>
+      invokeEdgeFunction("compute-budget", {
+        action,
+        budget_id: budget?.id,
+        scope: budget?.scope,
+        portfolio_id: budget?.portfolio_id || undefined,
+        property_id: budget?.property_id || undefined,
+        building_id: budget?.building_id || undefined,
+        unit_id: budget?.unit_id || undefined,
+        fiscal_year: fiscalYear,
+        reason,
+      }),
     onSuccess: async () => {
       await invalidateBudgetCaches(queryClient);
     },
@@ -191,6 +219,18 @@ export default function CreateBudget() {
     }
     if (!form.property_id) {
       toast.error("Please select a property.");
+      return;
+    }
+    if (form.scope === "building" && !form.building_id) {
+      toast.error("Please select a building.");
+      return;
+    }
+    if (form.scope === "unit" && !form.unit_id) {
+      toast.error("Please select a unit.");
+      return;
+    }
+    if (form.period !== "annual") {
+      toast.error("Only annual budgets are supported today — quarterly/monthly budgeting is not yet available.");
       return;
     }
 
@@ -244,8 +284,21 @@ export default function CreateBudget() {
       }
 
       createMutation.mutate({
+        scope: form.scope,
+        // portfolio_id is intentionally NOT sent here even though the form
+        // tracks one — compute-budget inherits it from the property record
+        // itself when omitted (see assertValidBudgetScopeHierarchy) and
+        // will hard-reject a mismatched value. form.portfolio_id can go
+        // stale when switching between properties in different portfolios
+        // (it doesn't always clear on property change), so sending it would
+        // risk a spurious "wrong portfolio" rejection for a value the user
+        // never actually chose. Letting the server derive it avoids that
+        // footgun entirely.
         propertyId: form.property_id,
+        buildingId: form.scope === "building" ? form.building_id : null,
+        unitId: form.scope === "unit" ? form.unit_id : null,
         fiscalYear: form.budget_year,
+        period: form.period,
         allowGenerateWithoutCam: generateWithoutCam || !latestCamSnapshot,
         aiInsights: aiData?.ai_insights || null,
       });
@@ -346,7 +399,7 @@ export default function CreateBudget() {
     try {
       await computeBudgetActionMutation.mutateAsync({
         action: "mark_reviewed",
-        propertyId: budget.property_id,
+        budget,
         fiscalYear: budget.budget_year || budget.fiscal_year,
       });
       toast.success(`"${budget.name}" marked as reviewed`);
@@ -369,7 +422,7 @@ export default function CreateBudget() {
     try {
       await computeBudgetActionMutation.mutateAsync({
         action: "reject",
-        propertyId: budget?.property_id,
+        budget,
         fiscalYear: budget?.budget_year || budget?.fiscal_year,
         reason: comment,
       });
@@ -487,8 +540,17 @@ export default function CreateBudget() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="annual">Annual</SelectItem>
-                      <SelectItem value="quarterly">Quarterly</SelectItem>
-                      <SelectItem value="monthly">Monthly</SelectItem>
+                      {/* Quarterly/monthly are disabled, not removed: the
+                          calculation engine only ever produces one annual
+                          aggregate today (see compute-budget's period
+                          contract, _shared/budget-scope.ts). Selecting them
+                          used to silently do nothing but get discarded
+                          before the budget was persisted; disabling them
+                          here makes that limitation visible instead of
+                          letting the request fail server-side with no
+                          context. */}
+                      <SelectItem value="quarterly" disabled>Quarterly (not yet supported)</SelectItem>
+                      <SelectItem value="monthly" disabled>Monthly (not yet supported)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -738,7 +800,7 @@ export default function CreateBudget() {
                           <Button
                             className="flex-1 bg-emerald-600 hover:bg-emerald-700"
                             disabled={computeBudgetActionMutation.isPending}
-                            onClick={() => computeBudgetActionMutation.mutate({ action: "approve", propertyId: selectedBudget.property_id, fiscalYear: selectedBudget.budget_year || selectedBudget.fiscal_year })}
+                            onClick={() => computeBudgetActionMutation.mutate({ action: "approve", budget: selectedBudget, fiscalYear: selectedBudget.budget_year || selectedBudget.fiscal_year })}
                           >
                             <CheckCircle2 className="w-4 h-4 mr-2" />
                             Approve Budget
@@ -748,7 +810,7 @@ export default function CreateBudget() {
                           <Button
                             className="flex-1 bg-slate-800 hover:bg-slate-900"
                             disabled={computeBudgetActionMutation.isPending}
-                            onClick={() => computeBudgetActionMutation.mutate({ action: "lock", propertyId: selectedBudget.property_id, fiscalYear: selectedBudget.budget_year || selectedBudget.fiscal_year })}
+                            onClick={() => computeBudgetActionMutation.mutate({ action: "lock", budget: selectedBudget, fiscalYear: selectedBudget.budget_year || selectedBudget.fiscal_year })}
                           >
                             <Lock className="w-4 h-4 mr-2" />
                             Lock Budget

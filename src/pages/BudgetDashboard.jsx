@@ -330,12 +330,23 @@ export default function BudgetDashboard() {
 
   const queryClient = useQueryClient();
 
+  // compute-budget looks budgets up by (org, scope, scope_id, budget_year),
+  // not property_id alone (a property can now have coexisting building/unit
+  // budgets in the same year) — the full scope identity of the target
+  // budget row must travel with the request, not just its property_id.
   const updateMutation = useMutation({
-    mutationFn: ({ action, propertyId, fiscalYear }) =>
+    // budget_id is the primary identifier (hardening PR) — scope fields
+    // travel alongside it as a cross-check against stale client state.
+    mutationFn: ({ action, budget, fiscalYear }) =>
       invokeEdgeFunction("compute-budget", {
-        property_id: propertyId,
-        fiscal_year: fiscalYear,
         action,
+        budget_id: budget?.id,
+        scope: budget?.scope,
+        portfolio_id: budget?.portfolio_id || undefined,
+        property_id: budget?.property_id || undefined,
+        building_id: budget?.building_id || undefined,
+        unit_id: budget?.unit_id || undefined,
+        fiscal_year: fiscalYear,
       }),
     onSuccess: async () => {
       await invalidateBudgetCaches(queryClient);
@@ -347,10 +358,10 @@ export default function BudgetDashboard() {
   });
 
   const handleStatusChange = (budget, action) => {
-    if (!budget?.property_id) return;
+    if (!budget?.scope_id) return;
     updateMutation.mutate({
       action,
-      propertyId: budget.property_id,
+      budget,
       fiscalYear: getBudgetYear(budget),
     });
   };
@@ -360,10 +371,12 @@ export default function BudgetDashboard() {
 
     const toastId = toast.loading("Preparing detailed financial export...");
     try {
+      // budget_id is the primary identifier (hardening PR) — property_id
+      // alone can no longer disambiguate which budget to export now that a
+      // property/building/unit budget can coexist for the same year.
       const data = await invokeFunctionWithFreshSession("export-data", {
         export_type: "budget",
-        property_id: budget.property_id,
-        fiscal_year: getBudgetYear(budget),
+        budget_id: budget.id,
         format: "csv",
       });
 
@@ -440,16 +453,24 @@ export default function BudgetDashboard() {
     engineType: "budget",
     propertyId: selectedBudget?.property_id ?? null,
     fiscalYear: selectedBudget ? getBudgetYear(selectedBudget) : null,
+    // Without these, a building/unit-scoped budget's snapshot lookup
+    // defaults to property-scope matching (useSnapshotQuery's scopeMatches
+    // treats an omitted scopeLevel as "property"), which would silently
+    // report "no snapshot yet" for a building/unit budget that actually has
+    // one, or worse, match the wrong scope's snapshot.
+    scopeLevel: selectedBudget?.scope ?? null,
+    scopeId: selectedBudget?.scope_id ?? null,
   });
 
   const handleEmailStakeholders = async ({ budget, recipients, message }) => {
     const toastId = toast.loading("Sending budget review...");
 
     try {
+      // budget_id is the primary identifier (hardening PR) — see
+      // handleDetailedExport above for the same reasoning.
       const exportData = await invokeFunctionWithFreshSession("export-data", {
         export_type: "budget",
-        property_id: budget.property_id,
-        fiscal_year: getBudgetYear(budget),
+        budget_id: budget.id,
         format: "csv",
       });
 
@@ -525,6 +546,13 @@ export default function BudgetDashboard() {
           propertyId={selectedPropertyId}
           fiscalYear={selectedBudget ? getBudgetYear(selectedBudget) : new Date().getFullYear()}
           actions={BUDGET_ACTIONS}
+          // Unit takes precedence over building when both are selected in
+          // the ScopeSelector below (same precedence as elsewhere on this
+          // page). Omitted entirely when neither is set, so
+          // compute-budget's own default (property scope, unchanged
+          // pre-existing behavior) applies.
+          scopeLevel={scopeUnit !== "all" ? "unit" : scopeBuilding !== "all" ? "building" : undefined}
+          scopeId={scopeUnit !== "all" ? scopeUnit : scopeBuilding !== "all" ? scopeBuilding : undefined}
         />
       ) : (
         <div className="text-xs text-slate-500">Select a property scope to run budget compute and export actions.</div>

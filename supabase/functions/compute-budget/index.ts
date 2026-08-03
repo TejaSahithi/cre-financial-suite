@@ -1,14 +1,22 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
-import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from "../_shared/supabase.ts";
+import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess, assertPortfolioAccess } from "../_shared/supabase.ts";
 import { saveSnapshot, findMatchingCompletedSnapshot } from "../_shared/snapshot.ts";
+import { BUDGET_LINE_ITEMS_SCHEMA_VERSION } from "../_shared/budget-snapshot-parser.ts";
+import { assertValidBudgetScopeHierarchy, assertSupportedBudgetPeriod, resolveBuildingUnitIds, applyBudgetScopeRowFilter, type ResolvedBudgetScope } from "../_shared/budget-scope.ts";
+import { resolveBudgetIdentity, type ResolvedBudget } from "../_shared/budget-identity.ts";
+import { buildSnapshotSeriesIdentity, applySnapshotSeriesFilter } from "../_shared/snapshot-identity.ts";
 
-const ENGINE_VERSION = "budget-v1.0";
+const ENGINE_VERSION = "budget-v1.1";
 
 /**
  * Compute Budget Edge Function
  * Generates budgets aggregating revenue projections and expense plans.
  * Supports approval workflow and versioning.
+ *
+ * Scope contract: see _shared/budget-scope.ts (portfolio | property | building
+ * | unit, validated server-side against the real hierarchy). Period
+ * contract: annual only — see assertSupportedBudgetPeriod.
  *
  * Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6
  * Task: 12.1
@@ -23,41 +31,138 @@ Deno.serve(async (req: Request) => {
     const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
 
     const body = await req.json();
-    const { property_id, fiscal_year, action, allow_generate_without_cam, readiness_snapshot, ai_insights, reason } = body;
-
-    if (!property_id || !fiscal_year) {
-      throw new Error("property_id and fiscal_year are required");
-    }
+    const {
+      budget_id,
+      scope: rawScope,
+      portfolio_id,
+      property_id,
+      building_id,
+      unit_id,
+      // Compact/CAM-style form: { property_id, scope_level, scope_id },
+      // the wire shape _shared/scope.ts's assertValidScopeHierarchy and
+      // compute-cam already use, and what the shared PipelineActions
+      // component (src/components/PipelineActions.jsx) sends for every
+      // engine it drives generically — it only knows one scope_id per
+      // node, not four separate portfolio/property/building/unit fields.
+      // Normalized into the explicit per-level fields below so
+      // PipelineActions' existing budget quick-actions (Generate/Approve/
+      // Lock) work against this contract without that shared, multi-engine
+      // component needing a budget-specific special case. Portfolio scope
+      // is not expressible in this compact form (it has no property_id),
+      // which is fine — PipelineActions always requires a property_id.
+      scope_level,
+      scope_id,
+      fiscal_year,
+      period: rawPeriod,
+      action,
+      allow_generate_without_cam,
+      readiness_snapshot,
+      ai_insights,
+      reason,
+    } = body;
 
     await assertPageAccess(req, orgId, ["BudgetDashboard", "CreateBudget"], "write");
-    await assertPropertyAccess(req, property_id);
 
     const resolvedAction = action || "generate";
+
+    // ---------------------------------------------------------------
+    // generate: creates a NEW budget, so it is keyed by the REQUESTED
+    // scope (there is no existing row's identity to resolve yet) — full
+    // hierarchy + period validation, exactly as before this PR.
+    // ---------------------------------------------------------------
+    if (resolvedAction === "generate") {
+      if (!fiscal_year) {
+        throw new Error("fiscal_year is required");
+      }
+
+      // Backward-compatible default: an omitted `scope` alongside a
+      // property_id is the pre-existing calling convention (every budget
+      // before the scope/period PR was implicitly property-scoped). This is
+      // the ONLY case that defaults — an explicitly-provided, invalid scope
+      // value is never silently coerced; assertValidBudgetScopeHierarchy
+      // still fails closed on that.
+      const requestedScope = rawScope ?? scope_level ?? (property_id ? "property" : undefined);
+      const requestedBuildingId = building_id ?? (scope_level === "building" ? scope_id : undefined);
+      const requestedUnitId = unit_id ?? (scope_level === "unit" ? scope_id : undefined);
+
+      const resolvedScope = await assertValidBudgetScopeHierarchy(supabaseAdmin, orgId, {
+        scope: requestedScope,
+        portfolio_id,
+        property_id,
+        building_id: requestedBuildingId,
+        unit_id: requestedUnitId,
+      });
+
+      const period = assertSupportedBudgetPeriod(rawPeriod);
+
+      if (resolvedScope.scope === "portfolio") {
+        await assertPortfolioAccess(req, resolvedScope.portfolio_id);
+      } else {
+        await assertPropertyAccess(req, resolvedScope.property_id);
+      }
+
+      return await handleGenerate(supabaseAdmin, orgId, user.id, resolvedScope, period, fiscal_year, allow_generate_without_cam === true, readiness_snapshot ?? null, typeof ai_insights === "string" ? ai_insights : null);
+    }
+
+    // ---------------------------------------------------------------
+    // approve / mark_reviewed / reject / lock: all act on an EXISTING
+    // budget, so budget_id is the primary identifier (hardening PR —
+    // never re-derive "the" budget from property_id/fiscal_year alone,
+    // since that stopped being unambiguous once building/unit budgets can
+    // coexist with a property's own budget for the same year).
+    // resolveBudgetIdentity fails closed on: no such budget, wrong org,
+    // any supplied scope/scope_id/property_id hint that disagrees with the
+    // resolved row, and an invalid/stale stored hierarchy. Legacy callers
+    // that only ever send property_id + fiscal_year (no budget_id, no
+    // scope) still resolve correctly and unambiguously, because
+    // (org_id, scope, scope_id, budget_year) is now a real, DB-enforced
+    // unique key — not a guess among possibly-multiple rows.
+    // ---------------------------------------------------------------
+    const requestedScope = rawScope ?? scope_level;
+    const requestedScopeId =
+      scope_id ??
+      (requestedScope === "building" ? building_id
+        : requestedScope === "unit" ? unit_id
+        : requestedScope === "portfolio" ? portfolio_id
+        : requestedScope === "property" ? property_id
+        : undefined);
+
+    const resolvedBudget = await resolveBudgetIdentity(supabaseAdmin, orgId, {
+      budget_id,
+      scope: requestedScope,
+      scope_id: requestedScopeId,
+      property_id,
+      fiscal_year,
+    });
+
+    if (resolvedBudget.scope === "portfolio") {
+      await assertPortfolioAccess(req, resolvedBudget.portfolio_id);
+    } else {
+      await assertPropertyAccess(req, resolvedBudget.property_id);
+    }
 
     // ---------------------------------------------------------------
     // Route to the appropriate action handler
     // ---------------------------------------------------------------
     switch (resolvedAction) {
-      case "generate":
-        return await handleGenerate(supabaseAdmin, orgId, user.id, property_id, fiscal_year, allow_generate_without_cam === true, readiness_snapshot ?? null, typeof ai_insights === "string" ? ai_insights : null);
       case "approve":
         // CreateBudget.jsx's UI only ever offers "Approve" once a budget has
         // been marked "reviewed" (a CreateBudget-specific intermediate step
         // compute-budget itself has no concept of) — accept either status so
         // the one enforced approval gate matches how the UI actually drives
         // it, instead of a precondition the UI could never satisfy.
-        return await handleStatusTransition(supabaseAdmin, orgId, user.id, property_id, fiscal_year, ["under_review", "reviewed"], "approved", "Budget approved successfully");
+        return await handleStatusTransition(supabaseAdmin, orgId, user.id, resolvedBudget, ["under_review", "reviewed"], "approved", "Budget approved successfully");
       case "mark_reviewed":
         // Matches CreateBudget.jsx's "Mark as Reviewed" button, which is
         // offered from draft/ai_generated/under_review.
-        return await handleMarkReviewed(supabaseAdmin, orgId, user.id, property_id, fiscal_year);
+        return await handleMarkReviewed(supabaseAdmin, orgId, user.id, resolvedBudget);
       case "reject":
         // CreateBudget.jsx's "Reject / Rework" button is offered from any
         // status except approved/locked/signed (not just 'under_review') and
         // carries a required rejection comment.
-        return await handleReject(supabaseAdmin, orgId, user.id, property_id, fiscal_year, typeof reason === "string" ? reason : null);
+        return await handleReject(supabaseAdmin, orgId, user.id, resolvedBudget, typeof reason === "string" ? reason : null);
       case "lock":
-        return await handleLock(supabaseAdmin, orgId, user.id, property_id, fiscal_year);
+        return await handleLock(supabaseAdmin, orgId, user.id, resolvedBudget);
       default:
         throw new Error(`Unknown action: ${resolvedAction}. Must be one of: generate, approve, mark_reviewed, reject, lock`);
     }
@@ -71,20 +176,77 @@ Deno.serve(async (req: Request) => {
 });
 
 // =================================================================
+// Scope-keyed helpers
+// =================================================================
+
+/** Applies the canonical budget row identity (org_id, scope, scope_id[, budget_year]) to a `budgets` query builder. */
+function applyBudgetRowFilter(query: any, orgId: string, resolvedScope: ResolvedBudgetScope, fiscalYear?: number) {
+  let q = query.eq("org_id", orgId).eq("scope", resolvedScope.scope).eq("scope_id", resolvedScope.scope_id);
+  if (fiscalYear !== undefined) {
+    q = q.eq("budget_year", fiscalYear);
+  }
+  return q;
+}
+
+/** Applies the canonical budget engine_type="budget" snapshot series identity to a computation_snapshots query builder. */
+function applyBudgetSnapshotFilter(query: any, orgId: string, resolvedScope: ResolvedBudgetScope, fiscalYear: number) {
+  const identity = buildSnapshotSeriesIdentity({
+    org_id: orgId,
+    property_id: resolvedScope.property_id,
+    engine_type: "budget",
+    scope_level: resolvedScope.scope,
+    scope_id: resolvedScope.scope_id,
+    fiscal_year: fiscalYear,
+    month: null,
+  });
+  return applySnapshotSeriesFilter(query, identity);
+}
+
+// resolveBuildingUnitIds / applyBudgetScopeRowFilter now live in
+// _shared/budget-scope.ts, shared with export-data so both compute the
+// exact same underlying row set for a building/unit-scoped budget.
+
+// =================================================================
 // Action: generate
 // =================================================================
 async function handleGenerate(
   supabaseAdmin: any,
   orgId: string,
   userId: string,
-  propertyId: string,
+  resolvedScope: ResolvedBudgetScope,
+  period: "annual",
   fiscalYear: number,
   allowGenerateWithoutCam = false,
   readinessSnapshot: any = null,
   aiInsights: string | null = null
 ) {
+  // Portfolio-level budget generation is intentionally NOT implemented in
+  // this PR. compute-revenue, compute-expense, and compute-cam are all
+  // property-anchored engines (none can produce a portfolio-wide figure),
+  // so there are exactly two honest ways to support portfolio generation:
+  // (a) aggregate the portfolio's property-level snapshots here, or (b)
+  // require a dedicated portfolio calculation engine. Both are new
+  // calculation capabilities, not a scope-handling fix, and this task's
+  // scope is explicitly "honor the selected scope", not "add portfolio
+  // roll-up math". Rather than silently picking an arbitrary child
+  // property's snapshot (the exact failure mode this task calls out),
+  // portfolio scope is fully valid for hierarchy validation and persistence
+  // (see _shared/budget-scope.ts) but generation fails closed here until
+  // (a) or (b) is explicitly authorized as its own PR.
+  if (resolvedScope.scope === "portfolio") {
+    throw new Error(
+      "Portfolio-level budget generation is not yet supported: no dedicated portfolio calculation engine exists, " +
+      "and aggregating child property snapshots is a distinct, unauthorized feature decision. " +
+      "Generate property/building/unit budgets individually instead.",
+    );
+  }
+
+  const propertyId = resolvedScope.property_id;
+  const isSubPropertyScope = resolvedScope.scope === "building" || resolvedScope.scope === "unit";
+
   // ---------------------------------------------------------------
-  // 1. Fetch property details
+  // 1. Fetch property (and, for building/unit scope, the specific
+  //    building/unit) details
   // ---------------------------------------------------------------
   const { data: property, error: propErr } = await supabaseAdmin
     .from("properties")
@@ -97,6 +259,45 @@ async function handleGenerate(
     throw new Error(`Property not found: ${propErr?.message ?? propertyId}`);
   }
 
+  let scopeEntityName = property.name;
+  if (resolvedScope.scope === "building") {
+    const { data: building, error: buildingErr } = await supabaseAdmin
+      .from("buildings")
+      .select("name")
+      .eq("id", resolvedScope.building_id)
+      .eq("org_id", orgId)
+      .single();
+    if (buildingErr || !building) {
+      throw new Error(`Building not found: ${buildingErr?.message ?? resolvedScope.building_id}`);
+    }
+    scopeEntityName = `${property.name} / ${building.name ?? resolvedScope.building_id}`;
+  } else if (resolvedScope.scope === "unit") {
+    const { data: unit, error: unitErr } = await supabaseAdmin
+      .from("units")
+      .select("unit_number")
+      .eq("id", resolvedScope.unit_id)
+      .eq("org_id", orgId)
+      .single();
+    if (unitErr || !unit) {
+      throw new Error(`Unit not found: ${unitErr?.message ?? resolvedScope.unit_id}`);
+    }
+    scopeEntityName = `${property.name} / Unit ${unit.unit_number ?? resolvedScope.unit_id}`;
+  }
+
+  // Revenue/expense dependency snapshots remain PROPERTY-LEVEL ONLY. This is
+  // a deliberate, documented limitation carried forward from this PR's
+  // workflow trace, not a bug introduced here: compute-revenue and
+  // compute-expense have no building/unit-granular calculation logic at
+  // all (confirmed by reading both in full), and adding one would be new
+  // calculation math, which this task explicitly excludes. A building/unit
+  // budget still requires the property's revenue/expense snapshots to
+  // exist as a readiness gate (proving those engines have run), but the
+  // actual base-rent/other-income/expense DOLLAR figures for a building or
+  // unit budget are computed below directly from scope-filtered raw rows
+  // (leases/expenses/revenues all carry their own building_id/unit_id),
+  // never from the property-wide snapshot total — using the property-wide
+  // total for a narrower scope would silently overstate a building/unit
+  // budget by including the rest of the property.
   const { data: revenueSnapshot } = await supabaseAdmin
     .from("computation_snapshots")
     .select("id, outputs, computed_at")
@@ -126,51 +327,71 @@ async function handleGenerate(
     throw new Error("Expense snapshot is required before generating a budget");
   }
 
+  const buildingUnitIds = resolvedScope.scope === "building"
+    ? await resolveBuildingUnitIds(supabaseAdmin, orgId, resolvedScope.building_id)
+    : [];
+
   // ---------------------------------------------------------------
   // 2. Calculate total projected revenue from trusted snapshots + stored detail
   // ---------------------------------------------------------------
 
   // 2a. Base rent from active leases
-  const { data: leases, error: leaseErr } = await supabaseAdmin
+  let leaseQuery = supabaseAdmin
     .from("leases")
     .select("id, monthly_rent, start_date, end_date, status")
     .eq("property_id", propertyId)
     .eq("org_id", orgId)
     .eq("status", "active");
+  leaseQuery = applyBudgetScopeRowFilter(leaseQuery, resolvedScope, buildingUnitIds);
+  const { data: leases, error: leaseErr } = await leaseQuery;
 
   if (leaseErr) {
     throw new Error(`Failed to fetch leases: ${leaseErr.message}`);
   }
 
-  let baseRent = Number(revenueSnapshot?.outputs?.summary?.revenue_by_type?.base_rent ?? 0);
   const fyStart = new Date(fiscalYear, 0, 1); // Jan 1 of fiscal year
   const fyEnd = new Date(fiscalYear, 11, 31); // Dec 31 of fiscal year
 
-  if (baseRent === 0) {
-    for (const lease of leases ?? []) {
-      const monthlyRent = Number(lease.monthly_rent) || 0;
-      const leaseStart = new Date(lease.start_date);
-      const leaseEnd = lease.end_date ? new Date(lease.end_date) : fyEnd;
+  let computedBaseRentFromLeases = 0;
+  for (const lease of leases ?? []) {
+    const monthlyRent = Number(lease.monthly_rent) || 0;
+    const leaseStart = new Date(lease.start_date);
+    const leaseEnd = lease.end_date ? new Date(lease.end_date) : fyEnd;
 
-      const overlapStart = leaseStart > fyStart ? leaseStart : fyStart;
-      const overlapEnd = leaseEnd < fyEnd ? leaseEnd : fyEnd;
+    const overlapStart = leaseStart > fyStart ? leaseStart : fyStart;
+    const overlapEnd = leaseEnd < fyEnd ? leaseEnd : fyEnd;
 
-      if (overlapStart <= overlapEnd) {
-        const startMonth = overlapStart.getFullYear() * 12 + overlapStart.getMonth();
-        const endMonth = overlapEnd.getFullYear() * 12 + overlapEnd.getMonth();
-        const activeMonths = endMonth - startMonth + 1;
-        baseRent += monthlyRent * activeMonths;
-      }
+    if (overlapStart <= overlapEnd) {
+      const startMonth = overlapStart.getFullYear() * 12 + overlapStart.getMonth();
+      const endMonth = overlapEnd.getFullYear() * 12 + overlapEnd.getMonth();
+      const activeMonths = endMonth - startMonth + 1;
+      computedBaseRentFromLeases += monthlyRent * activeMonths;
     }
   }
 
-  // 2b. CAM recovery from latest cam computation snapshot
+  // Property scope: prefer the trusted snapshot total, falling back to the
+  // per-lease computation only when the snapshot has no base_rent figure —
+  // unchanged from pre-PR behavior. Building/unit scope: the snapshot total
+  // is property-wide and not meaningful at this granularity, so always use
+  // the scope-filtered per-lease computation (see block comment above).
+  const baseRent = isSubPropertyScope
+    ? computedBaseRentFromLeases
+    : (Number(revenueSnapshot?.outputs?.summary?.revenue_by_type?.base_rent ?? 0) || computedBaseRentFromLeases);
+
+  // 2b. CAM recovery from the CAM snapshot matching THIS budget's own scope
+  // (property budget -> property CAM snapshot, building -> building CAM
+  // snapshot, unit -> unit CAM snapshot) — never the whole-property total
+  // for a building/unit-scoped budget, and never a sub-scope snapshot for a
+  // property-scoped budget.
   let camRecovery = 0;
   const { data: camSnapshot, error: camSnapErr } = await supabaseAdmin
     .from("computation_snapshots")
     .select("id, outputs")
+    .eq("org_id", orgId)
     .eq("property_id", propertyId)
     .eq("engine_type", "cam")
+    .eq("scope_level", resolvedScope.scope)
+    .eq("scope_id", resolvedScope.scope_id)
     .eq("fiscal_year", fiscalYear)
     .order("computed_at", { ascending: false })
     .limit(1);
@@ -179,52 +400,68 @@ async function handleGenerate(
     const camOutputs = camSnapshot[0].outputs;
     camRecovery = Number(camOutputs?.total_cam) || 0;
   } else if (!allowGenerateWithoutCam) {
-    throw new Error("CAM snapshot is required before generating a budget. Re-run with allow_generate_without_cam=true only when you intentionally want to bypass CAM.");
+    throw new Error(
+      `CAM snapshot is required before generating a "${resolvedScope.scope}"-scope budget ` +
+      `(looked for scope_level="${resolvedScope.scope}", scope_id="${resolvedScope.scope_id}"). ` +
+      `Re-run with allow_generate_without_cam=true only when you intentionally want to bypass CAM.`,
+    );
   }
 
   // 2c. Other revenue from revenues table
-  let otherIncome = Number(revenueSnapshot?.outputs?.summary?.revenue_by_type?.other_income ?? 0);
-  const { data: revenues, error: revErr } = await supabaseAdmin
+  let revenueQuery = supabaseAdmin
     .from("revenues")
     .select("type, amount, month")
     .eq("property_id", propertyId)
     .eq("org_id", orgId)
     .eq("fiscal_year", fiscalYear);
-
-  if (!revErr && revenues && otherIncome === 0) {
-    for (const rev of revenues) {
-      otherIncome += Number(rev.amount) || 0;
-    }
+  revenueQuery = applyBudgetScopeRowFilter(revenueQuery, resolvedScope, buildingUnitIds);
+  const { data: revenues, error: revErr } = await revenueQuery;
+  if (revErr) {
+    throw new Error(`Failed to fetch revenues: ${revErr.message}`);
   }
+
+  let computedOtherIncomeFromRevenues = 0;
+  for (const rev of revenues ?? []) {
+    computedOtherIncomeFromRevenues += Number(rev.amount) || 0;
+  }
+
+  const otherIncome = isSubPropertyScope
+    ? computedOtherIncomeFromRevenues
+    : (Number(revenueSnapshot?.outputs?.summary?.revenue_by_type?.other_income ?? 0) || computedOtherIncomeFromRevenues);
 
   const totalRevenue = baseRent + camRecovery + otherIncome;
 
   // ---------------------------------------------------------------
   // 3. Calculate total projected expenses
   // ---------------------------------------------------------------
-  const { data: expenses, error: expErr } = await supabaseAdmin
+  let expenseQuery = supabaseAdmin
     .from("expenses")
     .select("id, category, amount, classification, month")
     .eq("property_id", propertyId)
     .eq("org_id", orgId)
     .eq("fiscal_year", fiscalYear);
+  expenseQuery = applyBudgetScopeRowFilter(expenseQuery, resolvedScope, buildingUnitIds);
+  const { data: expenses, error: expErr } = await expenseQuery;
 
   if (expErr) {
     throw new Error(`Failed to fetch expenses: ${expErr.message}`);
   }
 
-  // Group expenses by category
+  // Group expenses by category (always computed from the scope-filtered
+  // rows, regardless of scope — the per-category breakdown has always come
+  // from raw rows, never the snapshot).
   const expenseByCategory: Record<string, number> = {};
-  let totalExpenses = Number(expenseSnapshot?.outputs?.total_expenses ?? 0);
-
+  let computedTotalExpensesFromRows = 0;
   for (const exp of expenses ?? []) {
     const amount = Number(exp.amount) || 0;
     const category = (exp.category || "other").toLowerCase();
     expenseByCategory[category] = (expenseByCategory[category] || 0) + amount;
-    if (!expenseSnapshot?.outputs?.total_expenses) {
-      totalExpenses += amount;
-    }
+    computedTotalExpensesFromRows += amount;
   }
+
+  const totalExpenses = isSubPropertyScope
+    ? computedTotalExpensesFromRows
+    : (Number(expenseSnapshot?.outputs?.total_expenses ?? 0) || computedTotalExpensesFromRows);
 
   // ---------------------------------------------------------------
   // 4. Generate budget line items
@@ -260,6 +497,7 @@ async function handleGenerate(
   const noi = round2(totalRevenue - totalExpenses);
 
   const lineItems = {
+    schema_version: BUDGET_LINE_ITEMS_SCHEMA_VERSION,
     revenue: revenueLines,
     expenses: expenseLines,
     noi,
@@ -268,11 +506,16 @@ async function handleGenerate(
   // ---------------------------------------------------------------
   // 5. Create or update budget record with status='draft'
   // ---------------------------------------------------------------
-  const budgetName = `${property.name} - FY ${fiscalYear} Budget`;
+  const budgetName = `${scopeEntityName} - FY ${fiscalYear} Budget`;
 
   const budgetPayload = {
     org_id: orgId,
-    property_id: propertyId,
+    scope: resolvedScope.scope,
+    scope_id: resolvedScope.scope_id,
+    portfolio_id: resolvedScope.portfolio_id,
+    property_id: resolvedScope.property_id,
+    building_id: resolvedScope.building_id,
+    unit_id: resolvedScope.unit_id,
     name: budgetName,
     budget_year: fiscalYear,
     total_revenue: round2(totalRevenue),
@@ -285,20 +528,18 @@ async function handleGenerate(
     // previously instead of clobbering it with null.
     ...(aiInsights ? { ai_insights: aiInsights } : {}),
     generation_method: "automated",
-    period: "annual",
-    scope: "property",
+    period,
     status: "draft",
     updated_at: new Date().toISOString(),
   };
 
-  // Try to find an existing budget for this property and year
-  const { data: existingBudget } = await supabaseAdmin
-    .from("budgets")
-    .select("id, status")
-    .eq("org_id", orgId)
-    .eq("property_id", propertyId)
-    .eq("budget_year", fiscalYear)
-    .limit(1);
+  // Try to find an existing budget for this scope and year
+  const { data: existingBudget } = await applyBudgetRowFilter(
+    supabaseAdmin.from("budgets").select("id, status"),
+    orgId,
+    resolvedScope,
+    fiscalYear,
+  ).limit(1);
 
   if (existingBudget && existingBudget.length > 0) {
     const existing = existingBudget[0];
@@ -315,8 +556,8 @@ async function handleGenerate(
     .upsert({
       ...budgetPayload,
       created_at: new Date().toISOString(), // Will be ignored on update if we don't include it in onConflict, but we want it for new rows
-    }, { 
-      onConflict: "org_id,property_id,budget_year" 
+    }, {
+      onConflict: "org_id,scope,scope_id,budget_year"
     })
     .select("id")
     .single();
@@ -332,12 +573,22 @@ async function handleGenerate(
   // ---------------------------------------------------------------
   const snapshotPayload = {
     org_id: orgId,
-    property_id: propertyId,
+    property_id: resolvedScope.property_id,
     engine_type: "budget",
     fiscal_year: fiscalYear,
     inputs: {
-      property_id: propertyId,
+      // Explicit scope + period on every newly-created budget snapshot — no
+      // legacy defaulting. resolveSnapshotScope (_shared/snapshot.ts) reads
+      // scope_level/scope_id straight from here rather than falling back to
+      // LEGACY_SCOPE_DEFAULT_ENGINES's property default.
+      scope_level: resolvedScope.scope,
+      scope_id: resolvedScope.scope_id,
+      portfolio_id: resolvedScope.portfolio_id,
+      property_id: resolvedScope.property_id,
+      building_id: resolvedScope.building_id,
+      unit_id: resolvedScope.unit_id,
       fiscal_year: fiscalYear,
+      period,
       lease_count: (leases ?? []).length,
       expense_count: (expenses ?? []).length,
       revenue_count: (revenues ?? []).length,
@@ -372,7 +623,7 @@ async function handleGenerate(
 
   const existingSnapshot = await findMatchingCompletedSnapshot(supabaseAdmin, {
     org_id: orgId,
-    property_id: propertyId,
+    property_id: resolvedScope.property_id,
     engine_type: "budget",
     fiscal_year: fiscalYear,
     inputs: snapshotPayload.inputs,
@@ -384,8 +635,14 @@ async function handleGenerate(
     return new Response(
       JSON.stringify({
         error: false,
-        property_id: propertyId,
+        scope: resolvedScope.scope,
+        scope_id: resolvedScope.scope_id,
+        portfolio_id: resolvedScope.portfolio_id,
+        property_id: resolvedScope.property_id,
+        building_id: resolvedScope.building_id,
+        unit_id: resolvedScope.unit_id,
         fiscal_year: fiscalYear,
+        period,
         budget_id: existingSnapshot.outputs.budget_id,
         status: existingSnapshot.outputs.status ?? "draft",
         line_items: existingSnapshot.outputs.line_items ?? lineItems,
@@ -398,7 +655,7 @@ async function handleGenerate(
 
   const newSnapshotId = await saveSnapshot(supabaseAdmin, {
     org_id: orgId,
-    property_id: propertyId,
+    property_id: resolvedScope.property_id,
     engine_type: "budget",
     fiscal_year: fiscalYear,
     computed_by: userId,
@@ -410,7 +667,7 @@ async function handleGenerate(
   try {
     await supabaseAdmin.from("audit_logs").insert({
       org_id: orgId,
-      property_id: propertyId,
+      property_id: resolvedScope.property_id,
       entity_type: "computation_snapshots",
       entity_id: newSnapshotId ?? null,
       action: "budget_generated",
@@ -419,6 +676,8 @@ async function handleGenerate(
       severity: "info",
       metadata: {
         fiscal_year: fiscalYear,
+        scope: resolvedScope.scope,
+        scope_id: resolvedScope.scope_id,
         engine_type: "budget",
         engine_version: ENGINE_VERSION,
         snapshot_id: newSnapshotId ?? null,
@@ -438,8 +697,14 @@ async function handleGenerate(
   return new Response(
     JSON.stringify({
       error: false,
-      property_id: propertyId,
+      scope: resolvedScope.scope,
+      scope_id: resolvedScope.scope_id,
+      portfolio_id: resolvedScope.portfolio_id,
+      property_id: resolvedScope.property_id,
+      building_id: resolvedScope.building_id,
+      unit_id: resolvedScope.unit_id,
       fiscal_year: fiscalYear,
+      period,
       budget_id: budgetId,
       status: "draft",
       line_items: lineItems,
@@ -455,31 +720,14 @@ async function handleStatusTransition(
   supabaseAdmin: any,
   orgId: string,
   userId: string,
-  propertyId: string,
-  fiscalYear: number,
+  resolvedBudget: ResolvedBudget,
   requiredStatus: string | string[],
   newStatus: string,
   successMessage: string
 ) {
   const requiredStatuses = Array.isArray(requiredStatus) ? requiredStatus : [requiredStatus];
-  // Fetch budget
-  const { data: budgets, error: fetchErr } = await supabaseAdmin
-    .from("budgets")
-    .select("id, status")
-    .eq("org_id", orgId)
-    .eq("property_id", propertyId)
-    .eq("budget_year", fiscalYear)
-    .limit(1);
-
-  if (fetchErr) {
-    throw new Error(`Failed to fetch budget: ${fetchErr.message}`);
-  }
-
-  if (!budgets || budgets.length === 0) {
-    throw new Error(`No budget found for property ${propertyId} and fiscal year ${fiscalYear}`);
-  }
-
-  const budget = budgets[0];
+  const budget = resolvedBudget;
+  const fiscalYear = budget.budget_year;
 
   if (!requiredStatuses.includes(budget.status)) {
     throw new Error(
@@ -502,28 +750,28 @@ async function handleStatusTransition(
 
   // Create audit log entry
   const auditAction = newStatus === "approved" ? "budget_approved" : "budget_rejected";
-  await createAuditLog(supabaseAdmin, orgId, userId, budget.id, propertyId, fiscalYear, auditAction, successMessage);
+  await createAuditLog(supabaseAdmin, orgId, userId, budget.id, budget, fiscalYear, auditAction, successMessage);
 
-  const { data: latestSnapshot } = await supabaseAdmin
-    .from("computation_snapshots")
-    .select("id, outputs")
-    .eq("org_id", orgId)
-    .eq("property_id", propertyId)
-    .eq("engine_type", "budget")
-    .eq("fiscal_year", fiscalYear)
+  const { data: latestSnapshot } = await applyBudgetSnapshotFilter(
+    supabaseAdmin.from("computation_snapshots").select("id, outputs"),
+    orgId,
+    budget,
+    fiscalYear,
+  )
     .order("computed_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
   await saveSnapshot(supabaseAdmin, {
     org_id: orgId,
-    property_id: propertyId,
+    property_id: budget.property_id,
     engine_type: "budget",
     fiscal_year: fiscalYear,
     computed_by: userId,
     engine_version: ENGINE_VERSION,
     inputs: {
-      property_id: propertyId,
+      scope_level: budget.scope,
+      scope_id: budget.scope_id,
       fiscal_year: fiscalYear,
       action: newStatus,
       _compute: {
@@ -547,6 +795,8 @@ async function handleStatusTransition(
     JSON.stringify({
       error: false,
       budget_id: budget.id,
+      scope: budget.scope,
+      scope_id: budget.scope_id,
       status: newStatus,
       message: successMessage,
     }),
@@ -561,27 +811,12 @@ async function handleMarkReviewed(
   supabaseAdmin: any,
   orgId: string,
   userId: string,
-  propertyId: string,
-  fiscalYear: number
+  resolvedBudget: ResolvedBudget,
 ) {
   const ALLOWED_FROM = ["draft", "ai_generated", "under_review"];
+  const budget = resolvedBudget;
+  const fiscalYear = budget.budget_year;
 
-  const { data: budgets, error: fetchErr } = await supabaseAdmin
-    .from("budgets")
-    .select("id, status")
-    .eq("org_id", orgId)
-    .eq("property_id", propertyId)
-    .eq("budget_year", fiscalYear)
-    .limit(1);
-
-  if (fetchErr) {
-    throw new Error(`Failed to fetch budget: ${fetchErr.message}`);
-  }
-  if (!budgets || budgets.length === 0) {
-    throw new Error(`No budget found for property ${propertyId} and fiscal year ${fiscalYear}`);
-  }
-
-  const budget = budgets[0];
   if (!ALLOWED_FROM.includes(budget.status)) {
     throw new Error(
       `Budget status must be one of ${ALLOWED_FROM.map((s) => `'${s}'`).join(", ")} to mark as reviewed. Current status: '${budget.status}'`
@@ -603,12 +838,14 @@ async function handleMarkReviewed(
     throw new Error(`Failed to mark budget as reviewed: ${updateErr.message}`);
   }
 
-  await createAuditLog(supabaseAdmin, orgId, userId, budget.id, propertyId, fiscalYear, "budget_marked_reviewed", "Budget marked as reviewed");
+  await createAuditLog(supabaseAdmin, orgId, userId, budget.id, budget, fiscalYear, "budget_marked_reviewed", "Budget marked as reviewed");
 
   return new Response(
     JSON.stringify({
       error: false,
       budget_id: budget.id,
+      scope: budget.scope,
+      scope_id: budget.scope_id,
       status: "reviewed",
       message: "Budget marked as reviewed",
     }),
@@ -623,8 +860,7 @@ async function handleReject(
   supabaseAdmin: any,
   orgId: string,
   userId: string,
-  propertyId: string,
-  fiscalYear: number,
+  resolvedBudget: ResolvedBudget,
   reason: string | null
 ) {
   const BLOCKED_FROM = ["approved", "locked", "signed"];
@@ -634,22 +870,9 @@ async function handleReject(
     throw new Error("A rejection reason is required");
   }
 
-  const { data: budgets, error: fetchErr } = await supabaseAdmin
-    .from("budgets")
-    .select("id, status")
-    .eq("org_id", orgId)
-    .eq("property_id", propertyId)
-    .eq("budget_year", fiscalYear)
-    .limit(1);
+  const budget = resolvedBudget;
+  const fiscalYear = budget.budget_year;
 
-  if (fetchErr) {
-    throw new Error(`Failed to fetch budget: ${fetchErr.message}`);
-  }
-  if (!budgets || budgets.length === 0) {
-    throw new Error(`No budget found for property ${propertyId} and fiscal year ${fiscalYear}`);
-  }
-
-  const budget = budgets[0];
   if (BLOCKED_FROM.includes(budget.status)) {
     throw new Error(
       `Budget status '${budget.status}' cannot be rejected. Reject is blocked once a budget is approved, locked, or signed.`
@@ -672,12 +895,14 @@ async function handleReject(
     throw new Error(`Failed to reject budget: ${updateErr.message}`);
   }
 
-  await createAuditLog(supabaseAdmin, orgId, userId, budget.id, propertyId, fiscalYear, "budget_rejected", `Budget rejected and returned to draft: ${trimmedReason}`);
+  await createAuditLog(supabaseAdmin, orgId, userId, budget.id, budget, fiscalYear, "budget_rejected", `Budget rejected and returned to draft: ${trimmedReason}`);
 
   return new Response(
     JSON.stringify({
       error: false,
       budget_id: budget.id,
+      scope: budget.scope,
+      scope_id: budget.scope_id,
       status: "draft",
       rejection_comment: trimmedReason,
       message: "Budget rejected and returned to draft",
@@ -693,27 +918,10 @@ async function handleLock(
   supabaseAdmin: any,
   orgId: string,
   userId: string,
-  propertyId: string,
-  fiscalYear: number
+  resolvedBudget: ResolvedBudget,
 ) {
-  // Fetch budget
-  const { data: budgets, error: fetchErr } = await supabaseAdmin
-    .from("budgets")
-    .select("id, status, total_revenue, total_expenses")
-    .eq("org_id", orgId)
-    .eq("property_id", propertyId)
-    .eq("budget_year", fiscalYear)
-    .limit(1);
-
-  if (fetchErr) {
-    throw new Error(`Failed to fetch budget: ${fetchErr.message}`);
-  }
-
-  if (!budgets || budgets.length === 0) {
-    throw new Error(`No budget found for property ${propertyId} and fiscal year ${fiscalYear}`);
-  }
-
-  const budget = budgets[0];
+  const budget = resolvedBudget;
+  const fiscalYear = budget.budget_year;
 
   if (budget.status !== "approved") {
     throw new Error(
@@ -735,13 +943,12 @@ async function handleLock(
   }
 
   // Create baseline snapshot for variance analysis
-  const { data: latestSnapshot } = await supabaseAdmin
-    .from("computation_snapshots")
-    .select("id, outputs")
-    .eq("org_id", orgId)
-    .eq("property_id", propertyId)
-    .eq("engine_type", "budget")
-    .eq("fiscal_year", fiscalYear)
+  const { data: latestSnapshot } = await applyBudgetSnapshotFilter(
+    supabaseAdmin.from("computation_snapshots").select("id, outputs"),
+    orgId,
+    budget,
+    fiscalYear,
+  )
     .order("computed_at", { ascending: false })
     .limit(1);
 
@@ -755,11 +962,12 @@ async function handleLock(
 
   const baselinePayload = {
     org_id: orgId,
-    property_id: propertyId,
+    property_id: budget.property_id,
     engine_type: "budget",
     fiscal_year: fiscalYear,
     inputs: {
-      property_id: propertyId,
+      scope_level: budget.scope,
+      scope_id: budget.scope_id,
       fiscal_year: fiscalYear,
       action: "lock",
       locked_at: new Date().toISOString(),
@@ -777,7 +985,7 @@ async function handleLock(
 
   await saveSnapshot(supabaseAdmin, {
     org_id: orgId,
-    property_id: propertyId,
+    property_id: budget.property_id,
     engine_type: "budget",
     fiscal_year: fiscalYear,
     computed_by: userId,
@@ -799,12 +1007,14 @@ async function handleLock(
   });
 
   // Create audit log entry
-  await createAuditLog(supabaseAdmin, orgId, userId, budget.id, propertyId, fiscalYear, "budget_locked", "Budget locked successfully");
+  await createAuditLog(supabaseAdmin, orgId, userId, budget.id, budget, fiscalYear, "budget_locked", "Budget locked successfully");
 
   return new Response(
     JSON.stringify({
       error: false,
       budget_id: budget.id,
+      scope: budget.scope,
+      scope_id: budget.scope_id,
       status: "locked",
       message: "Budget locked successfully",
     }),
@@ -831,7 +1041,7 @@ async function createAuditLog(
   orgId: string,
   userId: string,
   budgetId: string,
-  propertyId: string,
+  resolvedBudget: ResolvedBudget,
   fiscalYear: number,
   auditAction: string,
   message: string
@@ -839,7 +1049,7 @@ async function createAuditLog(
   try {
     await supabaseAdmin.from("audit_logs").insert({
       org_id: orgId,
-      property_id: propertyId,
+      property_id: resolvedBudget.property_id,
       entity_type: "budget",
       entity_id: budgetId,
       action: auditAction,
@@ -847,7 +1057,8 @@ async function createAuditLog(
       source: "edge_function",
       severity: "info",
       metadata: {
-        property_id: propertyId,
+        scope: resolvedBudget.scope,
+        scope_id: resolvedBudget.scope_id,
         fiscal_year: fiscalYear,
         message,
         timestamp: new Date().toISOString(),

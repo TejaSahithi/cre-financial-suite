@@ -107,6 +107,13 @@ async function insertRule(admin: ReturnType<typeof adminClient>, org: { id: stri
     lease_id: lease.id,
     property_id: property.id,
     published_to_cam: true,
+    // CAM publication boundary hardening (20260905000000_cam_publication_rpcs.sql):
+    // save_lease_rule_amount_cam_input now requires rule_type='fixed_charge'
+    // — a normal recovery rule must never receive a manually entered CAM
+    // amount. Every test in this file exercises that RPC, so this default
+    // reflects the new required precondition rather than each test setting
+    // it individually.
+    rule_type: "fixed_charge",
     ...overrides,
   });
 }
@@ -280,6 +287,39 @@ Deno.test({
       .select("id")
       .eq("lease_expense_rule_id", unpublishedRule.id);
     assertEquals(rows?.length ?? 0, 0, "no row should be created for an unpublished rule");
+  },
+});
+
+Deno.test({
+  name: "save_lease_rule_amount_cam_input: a rule not explicitly marked rule_type=fixed_charge is rejected, even if published_to_cam",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { org, accessToken, property, lease } = await setUpScope(admin, suffix);
+    // Real current data shape (confirmed via the CAM publication boundary
+    // audit): zero live lease_expense_rules rows have rule_type='fixed_charge'
+    // today — the vast majority are '' (empty string), a smaller number are
+    // 'expense_recovery'/'direct_tenant_responsibility'/'cam'. A normal
+    // recovery rule must be matched to a real actual expense, never given a
+    // manually entered contractual amount.
+    const normalRule = await insertRule(admin, org, lease, property, { rule_type: "expense_recovery" });
+
+    const res = await callFn(accessToken, {
+      rule_id: normalRule.id,
+      classification: classificationPatch({ property_id: property.id, lease_id: lease.id }),
+    });
+    const body = await res.json();
+    assertEquals(body.error, true, "expected a non-fixed_charge rule to be rejected");
+    assertEquals(res.status, 400, JSON.stringify(body));
+    assertEquals(/rule_type=fixed_charge/i.test(body.message || ""), true, `expected a rule_type=fixed_charge message: ${JSON.stringify(body)}`);
+
+    const { data: rows } = await admin
+      .from("expense_classifications")
+      .select("id")
+      .eq("lease_expense_rule_id", normalRule.id);
+    assertEquals(rows?.length ?? 0, 0, "no row should be created for a non-fixed_charge rule");
   },
 });
 

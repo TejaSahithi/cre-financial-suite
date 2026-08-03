@@ -68,6 +68,31 @@ export function deriveExpenseCamSendBlockers(
   if (!automatic && !hasReason) blockers.push("manual_reason_required");
   if (hasRule && rule && rule.published_to_cam !== true && !hasReason) blockers.push("rule_not_published_to_cam");
 
+  // CAM publication boundary hardening: these were previously enforced
+  // client-side only (buildClassificationRows.js's canSendFinalizedActualToCam)
+  // or not at all. send_expense_classification_to_cam_workflow now also
+  // re-checks all three server-side (20260905000000_cam_publication_rpcs.sql)
+  // — this is the earlier, friendlier layer that returns a named blocker
+  // instead of a raw RPC exception.
+  if (normalize(classification.classification_status) !== "finalized") {
+    blockers.push("not_finalized");
+  }
+  if (hasActual) {
+    // approval_status and approved_status are two distinct, independently
+    // maintained columns on expenses (confirmed via schema trace) — each
+    // defaults to a non-null but non-"approved" value ('pending'/'draft'),
+    // so `a || b` or COALESCE(a, b) would let a genuinely-approved
+    // approved_status get masked by an unrelated default sitting in
+    // approval_status. Either column being "approved" is sufficient.
+    const approvedByEither =
+      normalize(expense?.approval_status) === "approved" ||
+      normalize(expense?.approved_status) === "approved";
+    if (!approvedByEither) blockers.push("expense_not_approved");
+  }
+  if (hasRule && rule && normalize(rule.approval_status) !== "approved") {
+    blockers.push("rule_not_approved");
+  }
+
   return [...new Set(blockers)];
 }
 

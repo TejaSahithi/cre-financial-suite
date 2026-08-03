@@ -203,6 +203,10 @@ Deno.test({
       property_id: property.id,
       category: "CAM",
       amount: 1500,
+      // CAM publication boundary hardening (20260905000000_cam_publication_rpcs.sql):
+      // send_expense_classification_to_cam_workflow now requires the linked
+      // expense to be approved.
+      approval_status: "approved",
     });
 
     const classification = await insertOne(admin, "expense_classifications", {
@@ -215,6 +219,9 @@ Deno.test({
       cam_eligible: "yes",
       cam_status: "needs_review",
       approved_status: "draft",
+      // Same hardening: the classification must be finalized before it can
+      // be sent to CAM.
+      classification_status: "finalized",
       amount: 1500,
       classification_key: `${org.id}:${expense.id}:manual`,
     });

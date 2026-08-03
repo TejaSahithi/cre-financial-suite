@@ -50,6 +50,7 @@ import {
   leaseCoversYear,
   isAutomaticCamReadyRow,
   buildClassificationRows,
+  getCamPublicationReadiness,
 } from "@/components/lease-expense/utils/buildClassificationRows";
 
 function fmt(value) {
@@ -301,6 +302,7 @@ export default function LeaseExpenseClassification() {
           summary.finalizedCamEligible += amount;
         }
       }
+      if (row.camStatus === "cam_ready") summary.camReady += amount;
       if (row.sentToCam) summary.sentToCam += amount;
       return summary;
     }, {
@@ -317,6 +319,7 @@ export default function LeaseExpenseClassification() {
       conditionalCamEligible: 0,
       finalized: 0,
       finalizedCamEligible: 0,
+      camReady: 0,
       sentToCam: 0,
     });
   }, [rows]);
@@ -455,6 +458,30 @@ export default function LeaseExpenseClassification() {
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
     },
     onError: (error) => toast.error(error?.message || "Could not send rows to CAM"),
+  });
+
+  const withdrawFromCamMutation = useMutation({
+    mutationFn: async (row) => {
+      const reason = window.prompt(
+        `Enter a reason for withdrawing "${row.vendor || row.ruleLabel || "this expense"}" from CAM. The published version is kept (never deleted); republishing after re-finalizing will create a new version.`,
+      );
+      if (!reason || !reason.trim()) {
+        throw new Error("A reason is required to withdraw a published CAM input.");
+      }
+      return expenseService.withdrawClassificationFromCam(row.classificationRecord, reason.trim());
+    },
+    onSuccess: (result) => {
+      const staleCount = result?.stale_snapshot_count || 0;
+      const restatementCount = result?.restatement_required_snapshot_count || 0;
+      const extra = [
+        staleCount ? `${staleCount} CAM snapshot(s) marked stale` : null,
+        restatementCount ? `${restatementCount} locked snapshot(s) flagged for restatement` : null,
+      ].filter(Boolean).join(", ");
+      toast.success(`Withdrawn from CAM${extra ? ` — ${extra}` : ""}`);
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
+    },
+    onError: (error) => toast.error(error?.message || "Could not withdraw from CAM"),
   });
 
   const amountMutation = useMutation({
@@ -806,20 +833,22 @@ export default function LeaseExpenseClassification() {
 
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
           {[
-            { label: "Approved Expenses", value: approvedActuals.length, color: "border-t-slate-400" },
-            { label: "Total Expenses", value: fmt(totals.approvedActualTotal), color: "border-t-slate-500" },
-            { label: "Approved Lease Rules", value: approvedRules.length, color: "border-t-slate-400" },
-            { label: "Matched", value: counts.matched, color: "border-t-emerald-500" },
-            { label: "Actuals Missing Rules", value: counts.actuals_missing_rules, color: "border-t-rose-500" },
-            { label: "Rules Missing Actuals", value: counts.rules_missing_actuals, color: "border-t-blue-500" },
-            { label: "Recoverable Costs", value: fmt(totals.recoverable), color: "border-t-emerald-500" },
-            { label: "Non-Recoverable Costs", value: fmt(totals.nonRecoverable), color: "border-t-rose-500" },
-            { label: "Conditional Costs", value: fmt(totals.conditional), color: "border-t-amber-500" },
-            { label: "Excluded Costs", value: fmt(totals.excluded), color: "border-t-slate-500" },
-            { label: "CAM Eligible Costs", value: fmt(totals.camEligible), color: "border-t-blue-500" },
-            { label: "Finalized Costs", value: fmt(totals.finalized), color: "border-t-indigo-500" },
+            { label: "Approved Expenses", value: approvedActuals.length, color: "border-t-slate-400", tooltip: "Count of actual expenses with approval_status/approved_status = approved that are eligible to appear in this workspace at all." },
+            { label: "Total Expenses", value: fmt(totals.approvedActualTotal), color: "border-t-slate-500", tooltip: "Sum of the amount on every approved actual expense row shown below, regardless of classification or recoverability." },
+            { label: "Approved Lease Rules", value: approvedRules.length, color: "border-t-slate-400", tooltip: "Count of lease expense rules with approval_status = approved." },
+            { label: "Matched", value: counts.matched, color: "border-t-emerald-500", tooltip: "Count of approved actual expenses that have a matched lease expense rule (classified, any recoverability)." },
+            { label: "Actuals Missing Rules", value: counts.actuals_missing_rules, color: "border-t-rose-500", tooltip: "Count of approved actual expenses with no approved lease expense rule matched to them yet." },
+            { label: "Rules Without Actual Expenses", value: counts.rules_missing_actuals, color: "border-t-blue-500", tooltip: "Count of approved lease expense rules with no actual expense matched yet — a contractual rule only, not a missing dollar amount. Only rule_type=fixed_charge rules may ever receive a manually entered amount here; every other rule must be matched to a real actual expense." },
+            { label: "Recoverable Costs", value: fmt(totals.recoverable), color: "border-t-emerald-500", tooltip: "Formula: Σ amount of matched, classified rows where recoverability_result = recoverable." },
+            { label: "Non-Recoverable Costs", value: fmt(totals.nonRecoverable), color: "border-t-rose-500", tooltip: "Formula: Σ amount of matched, classified rows where recoverability_result = non_recoverable." },
+            { label: "Conditional Costs", value: fmt(totals.conditional), color: "border-t-amber-500", tooltip: "Formula: Σ amount of matched, classified rows where recoverability_result = conditional (blocked from CAM publication until the condition is resolved)." },
+            { label: "Excluded Costs", value: fmt(totals.excluded), color: "border-t-slate-500", tooltip: "Formula: Σ amount of matched, classified rows where recoverability_result = excluded." },
+            { label: "CAM Eligible Costs", value: fmt(totals.camEligible), color: "border-t-blue-500", tooltip: "Formula: Σ amount of matched rows where cam_eligible is yes or conditional. CAM-eligible is necessary but not sufficient for CAM publication — the classification must also be finalized, the expense and rule approved, and it must go through Send to CAM." },
+            { label: "Finalized Costs", value: fmt(totals.finalized), color: "border-t-indigo-500", tooltip: "Formula: Σ amount of rows where classification_status = finalized (human-reviewed and locked in), regardless of whether they've been published to CAM yet." },
+            { label: "CAM Ready Costs", value: fmt(totals.camReady), color: "border-t-sky-500", tooltip: "Formula: Σ amount of rows where cam_status = cam_ready. This is the classification's own readiness flag — it does not by itself mean the row is published; check the row's CAM publication status/badge for that." },
+            { label: "Published to CAM", value: fmt(totals.sentToCam), color: "border-t-blue-700", tooltip: "Formula: Σ amount of rows with an ACTIVE (non-withdrawn) published cam_expense_inputs row — this is what compute-cam actually consumes. A row can be Finalized or even CAM Ready without being Published yet; only Send to CAM moves it into this total, and Withdraw from CAM removes it again (the withdrawn version is kept, never deleted)." },
           ].map((card) => (
-            <Card key={card.label} className={`border-t-4 shadow-sm ${card.color}`}>
+            <Card key={card.label} className={`border-t-4 shadow-sm ${card.color}`} title={card.tooltip}>
               <CardContent className="p-4">
                 <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">{card.label}</p>
                 <p className="text-xl font-bold text-slate-800">{card.value}</p>
@@ -936,7 +965,7 @@ export default function LeaseExpenseClassification() {
                   { value: "conditional", label: `Conditional (${counts.conditional})` },
                   { value: "excluded", label: `Excluded (${counts.excluded})` },
                   { value: "actuals_missing_rules", label: `Actuals Missing Rules (${counts.actuals_missing_rules})` },
-                  { value: "rules_missing_actuals", label: `Rules Missing Actuals (${counts.rules_missing_actuals})` },
+                  { value: "rules_missing_actuals", label: `Rules Without Actual Expenses (${counts.rules_missing_actuals})` },
                   { value: "needs_review", label: `Needs Review / Exceptions (${counts.needs_review})` },
                   { value: "finalized", label: `Finalized (${counts.finalized})` },
                   { value: "sent_to_cam", label: `Sent to CAM (${counts.sent_to_cam})` },
@@ -1005,6 +1034,10 @@ export default function LeaseExpenseClassification() {
                           row.rowType === "rule_missing_actual" &&
                           row.rule &&
                           leaseExpenseRuleService.isRuleCamPublishable(row.rule);
+                        const readiness = getCamPublicationReadiness(row);
+                        const expenseApprovalStatus = hasActualExpense
+                          ? normalizeText(row.expense?.approval_status || row.expense?.approved_status) || "pending"
+                          : null;
 
                         return (
                           <TableRow key={row.id} className="group border-b-slate-100 transition-colors hover:bg-indigo-50/30">
@@ -1022,6 +1055,15 @@ export default function LeaseExpenseClassification() {
                             </TableCell>
                             <TableCell className={`text-xs ${hasActualExpense ? "text-slate-500" : "text-slate-400"}`}>
                               {vendorLabel}
+                              {expenseApprovalStatus && (
+                                <Badge
+                                  variant="outline"
+                                  className={`ml-1.5 border text-[9px] uppercase ${expenseApprovalStatus === "approved" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}
+                                  title="Expense approval status — separate from classification/recoverability/CAM publication status."
+                                >
+                                  {expenseApprovalStatus === "approved" ? "Approved" : humanize(expenseApprovalStatus)}
+                                </Badge>
+                              )}
                             </TableCell>
                             <TableCell className="text-xs text-slate-500">
                               <div>{propertyLabel}</div>
@@ -1062,18 +1104,25 @@ export default function LeaseExpenseClassification() {
                                 {humanize(row.recoverabilityResult)}
                               </Badge>
                             </TableCell>
-                            <TableCell title={row.camWhy}>
+                            <TableCell title={readiness.alreadyPublished ? "Actively published to CAM." : (readiness.blockers.length > 0 ? `Blocking CAM publication:\n${readiness.blockers.join("\n")}` : row.camWhy)}>
                               <Badge variant="outline" className={`border text-[10px] uppercase ${row.camEligible === "yes" ? "bg-blue-50 text-blue-700 border-blue-200" : row.camEligible === "conditional" ? "bg-sky-50 text-sky-700 border-sky-200" : "bg-slate-100 text-slate-500 border-slate-200"}`}>
                                 {humanize(row.camEligible)}
                               </Badge>
                               <p className="mt-1 text-[11px] text-slate-500">{row.camDecision}</p>
+                              {!readiness.alreadyPublished && readiness.blockers.length > 0 && (
+                                <p className="mt-0.5 text-[10px] text-rose-500">{readiness.blockers.length} blocker{readiness.blockers.length === 1 ? "" : "s"} — hover for detail</p>
+                              )}
                             </TableCell>
                             <TableCell className="max-w-[200px]" title={row.message}>
                               <Badge variant="outline" className={`border text-[10px] uppercase ${statusBadge(row.classificationStatus)}`}>
                                 {humanize(row.classificationStatus)}
                               </Badge>
                               <p className="mt-1 text-[11px] text-slate-500">{row.nextStep}</p>
-                              {row.sentToCam ? <p className="mt-1 text-[11px] text-blue-600">Sent to CAM</p> : null}
+                              {row.sentToCam ? (
+                                <Badge variant="outline" className="mt-1 border border-blue-200 bg-blue-50 text-[9px] uppercase text-blue-700">
+                                  Published to CAM
+                                </Badge>
+                              ) : null}
                             </TableCell>
                             <TableCell className="pr-4 text-right">
                               <DropdownMenu>
@@ -1099,6 +1148,12 @@ export default function LeaseExpenseClassification() {
                                     <DropdownMenuItem onClick={() => sendToCamMutation.mutate(new Set([row.id]))}>
                                       <ArrowRightCircle className="mr-2 h-4 w-4 text-blue-600" />
                                       Send to CAM
+                                    </DropdownMenuItem>
+                                  )}
+                                  {row.sentToCam && (
+                                    <DropdownMenuItem onClick={() => withdrawFromCamMutation.mutate(row)}>
+                                      <RefreshCw className="mr-2 h-4 w-4 text-amber-600" />
+                                      Withdraw from CAM
                                     </DropdownMenuItem>
                                   )}
                                   {canPublishContractRuleForCam && (

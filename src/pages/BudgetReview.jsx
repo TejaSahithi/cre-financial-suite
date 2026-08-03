@@ -208,6 +208,13 @@ export default function BudgetReview() {
     engineType: "budget",
     propertyId: scopeProperty !== "all" ? scopeProperty : null,
     fiscalYear: currentYear,
+    // Unit takes precedence over building when both are selected, matching
+    // the same precedence used elsewhere on this page's scope filtering.
+    // Without this, an omitted scopeLevel defaults to property-scope
+    // matching, which would show the wrong (or no) engine metadata for a
+    // building/unit-scoped budget.
+    scopeLevel: scopeUnit !== "all" ? "unit" : scopeBuilding !== "all" ? "building" : null,
+    scopeId: scopeUnit !== "all" ? scopeUnit : scopeBuilding !== "all" ? scopeBuilding : null,
   });
 
   // Aggregate across all matching budgets for each year
@@ -292,10 +299,13 @@ export default function BudgetReview() {
     if (!budget) return;
     const toastId = toast.loading("Preparing budget export...");
     try {
+      // budget_id is the primary identifier (hardening PR) — property_id +
+      // fiscal_year alone can no longer disambiguate which budget to
+      // export now that property/building/unit budgets can coexist for the
+      // same year.
       const data = await invokeEdgeFunction("export-data", {
         export_type: "budget",
-        property_id: budget.property_id,
-        fiscal_year: budget.budget_year || budget.fiscal_year || currentYear,
+        budget_id: budget.id,
         format: "csv",
       });
       if (!data?.download_url) throw new Error("Download URL not received");

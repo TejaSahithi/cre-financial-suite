@@ -245,12 +245,27 @@ Deno.serve(async (req: Request) => {
 
     // ---------------------------------------------------------------
     // 4. Fetch latest cam_calculations for property + fiscal_year
+    //
+    // Required consequence of cam_calculations becoming scope-aware
+    // (20260901000000_cam_scope_columns.sql): a property can now have
+    // multiple cam_calculations rows for the same fiscal_year — one
+    // property-level plus any building/unit-level runs — so this
+    // .maybeSingle() would start erroring ("multiple rows returned") as
+    // soon as any building/unit-scoped CAM calculation exists alongside
+    // the property-level one. Revenue projection has always wanted the
+    // property-wide CAM recovery figure, which is exactly the
+    // scope_level='property' row, so that filter restores the original
+    // single-row guarantee rather than changing what this function
+    // computes. (Note: this query still doesn't filter by org_id — a
+    // separate, pre-existing gap left as-is here; out of scope for this
+    // PR, which only touches what CAM's own scope change requires.)
     // ---------------------------------------------------------------
     const { data: camCalc, error: camErr } = await supabaseAdmin
       .from("cam_calculations")
       .select("property_id, fiscal_year, annual_cam, cam_per_sf")
       .eq("property_id", property_id)
       .eq("fiscal_year", fiscal_year)
+      .eq("scope_level", "property")
       .maybeSingle();
 
     if (camErr) {
