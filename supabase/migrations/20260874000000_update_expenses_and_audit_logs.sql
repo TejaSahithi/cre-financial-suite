@@ -129,7 +129,7 @@ create policy expenses_select
   on public.expenses
   for select
   to authenticated
-  using (public.is_super_admin() or org_id in (select public.get_my_org_ids()));
+  using (public.is_super_admin() or org_id in (select unnest(public.get_my_org_ids())));
 
 drop policy if exists audit_logs_select on public.audit_logs;
 create policy audit_logs_select
@@ -139,7 +139,15 @@ create policy audit_logs_select
   using (
     public.is_super_admin()
     or org_id is null
-    or org_id in (select public.get_my_org_ids())
+    or org_id in (select unnest(public.get_my_org_ids()))
+  );
+
+drop policy if exists audit_logs_insert on public.audit_logs;
+create policy audit_logs_insert on public.audit_logs
+  for insert to authenticated
+  with check (
+    public.is_super_admin()
+    or org_id in (select unnest(public.get_my_org_ids()))
   );
 
 create or replace function public.create_expense_workflow(

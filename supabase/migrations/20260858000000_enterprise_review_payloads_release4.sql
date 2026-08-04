@@ -78,14 +78,14 @@ BEGIN
     SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'document_enterprise_review_payloads' AND policyname = 'document_enterprise_review_payloads_select'
   ) THEN
     CREATE POLICY document_enterprise_review_payloads_select ON public.document_enterprise_review_payloads
-      FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()));
+      FOR SELECT USING (org_id IN (SELECT unnest(public.get_my_org_ids())));
   END IF;
 
   IF NOT EXISTS (
     SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'document_field_review_overrides' AND policyname = 'document_field_review_overrides_select'
   ) THEN
     CREATE POLICY document_field_review_overrides_select ON public.document_field_review_overrides
-      FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()));
+      FOR SELECT USING (org_id IN (SELECT unnest(public.get_my_org_ids())));
   END IF;
 
   IF NOT EXISTS (

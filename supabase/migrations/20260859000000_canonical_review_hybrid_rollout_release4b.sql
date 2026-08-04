@@ -47,7 +47,7 @@ BEGIN
     SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'canonical_review_rollout_configs' AND policyname = 'canonical_review_rollout_configs_select'
   ) THEN
     CREATE POLICY canonical_review_rollout_configs_select ON public.canonical_review_rollout_configs
-      FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()));
+      FOR SELECT USING (org_id IN (SELECT unnest(public.get_my_org_ids())));
   END IF;
 
   IF NOT EXISTS (

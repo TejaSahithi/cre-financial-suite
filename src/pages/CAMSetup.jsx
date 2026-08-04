@@ -292,7 +292,7 @@ export default function CAMSetup() {
     queryFn: async () => {
       let dbData = [];
       try {
-        let query = supabase.from("recovery_pools").select("*, recovery_pool_categories(*), recovery_pool_scope_members(*)");
+        let query = supabase.from("recovery_pools").select("*");
         if (periodId) {
           query = query.eq("period_id", periodId);
         } else if (propertyId) {
@@ -320,7 +320,7 @@ export default function CAMSetup() {
       try {
         const { data, error } = await supabase
           .from("recovery_pool_lease_participants")
-          .select("*, leases(tenant_name)")
+          .select("*")
           .eq("pool_id", selectedPoolId)
           .neq("status", "removed")
           .order("created_at");
@@ -344,7 +344,7 @@ export default function CAMSetup() {
       try {
         const { data, error } = await supabase
           .from("lease_recovery_policies")
-          .select("*, leases(tenant_name), expense_categories(category_name)")
+          .select("*")
           .eq("property_id", propertyId)
           .order("created_at");
         if (!error && data && data.length > 0) return data;
@@ -374,7 +374,7 @@ export default function CAMSetup() {
       try {
         const { data, error } = await supabase
           .from("cam_prior_period_adjustments")
-          .select("*, leases(tenant_name)")
+          .select("*")
           .eq("recovery_period_id", periodId);
         if (error) return [];
         return data ?? [];
@@ -391,7 +391,7 @@ export default function CAMSetup() {
       try {
         const { data, error } = await supabase
           .from("cam_expense_inputs")
-          .select("*, cam_input_pool_assignments(*)")
+          .select("*")
           .eq("property_id", propertyId)
           .eq("publication_status", "published")
           .order("created_at");

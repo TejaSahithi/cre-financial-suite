@@ -201,7 +201,7 @@ export default function CAMDashboard() {
     enabled: !!scope.targetPropertyId || scopeProperty === "all",
     queryFn: async () => {
       try {
-        let query = supabase.from("cam_expense_inputs").select("*, cam_input_pool_assignments(amount)");
+        let query = supabase.from("cam_expense_inputs").select("*");
         if (scope.targetPropertyId) {
           query = query.eq("property_id", scope.targetPropertyId);
         }

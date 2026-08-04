@@ -88,6 +88,8 @@ CREATE TABLE IF NOT EXISTS public.cam_charge_exports (
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE public.cam_charge_exports ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+
 -- Idempotency: one pending/delivered export per run at a time.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_cam_charge_exports_run_active
   ON public.cam_charge_exports (cam_run_id)

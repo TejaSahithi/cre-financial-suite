@@ -53,7 +53,7 @@ create policy financial_uploads_insert
     bucket_id = 'financial-uploads'
     and (
       public.is_super_admin()
-      or (storage.foldername(name))[1] in (select public.get_my_org_ids()::text)
+      or (storage.foldername(name))[1] in (select unnest(public.get_my_org_ids())::text)
     )
   );
 
@@ -65,7 +65,7 @@ create policy financial_uploads_select
     bucket_id = 'financial-uploads'
     and (
       public.is_super_admin()
-      or (storage.foldername(name))[1] in (select public.get_my_org_ids()::text)
+      or (storage.foldername(name))[1] in (select unnest(public.get_my_org_ids())::text)
     )
   );
 
@@ -77,14 +77,14 @@ create policy financial_uploads_update
     bucket_id = 'financial-uploads'
     and (
       public.is_super_admin()
-      or (storage.foldername(name))[1] in (select public.get_my_org_ids()::text)
+      or (storage.foldername(name))[1] in (select unnest(public.get_my_org_ids())::text)
     )
   )
   with check (
     bucket_id = 'financial-uploads'
     and (
       public.is_super_admin()
-      or (storage.foldername(name))[1] in (select public.get_my_org_ids()::text)
+      or (storage.foldername(name))[1] in (select unnest(public.get_my_org_ids())::text)
     )
   );
 
@@ -96,6 +96,6 @@ create policy financial_uploads_delete
     bucket_id = 'financial-uploads'
     and (
       public.is_super_admin()
-      or (storage.foldername(name))[1] in (select public.get_my_org_ids()::text)
+      or (storage.foldername(name))[1] in (select unnest(public.get_my_org_ids())::text)
     )
   );

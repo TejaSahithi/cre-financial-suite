@@ -288,9 +288,9 @@ BEGIN
     'portfolio_export_runs',
     'portfolio_finding_actions'
   ] LOOP
-    EXECUTE format('CREATE POLICY %I_select ON public.%I FOR SELECT USING (organization_id IN (SELECT public.get_my_org_ids()) AND (portfolio_id IS NULL OR public.can_access_portfolio(portfolio_id)))', table_name, table_name);
-    EXECUTE format('CREATE POLICY %I_insert ON public.%I FOR INSERT WITH CHECK (organization_id IN (SELECT public.get_my_org_ids()) AND (portfolio_id IS NULL OR public.can_access_portfolio(portfolio_id)))', table_name, table_name);
-    EXECUTE format('CREATE POLICY %I_update ON public.%I FOR UPDATE USING (organization_id IN (SELECT public.get_my_org_ids()) AND (portfolio_id IS NULL OR public.can_access_portfolio(portfolio_id)))', table_name, table_name);
+    EXECUTE format('CREATE POLICY %I_select ON public.%I FOR SELECT USING (organization_id IN (SELECT unnest(public.get_my_org_ids())) AND (portfolio_id IS NULL OR public.can_access_portfolio(portfolio_id)))', table_name, table_name);
+    EXECUTE format('CREATE POLICY %I_insert ON public.%I FOR INSERT WITH CHECK (organization_id IN (SELECT unnest(public.get_my_org_ids())) AND (portfolio_id IS NULL OR public.can_access_portfolio(portfolio_id)))', table_name, table_name);
+    EXECUTE format('CREATE POLICY %I_update ON public.%I FOR UPDATE USING (organization_id IN (SELECT unnest(public.get_my_org_ids())) AND (portfolio_id IS NULL OR public.can_access_portfolio(portfolio_id)))', table_name, table_name);
   END LOOP;
 EXCEPTION WHEN duplicate_object THEN
   NULL;
@@ -300,7 +300,7 @@ DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'portfolio_intelligence_rollout_config' AND policyname = 'portfolio_intelligence_rollout_config_select') THEN
     CREATE POLICY portfolio_intelligence_rollout_config_select ON public.portfolio_intelligence_rollout_config
-      FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()) AND (portfolio_id IS NULL OR public.can_access_portfolio(portfolio_id)));
+      FOR SELECT USING (org_id IN (SELECT unnest(public.get_my_org_ids())) AND (portfolio_id IS NULL OR public.can_access_portfolio(portfolio_id)));
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'portfolio_intelligence_rollout_config' AND policyname = 'portfolio_intelligence_rollout_config_insert') THEN
     CREATE POLICY portfolio_intelligence_rollout_config_insert ON public.portfolio_intelligence_rollout_config

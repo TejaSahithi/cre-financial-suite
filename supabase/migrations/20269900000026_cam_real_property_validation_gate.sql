@@ -24,7 +24,7 @@ SECURITY DEFINER
 SET search_path TO 'public', 'pg_temp'
 AS $$
 DECLARE
-  v_gate  RECORD;
+  v_rows  INTEGER;
   v_now   TIMESTAMPTZ := now();
 BEGIN
   -- Only allowed on real property cam runs (not synthetic test data).
@@ -57,7 +57,7 @@ BEGIN
         manual_reviewer  = EXCLUDED.manual_reviewer,
         updated_at       = v_now;
 
-  GET DIAGNOSTICS v_gate = ROW_COUNT;
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
 
   INSERT INTO public.audit_logs (org_id, entity_type, entity_id, action, actor_user_id, actor_email, severity, source, metadata, "timestamp")
   VALUES (p_org_id, 'CamRealPropertyValidation', p_property_id::TEXT, 'real_property_variance_report_submitted',

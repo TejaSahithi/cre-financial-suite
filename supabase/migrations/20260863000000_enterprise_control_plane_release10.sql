@@ -315,9 +315,9 @@ BEGIN
   ] LOOP
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
     BEGIN
-      EXECUTE format('CREATE POLICY %I_select ON public.%I FOR SELECT USING (organization_id IS NULL OR organization_id IN (SELECT public.get_my_org_ids()))', t, t);
-      EXECUTE format('CREATE POLICY %I_insert ON public.%I FOR INSERT WITH CHECK (organization_id IS NULL OR organization_id IN (SELECT public.get_my_org_ids()))', t, t);
-      EXECUTE format('CREATE POLICY %I_update ON public.%I FOR UPDATE USING (organization_id IS NULL OR organization_id IN (SELECT public.get_my_org_ids())) WITH CHECK (organization_id IS NULL OR organization_id IN (SELECT public.get_my_org_ids()))', t, t);
+      EXECUTE format('CREATE POLICY %I_select ON public.%I FOR SELECT USING (organization_id IS NULL OR organization_id IN (SELECT unnest(public.get_my_org_ids())))', t, t);
+      EXECUTE format('CREATE POLICY %I_insert ON public.%I FOR INSERT WITH CHECK (organization_id IS NULL OR organization_id IN (SELECT unnest(public.get_my_org_ids())))', t, t);
+      EXECUTE format('CREATE POLICY %I_update ON public.%I FOR UPDATE USING (organization_id IS NULL OR organization_id IN (SELECT unnest(public.get_my_org_ids()))) WITH CHECK (organization_id IS NULL OR organization_id IN (SELECT unnest(public.get_my_org_ids())))', t, t);
     EXCEPTION WHEN duplicate_object THEN
       NULL;
     END;
