@@ -449,11 +449,46 @@ export default function CAMSetup() {
     const suggestion = activeCalendar ? suggestedPeriodForCalendar(activeCalendar) : null;
     const alreadyHasCurrentPeriod = suggestion && periods.some((p) => p.start_date === suggestion.start_date && p.end_date === suggestion.end_date);
 
+    React.useEffect(() => {
+      if (!propertyId && properties.length > 0) {
+        setPropertyId(properties[0].id);
+      }
+    }, [properties]);
+
+    React.useEffect(() => {
+      if (propertyId && !periodId && periods.length > 0) {
+        setPeriodId(periods[0].id);
+      }
+    }, [propertyId, periods]);
+
     return (
       <div className="space-y-6">
-        {!propertyId && (
-          <Card><CardContent className="py-10 text-center text-sm text-slate-500">Select a property in the scope bar above to begin.</CardContent></Card>
-        )}
+        <Card className="border-slate-200 shadow-sm">
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <CardTitle className="text-base font-semibold">Select Property</CardTitle>
+            {properties.length > 0 && (
+              <Badge variant="outline" className="text-xs font-normal">
+                {properties.length} propert{properties.length === 1 ? "y" : "ies"} available
+              </Badge>
+            )}
+          </CardHeader>
+          <CardContent>
+            {properties.length === 0 ? (
+              <p className="text-sm text-slate-500">No properties found in this organization. Create a property first to set up CAM.</p>
+            ) : (
+              <Select value={propertyId} onValueChange={(v) => setPropertyId(v)}>
+                <SelectTrigger id="s1-property" className="w-full max-w-md bg-white">
+                  <SelectValue placeholder="Choose property..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {properties.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </CardContent>
+        </Card>
 
         {propertyId && (
           <Card>

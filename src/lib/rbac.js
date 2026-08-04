@@ -260,7 +260,12 @@ export function canAccessPlatformData(user) {
 }
 
 export function getActiveOrgId(user) {
-  return user?.activeOrg?.id || user?.org_id || null;
+  return (
+    user?.activeOrg?.id ||
+    user?.org_id ||
+    user?.memberships?.[0]?.org_id ||
+    null
+  );
 }
 
 export function getDataScope(user, options = {}) {
@@ -278,7 +283,7 @@ export function getDataScope(user, options = {}) {
     const hasMembership = user?.memberships?.some(
       (m) =>
         m?.org_id === explicitOrgId &&
-        ["active", "owner"].includes(m?.status)
+        (!m?.status || ["active", "owner", "approved"].includes(m?.status))
     );
     if (hasMembership) {
       return { scope: "org", orgId: explicitOrgId };
@@ -288,6 +293,13 @@ export function getDataScope(user, options = {}) {
   const activeOrgId = getActiveOrgId(user);
   if (activeOrgId) {
     return { scope: "org", orgId: activeOrgId };
+  }
+
+  if (user?.memberships?.length > 0) {
+    const firstOrgId = user.memberships[0]?.org_id;
+    if (firstOrgId) {
+      return { scope: "org", orgId: firstOrgId };
+    }
   }
 
   return { scope: "none", orgId: null };
