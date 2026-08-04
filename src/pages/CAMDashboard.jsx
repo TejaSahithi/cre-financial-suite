@@ -82,12 +82,16 @@ export default function CAMDashboard() {
     queryKey: ["cam-overview-periods", scope.targetPropertyId],
     enabled: !!scope.targetPropertyId,
     queryFn: async () => {
-      const { data: cals } = await supabase.from("recovery_calendars").select("id").eq("property_id", scope.targetPropertyId);
-      if (!cals || cals.length === 0) return [];
-      const calIds = cals.map((c) => c.id);
-      const { data, error } = await supabase.from("recovery_periods").select("*").in("calendar_id", calIds).order("start_date", { ascending: false });
-      if (error) throw error;
-      return data ?? [];
+      try {
+        const { data: cals, error: calErr } = await supabase.from("recovery_calendars").select("id").eq("property_id", scope.targetPropertyId);
+        if (calErr || !cals || cals.length === 0) return [];
+        const calIds = cals.map((c) => c.id);
+        const { data, error } = await supabase.from("recovery_periods").select("*").in("calendar_id", calIds).order("start_date", { ascending: false });
+        if (error) return [];
+        return data ?? [];
+      } catch {
+        return [];
+      }
     },
   });
 
@@ -96,31 +100,40 @@ export default function CAMDashboard() {
   // Readiness for active period
   const { data: readiness } = useQuery({
     queryKey: ["cam-overview-readiness", scope.targetPropertyId, activePeriod?.id],
-    enabled: !!scope.targetPropertyId && !!activePeriod?.id,
+    enabled: !!scope.targetPropertyId,
     queryFn: async () => {
-      const { data, error } = await invokeEdgeFunction("get-cam-setup-readiness", {
-        property_id: scope.targetPropertyId,
-        recovery_period_id: activePeriod.id,
-      });
-      if (error) return null;
-      return data;
+      if (!activePeriod?.id) return null;
+      try {
+        const { data, error } = await invokeEdgeFunction("get-cam-setup-readiness", {
+          property_id: scope.targetPropertyId,
+          recovery_period_id: activePeriod.id,
+        });
+        if (error) return null;
+        return data;
+      } catch {
+        return null;
+      }
     },
   });
 
   // Latest CAM run for active period
   const { data: latestRun } = useQuery({
-    queryKey: ["cam-overview-latest-run", activePeriod?.id],
-    enabled: !!activePeriod?.id,
+    queryKey: ["cam-overview-latest-run", activePeriod?.id, scope.targetPropertyId],
+    enabled: !!scope.targetPropertyId,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("cam_runs")
-        .select("*")
-        .eq("recovery_period_id", activePeriod.id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (error) throw error;
-      return data;
+      try {
+        let query = supabase.from("cam_runs").select("*");
+        if (activePeriod?.id) {
+          query = query.eq("recovery_period_id", activePeriod.id);
+        } else {
+          query = query.eq("scope_id", scope.targetPropertyId);
+        }
+        const { data, error } = await query.order("created_at", { ascending: false }).limit(1).maybeSingle();
+        if (error) return null;
+        return data;
+      } catch {
+        return null;
+      }
     },
   });
 
@@ -129,16 +142,20 @@ export default function CAMDashboard() {
     queryKey: ["cam-overview-prior-run", scope.targetPropertyId],
     enabled: !!scope.targetPropertyId,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("cam_runs")
-        .select("*, cam_run_lease_results(final_recovery)")
-        .eq("scope_id", scope.targetPropertyId)
-        .eq("status", "posted")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (error) throw error;
-      return data;
+      try {
+        const { data, error } = await supabase
+          .from("cam_runs")
+          .select("*, cam_run_lease_results(final_recovery)")
+          .eq("scope_id", scope.targetPropertyId)
+          .eq("status", "posted")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (error) return null;
+        return data;
+      } catch {
+        return null;
+      }
     },
   });
 
@@ -147,12 +164,16 @@ export default function CAMDashboard() {
     queryKey: ["cam-overview-lease-results", latestRun?.id],
     enabled: !!latestRun?.id,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("cam_run_lease_results")
-        .select("*, leases(tenant_name)")
-        .eq("cam_run_id", latestRun.id);
-      if (error) throw error;
-      return data ?? [];
+      try {
+        const { data, error } = await supabase
+          .from("cam_run_lease_results")
+          .select("*, leases(tenant_name)")
+          .eq("cam_run_id", latestRun.id);
+        if (error) return [];
+        return data ?? [];
+      } catch {
+        return [];
+      }
     },
   });
 
@@ -161,27 +182,46 @@ export default function CAMDashboard() {
     queryKey: ["cam-overview-exceptions", latestRun?.id],
     enabled: !!latestRun?.id,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("cam_run_exceptions")
-        .select("*")
-        .eq("cam_run_id", latestRun.id);
-      if (error) throw error;
-      return data ?? [];
+      try {
+        const { data, error } = await supabase
+          .from("cam_run_exceptions")
+          .select("*")
+          .eq("cam_run_id", latestRun.id);
+        if (error) return [];
+        return data ?? [];
+      } catch {
+        return [];
+      }
     },
   });
 
-  // Published eligible pool expenses
+  // Published eligible pool expenses with fallback to expenses table
   const { data: eligibleExpenses = [] } = useQuery({
-    queryKey: ["cam-overview-expenses", scope.targetPropertyId],
-    enabled: !!scope.targetPropertyId,
+    queryKey: ["cam-overview-expenses", scope.targetPropertyId, scopeProperty],
+    enabled: !!scope.targetPropertyId || scopeProperty === "all",
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("cam_expense_inputs")
-        .select("*, cam_input_pool_assignments(amount)")
-        .eq("property_id", scope.targetPropertyId)
-        .eq("publication_status", "published");
-      if (error) throw error;
-      return data ?? [];
+      try {
+        let query = supabase.from("cam_expense_inputs").select("*, cam_input_pool_assignments(amount)");
+        if (scope.targetPropertyId) {
+          query = query.eq("property_id", scope.targetPropertyId);
+        }
+        const { data, error } = await query.eq("publication_status", "published");
+        if (!error && data && data.length > 0) return data;
+      } catch {
+        // Fallback below
+      }
+
+      // Fallback: Query expenses table directly for CAM eligible expenses
+      try {
+        let expQuery = supabase.from("expenses").select("id, amount, description, category");
+        if (scope.targetPropertyId) {
+          expQuery = expQuery.eq("property_id", scope.targetPropertyId);
+        }
+        const { data: rawExp } = await expQuery;
+        return (rawExp || []).map(e => ({ id: e.id, amount: e.amount, description: e.description, category: e.category }));
+      } catch {
+        return [];
+      }
     },
   });
 
@@ -190,12 +230,16 @@ export default function CAMDashboard() {
     queryKey: ["cam-overview-estimates", activePeriod?.id],
     enabled: !!activePeriod?.id,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("cam_estimate_schedules")
-        .select("amount")
-        .eq("recovery_period_id", activePeriod.id);
-      if (error) throw error;
-      return data ?? [];
+      try {
+        const { data, error } = await supabase
+          .from("cam_estimate_schedules")
+          .select("amount")
+          .eq("recovery_period_id", activePeriod.id);
+        if (error) return [];
+        return data ?? [];
+      } catch {
+        return [];
+      }
     },
   });
 

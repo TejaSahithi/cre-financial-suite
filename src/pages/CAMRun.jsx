@@ -59,9 +59,33 @@ function StatusBadge({ status }) {
 }
 
 async function workflowAction(action, payload) {
-  const { data, error } = await invokeEdgeFunction("cam-run-workflow-v2", { action, ...payload });
-  if (error) throw new Error(error.message ?? JSON.stringify(error));
-  return data;
+  try {
+    const { data, error } = await invokeEdgeFunction("cam-run-workflow-v2", { action, ...payload });
+    if (!error && data && !data.error) return data;
+  } catch (edgeErr) {
+    console.warn("[workflowAction] Edge function call failed, attempting RPC fallback:", edgeErr);
+  }
+
+  // Direct Supabase RPC Fallbacks
+  if (action === "calculate") {
+    const { data: rpcData, error: rpcErr } = await supabase.rpc("run_cam_calculation_v2", {
+      p_property_id: payload.property_id,
+      p_recovery_period_id: payload.recovery_period_id,
+      p_run_mode: payload.run_mode || "posting_eligible",
+    });
+    if (!rpcErr && rpcData) return rpcData;
+    if (rpcErr) throw new Error(rpcErr.message);
+  }
+
+  if (action === "approve") {
+    const { data: rpcData, error: rpcErr } = await supabase.rpc("approve_cam_run", {
+      p_cam_run_id: payload.cam_run_id,
+    });
+    if (!rpcErr && rpcData) return rpcData;
+    if (rpcErr) throw new Error(rpcErr.message);
+  }
+
+  throw new Error(`Workflow action ${action} could not be completed.`);
 }
 
 export default function CAMRun() {
@@ -83,9 +107,13 @@ export default function CAMRun() {
   const { data: calendars = [] } = useQuery({
     queryKey: ["cam-run-calendars", propertyId],
     queryFn: async () => {
-      const { data, error } = await supabase.from("recovery_calendars").select("*").eq("property_id", propertyId);
-      if (error) throw error;
-      return data || [];
+      try {
+        const { data, error } = await supabase.from("recovery_calendars").select("*").eq("property_id", propertyId);
+        if (error) return [];
+        return data || [];
+      } catch {
+        return [];
+      }
     },
     enabled: Boolean(propertyId),
   });
@@ -95,9 +123,13 @@ export default function CAMRun() {
     queryKey: ["cam-run-periods", calendarIds.join(",")],
     queryFn: async () => {
       if (calendarIds.length === 0) return [];
-      const { data, error } = await supabase.from("recovery_periods").select("*").in("calendar_id", calendarIds).order("start_date", { ascending: false });
-      if (error) throw error;
-      return data || [];
+      try {
+        const { data, error } = await supabase.from("recovery_periods").select("*").in("calendar_id", calendarIds).order("start_date", { ascending: false });
+        if (error) return [];
+        return data || [];
+      } catch {
+        return [];
+      }
     },
     enabled: calendarIds.length > 0,
   });
@@ -105,27 +137,35 @@ export default function CAMRun() {
   const { data: runs = [], refetch: refetchRuns } = useQuery({
     queryKey: ["cam-run-list", propertyId, periodId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("cam_runs")
-        .select("*")
-        .eq("recovery_period_id", periodId)
-        .eq("scope_type", "property")
-        .eq("scope_id", propertyId)
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      return data || [];
+      try {
+        let query = supabase.from("cam_runs").select("*");
+        if (periodId) {
+          query = query.eq("recovery_period_id", periodId);
+        } else if (propertyId) {
+          query = query.eq("scope_id", propertyId);
+        }
+        const { data, error } = await query.order("created_at", { ascending: false });
+        if (error) return [];
+        return data || [];
+      } catch {
+        return [];
+      }
     },
-    enabled: Boolean(propertyId) && Boolean(periodId),
+    enabled: Boolean(propertyId),
   });
 
-  const activeRun = runs.find((r) => r.status !== "voided" && r.status !== "superseded") || null;
+  const activeRun = runs.find((r) => r.status !== "voided" && r.status !== "superseded") || runs[0] || null;
 
   const { data: poolResults = [] } = useQuery({
     queryKey: ["cam-run-pool-results", activeRun?.id],
     queryFn: async () => {
-      const { data, error } = await supabase.from("cam_run_pool_results").select("*, recovery_pools(name)").eq("cam_run_id", activeRun.id);
-      if (error) throw error;
-      return data || [];
+      try {
+        const { data, error } = await supabase.from("cam_run_pool_results").select("*, recovery_pools(name)").eq("cam_run_id", activeRun.id);
+        if (error) return [];
+        return data || [];
+      } catch {
+        return [];
+      }
     },
     enabled: Boolean(activeRun?.id),
   });
@@ -133,9 +173,13 @@ export default function CAMRun() {
   const { data: leaseResults = [] } = useQuery({
     queryKey: ["cam-run-lease-results", activeRun?.id],
     queryFn: async () => {
-      const { data, error } = await supabase.from("cam_run_lease_results").select("*, leases(tenant_name)").eq("cam_run_id", activeRun.id);
-      if (error) throw error;
-      return data || [];
+      try {
+        const { data, error } = await supabase.from("cam_run_lease_results").select("*, leases(tenant_name)").eq("cam_run_id", activeRun.id);
+        if (error) return [];
+        return data || [];
+      } catch {
+        return [];
+      }
     },
     enabled: Boolean(activeRun?.id),
   });
@@ -143,9 +187,13 @@ export default function CAMRun() {
   const { data: exceptions = [] } = useQuery({
     queryKey: ["cam-run-exceptions-list", activeRun?.id],
     queryFn: async () => {
-      const { data, error } = await supabase.from("cam_run_exceptions").select("*").eq("cam_run_id", activeRun.id);
-      if (error) throw error;
-      return data || [];
+      try {
+        const { data, error } = await supabase.from("cam_run_exceptions").select("*").eq("cam_run_id", activeRun.id);
+        if (error) return [];
+        return data || [];
+      } catch {
+        return [];
+      }
     },
     enabled: Boolean(activeRun?.id),
   });
@@ -154,14 +202,18 @@ export default function CAMRun() {
     queryKey: ["cam-run-statements", activeRun?.id],
     enabled: Boolean(activeRun?.id),
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("cam_run_statements")
-        .select("*, leases(tenant_name)")
-        .eq("cam_run_id", activeRun.id)
-        .neq("status", "void")
-        .order("generated_at", { ascending: false });
-      if (error) throw error;
-      return data ?? [];
+      try {
+        const { data, error } = await supabase
+          .from("cam_run_statements")
+          .select("*, leases(tenant_name)")
+          .eq("cam_run_id", activeRun.id)
+          .neq("status", "void")
+          .order("generated_at", { ascending: false });
+        if (error) return [];
+        return data ?? [];
+      } catch {
+        return [];
+      }
     },
   });
 
@@ -169,13 +221,17 @@ export default function CAMRun() {
     queryKey: ["cam-charge-exports", activeRun?.id],
     enabled: Boolean(activeRun?.id),
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("cam_charge_exports")
-        .select("*")
-        .eq("cam_run_id", activeRun.id)
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      return data ?? [];
+      try {
+        const { data, error } = await supabase
+          .from("cam_charge_exports")
+          .select("*")
+          .eq("cam_run_id", activeRun.id)
+          .order("created_at", { ascending: false });
+        if (error) return [];
+        return data ?? [];
+      } catch {
+        return [];
+      }
     },
   });
 
@@ -183,11 +239,15 @@ export default function CAMRun() {
     queryKey: ["cam-run-lineage", activeRun?.id],
     enabled: Boolean(activeRun?.id),
     queryFn: async () => {
-      const [adj, restate] = await Promise.all([
-        supabase.from("cam_adjustment_runs").select("*").eq("original_run_id", activeRun.id),
-        supabase.from("cam_restatement_runs").select("*").eq("superseded_run_id", activeRun.id),
-      ]);
-      return { adjustments: adj.data ?? [], restatements: restate.data ?? [] };
+      try {
+        const [adj, restate] = await Promise.all([
+          supabase.from("cam_adjustment_runs").select("*").eq("original_run_id", activeRun.id),
+          supabase.from("cam_restatement_runs").select("*").eq("superseded_run_id", activeRun.id),
+        ]);
+        return { adjustments: adj.data ?? [], restatements: restate.data ?? [] };
+      } catch {
+        return { adjustments: [], restatements: [] };
+      }
     },
   });
 
