@@ -100,7 +100,7 @@ export default function PropertyCAMTab({ propertyId, canRunCalculation = true })
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-base">Tenant CAM Allocation — Current vs Prior Year vs Lease Terms</CardTitle>
           {canRunCalculation ? (
-            <Link to={createPageUrl("CAMCalculation") + `?property=${propertyId}`}>
+            <Link to={createPageUrl("CAMRun") + `?property_id=${propertyId}`}>
               <Button size="sm" className="bg-blue-600 hover:bg-blue-700"><Calculator className="w-3 h-3 mr-1" />Run Calculation</Button>
             </Link>
           ) : (

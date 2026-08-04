@@ -200,7 +200,7 @@ test.describe("CAM Negative Workflows (Phase 4B)", () => {
     const viewerPassword = `Viewer-${suffix}!`;
     const viewer = await createOrgUserWithMfa(admin, suffix + "v", viewerPassword, seed.org.id, "viewer");
 
-    await loginAs(page, viewer.email, viewerPassword, viewer.totpSecret, "/cam-setup-v2");
+    await loginAs(page, viewer.email, viewerPassword, viewer.totpSecret, "/cam-setup");
 
     // Any write button that requires CAMSetup write permission should be absent or disabled
     const writeButtons = [

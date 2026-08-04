@@ -172,7 +172,7 @@ test.describe("CAM Setup Workflow (Phase 4B)", () => {
     const password = `Smoke-${suffix}!`;
     const seed = await seedSetupScenario(admin, suffix, password);
 
-    await loginAndNavigate(page, seed.actor, password, seed.totpSecret, "/cam-setup-v2");
+    await loginAndNavigate(page, seed.actor, password, seed.totpSecret, "/cam-setup");
 
     // Select property
     await page.locator("#s1-property").click();
@@ -192,7 +192,7 @@ test.describe("CAM Setup Workflow (Phase 4B)", () => {
     const password = `Smoke-${suffix}!`;
     const seed = await seedSetupScenario(admin, suffix, password);
 
-    await loginAndNavigate(page, seed.actor, password, seed.totpSecret, "/cam-setup-v2");
+    await loginAndNavigate(page, seed.actor, password, seed.totpSecret, "/cam-setup");
     await page.locator(`#step-tab-2`).click();
 
     // Without property + period selected, pool create would be blocked.
@@ -229,7 +229,7 @@ test.describe("CAM Setup Workflow (Phase 4B)", () => {
     });
     const poolId = poolResult.pool.id;
 
-    await loginAndNavigate(page, seed.actor, password, seed.totpSecret, "/cam-setup-v2");
+    await loginAndNavigate(page, seed.actor, password, seed.totpSecret, "/cam-setup");
     await page.locator("#step-tab-1").click();
     await page.locator("#s1-property").click();
     await page.getByText(seed.property.name).click();
@@ -266,7 +266,7 @@ test.describe("CAM Setup Workflow (Phase 4B)", () => {
       p_actor_user_id: seed.actor.userId, p_actor_email: seed.actor.email,
     });
 
-    await loginAndNavigate(page, seed.actor, password, seed.totpSecret, "/cam-setup-v2");
+    await loginAndNavigate(page, seed.actor, password, seed.totpSecret, "/cam-setup");
     await page.locator("#step-tab-1").click();
     await page.locator("#s1-property").click();
     await page.getByText(seed.property.name).click();
@@ -302,7 +302,7 @@ test.describe("CAM Setup Workflow (Phase 4B)", () => {
       p_actor_user_id: seed.actor.userId, p_actor_email: seed.actor.email,
     });
 
-    await loginAndNavigate(page, seed.actor, password, seed.totpSecret, "/cam-setup-v2");
+    await loginAndNavigate(page, seed.actor, password, seed.totpSecret, "/cam-setup");
     await page.locator("#step-tab-1").click();
     await page.locator("#s1-property").click();
     await page.getByText(seed.property.name).click();
@@ -330,7 +330,7 @@ test.describe("CAM Setup Workflow (Phase 4B)", () => {
     const password = `Smoke-${suffix}!`;
     const seed = await seedSetupScenario(admin, suffix, password);
 
-    await loginAndNavigate(page, seed.actor, password, seed.totpSecret, "/cam-setup-v2");
+    await loginAndNavigate(page, seed.actor, password, seed.totpSecret, "/cam-setup");
     await page.locator("#step-tab-1").click();
     await page.locator("#s1-property").click();
     await page.getByText(seed.property.name).click();

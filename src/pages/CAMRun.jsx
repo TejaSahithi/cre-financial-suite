@@ -1,21 +1,24 @@
 /**
- * CAMRun — Enterprise CAM & Budget Implementation Blueprint v1.0, Phase 4A.
+ * CAMRuns — Consolidated CAM Runs management page.
  *
- * Create/select a CAM run for a property + recovery period, calculate it,
- * inspect the engine-computed pool/lease summaries and exceptions, and
- * drive the DRAFT -> CALCULATED -> IN_REVIEW -> APPROVED workflow. This
- * page does NOT compute any CAM figure itself — every number shown here is
- * read directly from cam_run_pool_results/cam_run_lease_results/
- * cam_run_exceptions, written by the real orchestrator via
- * run-cam-calculation-v2. Posting (APPROVED -> POSTED and beyond) is
- * intentionally not exposed anywhere in this UI yet — that is gated behind
- * Workstream B's release-readiness acceptance, per the Phase 4B gate.
+ * Consolidates:
+ *   - Run list / selection
+ *   - Run summary & calculation
+ *   - Pool results
+ *   - Lease results
+ *   - Exceptions
+ *   - Approval workflow
+ *   - Statements & Charge Export (CSV generation, download, delivery)
+ *   - Lineage (Adjustment & Restatement run tracking)
  */
 import React, { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Calculator, RefreshCw, Send, ExternalLink } from "lucide-react";
+import {
+  Calculator, RefreshCw, Send, ExternalLink, FileDown,
+  CheckCircle2, XCircle, AlertTriangle, Package, Lock, Loader2,
+} from "lucide-react";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
@@ -25,34 +28,40 @@ import PageHeader from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 function fmtCurrency(value) {
   const num = Number(value);
-  if (!Number.isFinite(num)) return "-";
-  return num.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+  if (!Number.isFinite(num)) return "—";
+  return num.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
+
 function fmtDateTime(value) {
-  if (!value) return "-";
+  if (!value) return "—";
   return new Date(value).toLocaleString();
 }
 
-const STATUS_TONE = {
-  draft: "bg-slate-100 text-slate-600",
-  readiness_failed: "bg-red-100 text-red-700",
-  ready: "bg-slate-100 text-slate-600",
-  calculating: "bg-blue-100 text-blue-700",
-  calculated: "bg-indigo-100 text-indigo-700",
-  under_review: "bg-amber-100 text-amber-800",
-  submitted: "bg-amber-100 text-amber-800",
-  approved: "bg-emerald-100 text-emerald-700",
-  posted: "bg-emerald-100 text-emerald-700",
-  superseded: "bg-slate-100 text-slate-500",
-  voided: "bg-slate-100 text-slate-400",
-};
 function StatusBadge({ status }) {
-  return <Badge className={`text-xs ${STATUS_TONE[status] || "bg-slate-100 text-slate-600"}`}>{status}</Badge>;
+  const tone =
+    status === "posted"      ? "bg-emerald-100 text-emerald-700"
+    : status === "approved"  ? "bg-emerald-100 text-emerald-700"
+    : status === "submitted" || status === "under_review" ? "bg-amber-100 text-amber-800"
+    : status === "calculated" ? "bg-indigo-100 text-indigo-700"
+    : status === "readiness_failed" ? "bg-red-100 text-red-700"
+    : "bg-slate-100 text-slate-600";
+  return <Badge className={`text-xs uppercase font-semibold ${tone}`}>{status}</Badge>;
+}
+
+async function workflowAction(action, payload) {
+  const { data, error } = await invokeEdgeFunction("cam-run-workflow-v2", { action, ...payload });
+  if (error) throw new Error(error.message ?? JSON.stringify(error));
+  return data;
 }
 
 export default function CAMRun() {
@@ -63,6 +72,11 @@ export default function CAMRun() {
   const [propertyId, setPropertyId] = useState(propertyIdParam);
   const [periodId, setPeriodId] = useState(periodIdParam);
   const [runMode, setRunMode] = useState("posting_eligible");
+
+  // Dialog states for posting / lifecycle
+  const [adjDialog, setAdjDialog] = useState(false);
+  const [restateDialog, setRestateDialog] = useState(false);
+  const [reasonForm, setReasonForm] = useState({ reason: "" });
 
   const { data: properties = [] } = useOrgQuery("Property");
 
@@ -104,10 +118,6 @@ export default function CAMRun() {
     enabled: Boolean(propertyId) && Boolean(periodId),
   });
 
-  // The most recent non-voided run is what this page operates on -- a new
-  // "Calculate" click always targets it (run-cam-calculation-v2 creates a
-  // fresh draft only if none exists yet, matching the one-active-run-per-
-  // series constraint already enforced at the database level).
   const activeRun = runs.find((r) => r.status !== "voided" && r.status !== "superseded") || null;
 
   const { data: poolResults = [] } = useQuery({
@@ -130,21 +140,58 @@ export default function CAMRun() {
     enabled: Boolean(activeRun?.id),
   });
 
-  const { data: exceptionCounts = { blocking: 0, warning: 0, open: 0 } } = useQuery({
-    queryKey: ["cam-run-exception-counts", activeRun?.id],
+  const { data: exceptions = [] } = useQuery({
+    queryKey: ["cam-run-exceptions-list", activeRun?.id],
     queryFn: async () => {
-      const { data, error } = await supabase.from("cam_run_exceptions").select("severity, resolution_status").eq("cam_run_id", activeRun.id);
+      const { data, error } = await supabase.from("cam_run_exceptions").select("*").eq("cam_run_id", activeRun.id);
       if (error) throw error;
-      const rows = data || [];
-      return {
-        blocking: rows.filter((r) => r.severity === "blocking").length,
-        warning: rows.filter((r) => r.severity === "warning").length,
-        open: rows.filter((r) => r.resolution_status === "open").length,
-      };
+      return data || [];
     },
     enabled: Boolean(activeRun?.id),
   });
 
+  const { data: statements = [], refetch: refetchStatements } = useQuery({
+    queryKey: ["cam-run-statements", activeRun?.id],
+    enabled: Boolean(activeRun?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("cam_run_statements")
+        .select("*, leases(tenant_name)")
+        .eq("cam_run_id", activeRun.id)
+        .neq("status", "void")
+        .order("generated_at", { ascending: false });
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+  const { data: chargeExports = [], refetch: refetchExports } = useQuery({
+    queryKey: ["cam-charge-exports", activeRun?.id],
+    enabled: Boolean(activeRun?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("cam_charge_exports")
+        .select("*")
+        .eq("cam_run_id", activeRun.id)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+  const { data: lineage = {} } = useQuery({
+    queryKey: ["cam-run-lineage", activeRun?.id],
+    enabled: Boolean(activeRun?.id),
+    queryFn: async () => {
+      const [adj, restate] = await Promise.all([
+        supabase.from("cam_adjustment_runs").select("*").eq("original_run_id", activeRun.id),
+        supabase.from("cam_restatement_runs").select("*").eq("superseded_run_id", activeRun.id),
+      ]);
+      return { adjustments: adj.data ?? [], restatements: restate.data ?? [] };
+    },
+  });
+
+  // Calculation mutation
   const calculateMutation = useMutation({
     mutationFn: () =>
       invokeEdgeFunction("run-cam-calculation-v2", {
@@ -153,31 +200,53 @@ export default function CAMRun() {
       }),
     onSuccess: (result) => {
       if (result?.status === "readiness_failed") {
-        toast.warning("Readiness check failed — see exceptions below before this run can be calculated.");
+        toast.warning("Readiness check failed — view exceptions for details.");
       } else {
-        toast.success(result?.idempotent_rerun ? "Already up to date — no changes since the last calculation." : "Calculation complete.");
+        toast.success(result?.idempotent_rerun ? "Up to date — no changes since last calculation." : "Calculation complete.");
       }
       refetchRuns();
       queryClient.invalidateQueries({ queryKey: ["cam-run-pool-results"] });
       queryClient.invalidateQueries({ queryKey: ["cam-run-lease-results"] });
-      queryClient.invalidateQueries({ queryKey: ["cam-run-exception-counts"] });
+      queryClient.invalidateQueries({ queryKey: ["cam-run-exceptions-list"] });
     },
     onError: (err) => toast.error(err?.message || "Calculation failed"),
   });
 
-  const submitMutation = useMutation({
-    mutationFn: () => invokeEdgeFunction("cam-run-workflow-v2", { cam_run_id: activeRun.id, action: "submit_for_review" }),
-    onSuccess: () => { toast.success("Submitted for review."); refetchRuns(); },
-    onError: (err) => toast.error(err?.message || "Could not submit for review"),
+  // Workflow actions mutation
+  const actionMutation = useMutation({
+    mutationFn: ({ action, payload }) => workflowAction(action, { cam_run_id: activeRun?.id, ...payload }),
+    onSuccess: () => {
+      refetchRuns();
+      refetchStatements();
+      refetchExports();
+      queryClient.invalidateQueries({ queryKey: ["cam-run-lineage"] });
+    },
+    onError: (err) => toast.error(err.message),
   });
+
+  const doAction = (action, payload, successMsg) =>
+    actionMutation.mutateAsync({ action, payload }, {
+      onSuccess: () => toast.success(successMsg ?? "Done"),
+    });
 
   const canCalculate = activeRun == null || ["draft", "readiness_failed", "ready", "calculating", "calculated"].includes(activeRun.status);
   const canSubmit = activeRun?.status === "calculated";
+  const isApproved = activeRun?.status === "approved";
+  const isPosted = activeRun?.status === "posted";
+
+  const blockingExceptions = exceptions.filter((e) => e.severity === "blocking" && e.resolution_status === "open");
+  const openExceptions = exceptions.filter((e) => e.resolution_status === "open");
 
   return (
-    <div className="space-y-6 p-6">
-      <PageHeader icon={Calculator} title="CAM Run" subtitle="Calculate, review, and approve a CAM recovery run — Phase 4A workflow" iconColor="from-blue-500 to-indigo-600" />
+    <div className="space-y-6 p-4 lg:p-6">
+      <PageHeader
+        icon={Calculator}
+        title="CAM Runs"
+        subtitle="Execute, review, approve, and issue CAM recovery runs"
+        iconColor="from-blue-500 to-indigo-600"
+      />
 
+      {/* Selectors */}
       <div className="flex flex-wrap items-center gap-3">
         <Select value={propertyId} onValueChange={(v) => { setPropertyId(v); setPeriodId(""); setSearchParams({ property_id: v }); }}>
           <SelectTrigger className="w-64"><SelectValue placeholder="Select property" /></SelectTrigger>
@@ -190,147 +259,437 @@ export default function CAMRun() {
       </div>
 
       {!propertyId || !periodId ? (
-        <Card><CardContent className="py-12 text-center text-sm text-slate-400">Select a property and recovery period to create or view a CAM run.</CardContent></Card>
+        <Card><CardContent className="py-12 text-center text-sm text-slate-400">Select a property and recovery period to manage CAM runs.</CardContent></Card>
       ) : (
-        <>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-base">Run status</CardTitle>
-              {activeRun && <StatusBadge status={activeRun.status} />}
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {activeRun && (
-                <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm md:grid-cols-4">
-                  <div><span className="text-slate-400">Run type</span><div>{activeRun.run_type}</div></div>
-                  <div><span className="text-slate-400">Run mode (last calc)</span><div>{activeRun.run_mode}</div></div>
-                  <div><span className="text-slate-400">Engine version</span><div className="font-mono text-xs">{activeRun.engine_version || "-"}</div></div>
-                  <div><span className="text-slate-400">Input hash</span><div className="font-mono text-xs">{activeRun.input_hash ? `${activeRun.input_hash.slice(0, 12)}…` : "-"}</div></div>
-                  <div><span className="text-slate-400">Created</span><div>{fmtDateTime(activeRun.created_at)}</div></div>
-                  <div><span className="text-slate-400">Submitted</span><div>{fmtDateTime(activeRun.submitted_at)}</div></div>
-                  <div><span className="text-slate-400">Approved</span><div>{fmtDateTime(activeRun.approved_at)}</div></div>
-                </div>
-              )}
+        <Tabs defaultValue="summary" className="space-y-4">
+          <TabsList id="cam-run-tabs">
+            <TabsTrigger value="summary">Summary</TabsTrigger>
+            <TabsTrigger value="pools">Pool Results ({poolResults.length})</TabsTrigger>
+            <TabsTrigger value="leases">Lease Results ({leaseResults.length})</TabsTrigger>
+            <TabsTrigger value="exceptions">Exceptions ({openExceptions.length})</TabsTrigger>
+            <TabsTrigger value="approval">Approval</TabsTrigger>
+            <TabsTrigger value="statements">Statements &amp; Export</TabsTrigger>
+            <TabsTrigger value="lineage">Lineage</TabsTrigger>
+          </TabsList>
 
-              <div className="flex flex-wrap items-center gap-3 pt-2">
-                {canCalculate && (
-                  <>
-                    <Select value={runMode} onValueChange={setRunMode}>
-                      <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="posting_eligible">Posting-eligible (full checks)</SelectItem>
-                        <SelectItem value="preview">Preview (relaxed checks)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <Button onClick={() => calculateMutation.mutate()} disabled={calculateMutation.isPending}>
-                      {activeRun?.status === "calculated" ? <RefreshCw className="mr-2 h-4 w-4" /> : <Calculator className="mr-2 h-4 w-4" />}
-                      {activeRun == null ? "Calculate" : activeRun.status === "calculated" ? "Recalculate" : "Calculate"}
-                    </Button>
-                  </>
-                )}
-                {canSubmit && (
-                  <Button variant="secondary" onClick={() => submitMutation.mutate()} disabled={submitMutation.isPending}>
-                    <Send className="mr-2 h-4 w-4" /> Submit for Review
-                  </Button>
-                )}
-                {activeRun?.status === "under_review" && (
-                  <Link to={`${createPageUrl("CAMExceptionReview")}?cam_run_id=${activeRun.id}`}>
-                    <Button variant="secondary">Go to Exception Review <ExternalLink className="ml-2 h-3 w-3" /></Button>
-                  </Link>
-                )}
-                {activeRun?.status === "submitted" && (
-                  <Link to={`${createPageUrl("CAMApproval")}?cam_run_id=${activeRun.id}`}>
-                    <Button variant="secondary">Go to Approval <ExternalLink className="ml-2 h-3 w-3" /></Button>
-                  </Link>
-                )}
-                {activeRun?.status === "approved" && (
-                  <Badge className="bg-emerald-100 text-emerald-700">Approved — posting is not yet enabled in this environment</Badge>
-                )}
-              </div>
-
-              {activeRun && (exceptionCounts.blocking > 0 || exceptionCounts.warning > 0) && (
-                <div className="flex flex-wrap gap-2 pt-2 text-sm">
-                  {exceptionCounts.blocking > 0 && <Badge className="bg-red-100 text-red-700">{exceptionCounts.blocking} blocking</Badge>}
-                  {exceptionCounts.warning > 0 && <Badge className="bg-amber-100 text-amber-800">{exceptionCounts.warning} warning</Badge>}
-                  {exceptionCounts.open > 0 && <Badge className="bg-slate-100 text-slate-600">{exceptionCounts.open} unresolved</Badge>}
-                  <Link to={`${createPageUrl("CAMExceptionReview")}?cam_run_id=${activeRun.id}`} className="text-xs text-blue-600 underline">Review exceptions</Link>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {activeRun && (
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <Card>
-                <CardHeader><CardTitle className="text-base">Pool results ({poolResults.length})</CardTitle></CardHeader>
-                <CardContent>
-                  {poolResults.length === 0 ? <p className="text-sm text-slate-400">No pool results yet.</p> : (
-                    <Table>
-                      <TableHeader><TableRow><TableHead>Pool</TableHead><TableHead>Actual</TableHead><TableHead>Gross-up</TableHead><TableHead>Adjusted</TableHead><TableHead /></TableRow></TableHeader>
-                      <TableBody>
-                        {poolResults.map((pr) => (
-                          <TableRow key={pr.id}>
-                            <TableCell className="text-sm font-medium">{pr.recovery_pools?.name || pr.pool_id.slice(0, 8)}</TableCell>
-                            <TableCell className="text-sm">{fmtCurrency(pr.actual_amount)}</TableCell>
-                            <TableCell className="text-sm">{fmtCurrency(pr.gross_up_adjustment)}</TableCell>
-                            <TableCell className="text-sm font-medium">{fmtCurrency(pr.adjusted_pool)}</TableCell>
-                            <TableCell>
-                              <Link to={`${createPageUrl("CAMPoolDetail")}?cam_run_id=${activeRun.id}&pool_result_id=${pr.id}`} className="text-xs text-blue-600 underline">Detail</Link>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader><CardTitle className="text-base">Lease results ({leaseResults.length})</CardTitle></CardHeader>
-                <CardContent>
-                  {leaseResults.length === 0 ? <p className="text-sm text-slate-400">No lease results yet.</p> : (
-                    <Table>
-                      <TableHeader><TableRow><TableHead>Tenant</TableHead><TableHead>Final recovery</TableHead><TableHead>Est. billed</TableHead><TableHead>Due / credit</TableHead><TableHead /></TableRow></TableHeader>
-                      <TableBody>
-                        {leaseResults.map((lr) => (
-                          <TableRow key={lr.id}>
-                            <TableCell className="text-sm font-medium">{lr.leases?.tenant_name || lr.lease_id.slice(0, 8)}</TableCell>
-                            <TableCell className="text-sm">{fmtCurrency(lr.final_recovery)}</TableCell>
-                            <TableCell className="text-sm">{fmtCurrency(lr.estimates_billed)}</TableCell>
-                            <TableCell className={`text-sm font-medium ${Number(lr.amount_due_credit) < 0 ? "text-emerald-600" : ""}`}>{fmtCurrency(lr.amount_due_credit)}</TableCell>
-                            <TableCell>
-                              <Link to={`${createPageUrl("CAMLeaseDetail")}?cam_run_id=${activeRun.id}&lease_result_id=${lr.id}`} className="text-xs text-blue-600 underline">Detail</Link>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          )}
-
-          {runs.length > 1 && (
+          {/* ---- Tab 1: Summary ---- */}
+          <TabsContent value="summary" className="space-y-4">
             <Card>
-              <CardHeader><CardTitle className="text-base">Run history ({runs.length})</CardTitle></CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader><TableRow><TableHead>Status</TableHead><TableHead>Run type</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {runs.map((r) => (
-                      <TableRow key={r.id} className={r.id === activeRun?.id ? "bg-blue-50" : ""}>
-                        <TableCell><StatusBadge status={r.status} /></TableCell>
-                        <TableCell className="text-sm">{r.run_type}</TableCell>
-                        <TableCell className="text-sm">{fmtDateTime(r.created_at)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-base">Run Details</CardTitle>
+                {activeRun && <StatusBadge status={activeRun.status} />}
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {activeRun ? (
+                  <div className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm md:grid-cols-4">
+                    <div><span className="text-slate-400 text-xs">Run Type</span><div className="font-medium">{activeRun.run_type}</div></div>
+                    <div><span className="text-slate-400 text-xs">Engine Version</span><div className="font-mono text-xs">{activeRun.engine_version || "—"}</div></div>
+                    <div><span className="text-slate-400 text-xs">Created</span><div className="text-xs">{fmtDateTime(activeRun.created_at)}</div></div>
+                    <div><span className="text-slate-400 text-xs">Submitted</span><div className="text-xs">{fmtDateTime(activeRun.submitted_at)}</div></div>
+                    <div><span className="text-slate-400 text-xs">Approved</span><div className="text-xs">{fmtDateTime(activeRun.approved_at)}</div></div>
+                    <div><span className="text-slate-400 text-xs">Posted</span><div className="text-xs">{fmtDateTime(activeRun.posted_at)}</div></div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500">No active run for this recovery period. Click Calculate to start.</p>
+                )}
+
+                <div className="flex flex-wrap items-center gap-3 pt-2 border-t">
+                  {canCalculate && (
+                    <>
+                      <Select value={runMode} onValueChange={setRunMode}>
+                        <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="posting_eligible">Full Validation Mode</SelectItem>
+                          <SelectItem value="preview">Draft / Simulation Mode</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button onClick={() => calculateMutation.mutate()} disabled={calculateMutation.isPending}>
+                        {activeRun?.status === "calculated" ? <RefreshCw className="mr-2 h-4 w-4" /> : <Calculator className="mr-2 h-4 w-4" />}
+                        {activeRun == null ? "Calculate CAM" : activeRun.status === "calculated" ? "Recalculate" : "Calculate"}
+                      </Button>
+                    </>
+                  )}
+                  {canSubmit && (
+                    <Button variant="secondary" onClick={() => doAction("submit_for_review", {}, "Submitted for review")} disabled={actionMutation.isPending}>
+                      <Send className="mr-2 h-4 w-4" /> Submit for Review
+                    </Button>
+                  )}
+                  {isApproved && (
+                    <Button
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                      disabled={actionMutation.isPending}
+                      onClick={() => doAction("post_run", {}, "Run posted successfully")}
+                    >
+                      <Lock className="mr-2 h-4 w-4" /> Post CAM Run
+                    </Button>
+                  )}
+                </div>
+
+                {openExceptions.length > 0 && (
+                  <div className="flex items-center gap-2 pt-2 text-sm text-amber-700 bg-amber-50 p-2.5 rounded border border-amber-200">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                    <span>{openExceptions.length} unresolved exception(s) require review before posting.</span>
+                  </div>
+                )}
               </CardContent>
             </Card>
-          )}
-        </>
+
+            {runs.length > 1 && (
+              <Card>
+                <CardHeader><CardTitle className="text-base">Run History ({runs.length})</CardTitle></CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Status</TableHead><TableHead>Type</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      {runs.map((r) => (
+                        <TableRow key={r.id} className={r.id === activeRun?.id ? "bg-blue-50 font-medium" : ""}>
+                          <TableCell><StatusBadge status={r.status} /></TableCell>
+                          <TableCell className="text-sm">{r.run_type}</TableCell>
+                          <TableCell className="text-sm">{fmtDateTime(r.created_at)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
+          {/* ---- Tab 2: Pools ---- */}
+          <TabsContent value="pools">
+            <Card>
+              <CardHeader><CardTitle className="text-base">Pool Results ({poolResults.length})</CardTitle></CardHeader>
+              <CardContent>
+                {poolResults.length === 0 ? <p className="text-sm text-slate-400 py-4 text-center">No pool results available.</p> : (
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Pool</TableHead><TableHead className="text-right">Actual Amount</TableHead><TableHead className="text-right">Gross-up Adj.</TableHead><TableHead className="text-right">Adjusted Pool</TableHead><TableHead /></TableRow></TableHeader>
+                    <TableBody>
+                      {poolResults.map((pr) => (
+                        <TableRow key={pr.id}>
+                          <TableCell className="text-sm font-medium">{pr.recovery_pools?.name || pr.pool_id.slice(0, 8)}</TableCell>
+                          <TableCell className="text-sm text-right">{fmtCurrency(pr.actual_amount)}</TableCell>
+                          <TableCell className="text-sm text-right">{fmtCurrency(pr.gross_up_adjustment)}</TableCell>
+                          <TableCell className="text-sm text-right font-medium">{fmtCurrency(pr.adjusted_pool)}</TableCell>
+                          <TableCell className="text-right">
+                            <Link to={`${createPageUrl("CAMPoolDetail")}?cam_run_id=${activeRun?.id}&pool_result_id=${pr.id}`} className="text-xs text-blue-600 underline">Detail</Link>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* ---- Tab 3: Leases ---- */}
+          <TabsContent value="leases">
+            <Card>
+              <CardHeader><CardTitle className="text-base">Lease Results ({leaseResults.length})</CardTitle></CardHeader>
+              <CardContent>
+                {leaseResults.length === 0 ? <p className="text-sm text-slate-400 py-4 text-center">No lease results available.</p> : (
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Tenant</TableHead><TableHead className="text-right">Final Recovery</TableHead><TableHead className="text-right">Estimates Scheduled</TableHead><TableHead className="text-right">Due / (Credit)</TableHead><TableHead /></TableRow></TableHeader>
+                    <TableBody>
+                      {leaseResults.map((lr) => (
+                        <TableRow key={lr.id}>
+                          <TableCell className="text-sm font-medium">{lr.leases?.tenant_name || lr.lease_id.slice(0, 8)}</TableCell>
+                          <TableCell className="text-sm text-right">{fmtCurrency(lr.final_recovery)}</TableCell>
+                          <TableCell className="text-sm text-right">{fmtCurrency(lr.estimates_billed)}</TableCell>
+                          <TableCell className={`text-sm text-right font-medium ${Number(lr.amount_due_credit) < 0 ? "text-red-600" : "text-emerald-700"}`}>{fmtCurrency(lr.amount_due_credit)}</TableCell>
+                          <TableCell className="text-right">
+                            <Link to={`${createPageUrl("CAMLeaseDetail")}?cam_run_id=${activeRun?.id}&lease_result_id=${lr.id}`} className="text-xs text-blue-600 underline">Detail</Link>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* ---- Tab 4: Exceptions ---- */}
+          <TabsContent value="exceptions">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-base">Calculation Exceptions ({exceptions.length})</CardTitle>
+                {activeRun && (
+                  <Link to={`${createPageUrl("CAMExceptionReview")}?cam_run_id=${activeRun.id}`}>
+                    <Button size="sm" variant="outline">Exception Review Page →</Button>
+                  </Link>
+                )}
+              </CardHeader>
+              <CardContent>
+                {exceptions.length === 0 ? (
+                  <p className="text-sm text-emerald-700 py-4 text-center">Zero exceptions recorded for this run.</p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Severity</TableHead>
+                        <TableHead>Code</TableHead>
+                        <TableHead>Message</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {exceptions.map((ex) => (
+                        <TableRow key={ex.id}>
+                          <TableCell>
+                            <Badge className={`text-[10px] uppercase ${ex.severity === "blocking" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800"}`}>
+                              {ex.severity}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">{ex.code}</TableCell>
+                          <TableCell className="text-xs">{ex.message}</TableCell>
+                          <TableCell>
+                            <Badge className={`text-[10px] ${ex.resolution_status === "resolved" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+                              {ex.resolution_status}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* ---- Tab 5: Approval ---- */}
+          <TabsContent value="approval">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-base">Approval Workflow</CardTitle>
+                {activeRun && <StatusBadge status={activeRun.status} />}
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {activeRun ? (
+                  <>
+                    <p className="text-sm text-slate-600">
+                      Current run state: <strong className="uppercase">{activeRun.status}</strong>
+                    </p>
+                    <div className="flex flex-wrap gap-2 pt-2">
+                      {activeRun.status === "calculated" && (
+                        <Button onClick={() => doAction("submit_for_review", {}, "Submitted for review")}>
+                          <Send className="mr-2 h-4 w-4" /> Submit for Review
+                        </Button>
+                      )}
+                      {(activeRun.status === "submitted" || activeRun.status === "under_review") && (
+                        <>
+                          <Button
+                            className="bg-emerald-600 hover:bg-emerald-700"
+                            disabled={blockingExceptions.length > 0}
+                            onClick={() => doAction("approve", {}, "Run approved")}
+                          >
+                            <CheckCircle2 className="mr-2 h-4 w-4" /> Approve Run
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            onClick={() => doAction("reject", { reason: "Rejected during review" }, "Run rejected")}
+                          >
+                            <XCircle className="mr-2 h-4 w-4" /> Reject Run
+                          </Button>
+                          <Button
+                            variant="outline"
+                            onClick={() => doAction("return_to_draft", { reason: "Returned to draft" }, "Returned to draft")}
+                          >
+                            Return to Draft
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-sm text-slate-400">Select or calculate a run to view approval controls.</p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* ---- Tab 6: Statements & Export ---- */}
+          <TabsContent value="statements" className="space-y-4">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-base">Reconciliation Statements</CardTitle>
+                <Button
+                  id="btn-generate-statements"
+                  disabled={!isPosted || actionMutation.isPending}
+                  onClick={() => doAction("generate_statements", {}, "Statements generated")}
+                >
+                  <FileDown className="w-4 h-4 mr-2" /> Generate Statements
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {!isPosted && (
+                  <p className="text-xs text-amber-700 bg-amber-50 p-2.5 rounded mb-4">
+                    Statements can be generated once the run is in <strong>posted</strong> status.
+                  </p>
+                )}
+                {statements.length === 0 ? (
+                  <p className="text-sm text-slate-400 py-4 text-center">No statements generated yet.</p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Tenant</TableHead>
+                        <TableHead>Schema Version</TableHead>
+                        <TableHead className="text-right">Final Recovery</TableHead>
+                        <TableHead className="text-right">Amount Due / (Credit)</TableHead>
+                        <TableHead />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {statements.map((s) => (
+                        <TableRow key={s.id}>
+                          <TableCell className="font-medium text-sm">{s.leases?.tenant_name ?? "Consolidated"}</TableCell>
+                          <TableCell className="text-xs font-mono">v{s.schema_version}</TableCell>
+                          <TableCell className="text-right text-sm">{fmtCurrency(s.statement_payload?.final_recovery)}</TableCell>
+                          <TableCell className="text-right text-sm font-semibold">{fmtCurrency(s.statement_payload?.amount_due_credit)}</TableCell>
+                          <TableCell className="text-right">
+                            {s.storage_path && (
+                              <a href={s.storage_path} target="_blank" rel="noopener noreferrer">
+                                <Button size="sm" variant="outline"><ExternalLink className="w-3 h-3 mr-1" /> PDF</Button>
+                              </a>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-base">Charge Export (CSV)</CardTitle>
+                <Button
+                  id="btn-create-export"
+                  disabled={!isPosted || actionMutation.isPending}
+                  onClick={() => doAction("create_charge_export", {}, "Charge export created")}
+                >
+                  <Send className="w-4 h-4 mr-2" /> Create Charge Export
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {chargeExports.length === 0 ? (
+                  <p className="text-sm text-slate-400 py-4 text-center">No charge exports created yet.</p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Export ID</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Created</TableHead>
+                        <TableHead />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {chargeExports.map((exp) => (
+                        <TableRow key={exp.id}>
+                          <TableCell className="font-mono text-xs">{exp.id.slice(0, 8)}…</TableCell>
+                          <TableCell><StatusBadge status={exp.status} /></TableCell>
+                          <TableCell className="text-xs">{fmtDateTime(exp.created_at)}</TableCell>
+                          <TableCell className="text-right space-x-2">
+                            {exp.status === "pending" && (
+                              <Button size="sm" variant="outline" onClick={() => doAction("mark_export_delivered", { export_id: exp.id }, "Delivered")}>
+                                Mark Delivered
+                              </Button>
+                            )}
+                            {exp.csv_storage_path && (
+                              <a href={exp.csv_storage_path} target="_blank" rel="noopener noreferrer">
+                                <Button size="sm" variant="outline"><FileDown className="w-3 h-3 mr-1" /> CSV</Button>
+                              </a>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* ---- Tab 7: Lineage ---- */}
+          <TabsContent value="lineage" className="space-y-4">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-base">Adjustment &amp; Restatement Lineage</CardTitle>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" disabled={!isPosted} onClick={() => setAdjDialog(true)}>
+                    Create Adjustment Run
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={!isPosted} onClick={() => setRestateDialog(true)}>
+                    Create Restatement Run
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {(lineage.adjustments?.length > 0 || lineage.restatements?.length > 0) ? (
+                  <div className="space-y-2 text-sm">
+                    {lineage.adjustments?.map((adj) => (
+                      <div key={adj.id} className="flex items-center gap-2 p-2 bg-blue-50 rounded">
+                        <Package className="w-4 h-4 text-blue-600" />
+                        <span>Adjustment Run: <code>{adj.adjustment_run_id.slice(0, 8)}…</code></span>
+                        <span className="text-slate-400 text-xs">Reason: {adj.reason}</span>
+                      </div>
+                    ))}
+                    {lineage.restatements?.map((r) => (
+                      <div key={r.id} className="flex items-center gap-2 p-2 bg-purple-50 rounded">
+                        <RefreshCw className="w-4 h-4 text-purple-600" />
+                        <span>Restatement Run: <code>{r.restatement_run_id.slice(0, 8)}…</code></span>
+                        <span className="text-slate-400 text-xs">Reason: {r.reason}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-400">No adjustment or restatement runs in the lineage for this run.</p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
       )}
+
+      {/* Dialogs */}
+      <Dialog open={adjDialog} onOpenChange={setAdjDialog}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Create Adjustment Run</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <Label>Reason for adjustment (required)</Label>
+            <Textarea rows={3} value={reasonForm.reason} onChange={(e) => setReasonForm({ reason: e.target.value })} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAdjDialog(false)}>Cancel</Button>
+            <Button onClick={async () => {
+              await doAction("create_adjustment_run", { reason: reasonForm.reason }, "Adjustment run created");
+              setAdjDialog(false);
+              setReasonForm({ reason: "" });
+            }}>Create</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={restateDialog} onOpenChange={setRestateDialog}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Create Restatement Run</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <Label>Reason for restatement (required)</Label>
+            <Textarea rows={3} value={reasonForm.reason} onChange={(e) => setReasonForm({ reason: e.target.value })} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRestateDialog(false)}>Cancel</Button>
+            <Button onClick={async () => {
+              await doAction("create_restatement_run", { reason: reasonForm.reason }, "Restatement run created");
+              setRestateDialog(false);
+              setReasonForm({ reason: "" });
+            }}>Create</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

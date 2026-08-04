@@ -8,7 +8,7 @@ const actions = [
   { label: "Lease", icon: Upload, page: "LeaseUpload", color: "from-violet-500 to-violet-600" },
   { label: "Expense", icon: DollarSign, page: "AddExpense", color: "from-emerald-500 to-emerald-600" },
   { label: "Budget", icon: Calculator, page: "CreateBudget", color: "from-amber-500 to-orange-500" },
-  { label: "CAM", icon: FileText, page: "CAMCalculation", color: "from-rose-500 to-pink-500" },
+  { label: "CAM", icon: FileText, page: "CAMRun", color: "from-rose-500 to-pink-500" },
   { label: "Reports", icon: BarChart3, page: "Reports", color: "from-cyan-500 to-teal-500" },
 ];
 

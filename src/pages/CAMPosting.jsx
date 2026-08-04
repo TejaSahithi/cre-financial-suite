@@ -196,15 +196,13 @@ export default function CAMPosting() {
   if (!POSTING_ENABLED) {
     return (
       <div className="space-y-6">
-        <PageHeader title="CAM Posting" subtitle="Phase 4B — Production Posting Pipeline" />
-        <Alert className="border-amber-300 bg-amber-50">
-          <Lock className="h-4 w-4 text-amber-600" />
-          <AlertDescription className="text-amber-800">
-            <strong>Posting is not enabled in this environment.</strong> The Phase 4B acceptance gate has not been
-            fully verified. Set <code>VITE_FEATURE_CAM_POSTING_ENABLED=true</code> and{" "}
-            <code>FEATURE_CAM_POSTING_ENABLED=true</code> only after all gate items pass.
-          </AlertDescription>
-        </Alert>
+        <PageHeader title="CAM Posting" subtitle="Production Posting Pipeline" />
+      <Alert className="border-amber-300 bg-amber-50">
+        <Lock className="h-4 w-4 text-amber-600" />
+        <AlertDescription className="text-amber-800">
+          <strong>Posting is not enabled in this environment.</strong> The real property validation tie-out has not been completed.
+        </AlertDescription>
+      </Alert>
       </div>
     );
   }
@@ -214,7 +212,7 @@ export default function CAMPosting() {
   if (!camRunId) {
     return (
       <div className="space-y-4">
-        <PageHeader title="CAM Posting" subtitle="Phase 4B" />
+        <PageHeader title="CAM Posting" subtitle="Production Posting Pipeline" />
         <p className="text-sm text-slate-500">No run selected. Navigate here from a posted run.</p>
       </div>
     );

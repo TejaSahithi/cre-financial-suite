@@ -100,7 +100,7 @@ export default function CAMRealPropertyGate() {
     <div className="space-y-6">
       <PageHeader
         title="Real Property Validation Gate"
-        subtitle="Phase 4B Acceptance Gate — must pass before enabling production posting"
+        subtitle="Acceptance Gate — internal validation prior to production posting enablement"
       />
 
       {/* Gate status banner */}

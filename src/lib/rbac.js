@@ -18,8 +18,7 @@ const ROLE_PAGES = {
     "Tenants", "TenantDetail", "Vendors", "VendorProfile",
     "Leases", "LeaseDetail", "LeaseRentSchedule", "LeaseUpload", "LeaseReview", "RentProjection", "CriticalDates",
     "Expenses", "AddExpense", "BulkImport", "LeaseExpenseRules", "ExpenseProjection", "LeaseExpenseClassification", "ExpenseReview",
-    "CAMDashboard", "CAMSetup", "CAMSetupV2", "CAMCalculation",
-    "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "CAMPosting", "CAMRealPropertyGate",
+    "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval",
     "Billing", "Revenue",
     "BudgetDashboard", "CreateBudget", "BudgetReview",
     "ActualsVariance", "Actuals", "Variance", "Comparison",
@@ -36,8 +35,7 @@ const ROLE_PAGES = {
     "Tenants", "TenantDetail", "Vendors", "VendorProfile",
     "Leases", "LeaseDetail", "LeaseRentSchedule", "LeaseUpload", "LeaseReview", "RentProjection", "CriticalDates",
     "Expenses", "AddExpense", "BulkImport", "LeaseExpenseRules", "ExpenseProjection", "LeaseExpenseClassification", "ExpenseReview",
-    "CAMDashboard", "CAMSetup", "CAMSetupV2", "CAMCalculation",
-    "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "CAMPosting", "CAMRealPropertyGate",
+    "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval",
     "Billing",
     "BudgetDashboard", "CreateBudget", "BudgetReview",
     "Documents", "Notifications",
@@ -49,8 +47,7 @@ const ROLE_PAGES = {
     "Tenants", "TenantDetail", "Vendors",
     "Leases", "LeaseDetail", "LeaseRentSchedule", "LeaseUpload", "LeaseReview", "RentProjection", "CriticalDates",
     "Expenses", "AddExpense", "BulkImport", "LeaseExpenseRules", "ExpenseProjection", "LeaseExpenseClassification", "ExpenseReview",
-    "CAMDashboard", "CAMSetup", "CAMSetupV2", "CAMCalculation",
-    "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "CAMPosting", "CAMRealPropertyGate",
+    "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval",
     "Billing",
     "Documents", "Notifications",
   ],
@@ -63,8 +60,7 @@ const ROLE_PAGES = {
     "BudgetDashboard", "CreateBudget", "BudgetReview",
     "Billing", "Revenue", "ActualsVariance", "Actuals", "Variance", "Comparison",
     "Reconciliation",
-    "CAMDashboard", "CAMSetup", "CAMSetupV2", "CAMCalculation",
-    "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "CAMPosting", "CAMRealPropertyGate",
+    "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval",
     "ChartOfAccounts", "Vendors",
     "Notifications", "Documents",
   ],
@@ -75,8 +71,7 @@ const ROLE_PAGES = {
     "BudgetDashboard", "CreateBudget", "BudgetReview",
     "Billing", "Revenue", "ActualsVariance", "Actuals", "Variance", "Comparison",
     "Reconciliation",
-    "CAMDashboard", "CAMSetup", "CAMSetupV2", "CAMCalculation",
-    "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "CAMPosting", "CAMRealPropertyGate",
+    "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval",
     "AnalyticsReports", "Reports", "Analytics",
     "ChartOfAccounts", "Vendors",
     "Notifications", "Documents",
@@ -90,7 +85,7 @@ const ROLE_PAGES = {
     "BudgetDashboard",
     "Revenue", "ActualsVariance", "Actuals", "Variance", "Comparison",
     "AnalyticsReports", "Reports", "Analytics",
-    "CAMDashboard", "CAMSetup", "CAMSetupV2", "CAMRun", "CAMPosting", "CAMRealPropertyGate",
+    "CAMDashboard", "CAMSetup", "CAMRun",
     "Notifications", "Documents",
   ],
   // Legacy alias
@@ -103,7 +98,7 @@ const ROLE_PAGES = {
     "BudgetDashboard",
     "Revenue", "ActualsVariance", "Actuals", "Variance", "Comparison",
     "AnalyticsReports", "Reports", "Analytics",
-    "CAMDashboard", "CAMSetup", "CAMSetupV2", "CAMRun", "CAMPosting", "CAMRealPropertyGate",
+    "CAMDashboard", "CAMSetup", "CAMRun",
     "Notifications", "Documents",
   ],
   auditor: [
@@ -114,7 +109,7 @@ const ROLE_PAGES = {
     "Revenue", "ActualsVariance", "Actuals", "Variance", "Comparison",
     "Reconciliation",
     "AnalyticsReports", "Reports", "Analytics",
-    "CAMDashboard", "CAMSetup", "CAMSetupV2", "CAMRun", "CAMPosting", "CAMRealPropertyGate",
+    "CAMDashboard", "CAMSetup", "CAMRun",
     "Documents", "Notifications",
   ],
 };
@@ -152,7 +147,7 @@ const MFA_BYPASS_PAGES = ["AcceptInvite", "PendingApproval", "ResetPassword", "S
 const LAYOUT_EXEMPT_PAGES = [...PUBLIC_PAGES, ...MANDATORY_SETUP_PAGES];
 
 // SuperAdmin-only pages
-const ADMIN_ONLY_PAGES = ["SuperAdmin", "Stakeholders"];
+const ADMIN_ONLY_PAGES = ["SuperAdmin", "Stakeholders", "CAMRealPropertyGate"];
 
 export function resolveRoleForAccess(role) {
   if (!role) return role;

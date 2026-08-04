@@ -733,7 +733,7 @@ export default function Leases() {
                               </Link>
                             </DropdownMenuItem>
                             <DropdownMenuItem asChild>
-                              <Link to={createPageUrl("CAMCalculation") + (lease.property_id ? `?property_id=${lease.property_id}` : "")}>
+                              <Link to={createPageUrl("CAMRun") + (lease.property_id ? `?property_id=${lease.property_id}` : "")}>
                                 <Calculator className="mr-2 h-3.5 w-3.5" /> Generate CAM Profile
                               </Link>
                             </DropdownMenuItem>

@@ -53,13 +53,9 @@ const navSections = [
   },
   {
     label: "CAM Engine", icon: Calculator, children: [
-      { label: "CAM Dashboard", page: "CAMDashboard" },
-      { label: "CAM Setup", page: "CAMSetup" },
-      { label: "CAM Setup (v2 preview)", page: "CAMSetupV2" },
-      { label: "CAM Calculation", page: "CAMCalculation" },
-      { label: "CAM Run (v2 workflow)", page: "CAMRun" },
-      { label: "CAM Posting", page: "CAMPosting" },
-      { label: "Real Property Gate", page: "CAMRealPropertyGate" },
+      { label: "Overview", page: "CAMDashboard" },
+      { label: "Setup", page: "CAMSetup" },
+      { label: "Runs", page: "CAMRun" },
     ]
   },
   { label: "Revenue", icon: TrendingUp, page: "Revenue" },
