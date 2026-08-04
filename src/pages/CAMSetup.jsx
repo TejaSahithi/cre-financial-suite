@@ -1,23 +1,31 @@
 /**
- * CAMSetup — Guided 7-step CAM setup workflow.
+ * CAMSetup — Guided 7-step CAM setup workflow, automation + business
+ * usability pass.
  *
- * Property managers complete full CAM setup:
- *   Step 1 — Property / Period:  select property, create calendar, create period
- *   Step 2 — Pools:              create pool, assign categories, configure gross-up default
- *   Step 3 — Participants:       add/remove lease participants per pool
- *   Step 4 — Policies:           review materialized policies, resolve missing/unknown values
- *   Step 5 — Expenses:           assign/split published expenses to pools
- *   Step 6 — Estimates & Adjustments: monthly estimate schedules + prior adjustments
- *   Step 7 — Readiness:          run readiness check, inspect blocking items, launch run
+ *   Step 1 — Property / Period:  select property, automatic period suggestion, source-data summary
+ *   Step 2 — Pools:              automatic pool suggestions (confirm/rename/combine/remove) + custom pools
+ *   Step 3 — Participants:       automatic participant suggestions per pool + manual include/exclude with reason
+ *   Step 4 — Policies:           complete policy display derived from materialized policy steps
+ *   Step 5 — Expenses:           complete expense display, assign/split, readiness gaps
+ *   Step 6 — Estimates & Adjustments: bulk monthly estimate entry + prior adjustments
+ *   Step 7 — Readiness:          Readiness Action Center — business-friendly, resolvable, "Start CAM Run"
+ *
+ * Scope (property/building/unit/calendar/period) and the current step
+ * persist in the URL, not component state, so they survive a refresh and
+ * direct navigation to any step. This file does not calculate anything —
+ * every figure shown is read from already-materialized/published/approved
+ * records; every write goes through the cam-setup-actions-v2 edge function
+ * (service-role, audited), never a silent local-only fallback.
  */
-import React, { useState, useCallback } from "react";
+import React, { useMemo, useState } from "react";
+import { useSearchParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   AlertTriangle, CheckCircle2, XCircle, ChevronRight, ChevronLeft,
   Plus, Trash2, Settings2, Users, FileText, DollarSign, ClipboardCheck, Loader2,
+  Sparkles, ExternalLink, Combine, RefreshCw,
 } from "lucide-react";
-import { Link } from "react-router-dom";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
@@ -30,6 +38,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -40,6 +49,15 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 
+import {
+  calendarTypeLabel, poolTypeLabel, scopeTypeLabel,
+  policyStatusLabel, adjustmentTypeLabel, adjustmentStateLabel,
+  participantStatusLabel, recoverabilityLabel,
+} from "@/lib/camLabels";
+import { summarizePolicy } from "@/lib/camPolicySummary";
+import { suggestPools, suggestParticipants } from "@/lib/camSuggestions";
+import { normalizeReadiness, computeExpenseGapExceptions, mergeReadiness, suggestedPeriodForCalendar } from "@/lib/camReadiness";
+
 // ---- Helpers ----------------------------------------------------------------
 
 function fmtCurrency(value) {
@@ -48,498 +66,354 @@ function fmtCurrency(value) {
   return num.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
-function StatusBadge({ status }) {
-  const tone =
-    status === "READY"          ? "bg-emerald-100 text-emerald-700"
-    : status === "BLOCKED"      ? "bg-red-100 text-red-700"
-    : status === "INCOMPLETE"   ? "bg-amber-100 text-amber-800"
-    : "bg-slate-100 text-slate-600";
-  return <Badge className={`text-[11px] font-semibold ${tone}`}>{status}</Badge>;
+function StatusBadge({ ready }) {
+  return ready
+    ? <Badge className="text-[11px] font-semibold bg-emerald-100 text-emerald-700">READY</Badge>
+    : <Badge className="text-[11px] font-semibold bg-red-100 text-red-700">NOT READY</Badge>;
 }
 
-import { camLocalStore } from "@/lib/camLocalStore";
-
+/** Every write in this wizard goes through cam-setup-actions-v2 (service-role,
+ * audited). No silent fallback to a direct RPC or browser-local storage --
+ * a failed write must surface as a real error, not a false "saved".
+ * invokeEdgeFunction already throws on any error and resolves directly with
+ * the response body on success (it is NOT a {data,error} tuple) -- an
+ * earlier version of this wrapper destructured it as one, which silently
+ * discarded every successful response and is why the previous version of
+ * this file needed an elaborate fallback chain in the first place. */
 async function camSetupAction(action, payload) {
-  try {
-    const { data, error } = await invokeEdgeFunction("cam-setup-actions-v2", { action, ...payload });
-    if (!error && data && !data.error) return data;
-  } catch (edgeErr) {
-    console.warn("[camSetupAction] Edge function call failed, attempting DB/RPC/Local fallback:", edgeErr);
-  }
-
-  // Direct Supabase RPC / Database / Local Store Fallbacks
-  if (action === "create_recovery_calendar") {
-    try {
-      const { data: rpcData, error: rpcErr } = await supabase.rpc("create_recovery_calendar", {
-        p_property_id: payload.property_id,
-        p_name: payload.name,
-        p_calendar_type: payload.calendar_type,
-        p_fiscal_start_month: payload.fiscal_start_month ?? 1,
-      });
-      if (!rpcErr && rpcData) return rpcData;
-
-      const { data, error } = await supabase.from("recovery_calendars").insert({
-        property_id: payload.property_id,
-        name: payload.name,
-        calendar_type: payload.calendar_type,
-        fiscal_start_month: payload.fiscal_start_month ?? 1,
-      }).select().single();
-      if (!error && data) return { calendar: data };
-    } catch {
-      // Missing table fallback below
-    }
-
-    const localCal = camLocalStore.addCalendar(payload);
-    return { calendar: localCal };
-  }
-
-  if (action === "create_recovery_period") {
-    try {
-      const { data: rpcData, error: rpcErr } = await supabase.rpc("create_recovery_period", {
-        p_calendar_id: payload.calendar_id,
-        p_period_name: payload.name,
-        p_start_date: payload.start_date,
-        p_end_date: payload.end_date,
-      });
-      if (!rpcErr && rpcData) return rpcData;
-
-      const { data, error } = await supabase.from("recovery_periods").insert({
-        calendar_id: payload.calendar_id,
-        name: payload.name,
-        start_date: payload.start_date,
-        end_date: payload.end_date,
-      }).select().single();
-      if (!error && data) return { period: data };
-    } catch {
-      // Missing table fallback below
-    }
-
-    const localPer = camLocalStore.addPeriod(payload);
-    return { period: localPer };
-  }
-
-  if (action === "create_recovery_pool") {
-    try {
-      const { data: rpcData, error: rpcErr } = await supabase.rpc("create_recovery_pool", {
-        p_property_id: payload.property_id,
-        p_name: payload.name,
-        p_pool_type: payload.pool_type,
-        p_scope_type: payload.scope_type,
-      });
-      if (!rpcErr && rpcData) return rpcData;
-
-      const { data, error } = await supabase.from("recovery_pools").insert({
-        property_id: payload.property_id,
-        name: payload.name,
-        pool_type: payload.pool_type,
-        scope_type: payload.scope_type,
-      }).select().single();
-      if (!error && data) return { pool: data };
-    } catch {
-      // Missing table fallback below
-    }
-
-    const localPool = camLocalStore.addPool(payload);
-    return { pool: localPool };
-  }
-
-  if (action === "add_pool_participant") {
-    try {
-      const { data: rpcData, error: rpcErr } = await supabase.rpc("add_recovery_pool_lease_participant", {
-        p_pool_id: payload.pool_id,
-        p_lease_id: payload.lease_id,
-      });
-      if (!rpcErr && rpcData) return rpcData;
-
-      const { data, error } = await supabase.from("recovery_pool_lease_participants").insert({
-        pool_id: payload.pool_id,
-        lease_id: payload.lease_id,
-      }).select().single();
-      if (!error && data) return { participant: data };
-    } catch {
-      // Missing table fallback below
-    }
-
-    const localPt = camLocalStore.addParticipant(payload);
-    return { participant: localPt };
-  }
-
-  if (action === "create_estimate_schedule") {
-    try {
-      const { data, error } = await supabase.from("cam_estimate_schedules").upsert({
-        lease_id: payload.lease_id,
-        recovery_period_id: payload.recovery_period_id,
-        month: payload.month,
-        amount: payload.amount,
-      }).select().single();
-      if (!error && data) return { estimate: data };
-    } catch {
-      // Missing table fallback below
-    }
-
-    const localEst = camLocalStore.addEstimate(payload);
-    return { estimate: localEst };
-  }
-
-  if (action === "assign_expense_to_pool") {
-    try {
-      const { data: rpcData, error: rpcErr } = await supabase.rpc("assign_cam_input_to_pool", {
-        p_cam_expense_input_id: payload.cam_expense_input_id,
-        p_recovery_pool_id: payload.recovery_pool_id,
-        p_amount: payload.amount,
-      });
-      if (!rpcErr && rpcData) return rpcData;
-
-      const { data, error } = await supabase.from("cam_input_pool_assignments").insert({
-        cam_expense_input_id: payload.cam_expense_input_id,
-        recovery_pool_id: payload.recovery_pool_id,
-        amount: payload.amount,
-      }).select().single();
-      if (!error && data) return { assignment: data };
-    } catch {
-      // Missing table fallback below
-    }
-
-    return { assignment: { id: `local-assign-${Date.now()}` } };
-  }
-
-  throw new Error(`Action ${action} could not be completed.`);
+  return invokeEdgeFunction("cam-setup-actions-v2", { action, ...payload });
 }
-
-// ---- Step labels ------------------------------------------------------------
 
 const STEPS = [
   { id: 1, label: "Property / Period", icon: FileText },
-  { id: 2, label: "Pools",             icon: Settings2 },
-  { id: 3, label: "Participants",      icon: Users },
-  { id: 4, label: "Policies",          icon: ClipboardCheck },
-  { id: 5, label: "Expenses",          icon: DollarSign },
+  { id: 2, label: "Pools", icon: Settings2 },
+  { id: 3, label: "Participants", icon: Users },
+  { id: 4, label: "Policies", icon: ClipboardCheck },
+  { id: 5, label: "Expenses", icon: DollarSign },
   { id: 6, label: "Estimates & Adjustments", icon: DollarSign },
-  { id: 7, label: "Readiness",         icon: CheckCircle2 },
+  { id: 7, label: "Readiness", icon: CheckCircle2 },
 ];
 
 export default function CAMSetup() {
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const [step, setStep] = useState(1);
-  const [propertyId, setPropertyId] = useState("");
-  const [periodId, setPeriodId] = useState("");
-  const [selectedPoolId, setSelectedPoolId] = useState("");
+  // ---- Requirement 1: scope persists in the URL, not component state ------
+  const propertyId = searchParams.get("property_id") || "";
+  const buildingId = searchParams.get("building_id") || "";
+  const unitId = searchParams.get("unit_id") || "";
+  const periodId = searchParams.get("period_id") || "";
+  const selectedPoolId = searchParams.get("pool_id") || "";
+  const step = Math.min(7, Math.max(1, Number(searchParams.get("step") || "1")));
 
-  // Dialog state
+  function updateParams(patch) {
+    const next = new URLSearchParams(searchParams);
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === null || v === undefined || v === "") next.delete(k); else next.set(k, String(v));
+    }
+    setSearchParams(next, { replace: false });
+  }
+  const setPropertyId = (v) => updateParams({ property_id: v, building_id: null, unit_id: null, period_id: null, pool_id: null });
+  const setBuildingId = (v) => updateParams({ building_id: v, unit_id: null });
+  const setUnitId = (v) => updateParams({ unit_id: v });
+  const setPeriodId = (v) => updateParams({ period_id: v });
+  const setStep = (s) => updateParams({ step: s });
+  const setSelectedPoolId = (v) => updateParams({ pool_id: v });
+
+  // Dialog state (transient UI only, not persisted)
   const [calendarDialog, setCalendarDialog] = useState(false);
   const [periodDialog, setPeriodDialog] = useState(false);
   const [poolDialog, setPoolDialog] = useState(false);
-  const [categoryDialog, setCategoryDialog] = useState(false);
-  const [grossUpDialog, setGrossUpDialog] = useState(false);
+  const [combineDialog, setCombineDialog] = useState(null); // array of suggestions being combined
   const [participantDialog, setParticipantDialog] = useState(false);
-  const [policyDialog, setPolicyDialog] = useState(null);
+  const [excludeDialog, setExcludeDialog] = useState(null); // participant row
   const [expenseDialog, setExpenseDialog] = useState(null);
   const [estimateDialog, setEstimateDialog] = useState(false);
-  const [priorAdjDialog, setPriorAdjDialog] = useState(null);
+  const [adjustmentDialog, setAdjustmentDialog] = useState(null);
 
-  // Data queries
+  // ---- Data queries ---------------------------------------------------------
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: leases = [] } = useOrgQuery("Lease");
+  // useOrgQuery initializes with leases=[] before its own org-scoped fetch
+  // resolves. Any query that filters leases inside its OWN queryFn without
+  // this value (or something derived from it) in its queryKey would run
+  // once against that initial empty array, cache an empty result under a
+  // key that never changes again, and silently never refetch once leases
+  // actually loads -- propertyLeaseIds exists specifically so every
+  // dependent query below can put it in its key instead.
+  const propertyLeaseIds = useMemo(() => leases.filter((l) => l.property_id === propertyId).map((l) => l.id), [leases, propertyId]);
   const { data: categories = [] } = useOrgQuery("ExpenseCategory");
+  const categoryNamesById = useMemo(() => new Map((categories || []).map((c) => [c.id, c.category_name])), [categories]);
+
+  const { data: buildings = [] } = useQuery({
+    queryKey: ["cam-setup-buildings", propertyId],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("buildings").select("*").eq("property_id", propertyId).order("name");
+      if (error) return [];
+      return data || [];
+    },
+    enabled: Boolean(propertyId),
+  });
 
   const { data: calendars = [], refetch: refetchCalendars } = useQuery({
     queryKey: ["recovery_calendars", propertyId],
-    enabled: !!propertyId,
+    enabled: Boolean(propertyId),
     queryFn: async () => {
-      let dbData = [];
-      try {
-        const { data, error } = await supabase
-          .from("recovery_calendars").select("*").eq("property_id", propertyId).order("created_at");
-        if (!error && data) dbData = data;
-      } catch {
-        dbData = [];
-      }
-      const localData = camLocalStore.getCalendars(propertyId);
-      const combined = [...dbData];
-      for (const loc of localData) {
-        if (!combined.some((c) => c.id === loc.id)) combined.push(loc);
-      }
-      return combined;
+      const { data, error } = await supabase.from("recovery_calendars").select("*").eq("property_id", propertyId).order("created_at");
+      if (error) return [];
+      return data || [];
     },
   });
+  const calendarIds = useMemo(() => calendars.map((c) => c.id), [calendars]);
+  const activeCalendar = calendars[0] || null;
 
   const { data: periods = [], refetch: refetchPeriods } = useQuery({
-    queryKey: ["recovery_periods", calendars.map((c) => c.id)],
-    enabled: calendars.length > 0,
+    queryKey: ["recovery_periods", calendarIds.join(",")],
+    enabled: calendarIds.length > 0,
     queryFn: async () => {
-      let dbData = [];
-      const calIds = calendars.map((c) => c.id);
-      try {
-        const { data, error } = await supabase
-          .from("recovery_periods").select("*").in("calendar_id", calIds).order("start_date");
-        if (!error && data) dbData = data;
-      } catch {
-        dbData = [];
-      }
-      const localData = camLocalStore.getPeriods(calIds);
-      const combined = [...dbData];
-      for (const loc of localData) {
-        if (!combined.some((p) => p.id === loc.id)) combined.push(loc);
-      }
-      return combined;
+      const { data, error } = await supabase.from("recovery_periods").select("*").in("calendar_id", calendarIds).order("start_date", { ascending: false });
+      if (error) return [];
+      return data || [];
     },
   });
+  const selectedPeriod = useMemo(() => periods.find((p) => p.id === periodId) || null, [periods, periodId]);
 
   const { data: pools = [], refetch: refetchPools } = useQuery({
     queryKey: ["recovery_pools", propertyId, periodId],
-    enabled: !!propertyId || !!periodId,
+    enabled: Boolean(propertyId) && Boolean(periodId),
     queryFn: async () => {
-      let dbData = [];
-      try {
-        let query = supabase.from("recovery_pools").select("*");
-        if (periodId) {
-          query = query.eq("period_id", periodId);
-        } else if (propertyId) {
-          query = query.eq("property_id", propertyId);
-        }
-        const { data, error } = await query.order("name");
-        if (!error && data) dbData = data;
-      } catch {
-        dbData = [];
-      }
-      const localData = camLocalStore.getPools(propertyId, periodId);
-      const combined = [...dbData];
-      for (const loc of localData) {
-        if (!combined.some((p) => p.id === loc.id)) combined.push(loc);
-      }
-      return combined;
+      const { data, error } = await supabase.from("recovery_pools").select("*, recovery_pool_categories(*)").eq("property_id", propertyId).eq("period_id", periodId).order("name");
+      if (error) return [];
+      return data || [];
     },
   });
+  const alreadyCoveredCategoryIds = useMemo(() => {
+    const set = new Set();
+    for (const pool of pools) for (const cat of (pool.recovery_pool_categories || [])) if (cat.inclusion_mode === "include") set.add(cat.expense_category_id);
+    return set;
+  }, [pools]);
+  const selectedPool = useMemo(() => pools.find((p) => p.id === selectedPoolId) || null, [pools, selectedPoolId]);
+  const selectedPoolCategoryIds = useMemo(() => new Set((selectedPool?.recovery_pool_categories || []).filter((c) => c.inclusion_mode === "include").map((c) => c.expense_category_id)), [selectedPool]);
 
   const { data: participants = [], refetch: refetchParticipants } = useQuery({
     queryKey: ["pool_participants", selectedPoolId],
-    enabled: !!selectedPoolId,
+    enabled: Boolean(selectedPoolId),
     queryFn: async () => {
-      let dbData = [];
-      try {
-        const { data, error } = await supabase
-          .from("recovery_pool_lease_participants")
-          .select("*")
-          .eq("pool_id", selectedPoolId)
-          .neq("status", "removed")
-          .order("created_at");
-        if (!error && data) dbData = data;
-      } catch {
-        dbData = [];
-      }
-      const localData = camLocalStore.getParticipants(selectedPoolId);
-      const combined = [...dbData];
-      for (const loc of localData) {
-        if (!combined.some((pt) => pt.id === loc.id)) combined.push(loc);
-      }
-      return combined;
+      const { data, error } = await supabase.from("recovery_pool_lease_participants").select("*, leases(tenant_name)").eq("pool_id", selectedPoolId).order("created_at");
+      if (error) return [];
+      return data || [];
+    },
+  });
+
+  const { data: leasePremises = [] } = useQuery({
+    queryKey: ["cam-setup-lease-premises", propertyLeaseIds.join(",")],
+    enabled: propertyLeaseIds.length > 0,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("lease_premises")
+        .select("*, lease_premises_spaces(*), lease_premises_area_periods(*)")
+        .in("lease_id", propertyLeaseIds)
+        .neq("status", "superseded");
+      if (error) return [];
+      return data || [];
     },
   });
 
   const { data: policies = [] } = useQuery({
-    queryKey: ["lease_recovery_policies", propertyId],
-    enabled: !!propertyId,
+    queryKey: ["lease_recovery_policies", propertyLeaseIds.join(",")],
+    enabled: propertyLeaseIds.length > 0,
     queryFn: async () => {
-      try {
-        const { data, error } = await supabase
-          .from("lease_recovery_policies")
-          .select("*")
-          .eq("property_id", propertyId)
-          .order("created_at");
-        if (!error && data && data.length > 0) return data;
-      } catch {
-        // Fallback below
-      }
-
-      // Fallback: build synthetic default policy items from active leases
-      const propLeases = (leases || []).filter((l) => l.property_id === propertyId || l.propertyId === propertyId);
-      return propLeases.map((l) => ({
-        id: `synth-${l.id}`,
-        lease_id: l.id,
-        leases: { tenant_name: l.tenant_name || l.tenantName || "Active Tenant" },
-        recovery_method: l.cam_calculation_method || "pro_rata",
-        allocation_basis: "pro_rata_sqft",
-        cap_type: l.cam_cap_type || "none",
-        cap_rate: l.cam_cap_rate || 0,
-        status: l.abstract_status === "approved" ? "approved" : "draft",
-      }));
+      const { data, error } = await supabase
+        .from("lease_recovery_policies")
+        .select("*, leases(tenant_name), lease_recovery_policy_steps(*)")
+        .in("lease_id", propertyLeaseIds)
+        .neq("status", "superseded")
+        .order("created_at");
+      if (error) return [];
+      return data || [];
     },
   });
+  const approvedPolicySteps = useMemo(() => {
+    const rows = [];
+    for (const pol of policies) {
+      if (pol.status !== "approved") continue;
+      for (const step of (pol.lease_recovery_policy_steps || [])) rows.push({ ...step, lease_id: pol.lease_id, policy_id: pol.id });
+    }
+    return rows;
+  }, [policies]);
 
   const { data: priorAdjustments = [], refetch: refetchPriorAdj } = useQuery({
     queryKey: ["cam_prior_period_adjustments", periodId],
-    enabled: !!periodId,
+    enabled: Boolean(periodId),
     queryFn: async () => {
-      try {
-        const { data, error } = await supabase
-          .from("cam_prior_period_adjustments")
-          .select("*")
-          .eq("recovery_period_id", periodId);
-        if (error) return [];
-        return data ?? [];
-      } catch {
-        return [];
-      }
+      const { data, error } = await supabase.from("cam_prior_period_adjustments").select("*, leases(tenant_name)").eq("recovery_period_id", periodId);
+      if (error) return [];
+      return data || [];
     },
   });
 
   const { data: publishedExpenses = [] } = useQuery({
     queryKey: ["cam_expense_inputs_published", propertyId],
-    enabled: !!propertyId,
+    enabled: Boolean(propertyId),
     queryFn: async () => {
-      try {
-        const { data, error } = await supabase
-          .from("cam_expense_inputs")
-          .select("*")
-          .eq("property_id", propertyId)
-          .eq("publication_status", "published")
-          .order("created_at");
-        if (!error && data && data.length > 0) return data;
-      } catch {
-        // Fallback below
-      }
-
-      // Fallback: Query expenses table for property
-      try {
-        const { data: expData } = await supabase
-          .from("expenses")
-          .select("*")
-          .eq("property_id", propertyId);
-        return (expData || []).map((e) => ({
-          id: e.id,
-          property_id: propertyId,
-          expense_id: e.id,
-          amount: e.amount,
-          description: e.description || e.expense_type,
-          publication_status: "published",
-          cam_input_pool_assignments: [],
-        }));
-      } catch {
-        return [];
-      }
+      const { data, error } = await supabase
+        .from("cam_expense_inputs")
+        .select("*, cam_input_pool_assignments(*, recovery_pools(name))")
+        .eq("property_id", propertyId)
+        .eq("publication_status", "published")
+        .order("created_at");
+      if (error) return [];
+      const rows = data || [];
+      // Enrich with vendor/description (from the source Expense record) and
+      // recoverability (from the classification record) -- two separate
+      // best-effort lookups since actual_expense_id / classification_result_id
+      // are not real FKs PostgREST can embed automatically.
+      const expenseIds = [...new Set(rows.map((r) => r.actual_expense_id).filter(Boolean))];
+      const classificationIds = [...new Set(rows.map((r) => r.classification_result_id).filter(Boolean))];
+      const [expensesRes, classificationsRes] = await Promise.all([
+        expenseIds.length ? supabase.from("expenses").select("id, vendor, vendor_name, description, invoice_number").in("id", expenseIds) : Promise.resolve({ data: [] }),
+        classificationIds.length ? supabase.from("expense_classifications").select("id, recovery_status, recoverability_result").in("id", classificationIds) : Promise.resolve({ data: [] }),
+      ]);
+      const expenseById = new Map((expensesRes.data || []).map((e) => [e.id, e]));
+      const classificationById = new Map((classificationsRes.data || []).map((c) => [c.id, c]));
+      return rows.map((r) => ({
+        ...r,
+        _sourceExpense: r.actual_expense_id ? expenseById.get(r.actual_expense_id) : null,
+        _classification: r.classification_result_id ? classificationById.get(r.classification_result_id) : null,
+      }));
     },
   });
 
   const { data: estimateSchedules = [], refetch: refetchEstimates } = useQuery({
     queryKey: ["cam_estimate_schedules", periodId],
-    enabled: !!periodId,
+    enabled: Boolean(periodId),
     queryFn: async () => {
-      let dbData = [];
-      try {
-        const { data, error } = await supabase
-          .from("cam_estimate_schedules")
-          .select("*, leases(tenant_name)")
-          .eq("recovery_period_id", periodId)
-          .order("month_date");
-        if (!error && data) dbData = data;
-      } catch {
-        dbData = [];
-      }
-      const localData = camLocalStore.getEstimateSchedules(periodId);
-      const combined = [...dbData];
-      for (const loc of localData) {
-        if (!combined.some((e) => e.id === loc.id)) combined.push(loc);
-      }
-      return combined;
+      const { data, error } = await supabase.from("cam_estimate_schedules").select("*, leases(tenant_name)").eq("recovery_period_id", periodId).order("month_date");
+      if (error) return [];
+      return data || [];
     },
   });
 
-  const {
-    data: readiness,
-    isLoading: readinessLoading,
-    refetch: refetchReadiness,
-  } = useQuery({
+  const { data: readinessRaw, isLoading: readinessLoading, refetch: refetchReadiness } = useQuery({
     queryKey: ["cam_readiness", propertyId, periodId],
-    enabled: !!propertyId && step === 7,
-    queryFn: async () => {
-      if (periodId) {
-        try {
-          const { data, error } = await invokeEdgeFunction("get-cam-setup-readiness", {
-            property_id: propertyId, recovery_period_id: periodId,
-          });
-          if (!error && data) return data;
-        } catch {
-          // Fallback below
-        }
-      }
-
-      // Fallback client-side readiness calculation
-      const missing = [];
-      if (calendars.length === 0) missing.push({ code: "NO_CALENDAR", message: "Recovery calendar has not been created yet." });
-      if (periods.length === 0) missing.push({ code: "NO_PERIOD", message: "Recovery period has not been defined." });
-      if (pools.length === 0) missing.push({ code: "NO_POOLS", message: "At least one recovery pool is required." });
-
-      const isReady = missing.length === 0;
-      return {
-        status: isReady ? "READY" : "INCOMPLETE",
-        can_run: isReady,
-        missing_items: missing,
-        warnings: [],
-      };
-    },
+    enabled: Boolean(propertyId) && Boolean(periodId),
+    queryFn: () => invokeEdgeFunction("get-cam-setup-readiness", { property_id: propertyId, recovery_period_id: periodId }),
   });
+  const readiness = useMemo(() => {
+    if (!readinessRaw) return { ready: false, blockingCount: 0, warningCount: 0, items: [] };
+    const engine = normalizeReadiness(readinessRaw.readiness);
+    const supplementary = computeExpenseGapExceptions(publishedExpenses);
+    return mergeReadiness(engine, supplementary);
+  }, [readinessRaw, publishedExpenses]);
 
-  // Mutations
+  // ---- Mutation dispatcher ----------------------------------------------------
   const mutation = useMutation({
     mutationFn: ({ action, payload }) => camSetupAction(action, payload),
-    onSuccess: (_, { invalidate }) => {
-      if (invalidate) invalidate.forEach((k) => queryClient.invalidateQueries({ queryKey: k }));
-    },
-    onError: (err) => toast.error(err.message),
+    onSuccess: (_, { invalidate }) => { if (invalidate) invalidate.forEach((k) => queryClient.invalidateQueries({ queryKey: k })); },
+    onError: (err) => toast.error(err.message || "Action failed"),
   });
+  const doAction = (action, payload, invalidateKeys, successMsg) =>
+    mutation.mutateAsync({ action, payload, invalidate: invalidateKeys }, { onSuccess: () => toast.success(successMsg ?? "Saved") });
 
-  const doAction = useCallback(
-    (action, payload, invalidateKeys, successMsg) =>
-      mutation.mutateAsync(
-        { action, payload, invalidate: invalidateKeys },
-        { onSuccess: () => toast.success(successMsg ?? "Saved") },
-      ),
-    [mutation],
-  );
+  // ---- Requirement 2: source-data summary ------------------------------------
+  const summary = useMemo(() => {
+    const propLeases = leases.filter((l) => l.property_id === propertyId);
+    const approvedLeases = propLeases.filter((l) => policies.some((p) => p.lease_id === l.id && p.status === "approved"));
+    const leasesWithApprovedRules = new Set(policies.filter((p) => p.status === "approved").map((p) => p.lease_id)).size;
+    const materializedPolicies = policies.length;
+    const leasesMissingPolicy = propLeases.filter((l) => !policies.some((p) => p.lease_id === l.id)).length;
+    const finalizedExpenses = publishedExpenses.length;
+    const publishedTotal = publishedExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+    const unassigned = publishedExpenses.filter((e) => (e.cam_input_pool_assignments || []).length === 0).length;
+    const missingArea = leasePremises.filter((p) => !(p.lease_premises_area_periods || []).length).length;
+    return {
+      approvedLeaseCount: approvedLeases.length,
+      leasesWithApprovedRules,
+      materializedPolicies,
+      leasesMissingPolicy,
+      finalizedExpenses,
+      publishedTotal,
+      unassigned,
+      estimateCount: estimateSchedules.length,
+      missingArea,
+      blockingCount: readiness.blockingCount,
+    };
+  }, [leases, propertyId, policies, publishedExpenses, leasePremises, estimateSchedules, readiness]);
 
-  // ---- Step 1: Property / Period -------------------------------------------
+  // ---- Requirement 1: per-step "can proceed" gating --------------------------
+  const stepReady = {
+    1: Boolean(propertyId) && Boolean(periodId),
+    2: Boolean(propertyId) && Boolean(periodId),
+    3: Boolean(propertyId) && Boolean(periodId) && pools.length > 0,
+    4: Boolean(propertyId) && Boolean(periodId),
+    5: Boolean(propertyId) && Boolean(periodId),
+    6: Boolean(propertyId) && Boolean(periodId),
+    7: Boolean(propertyId) && Boolean(periodId),
+  };
+  const canProceed = step < 7 && stepReady[step];
+  const canGoBack = step > 1;
 
+  // ============================================================================
+  // Step 1 — Property / Period
+  // ============================================================================
   function Step1() {
-    const [calForm, setCalForm] = useState({ name: "", calendar_type: "calendar_year", fiscal_start_month: 1 });
+    const [calForm, setCalForm] = useState({ name: "Standard Calendar", calendar_type: "calendar_year", fiscal_start_month: 1 });
     const [periodForm, setPeriodForm] = useState({ start_date: "", end_date: "", label: "" });
-    const [calendarId, setCalendarId] = useState(calendars[0]?.id ?? "");
+    const [calendarIdForPeriod, setCalendarIdForPeriod] = useState("");
+
+    const suggestion = activeCalendar ? suggestedPeriodForCalendar(activeCalendar) : null;
+    const alreadyHasCurrentPeriod = suggestion && periods.some((p) => p.start_date === suggestion.start_date && p.end_date === suggestion.end_date);
 
     return (
       <div className="space-y-6">
-        <Card>
-          <CardHeader><CardTitle className="text-base">Select Property</CardTitle></CardHeader>
-          <CardContent>
-            <Select value={propertyId} onValueChange={(v) => { setPropertyId(v); setPeriodId(""); }}>
-              <SelectTrigger id="s1-property"><SelectValue placeholder="Choose property..." /></SelectTrigger>
-              <SelectContent>
-                {properties.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </CardContent>
-        </Card>
+        {!propertyId && (
+          <Card><CardContent className="py-10 text-center text-sm text-slate-500">Select a property in the scope bar above to begin.</CardContent></Card>
+        )}
 
         {propertyId && (
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-base">Recovery Calendars</CardTitle>
-              <Button size="sm" variant="outline" id="btn-create-calendar" onClick={() => setCalendarDialog(true)}>
-                <Plus className="w-3 h-3 mr-1" /> New Calendar
-              </Button>
+              <CardTitle className="text-base">Recovery Calendar</CardTitle>
+              {calendars.length === 0 && (
+                <Button size="sm" id="btn-create-calendar" onClick={() => setCalendarDialog(true)}>
+                  <Plus className="w-3 h-3 mr-1" /> Set Up Calendar
+                </Button>
+              )}
             </CardHeader>
             <CardContent>
-              {calendars.length === 0
-                ? <p className="text-sm text-slate-500">No calendars yet. Create one above.</p>
-                : (
-                  <div className="space-y-2">
-                    {calendars.map((c) => (
-                      <div key={c.id} className="flex items-center gap-3 p-2 rounded border text-sm">
-                        <span className="font-medium">{c.name}</span>
-                        <Badge className="text-[10px]">{c.calendar_type}</Badge>
-                      </div>
-                    ))}
-                  </div>
-                )}
+              {calendars.length === 0 ? (
+                <p className="text-sm text-slate-500">No recovery calendar yet for this property. Most properties use a standard Calendar Year.</p>
+              ) : (
+                <div className="flex items-center gap-3 text-sm">
+                  <span className="font-medium">{activeCalendar.name}</span>
+                  <Badge className="text-[10px]">{calendarTypeLabel(activeCalendar.calendar_type)}</Badge>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Requirement 3: automatic recovery period suggestion */}
+        {calendars.length > 0 && suggestion && !alreadyHasCurrentPeriod && (
+          <Card className="border-blue-300 bg-blue-50">
+            <CardContent className="p-4 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <Sparkles className="w-5 h-5 text-blue-600 flex-shrink-0" />
+                <div>
+                  <p className="text-sm font-medium text-blue-900">Suggested recovery period: {suggestion.displayText}</p>
+                  <p className="text-xs text-blue-700">Based on {activeCalendar.name}'s {calendarTypeLabel(activeCalendar.calendar_type).toLowerCase()} schedule.</p>
+                </div>
+              </div>
+              <Button
+                id="btn-confirm-suggested-period"
+                onClick={async () => {
+                  const created = await doAction("create_recovery_period", { calendar_id: activeCalendar.id, start_date: suggestion.start_date, end_date: suggestion.end_date, label: suggestion.label }, [["recovery_periods"]], "Recovery period created");
+                  refetchPeriods();
+                  if (created?.period?.id) setPeriodId(created.period.id);
+                }}
+              >
+                Confirm
+              </Button>
             </CardContent>
           </Card>
         )}
@@ -548,73 +422,59 @@ export default function CAMSetup() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="text-base">Recovery Periods</CardTitle>
-              <Button size="sm" variant="outline" id="btn-create-period" onClick={() => setPeriodDialog(true)}>
-                <Plus className="w-3 h-3 mr-1" /> New Period
+              <Button size="sm" variant="outline" id="btn-create-period" onClick={() => { setCalendarIdForPeriod(activeCalendar.id); setPeriodDialog(true); }}>
+                <Plus className="w-3 h-3 mr-1" /> Custom Period (Nonstandard Fiscal Year)
               </Button>
             </CardHeader>
             <CardContent>
-              {periods.length === 0
-                ? <p className="text-sm text-slate-500">No periods yet. Create one above.</p>
-                : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Label</TableHead>
-                        <TableHead>Start</TableHead>
-                        <TableHead>End</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead />
+              {periods.length === 0 ? <p className="text-sm text-slate-500">No periods yet.</p> : (
+                <Table>
+                  <TableHeader><TableRow><TableHead>Label</TableHead><TableHead>Window</TableHead><TableHead>Status</TableHead><TableHead /></TableRow></TableHeader>
+                  <TableBody>
+                    {periods.map((p) => (
+                      <TableRow key={p.id} className={periodId === p.id ? "bg-blue-50" : ""}>
+                        <TableCell className="font-medium">{p.label}</TableCell>
+                        <TableCell>{p.start_date} → {p.end_date}</TableCell>
+                        <TableCell><Badge className="text-[10px]">{p.status}</Badge></TableCell>
+                        <TableCell>
+                          <Button size="sm" variant={periodId === p.id ? "default" : "outline"} id={`btn-select-period-${p.id}`} onClick={() => setPeriodId(p.id)}>
+                            {periodId === p.id ? "Selected" : "Select"}
+                          </Button>
+                        </TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {periods.map((p) => (
-                        <TableRow key={p.id} className={periodId === p.id ? "bg-blue-50" : ""}>
-                          <TableCell className="font-medium">{p.label}</TableCell>
-                          <TableCell>{p.start_date}</TableCell>
-                          <TableCell>{p.end_date}</TableCell>
-                          <TableCell><Badge className="text-[10px]">{p.status}</Badge></TableCell>
-                          <TableCell>
-                            <Button size="sm" variant={periodId === p.id ? "default" : "outline"}
-                              id={`btn-select-period-${p.id}`}
-                              onClick={() => setPeriodId(p.id)}>
-                              {periodId === p.id ? "Selected" : "Select"}
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
             </CardContent>
           </Card>
         )}
 
-        {/* Create Calendar Dialog */}
+        {propertyId && periodId && <SourceDataSummaryCard />}
+
         <Dialog open={calendarDialog} onOpenChange={setCalendarDialog}>
           <DialogContent>
-            <DialogHeader><DialogTitle>Create Recovery Calendar</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>Set Up Recovery Calendar</DialogTitle></DialogHeader>
             <div className="space-y-3">
-              <div><Label>Name</Label>
-                <Input id="cal-name" value={calForm.name} onChange={(e) => setCalForm({ ...calForm, name: e.target.value })} /></div>
+              <div><Label>Name</Label><Input id="cal-name" value={calForm.name} onChange={(e) => setCalForm({ ...calForm, name: e.target.value })} /></div>
               <div><Label>Calendar Type</Label>
                 <Select value={calForm.calendar_type} onValueChange={(v) => setCalForm({ ...calForm, calendar_type: v })}>
                   <SelectTrigger id="cal-type"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="calendar_year">Calendar Year</SelectItem>
-                    <SelectItem value="fiscal_year">Fiscal Year</SelectItem>
-                    <SelectItem value="lease_year">Lease Year</SelectItem>
+                    <SelectItem value="calendar_year">{calendarTypeLabel("calendar_year")}</SelectItem>
+                    <SelectItem value="fiscal_year">{calendarTypeLabel("fiscal_year")}</SelectItem>
+                    <SelectItem value="lease_year">{calendarTypeLabel("lease_year")}</SelectItem>
+                    <SelectItem value="custom">{calendarTypeLabel("custom")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              <div><Label>Fiscal Start Month</Label>
-                <Input id="cal-start-month" type="number" min={1} max={12} value={calForm.fiscal_start_month}
-                  onChange={(e) => setCalForm({ ...calForm, fiscal_start_month: Number(e.target.value) })} /></div>
+              <div><Label>Fiscal Start Month (1 = January)</Label>
+                <Input id="cal-start-month" type="number" min={1} max={12} value={calForm.fiscal_start_month} onChange={(e) => setCalForm({ ...calForm, fiscal_start_month: Number(e.target.value) })} /></div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setCalendarDialog(false)}>Cancel</Button>
               <Button id="btn-save-calendar" onClick={async () => {
-                await doAction("create_recovery_calendar", { property_id: propertyId, ...calForm },
-                  [["recovery_calendars", propertyId]], "Calendar created");
+                await doAction("create_recovery_calendar", { property_id: propertyId, ...calForm }, [["recovery_calendars", propertyId]], "Calendar created");
                 setCalendarDialog(false);
                 refetchCalendars();
               }}>Create Calendar</Button>
@@ -622,35 +482,23 @@ export default function CAMSetup() {
           </DialogContent>
         </Dialog>
 
-        {/* Create Period Dialog */}
         <Dialog open={periodDialog} onOpenChange={setPeriodDialog}>
           <DialogContent>
-            <DialogHeader><DialogTitle>Create Recovery Period</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>Create Custom Recovery Period</DialogTitle></DialogHeader>
             <div className="space-y-3">
-              <div><Label>Calendar</Label>
-                <Select value={calendarId} onValueChange={setCalendarId}>
-                  <SelectTrigger id="period-calendar"><SelectValue placeholder="Select calendar..." /></SelectTrigger>
-                  <SelectContent>
-                    {calendars.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div><Label>Label (e.g. FY2026)</Label>
-                <Input id="period-label" value={periodForm.label} onChange={(e) => setPeriodForm({ ...periodForm, label: e.target.value })} /></div>
+              <div><Label>Label (e.g. FY2026)</Label><Input id="period-label" value={periodForm.label} onChange={(e) => setPeriodForm({ ...periodForm, label: e.target.value })} /></div>
               <div className="grid grid-cols-2 gap-3">
-                <div><Label>Start Date</Label>
-                  <Input id="period-start" type="date" value={periodForm.start_date} onChange={(e) => setPeriodForm({ ...periodForm, start_date: e.target.value })} /></div>
-                <div><Label>End Date</Label>
-                  <Input id="period-end" type="date" value={periodForm.end_date} onChange={(e) => setPeriodForm({ ...periodForm, end_date: e.target.value })} /></div>
+                <div><Label>Start Date</Label><Input id="period-start" type="date" value={periodForm.start_date} onChange={(e) => setPeriodForm({ ...periodForm, start_date: e.target.value })} /></div>
+                <div><Label>End Date</Label><Input id="period-end" type="date" value={periodForm.end_date} onChange={(e) => setPeriodForm({ ...periodForm, end_date: e.target.value })} /></div>
               </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setPeriodDialog(false)}>Cancel</Button>
               <Button id="btn-save-period" onClick={async () => {
-                await doAction("create_recovery_period", { calendar_id: calendarId, ...periodForm },
-                  [["recovery_periods"]], "Period created");
+                const created = await doAction("create_recovery_period", { calendar_id: calendarIdForPeriod, ...periodForm }, [["recovery_periods"]], "Period created");
                 setPeriodDialog(false);
                 refetchPeriods();
+                if (created?.period?.id) setPeriodId(created.period.id);
               }}>Create Period</Button>
             </DialogFooter>
           </DialogContent>
@@ -659,101 +507,171 @@ export default function CAMSetup() {
     );
   }
 
-  // ---- Step 2: Pools --------------------------------------------------------
+  // ---- Requirement 2: Source-Data Summary (clickable) ------------------------
+  function SourceDataSummaryCard() {
+    const stats = [
+      { label: "Approved leases", value: summary.approvedLeaseCount, onClick: () => setStep(4) },
+      { label: "Leases with approved recovery rules", value: summary.leasesWithApprovedRules, onClick: () => setStep(4) },
+      { label: "Materialized policies", value: summary.materializedPolicies, onClick: () => setStep(4) },
+      { label: "Leases missing policy information", value: summary.leasesMissingPolicy, warn: summary.leasesMissingPolicy > 0, onClick: () => setStep(4) },
+      { label: "Finalized CAM-eligible expenses", value: summary.finalizedExpenses, onClick: () => setStep(5) },
+      { label: "Published expense total", value: fmtCurrency(summary.publishedTotal), onClick: () => setStep(5) },
+      { label: "Expenses awaiting pool assignment", value: summary.unassigned, warn: summary.unassigned > 0, onClick: () => setStep(5) },
+      { label: "Existing estimate schedules", value: summary.estimateCount, onClick: () => setStep(6) },
+      { label: "Missing area/occupancy records", value: summary.missingArea, warn: summary.missingArea > 0, onClick: () => setStep(4) },
+      { label: "Readiness blocking count", value: summary.blockingCount, warn: summary.blockingCount > 0, onClick: () => setStep(7) },
+    ];
+    return (
+      <Card>
+        <CardHeader><CardTitle className="text-base">Source-Data Summary</CardTitle></CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            {stats.map((s, i) => (
+              <button
+                key={i}
+                id={`summary-stat-${i}`}
+                onClick={s.onClick}
+                className={`text-left rounded-lg border p-3 hover:border-blue-400 transition-colors ${s.warn ? "border-amber-300 bg-amber-50" : "border-slate-200"}`}
+              >
+                <div className={`text-lg font-semibold ${s.warn ? "text-amber-700" : "text-slate-800"}`}>{s.value}</div>
+                <div className="text-[11px] text-slate-500 leading-tight">{s.label}</div>
+              </button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
+  // ============================================================================
+  // Step 2 — Pools (Requirement 4: automatic suggestions)
+  // ============================================================================
   function Step2() {
-    const [poolForm, setPoolForm] = useState({ name: "", pool_type: "property", scope_type: "property" });
-    const [catForm, setCatForm] = useState({ expense_category_id: "", inclusion_mode: "include" });
-    const [guForm, setGuForm] = useState({ target: "" });
+    const [poolForm, setPoolForm] = useState({ name: "", pool_type: buildingId ? "building" : "property", scope_type: buildingId ? "building" : "property" });
+    const [combineChecked, setCombineChecked] = useState({});
+    const [combineName, setCombineName] = useState("");
+
+    const suggestions = useMemo(
+      () => suggestPools(approvedPolicySteps, publishedExpenses, categoryNamesById, alreadyCoveredCategoryIds),
+      [approvedPolicySteps, publishedExpenses, categoryNamesById, alreadyCoveredCategoryIds],
+    );
+
+    async function confirmSuggestion(sugg, nameOverride) {
+      const created = await doAction("create_recovery_pool", {
+        property_id: propertyId, period_id: periodId, name: nameOverride || sugg.suggested_pool_name,
+        pool_type: buildingId ? "building" : "property", scope_type: buildingId ? "building" : "property", scope_id: buildingId || propertyId,
+      }, [["recovery_pools", propertyId, periodId]], "Pool created");
+      if (created?.pool?.id) {
+        await doAction("assign_pool_category", { pool_id: created.pool.id, expense_category_id: sugg.expense_category_id }, [["recovery_pools", propertyId, periodId]], "Category assigned");
+      }
+      refetchPools();
+    }
+
+    const checkedSuggestions = suggestions.filter((s) => combineChecked[s.expense_category_id]);
 
     return (
       <div className="space-y-6">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-base">Recovery Pools</CardTitle>
-            <Button size="sm" variant="outline" id="btn-create-pool" onClick={() => setPoolDialog(true)}>
-              <Plus className="w-3 h-3 mr-1" /> New Pool
-            </Button>
+        <Card className="border-blue-200">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2"><Sparkles className="w-4 h-4 text-blue-600" /> Suggested Recovery Pools</CardTitle>
+            <p className="text-xs text-slate-500 font-normal">Derived from approved lease recovery policies and finalized published expenses. Confirm, rename, combine, or remove — nothing is created until you confirm.</p>
           </CardHeader>
           <CardContent>
-            {pools.length === 0
-              ? <p className="text-sm text-slate-500">No pools for this period. Create one above.</p>
-              : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Pool Name</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Categories</TableHead>
-                      <TableHead>Default Gross-Up Target</TableHead>
-                      <TableHead>Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {pools.map((pool) => (
-                      <TableRow key={pool.id}>
-                        <TableCell className="font-medium">{pool.name}</TableCell>
-                        <TableCell><Badge className="text-[10px]">{pool.pool_type}</Badge></TableCell>
-                        <TableCell>
-                          <div className="flex flex-wrap gap-1">
-                            {(pool.recovery_pool_categories ?? []).map((cat) => (
-                              <Badge key={cat.id} className={`text-[10px] ${cat.inclusion_mode === "include" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
-                                {cat.expense_category_id?.slice(0, 8)}…
-                              </Badge>
-                            ))}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {pool.default_gross_up_target_pct != null ? `${pool.default_gross_up_target_pct}% (pool default)` : "—"}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex gap-1">
-                            <Button size="sm" variant="outline" id={`btn-assign-cat-${pool.id}`}
-                              onClick={() => { setSelectedPoolId(pool.id); setCategoryDialog(true); }}>Category</Button>
-                            <Button size="sm" variant="outline" id={`btn-grossup-${pool.id}`}
-                              onClick={() => { setSelectedPoolId(pool.id); setGrossUpDialog(true); }}>Gross-Up Default</Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
+            {suggestions.length === 0 ? (
+              <p className="text-sm text-slate-500">No new pool suggestions — either every category is already covered, or no approved policies/published expenses exist yet for this property.</p>
+            ) : (
+              <div className="space-y-2">
+                {suggestions.map((s) => (
+                  <div key={s.expense_category_id} className="flex items-center gap-3 rounded-lg border p-3">
+                    <Checkbox
+                      id={`combine-check-${s.expense_category_id}`}
+                      checked={Boolean(combineChecked[s.expense_category_id])}
+                      onCheckedChange={(v) => setCombineChecked((c) => ({ ...c, [s.expense_category_id]: Boolean(v) }))}
+                    />
+                    <div className="flex-1">
+                      <p className="text-sm font-medium">{s.suggested_pool_name}</p>
+                      <p className="text-xs text-slate-500">
+                        {s.policy_lease_count} lease{s.policy_lease_count === 1 ? "" : "s"} with approved policy · {s.expense_count} expense line{s.expense_count === 1 ? "" : "s"} · {fmtCurrency(s.expense_total)} total
+                      </p>
+                    </div>
+                    <Button size="sm" variant="outline" id={`btn-rename-suggestion-${s.expense_category_id}`} onClick={() => {
+                      const name = window.prompt("Pool name", s.suggested_pool_name);
+                      if (name) confirmSuggestion(s, name);
+                    }}>Rename &amp; Confirm</Button>
+                    <Button size="sm" id={`btn-confirm-suggestion-${s.expense_category_id}`} onClick={() => confirmSuggestion(s)}>Confirm</Button>
+                  </div>
+                ))}
+                {checkedSuggestions.length > 1 && (
+                  <div className="flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-50 p-3">
+                    <Combine className="w-4 h-4 text-blue-600" />
+                    <Input placeholder="Combined pool name" className="h-8 max-w-xs" value={combineName} onChange={(e) => setCombineName(e.target.value)} />
+                    <Button size="sm" id="btn-combine-suggestions" disabled={!combineName.trim()} onClick={() => setCombineDialog({ suggestions: checkedSuggestions, name: combineName })}>
+                      Combine {checkedSuggestions.length} into One Pool
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        {/* Create Pool Dialog */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base">Recovery Pools ({pools.length})</CardTitle>
+            <Button size="sm" variant="outline" id="btn-create-pool" onClick={() => setPoolDialog(true)}>
+              <Plus className="w-3 h-3 mr-1" /> Add Custom Pool
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {pools.length === 0 ? <p className="text-sm text-slate-500">No pools for this period yet.</p> : (
+              <Table>
+                <TableHeader><TableRow><TableHead>Pool Name</TableHead><TableHead>Scope</TableHead><TableHead>Categories</TableHead><TableHead>Gross-Up Default</TableHead><TableHead /></TableRow></TableHeader>
+                <TableBody>
+                  {pools.map((pool) => (
+                    <TableRow key={pool.id}>
+                      <TableCell className="font-medium">{pool.name}</TableCell>
+                      <TableCell><Badge className="text-[10px]">{poolTypeLabel(pool.scope_type)}</Badge></TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          {(pool.recovery_pool_categories ?? []).map((cat) => (
+                            <Badge key={cat.id} className={`text-[10px] ${cat.inclusion_mode === "include" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
+                              {categoryNamesById.get(cat.expense_category_id) || cat.expense_category_id.slice(0, 8)}
+                            </Badge>
+                          ))}
+                        </div>
+                      </TableCell>
+                      <TableCell>{pool.default_gross_up_target_pct != null ? `${pool.default_gross_up_target_pct}%` : "—"}</TableCell>
+                      <TableCell>
+                        <Button size="sm" variant="outline" id={`btn-goto-participants-${pool.id}`} onClick={() => { setSelectedPoolId(pool.id); setStep(3); }}>Participants →</Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+
         <Dialog open={poolDialog} onOpenChange={setPoolDialog}>
           <DialogContent>
-            <DialogHeader><DialogTitle>Create Recovery Pool</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>Add Custom Recovery Pool</DialogTitle></DialogHeader>
             <div className="space-y-3">
               <div><Label>Pool Name</Label><Input id="pool-name" value={poolForm.name} onChange={(e) => setPoolForm({ ...poolForm, name: e.target.value })} /></div>
-              <div><Label>Pool Type</Label>
-                <Select value={poolForm.pool_type} onValueChange={(v) => setPoolForm({ ...poolForm, pool_type: v })}>
-                  <SelectTrigger id="pool-type"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="property">Property</SelectItem>
-                    <SelectItem value="building">Building</SelectItem>
-                    <SelectItem value="custom">Custom</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div><Label>Scope Type</Label>
-                <Select value={poolForm.scope_type} onValueChange={(v) => setPoolForm({ ...poolForm, scope_type: v })}>
+              <div><Label>Scope</Label>
+                <Select value={poolForm.scope_type} onValueChange={(v) => setPoolForm({ ...poolForm, scope_type: v, pool_type: v })}>
                   <SelectTrigger id="pool-scope"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="property">Property</SelectItem>
-                    <SelectItem value="building">Building</SelectItem>
-                    <SelectItem value="custom">Custom</SelectItem>
+                    <SelectItem value="property">{scopeTypeLabel("property")}</SelectItem>
+                    <SelectItem value="building">{scopeTypeLabel("building")}</SelectItem>
+                    <SelectItem value="custom">{scopeTypeLabel("custom")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setPoolDialog(false)}>Cancel</Button>
-              <Button id="btn-save-pool" onClick={async () => {
-                await doAction("create_recovery_pool", { property_id: propertyId, period_id: periodId, ...poolForm },
-                  [["recovery_pools", periodId]], "Pool created");
+              <Button id="btn-save-pool" disabled={!poolForm.name.trim()} onClick={async () => {
+                await doAction("create_recovery_pool", { property_id: propertyId, period_id: periodId, scope_id: buildingId || propertyId, ...poolForm }, [["recovery_pools", propertyId, periodId]], "Pool created");
                 setPoolDialog(false);
                 refetchPools();
               }}>Create Pool</Button>
@@ -761,62 +679,27 @@ export default function CAMSetup() {
           </DialogContent>
         </Dialog>
 
-        {/* Assign Category Dialog */}
-        <Dialog open={categoryDialog} onOpenChange={setCategoryDialog}>
+        <Dialog open={Boolean(combineDialog)} onOpenChange={() => setCombineDialog(null)}>
           <DialogContent>
-            <DialogHeader><DialogTitle>Assign Expense Category</DialogTitle></DialogHeader>
-            <div className="space-y-3">
-              <div><Label>Category</Label>
-                <Select value={catForm.expense_category_id} onValueChange={(v) => setCatForm({ ...catForm, expense_category_id: v })}>
-                  <SelectTrigger id="cat-category"><SelectValue placeholder="Select category..." /></SelectTrigger>
-                  <SelectContent>
-                    {categories.map((c) => <SelectItem key={c.id} value={c.id}>{c.category_name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div><Label>Inclusion Mode</Label>
-                <Select value={catForm.inclusion_mode} onValueChange={(v) => setCatForm({ ...catForm, inclusion_mode: v })}>
-                  <SelectTrigger id="cat-inclusion"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="include">Include</SelectItem>
-                    <SelectItem value="exclude">Exclude</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
+            <DialogHeader><DialogTitle>Combine {combineDialog?.suggestions?.length} Suggestions into One Pool</DialogTitle></DialogHeader>
+            <p className="text-sm text-slate-600">Categories: {combineDialog?.suggestions?.map((s) => s.suggested_pool_name).join(", ")}</p>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setCategoryDialog(false)}>Cancel</Button>
-              <Button id="btn-save-category" onClick={async () => {
-                await doAction("assign_pool_category", { pool_id: selectedPoolId, ...catForm },
-                  [["recovery_pools", periodId]], "Category assigned");
-                setCategoryDialog(false);
+              <Button variant="outline" onClick={() => setCombineDialog(null)}>Cancel</Button>
+              <Button id="btn-confirm-combine" onClick={async () => {
+                const created = await doAction("create_recovery_pool", {
+                  property_id: propertyId, period_id: periodId, name: combineDialog.name,
+                  pool_type: buildingId ? "building" : "property", scope_type: buildingId ? "building" : "property", scope_id: buildingId || propertyId,
+                }, [], "Combined pool created");
+                if (created?.pool?.id) {
+                  for (const s of combineDialog.suggestions) {
+                    await doAction("assign_pool_category", { pool_id: created.pool.id, expense_category_id: s.expense_category_id }, [], null);
+                  }
+                }
+                queryClient.invalidateQueries({ queryKey: ["recovery_pools", propertyId, periodId] });
+                setCombineDialog(null);
+                setCombineChecked({});
                 refetchPools();
-              }}>Assign</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* Gross-Up Dialog */}
-        <Dialog open={grossUpDialog} onOpenChange={setGrossUpDialog}>
-          <DialogContent>
-            <DialogHeader><DialogTitle>Configure Default Pool Gross-Up Target</DialogTitle></DialogHeader>
-            <p className="text-xs text-slate-500 mb-2">Note: Pool gross-up targets act as defaults for participant calculation. Individual lease contracts override this when specific clauses exist.</p>
-            <div className="space-y-3">
-              <div>
-                <Label>Default Target Occupancy % (leave blank to disable)</Label>
-                <Input id="grossup-target" type="number" min={0} max={100} placeholder="e.g. 95"
-                  value={guForm.target} onChange={(e) => setGuForm({ target: e.target.value })} />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setGrossUpDialog(false)}>Cancel</Button>
-              <Button id="btn-save-grossup" onClick={async () => {
-                const targetPct = guForm.target === "" ? null : Number(guForm.target);
-                await doAction("configure_pool_grossup", { pool_id: selectedPoolId, default_gross_up_target_pct: targetPct },
-                  [["recovery_pools", periodId]], "Pool gross-up default configured");
-                setGrossUpDialog(false);
-                refetchPools();
-              }}>Save Default</Button>
+              }}>Create Combined Pool</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -824,10 +707,18 @@ export default function CAMSetup() {
     );
   }
 
-  // ---- Step 3: Participants --------------------------------------------------
-
+  // ============================================================================
+  // Step 3 — Participants (Requirement 5: automatic suggestions)
+  // ============================================================================
   function Step3() {
-    const [partForm, setPartForm] = useState({ lease_id: "", effective_from: "" });
+    const [partForm, setPartForm] = useState({ lease_id: "", effective_from: "", reason: "" });
+
+    const suggestions = useMemo(() => {
+      if (!selectedPool || !selectedPeriod) return [];
+      return suggestParticipants(selectedPool, leases, leasePremises, approvedPolicySteps, selectedPoolCategoryIds, participants, selectedPeriod);
+    }, [selectedPool, leases, leasePremises, approvedPolicySteps, selectedPoolCategoryIds, participants, selectedPeriod]);
+
+    const activeParticipants = participants.filter((p) => p.status === "active");
 
     return (
       <div className="space-y-6">
@@ -836,174 +727,228 @@ export default function CAMSetup() {
           <CardContent>
             <Select value={selectedPoolId} onValueChange={setSelectedPoolId}>
               <SelectTrigger id="s3-pool"><SelectValue placeholder="Choose pool..." /></SelectTrigger>
-              <SelectContent>
-                {pools.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-              </SelectContent>
+              <SelectContent>{pools.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
             </Select>
           </CardContent>
         </Card>
 
         {selectedPoolId && (
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-base">Lease Participants</CardTitle>
-              <Button size="sm" variant="outline" id="btn-add-participant" onClick={() => setParticipantDialog(true)}>
-                <Plus className="w-3 h-3 mr-1" /> Add Lease
-              </Button>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Tenant</TableHead>
-                    <TableHead>Effective From</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {participants.length === 0 && (
-                    <TableRow><TableCell colSpan={4} className="text-slate-500 text-sm text-center py-4">No participants yet</TableCell></TableRow>
-                  )}
-                  {participants.map((p) => (
-                    <TableRow key={p.id}>
-                      <TableCell>{p.leases?.tenant_name ?? p.lease_id.slice(0, 8) + "…"}</TableCell>
-                      <TableCell>{p.effective_from}</TableCell>
-                      <TableCell><Badge className="text-[10px]">{p.status}</Badge></TableCell>
-                      <TableCell>
-                        <Button size="sm" variant="ghost" id={`btn-remove-participant-${p.id}`}
-                          onClick={async () => {
-                            await doAction("remove_pool_participant", { participant_id: p.id },
-                              [["pool_participants", selectedPoolId]], "Participant removed");
-                            refetchParticipants();
-                          }}>
-                          <Trash2 className="w-3 h-3 text-red-500" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+          <>
+            <Card className="border-blue-200">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2"><Sparkles className="w-4 h-4 text-blue-600" /> Suggested Participants</CardTitle>
+                <p className="text-xs text-slate-500 font-normal">Derived from lease premises, this pool's scope, effective dates, and policy category eligibility. Explicit confirmation is what actually grants participation.</p>
+              </CardHeader>
+              <CardContent>
+                {suggestions.length === 0 ? <p className="text-sm text-slate-500">No new suggestions for this pool.</p> : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Tenant</TableHead><TableHead>Premises</TableHead><TableHead>Effective Area</TableHead>
+                        <TableHead>Lease Dates</TableHead><TableHead>Reason</TableHead><TableHead />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {suggestions.map((s) => (
+                        <TableRow key={s.lease_id}>
+                          <TableCell className="font-medium">{s.tenant_name}</TableCell>
+                          <TableCell className="text-xs font-mono">{s.premises_id.slice(0, 8)}</TableCell>
+                          <TableCell>{s.effective_area_sqft != null ? `${Number(s.effective_area_sqft).toLocaleString()} sqft` : "—"}</TableCell>
+                          <TableCell className="text-xs">{s.lease_start || "—"} → {s.lease_end || "open"}</TableCell>
+                          <TableCell className="text-xs text-slate-500 max-w-xs">{s.reason}</TableCell>
+                          <TableCell>
+                            <Button size="sm" id={`btn-confirm-participant-${s.lease_id}`} onClick={async () => {
+                              await doAction("add_pool_participant", { pool_id: selectedPoolId, lease_id: s.lease_id, effective_from: selectedPeriod.start_date, notes: "Confirmed from automatic suggestion" }, [["pool_participants", selectedPoolId]], "Participant confirmed");
+                              refetchParticipants();
+                            }}>Confirm</Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-base">Confirmed Participants ({activeParticipants.length})</CardTitle>
+                <Button size="sm" variant="outline" id="btn-add-participant" onClick={() => setParticipantDialog(true)}>
+                  <Plus className="w-3 h-3 mr-1" /> Include Other Lease
+                </Button>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader><TableRow><TableHead>Tenant</TableHead><TableHead>Effective From</TableHead><TableHead>Status</TableHead><TableHead>Source</TableHead><TableHead /></TableRow></TableHeader>
+                  <TableBody>
+                    {participants.length === 0 && <TableRow><TableCell colSpan={5} className="text-slate-500 text-sm text-center py-4">No participants yet</TableCell></TableRow>}
+                    {participants.map((p) => (
+                      <TableRow key={p.id}>
+                        <TableCell>{p.leases?.tenant_name ?? p.lease_id.slice(0, 8)}</TableCell>
+                        <TableCell>{p.effective_from}{p.effective_to ? ` → ${p.effective_to}` : ""}</TableCell>
+                        <TableCell><Badge className={`text-[10px] ${p.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{participantStatusLabel(p.status)}</Badge></TableCell>
+                        <TableCell className="text-xs text-slate-500">{p.notes || "—"}</TableCell>
+                        <TableCell>
+                          {p.status === "active" && (
+                            <Button size="sm" variant="ghost" id={`btn-exclude-participant-${p.id}`} onClick={() => setExcludeDialog(p)}>
+                              <Trash2 className="w-3 h-3 text-red-500" />
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </>
         )}
 
-        {/* Add Participant Dialog */}
         <Dialog open={participantDialog} onOpenChange={setParticipantDialog}>
           <DialogContent>
-            <DialogHeader><DialogTitle>Add Lease Participant</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>Include Lease (Manual Override)</DialogTitle></DialogHeader>
             <div className="space-y-3">
               <div><Label>Lease</Label>
                 <Select value={partForm.lease_id} onValueChange={(v) => setPartForm({ ...partForm, lease_id: v })}>
                   <SelectTrigger id="part-lease"><SelectValue placeholder="Select lease..." /></SelectTrigger>
-                  <SelectContent>
-                    {leases.filter((l) => l.property_id === propertyId).map((l) => (
-                      <SelectItem key={l.id} value={l.id}>{l.tenant_name ?? l.id.slice(0, 8)}</SelectItem>
-                    ))}
-                  </SelectContent>
+                  <SelectContent>{leases.filter((l) => l.property_id === propertyId).map((l) => <SelectItem key={l.id} value={l.id}>{l.tenant_name ?? l.id.slice(0, 8)}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
-              <div><Label>Effective From</Label>
-                <Input id="part-effective-from" type="date" value={partForm.effective_from}
-                  onChange={(e) => setPartForm({ ...partForm, effective_from: e.target.value })} /></div>
+              <div><Label>Effective From</Label><Input id="part-effective-from" type="date" value={partForm.effective_from} onChange={(e) => setPartForm({ ...partForm, effective_from: e.target.value })} /></div>
+              <div><Label>Reason (required — this lease was not on the suggested list)</Label>
+                <Textarea id="part-reason" rows={3} value={partForm.reason} onChange={(e) => setPartForm({ ...partForm, reason: e.target.value })} /></div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setParticipantDialog(false)}>Cancel</Button>
-              <Button id="btn-save-participant" onClick={async () => {
-                await doAction("add_pool_participant", { pool_id: selectedPoolId, ...partForm },
-                  [["pool_participants", selectedPoolId]], "Participant added");
+              <Button id="btn-save-participant" disabled={!partForm.lease_id || !partForm.effective_from || !partForm.reason.trim()} onClick={async () => {
+                await doAction("add_pool_participant", { pool_id: selectedPoolId, lease_id: partForm.lease_id, effective_from: partForm.effective_from, notes: partForm.reason }, [["pool_participants", selectedPoolId]], "Participant added");
                 setParticipantDialog(false);
+                setPartForm({ lease_id: "", effective_from: "", reason: "" });
                 refetchParticipants();
               }}>Add</Button>
             </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={Boolean(excludeDialog)} onOpenChange={() => setExcludeDialog(null)}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Exclude {excludeDialog?.leases?.tenant_name || "this lease"}</DialogTitle></DialogHeader>
+            <ExcludeParticipantForm
+              onCancel={() => setExcludeDialog(null)}
+              onConfirm={async (reason) => {
+                await doAction("remove_pool_participant", { participant_id: excludeDialog.id, reason }, [["pool_participants", selectedPoolId]], "Participant excluded");
+                setExcludeDialog(null);
+                refetchParticipants();
+              }}
+            />
           </DialogContent>
         </Dialog>
       </div>
     );
   }
 
-  // ---- Step 4: Policies -----------------------------------------------------
+  function ExcludeParticipantForm({ onCancel, onConfirm }) {
+    const [reason, setReason] = useState("");
+    return (
+      <>
+        <div><Label>Reason (required)</Label><Textarea id="exclude-reason" rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this lease being excluded from the pool?" /></div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel}>Cancel</Button>
+          <Button id="btn-confirm-exclude" disabled={!reason.trim()} onClick={() => onConfirm(reason)}>Exclude</Button>
+        </DialogFooter>
+      </>
+    );
+  }
 
+  // ============================================================================
+  // Step 4 — Policies (Requirement 6: complete display)
+  // ============================================================================
   function Step4() {
     const [resolveForm, setResolveForm] = useState({ state: "KNOWN_ZERO", amount: "", evidence_note: "" });
+    const [policyDialog, setPolicyDialog] = useState(null);
+    const [priorAdjDialog, setPriorAdjDialog] = useState(null);
+
+    const propLeases = leases.filter((l) => l.property_id === propertyId);
+    const leasesMissingPolicy = propLeases.filter((l) => !policies.some((p) => p.lease_id === l.id));
 
     return (
       <div className="space-y-6">
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Materialized Lease Recovery Policies</CardTitle>
-            <p className="text-xs text-slate-500 font-normal">
-              Policies are loaded directly from materialized, approved lease recovery rules. Users resolve missing or unknown values only; rules cannot be assigned arbitrarily during setup.
-            </p>
+            <p className="text-xs text-slate-500 font-normal">Loaded directly from materialized, approved lease recovery rules. You may only resolve missing or conflicting values — rules cannot be assigned arbitrarily here.</p>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Tenant</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Method</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {policies.length === 0 && (
-                  <TableRow><TableCell colSpan={5} className="text-sm text-slate-500 text-center py-4">No policies found. Ensure lease expense rules have been approved and materialized.</TableCell></TableRow>
-                )}
-                {policies.map((pol) => (
-                  <TableRow key={pol.id}>
-                    <TableCell>{pol.leases?.tenant_name ?? "—"}</TableCell>
-                    <TableCell>{pol.expense_categories?.category_name ?? "—"}</TableCell>
-                    <TableCell><Badge className="text-[10px]">{pol.recovery_method ?? pol.allocation_basis ?? "—"}</Badge></TableCell>
-                    <TableCell><Badge className={`text-[10px] ${pol.status === "approved" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}`}>{pol.status ?? "draft"}</Badge></TableCell>
-                    <TableCell>
-                      {pol.status !== "approved" && (
-                        <Button size="sm" variant="outline" id={`btn-resolve-policy-${pol.id}`}
-                          onClick={() => setPolicyDialog(pol)}>Resolve Missing Value</Button>
-                      )}
-                    </TableCell>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Tenant</TableHead><TableHead>Category</TableHead><TableHead>Share / Method</TableHead>
+                    <TableHead>Gross-Up</TableHead><TableHead>Base Year</TableHead><TableHead>Cap</TableHead>
+                    <TableHead>Fee</TableHead><TableHead>Effective</TableHead><TableHead>Status</TableHead><TableHead />
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {policies.length === 0 && <TableRow><TableCell colSpan={10} className="text-sm text-slate-500 text-center py-4">No policies found. Ensure lease expense rules have been approved and materialized.</TableCell></TableRow>}
+                  {policies.map((pol) => {
+                    const summ = summarizePolicy(pol, pol.lease_recovery_policy_steps, categoryNamesById);
+                    return (
+                      <TableRow key={pol.id}>
+                        <TableCell className="font-medium">{pol.leases?.tenant_name ?? "—"}</TableCell>
+                        <TableCell>{summ.hasCategory ? summ.categoryName : <Badge className="text-[10px] bg-amber-100 text-amber-800">Not derivable from steps</Badge>}</TableCell>
+                        <TableCell className="text-xs">{summ.shareDescription}</TableCell>
+                        <TableCell className="text-xs">{summ.grossUpTarget}</TableCell>
+                        <TableCell className="text-xs">{summ.baseYear}</TableCell>
+                        <TableCell className="text-xs">{summ.cap}</TableCell>
+                        <TableCell className="text-xs">{summ.adminFee}</TableCell>
+                        <TableCell className="text-xs">{summ.effectiveFrom}{summ.effectiveTo ? ` → ${summ.effectiveTo}` : ""}</TableCell>
+                        <TableCell><Badge className={`text-[10px] ${pol.status === "approved" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}`}>{policyStatusLabel(pol.status)}</Badge></TableCell>
+                        <TableCell>
+                          <Button size="sm" variant="outline" id={`btn-view-policy-${pol.id}`} onClick={() => setPolicyDialog({ pol, summ })}>Detail</Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
           </CardContent>
         </Card>
 
-        {/* Prior Adjustment Status */}
+        {leasesMissingPolicy.length > 0 && (
+          <Card className="border-amber-300 bg-amber-50">
+            <CardHeader><CardTitle className="text-base">Leases Missing Policy Information ({leasesMissingPolicy.length})</CardTitle></CardHeader>
+            <CardContent>
+              <ul className="text-sm space-y-1">
+                {leasesMissingPolicy.map((l) => (
+                  <li key={l.id} className="flex items-center justify-between">
+                    <span>{l.tenant_name || l.id.slice(0, 8)}</span>
+                    <Link to={createPageUrl("LeaseExpenseRules") + `?lease_id=${l.id}`} className="text-xs text-blue-600 underline flex items-center gap-1">
+                      Resolve in Lease Expense Rules <ExternalLink className="w-3 h-3" />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+        )}
+
         <Card>
           <CardHeader><CardTitle className="text-base">Prior Adjustments &amp; Credits</CardTitle></CardHeader>
           <CardContent>
             <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Tenant</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>State</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead />
-                </TableRow>
-              </TableHeader>
+              <TableHeader><TableRow><TableHead>Tenant</TableHead><TableHead>Type</TableHead><TableHead>State</TableHead><TableHead>Amount</TableHead><TableHead /></TableRow></TableHeader>
               <TableBody>
-                {priorAdjustments.length === 0 && (
-                  <TableRow><TableCell colSpan={5} className="text-sm text-slate-500 text-center py-4">No prior adjustment records for this period.</TableCell></TableRow>
-                )}
+                {priorAdjustments.length === 0 && <TableRow><TableCell colSpan={5} className="text-sm text-slate-500 text-center py-4">No prior adjustment records for this period.</TableCell></TableRow>}
                 {priorAdjustments.map((adj) => (
                   <TableRow key={adj.id}>
                     <TableCell>{adj.leases?.tenant_name ?? "—"}</TableCell>
-                    <TableCell><Badge className="text-[10px]">{adj.adjustment_type}</Badge></TableCell>
-                    <TableCell>
-                      <Badge className={`text-[10px] ${adj.state === "UNKNOWN" ? "bg-red-100 text-red-700" : adj.state === "KNOWN_AMOUNT" || adj.state === "KNOWN_ZERO" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                        {adj.state}
-                      </Badge>
-                    </TableCell>
+                    <TableCell><Badge className="text-[10px]">{adjustmentTypeLabel(adj.adjustment_type)}</Badge></TableCell>
+                    <TableCell><Badge className={`text-[10px] ${adj.state === "UNKNOWN" ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}>{adjustmentStateLabel(adj.state)}</Badge></TableCell>
                     <TableCell>{adj.amount != null ? fmtCurrency(adj.amount) : "—"}</TableCell>
                     <TableCell>
-                      {(adj.state === "UNKNOWN") && (
-                        <Button size="sm" variant="outline" id={`btn-resolve-adj-${adj.id}`}
-                          onClick={() => setPriorAdjDialog({ leaseId: adj.lease_id, periodId: adj.recovery_period_id, adjType: adj.adjustment_type })}>
-                          Resolve
-                        </Button>
+                      {adj.state === "UNKNOWN" && (
+                        <Button size="sm" variant="outline" id={`btn-resolve-adj-${adj.id}`} onClick={() => setPriorAdjDialog({ leaseId: adj.lease_id, periodId: adj.recovery_period_id, adjType: adj.adjustment_type })}>Resolve</Button>
                       )}
                     </TableCell>
                   </TableRow>
@@ -1013,253 +958,70 @@ export default function CAMSetup() {
           </CardContent>
         </Card>
 
-        {/* Resolve Policy Dialog */}
-        {policyDialog && (
-          <Dialog open={!!policyDialog} onOpenChange={() => setPolicyDialog(null)}>
-            <DialogContent>
-              <DialogHeader><DialogTitle>Resolve Missing Policy Value</DialogTitle></DialogHeader>
-              <p className="text-sm text-slate-600">Policy for <strong>{policyDialog.leases?.tenant_name}</strong> — {policyDialog.expense_categories?.category_name}</p>
-              <div className="space-y-3 mt-2">
-                <div><Label>Resolution State</Label>
-                  <Select value={resolveForm.state} onValueChange={(v) => setResolveForm({ ...resolveForm, state: v })}>
-                    <SelectTrigger id="resolve-state"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="KNOWN_ZERO">KNOWN_ZERO</SelectItem>
-                      <SelectItem value="KNOWN_AMOUNT">KNOWN_AMOUNT</SelectItem>
-                      <SelectItem value="NOT_APPLICABLE">NOT_APPLICABLE</SelectItem>
-                    </SelectContent>
-                  </Select>
+        <Dialog open={Boolean(policyDialog)} onOpenChange={() => setPolicyDialog(null)}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader><DialogTitle>Policy Detail — {policyDialog?.pol?.leases?.tenant_name}</DialogTitle></DialogHeader>
+            {policyDialog && (
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div><span className="text-slate-400">Category</span><div>{policyDialog.summ.categoryName ?? "—"}</div></div>
+                <div><span className="text-slate-400">Share / Method</span><div>{policyDialog.summ.shareDescription}</div></div>
+                <div><span className="text-slate-400">Numerator / Denominator Source</span><div>{policyDialog.summ.numeratorDenominatorSource}</div></div>
+                <div><span className="text-slate-400">Gross-Up Target</span><div>{policyDialog.summ.grossUpTarget}</div></div>
+                <div><span className="text-slate-400">Base Year</span><div>{policyDialog.summ.baseYear}</div></div>
+                <div><span className="text-slate-400">Expense Stop</span><div>{policyDialog.summ.expenseStop}</div></div>
+                <div><span className="text-slate-400">Cap</span><div>{policyDialog.summ.cap}</div></div>
+                <div><span className="text-slate-400">Floor</span><div>{policyDialog.summ.floor}</div></div>
+                <div><span className="text-slate-400">Deductible</span><div>{policyDialog.summ.deductible}</div></div>
+                <div><span className="text-slate-400">Admin / Management Fee</span><div>{policyDialog.summ.adminFee}</div></div>
+                <div><span className="text-slate-400">Effective Dates</span><div>{policyDialog.summ.effectiveFrom} → {policyDialog.summ.effectiveTo || "open"}</div></div>
+                <div><span className="text-slate-400">Readiness Status</span><div><Badge className={`text-[10px] ${policyDialog.pol.status === "approved" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}`}>{policyStatusLabel(policyDialog.pol.status)}</Badge></div></div>
+                <div className="col-span-2"><span className="text-slate-400">Source / Amendment Evidence</span>
+                  <div className="text-xs font-mono bg-slate-50 rounded p-2 mt-1 max-h-32 overflow-y-auto">
+                    {policyDialog.summ.sourceEvidence ? JSON.stringify(policyDialog.summ.sourceEvidence, null, 2) : "No evidence on file"}
+                  </div>
                 </div>
-                {resolveForm.state === "KNOWN_AMOUNT" && (
-                  <div><Label>Amount</Label>
-                    <Input id="resolve-amount" type="number" value={resolveForm.amount}
-                      onChange={(e) => setResolveForm({ ...resolveForm, amount: e.target.value })} /></div>
-                )}
-                <div><Label>Evidence / Note</Label>
-                  <Textarea id="resolve-note" rows={3} placeholder="Required evidence note..."
-                    value={resolveForm.evidence_note} onChange={(e) => setResolveForm({ ...resolveForm, evidence_note: e.target.value })} /></div>
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setPolicyDialog(null)}>Cancel</Button>
-                <Button id="btn-save-resolve" onClick={async () => {
-                  await doAction("resolve_missing_policy_value", {
-                    lease_id: policyDialog.lease_id, recovery_period_id: periodId,
-                    adjustment_type: "prior_period_adjustment", state: resolveForm.state,
-                    amount: resolveForm.amount || undefined, evidence_note: resolveForm.evidence_note,
-                  }, [["cam_prior_period_adjustments", periodId]], "Value resolved");
-                  setPolicyDialog(null);
-                  refetchPriorAdj();
-                }}>Save Resolution</Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        )}
+            )}
+            <DialogFooter>
+              {policyDialog?.pol?.status !== "approved" && (
+                <Button variant="outline" onClick={() => { setResolveForm({ state: "KNOWN_ZERO", amount: "", evidence_note: "" }); }}>
+                  Resolve Missing Value
+                </Button>
+              )}
+              <Button onClick={() => setPolicyDialog(null)}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
-        {/* Resolve Prior Adjustment Dialog */}
-        {priorAdjDialog && (
-          <Dialog open={!!priorAdjDialog} onOpenChange={() => setPriorAdjDialog(null)}>
-            <DialogContent>
-              <DialogHeader><DialogTitle>Resolve Prior Adjustment</DialogTitle></DialogHeader>
-              <p className="text-sm text-slate-600">Type: <strong>{priorAdjDialog.adjType}</strong></p>
-              <div className="space-y-3 mt-2">
-                <div><Label>State</Label>
-                  <Select value={resolveForm.state} onValueChange={(v) => setResolveForm({ ...resolveForm, state: v })}>
-                    <SelectTrigger id="adj-state"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="KNOWN_ZERO">KNOWN_ZERO</SelectItem>
-                      <SelectItem value="KNOWN_AMOUNT">KNOWN_AMOUNT</SelectItem>
-                      <SelectItem value="NOT_APPLICABLE">NOT_APPLICABLE</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                {resolveForm.state === "KNOWN_AMOUNT" && (
-                  <div><Label>Amount ($)</Label>
-                    <Input id="adj-amount" type="number" value={resolveForm.amount}
-                      onChange={(e) => setResolveForm({ ...resolveForm, amount: e.target.value })} /></div>
-                )}
-                <div><Label>Evidence Note (required)</Label>
-                  <Textarea id="adj-note" rows={3} placeholder="Describe the source of this figure..."
-                    value={resolveForm.evidence_note} onChange={(e) => setResolveForm({ ...resolveForm, evidence_note: e.target.value })} /></div>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setPriorAdjDialog(null)}>Cancel</Button>
-                <Button id="btn-save-prior-adj" onClick={async () => {
-                  await doAction("record_prior_adjustment", {
-                    lease_id: priorAdjDialog.leaseId, recovery_period_id: priorAdjDialog.periodId,
-                    adjustment_type: priorAdjDialog.adjType, state: resolveForm.state,
-                    amount: resolveForm.amount || undefined, evidence_note: resolveForm.evidence_note,
-                  }, [["cam_prior_period_adjustments", periodId]], "Adjustment resolved");
-                  setPriorAdjDialog(null);
-                  refetchPriorAdj();
-                }}>Save</Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        )}
-      </div>
-    );
-  }
-
-  // ---- Step 5: Expenses -----------------------------------------------------
-
-  function Step5() {
-    const [assignForm, setAssignForm] = useState({ recovery_pool_id: "", amount: "" });
-
-    return (
-      <div className="space-y-4">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Published Expense Inputs</CardTitle>
-            <p className="text-xs text-slate-500 font-normal">
-              Only finalized, CAM-eligible, published expense inputs appear here. Expenses may be assigned or split into pools, but source expenses cannot be created here.
-            </p>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Service Period</TableHead>
-                  <TableHead>Pool Assignments</TableHead>
-                  <TableHead />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {publishedExpenses.length === 0 && (
-                  <TableRow><TableCell colSpan={5} className="text-sm text-slate-500 text-center py-4">No published expense inputs for this property.</TableCell></TableRow>
-                )}
-                {publishedExpenses.map((exp) => (
-                  <TableRow key={exp.id}>
-                    <TableCell className="font-medium">{fmtCurrency(exp.amount)}</TableCell>
-                    <TableCell>{exp.category ?? "—"}</TableCell>
-                    <TableCell className="text-xs">{exp.service_period_start} → {exp.service_period_end}</TableCell>
-                    <TableCell>
-                      {(exp.cam_input_pool_assignments ?? []).length === 0
-                        ? <Badge className="text-[10px] bg-amber-100 text-amber-800">Unassigned</Badge>
-                        : <Badge className="text-[10px] bg-emerald-100 text-emerald-700">{exp.cam_input_pool_assignments.length} pool(s)</Badge>}
-                    </TableCell>
-                    <TableCell>
-                      <Button size="sm" variant="outline" id={`btn-assign-expense-${exp.id}`}
-                        onClick={() => setExpenseDialog(exp)}>Assign / Split</Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-
-        {/* Assign Expense Dialog */}
-        {expenseDialog && (
-          <Dialog open={!!expenseDialog} onOpenChange={() => setExpenseDialog(null)}>
-            <DialogContent>
-              <DialogHeader><DialogTitle>Assign Expense to Pool</DialogTitle></DialogHeader>
-              <p className="text-sm text-slate-600">Expense amount: <strong>{fmtCurrency(expenseDialog.amount)}</strong></p>
-              <div className="space-y-3 mt-2">
-                <div><Label>Pool</Label>
-                  <Select value={assignForm.recovery_pool_id} onValueChange={(v) => setAssignForm({ ...assignForm, recovery_pool_id: v })}>
-                    <SelectTrigger id="assign-pool"><SelectValue placeholder="Select pool..." /></SelectTrigger>
-                    <SelectContent>
-                      {pools.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div><Label>Amount to Assign ($)</Label>
-                  <Input id="assign-amount" type="number" min={0.01} placeholder={expenseDialog.amount}
-                    value={assignForm.amount} onChange={(e) => setAssignForm({ ...assignForm, amount: e.target.value })} /></div>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setExpenseDialog(null)}>Cancel</Button>
-                <Button id="btn-save-assign-expense" onClick={async () => {
-                  await doAction("assign_expense_to_pool", {
-                    cam_expense_input_id: expenseDialog.id,
-                    recovery_pool_id: assignForm.recovery_pool_id,
-                    amount: Number(assignForm.amount || expenseDialog.amount),
-                  }, [["cam_expense_inputs_published", propertyId]], "Expense assigned");
-                  setExpenseDialog(null);
-                }}>Assign</Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        )}
-      </div>
-    );
-  }
-
-  // ---- Step 6: Estimates & Adjustments --------------------------------------
-
-  function Step6() {
-    const [estForm, setEstForm] = useState({ lease_id: "", month_date: "", amount: "" });
-
-    const leaseOptions = leases.filter((l) => l.property_id === propertyId);
-
-    return (
-      <div className="space-y-6">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-base">Monthly Estimate Schedules</CardTitle>
-            <Button size="sm" variant="outline" id="btn-create-estimate" onClick={() => setEstimateDialog(true)}>
-              <Plus className="w-3 h-3 mr-1" /> Add Estimate
-            </Button>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Tenant</TableHead>
-                  <TableHead>Month</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {estimateSchedules.length === 0 && (
-                  <TableRow><TableCell colSpan={4} className="text-sm text-slate-500 text-center py-4">No estimate schedules for this period.</TableCell></TableRow>
-                )}
-                {estimateSchedules.map((es) => (
-                  <TableRow key={es.id}>
-                    <TableCell>{es.leases?.tenant_name ?? "—"}</TableCell>
-                    <TableCell>{es.month_date}</TableCell>
-                    <TableCell>{fmtCurrency(es.amount)}</TableCell>
-                    <TableCell><Badge className="text-[10px]">{es.status}</Badge></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-
-        {/* Create Estimate Dialog */}
-        <Dialog open={estimateDialog} onOpenChange={setEstimateDialog}>
+        <Dialog open={Boolean(priorAdjDialog)} onOpenChange={() => setPriorAdjDialog(null)}>
           <DialogContent>
-            <DialogHeader><DialogTitle>Add Monthly Estimate</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>Resolve Prior Adjustment</DialogTitle></DialogHeader>
             <div className="space-y-3">
-              <div><Label>Lease</Label>
-                <Select value={estForm.lease_id} onValueChange={(v) => setEstForm({ ...estForm, lease_id: v })}>
-                  <SelectTrigger id="est-lease"><SelectValue placeholder="Select lease..." /></SelectTrigger>
+              <div><Label>State</Label>
+                <Select value={resolveForm.state} onValueChange={(v) => setResolveForm({ ...resolveForm, state: v })}>
+                  <SelectTrigger id="adj-state"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {leaseOptions.map((l) => <SelectItem key={l.id} value={l.id}>{l.tenant_name ?? l.id.slice(0, 8)}</SelectItem>)}
+                    <SelectItem value="KNOWN_ZERO">{adjustmentStateLabel("KNOWN_ZERO")}</SelectItem>
+                    <SelectItem value="KNOWN_AMOUNT">{adjustmentStateLabel("KNOWN_AMOUNT")}</SelectItem>
+                    <SelectItem value="NOT_APPLICABLE">{adjustmentStateLabel("NOT_APPLICABLE")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              <div><Label>Month (YYYY-MM-01)</Label>
-                <Input id="est-month" type="date" value={estForm.month_date}
-                  onChange={(e) => setEstForm({ ...estForm, month_date: e.target.value })} /></div>
-              <div><Label>Monthly Amount ($)</Label>
-                <Input id="est-amount" type="number" min={0} value={estForm.amount}
-                  onChange={(e) => setEstForm({ ...estForm, amount: e.target.value })} /></div>
+              {resolveForm.state === "KNOWN_AMOUNT" && (
+                <div><Label>Amount ($)</Label><Input id="adj-amount" type="number" value={resolveForm.amount} onChange={(e) => setResolveForm({ ...resolveForm, amount: e.target.value })} /></div>
+              )}
+              <div><Label>Evidence Note (required)</Label><Textarea id="adj-note" rows={3} value={resolveForm.evidence_note} onChange={(e) => setResolveForm({ ...resolveForm, evidence_note: e.target.value })} /></div>
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setEstimateDialog(false)}>Cancel</Button>
-              <Button id="btn-save-estimate" onClick={async () => {
-                await doAction("create_estimate_schedule", {
-                  lease_id: estForm.lease_id, recovery_period_id: periodId,
-                  month_date: estForm.month_date, amount: Number(estForm.amount),
-                }, [["cam_estimate_schedules", periodId]], "Estimate saved");
-                setEstimateDialog(false);
-                refetchEstimates();
-              }}>Save Estimate</Button>
+              <Button variant="outline" onClick={() => setPriorAdjDialog(null)}>Cancel</Button>
+              <Button id="btn-save-prior-adj" disabled={!resolveForm.evidence_note.trim()} onClick={async () => {
+                await doAction("record_prior_adjustment", {
+                  lease_id: priorAdjDialog.leaseId, recovery_period_id: priorAdjDialog.periodId, adjustment_type: priorAdjDialog.adjType,
+                  state: resolveForm.state, amount: resolveForm.amount || undefined, evidence_note: resolveForm.evidence_note,
+                }, [["cam_prior_period_adjustments", periodId]], "Adjustment resolved");
+                setPriorAdjDialog(null);
+                refetchPriorAdj();
+              }}>Save</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -1267,16 +1029,251 @@ export default function CAMSetup() {
     );
   }
 
-  // ---- Step 7: Readiness ----------------------------------------------------
+  // ============================================================================
+  // Step 5 — Expenses (Requirement 7: complete display)
+  // ============================================================================
+  function Step5() {
+    const [assignForm, setAssignForm] = useState({ recovery_pool_id: "", amount: "" });
+    const [splitRows, setSplitRows] = useState([{ recovery_pool_id: "", amount: "" }]);
 
-  function Step7() {
-    if (!propertyId || !periodId) {
-      return <p className="text-sm text-slate-500">Select a property and period first (Step 1).</p>;
+    return (
+      <div className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Published Expense Inputs</CardTitle>
+            <p className="text-xs text-slate-500 font-normal">Only finalized, CAM-eligible, published expense inputs appear here. Source expenses cannot be created here — use the Expenses module.</p>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Vendor / Description</TableHead><TableHead>Category</TableHead><TableHead>Scope</TableHead>
+                    <TableHead>Service Period</TableHead><TableHead>Amount</TableHead><TableHead>Recoverability</TableHead>
+                    <TableHead>Pool Assignment</TableHead><TableHead /><TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {publishedExpenses.length === 0 && <TableRow><TableCell colSpan={9} className="text-sm text-slate-500 text-center py-4">No published expense inputs for this property.</TableCell></TableRow>}
+                  {publishedExpenses.map((exp) => {
+                    const assigned = (exp.cam_input_pool_assignments || []).reduce((s, a) => s + Number(a.amount || 0), 0);
+                    const unassignedBalance = Number(exp.amount || 0) - assigned;
+                    const vendor = exp._sourceExpense?.vendor || exp._sourceExpense?.vendor_name || "—";
+                    const description = exp._sourceExpense?.description || "—";
+                    const recoverability = exp._classification?.recoverability_result || exp._classification?.recovery_status;
+                    const hasGap = !exp.category || !exp.service_period_start || !exp.service_period_end;
+                    return (
+                      <TableRow key={exp.id} className={hasGap ? "bg-amber-50" : ""}>
+                        <TableCell>
+                          <div className="text-sm font-medium">{vendor}</div>
+                          <div className="text-xs text-slate-500">{description}</div>
+                        </TableCell>
+                        <TableCell>{exp.category ? (categoryNamesById.get(exp.category) || exp.category.slice(0, 8)) : <Badge className="text-[10px] bg-red-100 text-red-700">Missing</Badge>}</TableCell>
+                        <TableCell className="text-xs">{exp.building_id ? "Building" : "Property-Wide"}</TableCell>
+                        <TableCell className="text-xs">
+                          {exp.service_period_start && exp.service_period_end
+                            ? `${exp.service_period_start} → ${exp.service_period_end}`
+                            : <Badge className="text-[10px] bg-amber-100 text-amber-800">Missing</Badge>}
+                        </TableCell>
+                        <TableCell className="font-medium">{fmtCurrency(exp.amount)}</TableCell>
+                        <TableCell><Badge className="text-[10px]">{recoverabilityLabel(recoverability)}</Badge></TableCell>
+                        <TableCell>
+                          {(exp.cam_input_pool_assignments ?? []).length === 0
+                            ? <Badge className="text-[10px] bg-amber-100 text-amber-800">Unassigned</Badge>
+                            : (
+                              <div className="text-xs">
+                                {exp.cam_input_pool_assignments.map((a, i) => <div key={i}>{a.recovery_pools?.name}: {fmtCurrency(a.amount)}</div>)}
+                                {unassignedBalance > 0.005 && <div className="text-amber-700">Unassigned balance: {fmtCurrency(unassignedBalance)}</div>}
+                              </div>
+                            )}
+                        </TableCell>
+                        <TableCell>
+                          <Button size="sm" variant="outline" id={`btn-assign-expense-${exp.id}`} onClick={() => { setExpenseDialog(exp); setSplitRows([{ recovery_pool_id: "", amount: String(unassignedBalance || exp.amount) }]); }}>
+                            {(exp.cam_input_pool_assignments ?? []).length === 0 ? "Assign / Split" : "Adjust Split"}
+                          </Button>
+                        </TableCell>
+                        <TableCell>
+                          <Link to={createPageUrl("Expenses") + (exp.actual_expense_id ? `?expense_id=${exp.actual_expense_id}` : "")} className="text-xs text-blue-600 underline flex items-center gap-1">
+                            Expense Module <ExternalLink className="w-3 h-3" />
+                          </Link>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Dialog open={Boolean(expenseDialog)} onOpenChange={() => setExpenseDialog(null)}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Assign / Split Expense</DialogTitle></DialogHeader>
+            <p className="text-sm text-slate-600">Total amount: <strong>{fmtCurrency(expenseDialog?.amount)}</strong></p>
+            <div className="space-y-2 mt-2">
+              {splitRows.map((row, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Select value={row.recovery_pool_id} onValueChange={(v) => setSplitRows((r) => r.map((x, j) => j === i ? { ...x, recovery_pool_id: v } : x))}>
+                    <SelectTrigger id={`split-pool-${i}`} className="flex-1"><SelectValue placeholder="Pool..." /></SelectTrigger>
+                    <SelectContent>{pools.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <Input id={`split-amount-${i}`} type="number" min={0.01} className="w-32" value={row.amount} onChange={(e) => setSplitRows((r) => r.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))} />
+                  {splitRows.length > 1 && <Button size="sm" variant="ghost" onClick={() => setSplitRows((r) => r.filter((_, j) => j !== i))}><Trash2 className="w-3 h-3 text-red-500" /></Button>}
+                </div>
+              ))}
+              <Button size="sm" variant="outline" id="btn-add-split-row" onClick={() => setSplitRows((r) => [...r, { recovery_pool_id: "", amount: "" }])}>
+                <Plus className="w-3 h-3 mr-1" /> Split Across Another Pool
+              </Button>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setExpenseDialog(null)}>Cancel</Button>
+              <Button id="btn-save-assign-expense" onClick={async () => {
+                for (const row of splitRows) {
+                  if (!row.recovery_pool_id || !row.amount) continue;
+                  await doAction("assign_expense_to_pool", { cam_expense_input_id: expenseDialog.id, recovery_pool_id: row.recovery_pool_id, amount: Number(row.amount) }, [], null);
+                }
+                queryClient.invalidateQueries({ queryKey: ["cam_expense_inputs_published", propertyId] });
+                setExpenseDialog(null);
+                toast.success("Expense assignment saved");
+              }}>Save</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
+
+  // ============================================================================
+  // Step 6 — Estimates & Adjustments (Requirement 8: bulk entry)
+  // ============================================================================
+  function Step6() {
+    const leaseOptions = leases.filter((l) => l.property_id === propertyId);
+    const [bulkForm, setBulkForm] = useState({ lease_id: "", reason: "" });
+    const [ranges, setRanges] = useState([{ amount: "", start_month: "", end_month: "" }]);
+
+    function monthsInRange(startMonth, endMonth) {
+      const rows = [];
+      let cur = new Date(`${startMonth}-01T00:00:00Z`);
+      const end = new Date(`${endMonth}-01T00:00:00Z`);
+      while (cur <= end) {
+        rows.push(cur.toISOString().slice(0, 10));
+        cur = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth() + 1, 1));
+      }
+      return rows;
     }
 
-    const blockingItems = readiness?.blocking_items ?? [];
-    const warningItems = readiness?.warning_items ?? [];
-    const isReady = readiness?.status === "READY";
+    const previewRows = useMemo(() => {
+      const rows = [];
+      for (const r of ranges) {
+        if (!r.amount || !r.start_month || !r.end_month) continue;
+        for (const month_date of monthsInRange(r.start_month, r.end_month)) rows.push({ month_date, amount: Number(r.amount) });
+      }
+      // Later ranges override earlier ones for the same month (last-write-wins on overlap).
+      const byMonth = new Map(rows.map((r) => [r.month_date, r]));
+      return [...byMonth.values()].sort((a, b) => a.month_date.localeCompare(b.month_date));
+    }, [ranges]);
+
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base">Monthly Estimate Schedules</CardTitle>
+            <Button size="sm" id="btn-open-bulk-estimate" onClick={() => setEstimateDialog(true)}>
+              <Plus className="w-3 h-3 mr-1" /> Bulk Add Estimates
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader><TableRow><TableHead>Tenant</TableHead><TableHead>Month</TableHead><TableHead>Amount</TableHead><TableHead>Source</TableHead></TableRow></TableHeader>
+              <TableBody>
+                {estimateSchedules.length === 0 && <TableRow><TableCell colSpan={4} className="text-sm text-slate-500 text-center py-4">No estimate schedules for this period. No existing Revenue/Billing source was found to import from — enter manually below.</TableCell></TableRow>}
+                {estimateSchedules.map((es) => (
+                  <TableRow key={es.id}>
+                    <TableCell>{es.leases?.tenant_name ?? "—"}</TableCell>
+                    <TableCell>{es.month_date}</TableCell>
+                    <TableCell>{fmtCurrency(es.amount)}</TableCell>
+                    <TableCell><Badge className="text-[10px]">{es.source === "imported" ? "Imported" : es.source === "generated_from_budget" ? "From Budget" : "Manual"}</Badge></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+
+        <Dialog open={estimateDialog} onOpenChange={setEstimateDialog}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader><DialogTitle>Bulk Add Monthly Estimates</DialogTitle></DialogHeader>
+            <div className="space-y-3">
+              <div><Label>Lease</Label>
+                <Select value={bulkForm.lease_id} onValueChange={(v) => setBulkForm({ ...bulkForm, lease_id: v })}>
+                  <SelectTrigger id="bulk-est-lease"><SelectValue placeholder="Select lease..." /></SelectTrigger>
+                  <SelectContent>{leaseOptions.map((l) => <SelectItem key={l.id} value={l.id}>{l.tenant_name ?? l.id.slice(0, 8)}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <p className="text-xs text-slate-500">Add one row per effective range (use multiple rows if the monthly amount changes during the year).</p>
+              {ranges.map((r, i) => (
+                <div key={i} className="grid grid-cols-4 gap-2 items-end">
+                  <div><Label className="text-[10px]">Monthly $</Label><Input id={`bulk-est-amount-${i}`} type="number" value={r.amount} onChange={(e) => setRanges((rr) => rr.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))} /></div>
+                  <div><Label className="text-[10px]">Start Month</Label><Input id={`bulk-est-start-${i}`} type="month" value={r.start_month} onChange={(e) => setRanges((rr) => rr.map((x, j) => j === i ? { ...x, start_month: e.target.value } : x))} /></div>
+                  <div><Label className="text-[10px]">End Month</Label><Input id={`bulk-est-end-${i}`} type="month" value={r.end_month} onChange={(e) => setRanges((rr) => rr.map((x, j) => j === i ? { ...x, end_month: e.target.value } : x))} /></div>
+                  {ranges.length > 1 && <Button size="sm" variant="ghost" onClick={() => setRanges((rr) => rr.filter((_, j) => j !== i))}><Trash2 className="w-3 h-3 text-red-500" /></Button>}
+                </div>
+              ))}
+              <Button size="sm" variant="outline" id="btn-add-estimate-range" onClick={() => setRanges((rr) => [...rr, { amount: "", start_month: "", end_month: "" }])}>
+                <Plus className="w-3 h-3 mr-1" /> Add Effective Range
+              </Button>
+              <div><Label>Reason / Source (required)</Label><Textarea id="bulk-est-reason" rows={2} value={bulkForm.reason} onChange={(e) => setBulkForm({ ...bulkForm, reason: e.target.value })} placeholder="e.g. Per lease escalation schedule, confirmed with tenant." /></div>
+              {previewRows.length > 0 && (
+                <div className="text-xs text-slate-500 border rounded p-2 max-h-32 overflow-y-auto">
+                  <span id="bulk-est-preview-count" className="font-medium">{previewRows.length} monthly rows will be created</span>: {previewRows.map((r) => `${r.month_date.slice(0, 7)}=$${r.amount}`).join(", ")}
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEstimateDialog(false)}>Cancel</Button>
+              <Button
+                id="btn-save-bulk-estimate"
+                disabled={!bulkForm.lease_id || !bulkForm.reason.trim() || previewRows.length === 0}
+                onClick={async () => {
+                  await doAction("create_estimate_schedules_bulk", { lease_id: bulkForm.lease_id, recovery_period_id: periodId, rows: previewRows, reason: bulkForm.reason }, [["cam_estimate_schedules", periodId]], `${previewRows.length} estimate rows created`);
+                  setEstimateDialog(false);
+                  setRanges([{ amount: "", start_month: "", end_month: "" }]);
+                  setBulkForm({ lease_id: "", reason: "" });
+                  refetchEstimates();
+                }}
+              >
+                Create {previewRows.length || ""} Rows
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
+
+  // ============================================================================
+  // Step 7 — Readiness Action Center (Requirement 9)
+  // ============================================================================
+  function Step7() {
+    if (!propertyId || !periodId) return <p className="text-sm text-slate-500">Select a property and period first (Step 1).</p>;
+
+    const blocking = readiness.items.filter((i) => i.severity === "blocking");
+    const warnings = readiness.items.filter((i) => i.severity === "warning");
+    const completed = [
+      { label: "Recovery period selected", done: Boolean(periodId) },
+      { label: "At least one recovery pool configured", done: pools.length > 0 },
+      { label: "Every published expense assigned to a pool", done: summary.unassigned === 0 },
+    ];
+
+    function resolutionLink(item) {
+      const map = {
+        POLICY_MISSING: 4, POLICY_CONFLICT: 4, PREMISES_MISSING: 4, AREA_MISSING: 4,
+        POOL_CATEGORY_MISSING: 2, POOL_ASSIGNMENT_MISSING: 5, ALLOCATION_UNBALANCED: 5,
+        BASE_YEAR_MISSING: 4, CAP_HISTORY_MISSING: 4, PRIOR_ADJUSTMENT_UNKNOWN: 4,
+        EXPENSE_CATEGORY_MISSING: 5, EXPENSE_SERVICE_PERIOD_MISSING: 5, OCCUPANCY_UNKNOWN: 3,
+      };
+      return map[item.code] ?? null;
+    }
 
     return (
       <div className="space-y-6">
@@ -1284,56 +1281,68 @@ export default function CAMSetup() {
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-base">Setup Readiness</CardTitle>
             <Button size="sm" variant="outline" id="btn-recheck-readiness" onClick={() => refetchReadiness()} disabled={readinessLoading}>
-              {readinessLoading ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
-              Re-check
+              {readinessLoading ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <RefreshCw className="w-3 h-3 mr-1" />} Re-check
             </Button>
           </CardHeader>
-          <CardContent>
-            {readinessLoading && <p className="text-sm text-slate-500">Checking readiness…</p>}
-            {!readinessLoading && readiness && (
-              <div className="space-y-4">
-                <div className="flex items-center gap-3">
-                  <StatusBadge status={readiness.status} />
-                  {isReady && <span className="text-sm text-emerald-700 font-medium">Setup is complete. You can now run the CAM calculation.</span>}
-                </div>
+          <CardContent className="space-y-4">
+            <div className="flex items-center gap-3">
+              <StatusBadge ready={readiness.ready} />
+              {readiness.ready && <span id="readiness-ready-text" className="text-sm text-emerald-700 font-medium">CAM Setup is READY</span>}
+            </div>
 
-                {blockingItems.length > 0 && (
-                  <div>
-                    <p className="text-sm font-semibold text-red-700 mb-2">Blocking Issues ({blockingItems.length})</p>
-                    <div className="space-y-1">
-                      {blockingItems.map((item, i) => (
-                        <div key={i} className="flex items-start gap-2 p-2 bg-red-50 rounded text-sm">
-                          <XCircle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
-                          <span>{item.message ?? item.code ?? JSON.stringify(item)}</span>
-                        </div>
-                      ))}
-                    </div>
+            <div>
+              <p className="text-sm font-semibold text-slate-700 mb-2">Completed Requirements</p>
+              <div className="space-y-1">
+                {completed.map((c, i) => (
+                  <div key={i} className="flex items-center gap-2 text-sm">
+                    {c.done ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <XCircle className="w-4 h-4 text-slate-300" />}
+                    <span className={c.done ? "" : "text-slate-400"}>{c.label}</span>
                   </div>
-                )}
-
-                {warningItems.length > 0 && (
-                  <div>
-                    <p className="text-sm font-semibold text-amber-700 mb-2">Warnings ({warningItems.length})</p>
-                    <div className="space-y-1">
-                      {warningItems.map((item, i) => (
-                        <div key={i} className="flex items-start gap-2 p-2 bg-amber-50 rounded text-sm">
-                          <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
-                          <span>{item.message ?? item.code ?? JSON.stringify(item)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {isReady && (
-                  <Link
-                    to={createPageUrl("CAMRun") + `?property_id=${propertyId}&recovery_period_id=${periodId}`}
-                    id="btn-go-to-cam-run"
-                  >
-                    <Button className="mt-2" id="btn-launch-cam-run">Open CAM Runs →</Button>
-                  </Link>
-                )}
+                ))}
               </div>
+            </div>
+
+            {blocking.length > 0 && (
+              <div>
+                <p className="text-sm font-semibold text-red-700 mb-2">Blocking Issues ({blocking.length})</p>
+                <div className="space-y-1">
+                  {blocking.map((item, i) => {
+                    const jump = resolutionLink(item);
+                    return (
+                      <div key={i} className="flex items-start justify-between gap-2 p-2 bg-red-50 rounded text-sm">
+                        <div className="flex items-start gap-2">
+                          <XCircle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+                          <div>
+                            <div>{item.message}</div>
+                            <div className="text-xs text-slate-500">{item.rawMessage}</div>
+                          </div>
+                        </div>
+                        {jump && <Button size="sm" variant="outline" onClick={() => setStep(jump)}>Resolve →</Button>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {warnings.length > 0 && (
+              <div>
+                <p className="text-sm font-semibold text-amber-700 mb-2">Warnings ({warnings.length})</p>
+                <div className="space-y-1">
+                  {warnings.map((item, i) => (
+                    <div key={i} className="flex items-start gap-2 p-2 bg-amber-50 rounded text-sm">
+                      <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                      <span>{item.message}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {readiness.ready && (
+              <Link to={createPageUrl("CAMRun") + `?property_id=${propertyId}&recovery_period_id=${periodId}`} id="btn-go-to-cam-run">
+                <Button size="lg" className="mt-2" id="btn-launch-cam-run">Start CAM Run →</Button>
+              </Link>
             )}
           </CardContent>
         </Card>
@@ -1342,19 +1351,46 @@ export default function CAMSetup() {
   }
 
   // ---- Step renderer --------------------------------------------------------
-
   const stepComponents = [null, Step1, Step2, Step3, Step4, Step5, Step6, Step7];
   const StepComponent = stepComponents[step];
 
-  const canProceed = step < STEPS.length;
-  const canGoBack = step > 1;
-
   return (
-    <div className="space-y-6 p-4 lg:p-6">
-      <PageHeader
-        title="CAM Setup"
-        subtitle="Complete guided setup to prepare for a CAM recovery run"
-      />
+    <div className="space-y-4 p-4 lg:p-6">
+      <PageHeader title="CAM Setup" subtitle="Guided, automated setup for a CAM recovery run" />
+
+      {/* Requirement 1: persistent scope bar */}
+      <Card className="sticky top-0 z-10 border-slate-300 shadow-sm">
+        <CardContent className="p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={propertyId} onValueChange={setPropertyId}>
+              <SelectTrigger id="scope-property" className="w-56"><SelectValue placeholder="Property..." /></SelectTrigger>
+              <SelectContent>{properties.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
+            </Select>
+            <Select value={buildingId} onValueChange={setBuildingId} disabled={!propertyId || buildings.length === 0}>
+              <SelectTrigger id="scope-building" className="w-44"><SelectValue placeholder="All Buildings" /></SelectTrigger>
+              <SelectContent>{buildings.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
+            </Select>
+            <Select value={unitId} onValueChange={setUnitId} disabled={!buildingId}>
+              <SelectTrigger id="scope-unit" className="w-40"><SelectValue placeholder="All Units" /></SelectTrigger>
+              <SelectContent />
+            </Select>
+            <Select value={activeCalendar?.id || ""} disabled>
+              <SelectTrigger id="scope-calendar" className="w-40"><SelectValue placeholder="Calendar" /></SelectTrigger>
+              <SelectContent>{activeCalendar && <SelectItem value={activeCalendar.id}>{activeCalendar.name}</SelectItem>}</SelectContent>
+            </Select>
+            <Select value={periodId} onValueChange={setPeriodId} disabled={periods.length === 0}>
+              <SelectTrigger id="scope-period" className="w-44"><SelectValue placeholder="Period..." /></SelectTrigger>
+              <SelectContent>{periods.map((p) => <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>)}</SelectContent>
+            </Select>
+            {propertyId && periodId && (
+              <div id="scope-readiness-badge" className="ml-auto">
+                <StatusBadge ready={readiness.ready} />
+                {!readiness.ready && readiness.blockingCount > 0 && <span className="ml-2 text-xs text-red-600">{readiness.blockingCount} blocking</span>}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Step progress bar */}
       <div className="flex items-center gap-1 overflow-x-auto pb-2">
@@ -1364,14 +1400,10 @@ export default function CAMSetup() {
           const isDone = s.id < step;
           return (
             <React.Fragment key={s.id}>
-              <button
-                id={`step-tab-${s.id}`}
-                onClick={() => setStep(s.id)}
+              <button id={`step-tab-${s.id}`} onClick={() => setStep(s.id)}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors
-                  ${isActive ? "bg-blue-600 text-white" : isDone ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                {s.label}
+                  ${isActive ? "bg-blue-600 text-white" : isDone ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>
+                <Icon className="w-3.5 h-3.5" /> {s.label}
               </button>
               {idx < STEPS.length - 1 && <ChevronRight className="w-4 h-4 text-slate-300 flex-shrink-0" />}
             </React.Fragment>
@@ -1379,17 +1411,13 @@ export default function CAMSetup() {
         })}
       </div>
 
-      {/* Step content */}
-      <div className="min-h-[300px]">
-        {StepComponent && <StepComponent />}
-      </div>
+      <div className="min-h-[300px]">{StepComponent && <StepComponent />}</div>
 
-      {/* Navigation */}
       <div className="flex justify-between pt-2 border-t">
-        <Button variant="outline" onClick={() => setStep((s) => s - 1)} disabled={!canGoBack} id="btn-step-back">
+        <Button variant="outline" onClick={() => setStep(step - 1)} disabled={!canGoBack} id="btn-step-back">
           <ChevronLeft className="w-4 h-4 mr-1" /> Back
         </Button>
-        <Button onClick={() => setStep((s) => s + 1)} disabled={!canProceed} id="btn-step-next">
+        <Button onClick={() => setStep(step + 1)} disabled={!canProceed} id="btn-step-next">
           Next <ChevronRight className="w-4 h-4 ml-1" />
         </Button>
       </div>

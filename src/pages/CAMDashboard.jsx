@@ -298,8 +298,133 @@ export default function CAMDashboard() {
       />
 
       {!scope.targetPropertyId ? (
-        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-          Select a property to view its CAM overview summary.
+        <div className="space-y-6">
+          {/* Executive Portfolio Cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <Card className="bg-gradient-to-br from-teal-50 to-emerald-50/40 border-teal-100 shadow-sm">
+              <CardContent className="p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Portfolio CAM Expenses</p>
+                  <p className="text-2xl font-bold text-slate-900 mt-1">{fmtCurrency(expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0))}</p>
+                  <p className="text-xs text-teal-700 mt-1 font-medium">{expenses.length} expense item(s) logged</p>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-teal-500/10 flex items-center justify-center text-teal-600">
+                  <DollarSign className="w-5 h-5" />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-gradient-to-br from-blue-50 to-indigo-50/40 border-blue-100 shadow-sm">
+              <CardContent className="p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Managed Properties</p>
+                  <p className="text-2xl font-bold text-slate-900 mt-1">{properties.length}</p>
+                  <p className="text-xs text-blue-700 mt-1 font-medium">{leaseList.length} active lease(s)</p>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-600">
+                  <Building2 className="w-5 h-5" />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-gradient-to-br from-purple-50 to-indigo-50/40 border-purple-100 shadow-sm">
+              <CardContent className="p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Active Recovery Policies</p>
+                  <p className="text-2xl font-bold text-slate-900 mt-1">{leaseList.filter((l) => l.cam_calculation_method || l.cam_cap_type).length || leaseList.length}</p>
+                  <p className="text-xs text-purple-700 mt-1 font-medium">Materialized rules ready</p>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-600">
+                  <ClipboardCheck className="w-5 h-5" />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-gradient-to-br from-amber-50 to-orange-50/40 border-amber-100 shadow-sm">
+              <CardContent className="p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Portfolio Quick Setup</p>
+                  <p className="text-2xl font-bold text-slate-900 mt-1">Ready</p>
+                  <p className="text-xs text-amber-700 mt-1 font-medium">Select property below</p>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-600">
+                  <Calculator className="w-5 h-5" />
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Properties CAM Status Table */}
+          <Card className="border-slate-200 shadow-sm">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-base font-semibold">Properties CAM Summary</CardTitle>
+                <p className="text-xs text-slate-500 mt-0.5">Select any property to view detailed pool breakdowns, readiness, and calculation runs</p>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {properties.length === 0 ? (
+                <p className="text-sm text-slate-400 py-6 text-center">No properties found in this organization.</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Property Name</TableHead>
+                      <TableHead>Address / Code</TableHead>
+                      <TableHead className="text-center">Active Leases</TableHead>
+                      <TableHead className="text-right">CAM Expenses</TableHead>
+                      <TableHead className="text-center">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {properties.map((prop) => {
+                      const propLeases = leaseList.filter((l) => l.property_id === prop.id || l.propertyId === prop.id);
+                      const propExpenses = expenses.filter((e) => e.property_id === prop.id || e.propertyId === prop.id);
+                      const propExpTotal = propExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+
+                      return (
+                        <TableRow key={prop.id} className="hover:bg-slate-50/80 transition-colors">
+                          <TableCell className="font-semibold text-slate-900">
+                            <div className="flex items-center gap-2">
+                              <Building2 className="w-4 h-4 text-teal-600" />
+                              <span>{prop.name}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-slate-500 text-xs">{prop.address || prop.code || "—"}</TableCell>
+                          <TableCell className="text-center">
+                            <Badge variant="outline" className="text-xs font-semibold">{propLeases.length} leases</Badge>
+                          </TableCell>
+                          <TableCell className="text-right font-medium text-slate-900">{fmtCurrency(propExpTotal)}</TableCell>
+                          <TableCell className="text-center">
+                            <div className="flex items-center justify-center gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs border-teal-200 text-teal-700 hover:bg-teal-50"
+                                onClick={() => setScopeProperty(prop.id)}
+                              >
+                                View Overview →
+                              </Button>
+                              <Link to={`${createPageUrl("CAMSetup")}?property_id=${prop.id}`}>
+                                <Button size="sm" variant="ghost" className="h-7 text-xs text-slate-600">
+                                  Setup
+                                </Button>
+                              </Link>
+                              <Link to={`${createPageUrl("CAMRun")}?property_id=${prop.id}`}>
+                                <Button size="sm" variant="ghost" className="h-7 text-xs text-teal-600">
+                                  Runs
+                                </Button>
+                              </Link>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
         </div>
       ) : (
         <div className="space-y-6">

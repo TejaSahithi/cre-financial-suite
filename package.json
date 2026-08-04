@@ -14,6 +14,7 @@
     "preview": "vite preview",
     "test:e2e:phase5f": "playwright test e2e/phase5f/lease-review-workflow.spec.js",
     "test:e2e:phase4a": "playwright test e2e/phase4a/cam-run-workflow.spec.js",
+    "test:e2e:cam-setup-ux": "playwright test e2e/cam-setup-ux/cam-setup-wizard.spec.js",
     "check:deprecated-providers": "node scripts/check-no-deprecated-providers.mjs",
     "check:review-schema": "node scripts/check-review-schema-boundaries.mjs",
     "benchmark:lease-intelligence": "node scripts/run-lease-intelligence-benchmark.mjs",

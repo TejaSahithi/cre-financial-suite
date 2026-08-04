@@ -42,6 +42,8 @@ export const ENTITIES = {
   ComputationSnapshot: 'computation_snapshots',
   ExpenseClassification: 'expense_classifications',
   BudgetLineItem: 'budget_line_items',
+  ExpenseCategory: 'expense_categories',
+  ScopeExpenseCategory: 'scope_expense_categories',
 };
 
 /**
@@ -52,11 +54,14 @@ export const ENTITIES = {
  */
 export function resolveTableName(entityName) {
   if (ENTITIES[entityName]) return ENTITIES[entityName];
-  // Fallback: PascalCase → snake_case, then pluralise
+  // Fallback: PascalCase → snake_case, then pluralise correctly
   const snake = entityName
     .replace(/([A-Z])/g, '_$1')
     .toLowerCase()
     .replace(/^_/, '');
+  if (snake.endsWith('y') && !/[aeiou]y$/.test(snake)) {
+    return `${snake.slice(0, -1)}ies`;
+  }
   return `${snake}s`;
 }
 

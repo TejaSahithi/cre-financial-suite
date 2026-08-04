@@ -30,11 +30,28 @@
 //     assign_expense_to_pool      → assign_cam_input_to_pool RPC
 //
 //   ESTIMATES / ADJUSTMENTS
-//     create_estimate_schedule    → upsert into cam_estimate_schedules
-//     record_prior_adjustment     → record_cam_prior_period_adjustment RPC
+//     create_estimate_schedule       → upsert into cam_estimate_schedules
+//     create_estimate_schedules_bulk → bulk upsert into cam_estimate_schedules (one lease, many months)
+//     record_prior_adjustment        → record_cam_prior_period_adjustment RPC
 //
 // No action performs generic table CRUD. Every write is a controlled,
 // audited command with org-scoped authorization.
+//
+// Corrections made when this file was extended for the CAM Setup UX pass:
+//   - resolve_missing_policy_value / record_prior_adjustment previously
+//     called record_cam_prior_period_adjustment with p_evidence_note, which
+//     is not a parameter of that RPC (the actual name is p_notes) -- every
+//     call failed. Fixed.
+//   - remove_pool_participant previously set status='removed', which
+//     recovery_pool_lease_participants' CHECK constraint does not allow
+//     (only 'active'/'ended') -- every call failed. Fixed to set
+//     status='ended' + effective_to=today, with the now-mandatory reason
+//     recorded in notes and mirrored to audit_logs.
+//   - assign_scope_member previously upserted with
+//     onConflict:"pool_id,scope_id", but recovery_pool_scope_members has no
+//     matching unique/exclusion constraint on exactly those two columns
+//     (only a GIST date-range exclusion) -- every call failed. Fixed to
+//     select-then-insert-or-update against the currently-open row.
 import { corsHeaders } from "../_shared/cors.ts";
 import { assertPageAccess, assertPropertyAccess, getUserOrgId, verifyUser } from "../_shared/supabase.ts";
 
@@ -59,6 +76,7 @@ const VALID_ACTIONS = new Set([
   "assign_expense_to_pool",
   // Estimates / Adjustments
   "create_estimate_schedule",
+  "create_estimate_schedules_bulk",
   "record_prior_adjustment",
 ]);
 
@@ -226,14 +244,32 @@ Deno.serve(async (req: Request) => {
       if (!poolRow) throw new Error("Pool not found for this organization");
       await guardProperty(poolRow.property_id);
 
-      const { data, error } = await supabaseAdmin
+      // recovery_pool_scope_members has no plain UNIQUE(pool_id, scope_id) --
+      // only a GIST date-range exclusion constraint -- so there is no
+      // matching onConflict target for a real upsert. Instead: update the
+      // currently-open (effective_to IS NULL) row for this exact
+      // pool/scope/type if one exists, otherwise insert a new one.
+      const { data: existing, error: existingError } = await supabaseAdmin
         .from("recovery_pool_scope_members")
-        .upsert(
-          { org_id: orgId, pool_id: poolId, scope_type: scopeType, scope_id: scopeId, effective_from: effectiveFrom, effective_to: body?.effective_to ?? null, include_in_denominator: includeInDenominator },
-          { onConflict: "pool_id,scope_id" },
-        )
-        .select("*").single();
-      if (error) throw new Error(error.message);
+        .select("id").eq("pool_id", poolId).eq("scope_id", scopeId).eq("scope_type", scopeType).is("effective_to", null).maybeSingle();
+      if (existingError) throw new Error(existingError.message);
+
+      let data;
+      if (existing) {
+        const { data: updated, error: updateError } = await supabaseAdmin
+          .from("recovery_pool_scope_members")
+          .update({ effective_from: effectiveFrom, effective_to: body?.effective_to ?? null, include_in_denominator: includeInDenominator, updated_at: new Date().toISOString() })
+          .eq("id", existing.id).select("*").single();
+        if (updateError) throw new Error(updateError.message);
+        data = updated;
+      } else {
+        const { data: inserted, error: insertError } = await supabaseAdmin
+          .from("recovery_pool_scope_members")
+          .insert({ org_id: orgId, pool_id: poolId, scope_type: scopeType, scope_id: scopeId, effective_from: effectiveFrom, effective_to: body?.effective_to ?? null, include_in_denominator: includeInDenominator })
+          .select("*").single();
+        if (insertError) throw new Error(insertError.message);
+        data = inserted;
+      }
       result = { scope_member: data };
 
     } else if (action === "configure_pool_grossup") {
@@ -268,14 +304,22 @@ Deno.serve(async (req: Request) => {
       if (!leaseRow) throw new Error("Lease not found for this organization");
       await guardProperty(leaseRow.property_id);
 
+      const notes = String(body?.notes ?? body?.reason ?? "").trim() || null;
       const { data, error } = await supabaseAdmin.rpc("add_recovery_pool_lease_participant", {
-        ...actorArgs, p_pool_id: poolId, p_lease_id: leaseId, p_effective_from: effectiveFrom,
+        ...actorArgs, p_pool_id: poolId, p_lease_id: leaseId, p_effective_from: effectiveFrom, p_notes: notes,
       });
       if (error) throw new Error(error.message);
       result = data;
 
     } else if (action === "remove_pool_participant") {
+      // recovery_pool_lease_participants.status is CHECK-constrained to
+      // ('active','ended') -- there is no 'removed' value. Excluding a
+      // suggested/participating lease is represented as the participation
+      // window ending today, with the mandatory reason captured in notes
+      // (and mirrored to audit_logs) rather than a status value the schema
+      // doesn't support.
       const participantId = requireUUID(body?.participant_id, "participant_id");
+      const reason = requireString(body?.reason, "reason");
 
       const { data: participantRow, error: participantError } = await supabaseAdmin
         .from("recovery_pool_lease_participants")
@@ -286,12 +330,21 @@ Deno.serve(async (req: Request) => {
       if (participantError) throw new Error(participantError.message);
       if (!participantRow) throw new Error("Participant not found for this organization");
 
+      const today = new Date().toISOString().slice(0, 10);
       const { error } = await supabaseAdmin
         .from("recovery_pool_lease_participants")
-        .update({ status: "removed", updated_at: new Date().toISOString() })
+        .update({ status: "ended", effective_to: today, notes: reason, updated_at: new Date().toISOString() })
         .eq("id", participantId)
         .eq("org_id", orgId);
       if (error) throw new Error(error.message);
+
+      await supabaseAdmin.from("audit_logs").insert({
+        org_id: orgId, entity_type: "RecoveryPoolLeaseParticipant", entity_id: participantId,
+        action: "cam_setup_participant_excluded", actor_user_id: user.id, actor_email: user.email ?? "unknown@example.com",
+        severity: "info", source: "edge_function", metadata: { pool_id: participantRow.pool_id, lease_id: participantRow.lease_id, reason },
+        timestamp: new Date().toISOString(),
+      });
+
       result = { removed: true, participant_id: participantId };
 
     // ---- POLICIES -----------------------------------------------------------
@@ -305,7 +358,10 @@ Deno.serve(async (req: Request) => {
       const adjustmentType = requireString(body?.adjustment_type, "adjustment_type");
       const state = requireString(body?.state, "state");
       const amount = ["KNOWN_AMOUNT"].includes(state) ? Number(body?.amount ?? 0) : null;
-      const evidenceNote = String(body?.evidence_note ?? "").trim() || null;
+      // record_cam_prior_period_adjustment's free-text evidence parameter is
+      // named p_notes, not p_evidence_note -- this previously called the RPC
+      // with an unknown named parameter and always failed at the RPC layer.
+      const notes = String(body?.evidence_note ?? body?.notes ?? "").trim() || null;
 
       const { data: leaseRow, error: leaseError } = await supabaseAdmin
         .from("leases").select("property_id").eq("id", leaseId).eq("org_id", orgId).maybeSingle();
@@ -320,7 +376,7 @@ Deno.serve(async (req: Request) => {
         p_adjustment_type: adjustmentType,
         p_state: state,
         p_amount: amount,
-        p_evidence_note: evidenceNote,
+        p_notes: notes,
       });
       if (error) throw new Error(error.message);
       result = data;
@@ -374,6 +430,49 @@ Deno.serve(async (req: Request) => {
       if (error) throw new Error(error.message);
       result = { estimate_schedule: data };
 
+    } else if (action === "create_estimate_schedules_bulk") {
+      // Bulk monthly-row generation for one lease -- the wizard computes the
+      // per-month rows (possibly across several effective-amount ranges)
+      // client-side and sends them here as one call so a multi-month entry
+      // is one auditable write, not N separate ones.
+      const leaseId = requireUUID(body?.lease_id, "lease_id");
+      const recoveryPeriodId = requireUUID(body?.recovery_period_id, "recovery_period_id");
+      const source = String(body?.source ?? "manual").trim();
+      const rows = Array.isArray(body?.rows) ? body.rows : [];
+      if (rows.length === 0) throw new Error("rows is required and must be a non-empty array");
+      for (const row of rows) {
+        requireString(row?.month_date, "rows[].month_date");
+        if (!Number.isFinite(Number(row?.amount))) throw new Error("rows[].amount must be a number");
+      }
+
+      const { data: leaseRow, error: leaseError } = await supabaseAdmin
+        .from("leases").select("property_id").eq("id", leaseId).eq("org_id", orgId).maybeSingle();
+      if (leaseError) throw new Error(leaseError.message);
+      if (!leaseRow) throw new Error("Lease not found for this organization");
+      await guardProperty(leaseRow.property_id);
+
+      const { data, error } = await supabaseAdmin
+        .from("cam_estimate_schedules")
+        .upsert(
+          rows.map((row) => ({
+            org_id: orgId, lease_id: leaseId, recovery_period_id: recoveryPeriodId,
+            month_date: row.month_date, amount: Number(row.amount), source, status: "scheduled",
+          })),
+          { onConflict: "org_id,lease_id,recovery_period_id,month_date" },
+        )
+        .select("*");
+      if (error) throw new Error(error.message);
+
+      await supabaseAdmin.from("audit_logs").insert({
+        org_id: orgId, entity_type: "CamEstimateScheduleBulk", entity_id: leaseId,
+        action: "cam_setup_bulk_estimate_created", actor_user_id: user.id, actor_email: user.email ?? "unknown@example.com",
+        severity: "info", source: "edge_function",
+        metadata: { recovery_period_id: recoveryPeriodId, row_count: rows.length, reason: String(body?.reason ?? "").trim() || null },
+        timestamp: new Date().toISOString(),
+      });
+
+      result = { estimate_schedules: data, count: data?.length ?? 0 };
+
     } else if (action === "record_prior_adjustment") {
       const leaseId = requireUUID(body?.lease_id, "lease_id");
       const recoveryPeriodId = requireUUID(body?.recovery_period_id, "recovery_period_id");
@@ -394,7 +493,7 @@ Deno.serve(async (req: Request) => {
         p_adjustment_type: adjustmentType,
         p_state: state,
         p_amount: amount,
-        p_evidence_note: String(body?.evidence_note ?? "").trim() || null,
+        p_notes: String(body?.evidence_note ?? body?.notes ?? "").trim() || null,
       });
       if (error) throw new Error(error.message);
       result = data;
