@@ -130,6 +130,9 @@ export default function CAMSetup() {
   const [expenseDialog, setExpenseDialog] = useState(null);
   const [estimateDialog, setEstimateDialog] = useState(false);
   const [adjustmentDialog, setAdjustmentDialog] = useState(null);
+  const [prepareCamResult, setPrepareCamResult] = useState(null);
+  const [policyConflictLeaseId, setPolicyConflictLeaseId] = useState(null);
+  const [conflictReasons, setConflictReasons] = useState({});
 
   // ---- Data queries ---------------------------------------------------------
   const { data: properties = [] } = useOrgQuery("Property");
@@ -242,6 +245,36 @@ export default function CAMSetup() {
     return rows;
   }, [policies]);
 
+  // Mirrors evaluate_cam_readiness's POLICY_CONFLICT rule (two active
+  // policies, same lease, same expense category, overlapping effective
+  // window) so the "Resolve" action in Step 7 offers exactly the pair the
+  // readiness exception is about -- never an open-ended pick-any-policy list.
+  const policyConflictsByLeaseId = useMemo(() => {
+    const overlaps = (aFrom, aTo, bFrom, bTo) => aFrom <= (bTo || "9999-12-31") && bFrom <= (aTo || "9999-12-31");
+    const active = policies.filter((p) => p.status !== "superseded");
+    const byLease = new Map();
+    for (const p of active) {
+      if (!byLease.has(p.lease_id)) byLease.set(p.lease_id, []);
+      byLease.get(p.lease_id).push(p);
+    }
+    const result = new Map();
+    for (const [leaseId, leasePolicies] of byLease.entries()) {
+      if (leasePolicies.length < 2) continue;
+      const pairs = [];
+      for (let i = 0; i < leasePolicies.length; i += 1) {
+        for (let j = i + 1; j < leasePolicies.length; j += 1) {
+          const a = leasePolicies[i]; const b = leasePolicies[j];
+          const aCats = new Set((a.lease_recovery_policy_steps || []).map((s) => s.expense_category_id).filter(Boolean));
+          const bCats = new Set((b.lease_recovery_policy_steps || []).map((s) => s.expense_category_id).filter(Boolean));
+          const sharedCategory = [...aCats].some((c) => bCats.has(c));
+          if (sharedCategory && overlaps(a.effective_from, a.effective_to, b.effective_from, b.effective_to)) pairs.push([a, b]);
+        }
+      }
+      if (pairs.length > 0) result.set(leaseId, pairs);
+    }
+    return result;
+  }, [policies]);
+
   const { data: priorAdjustments = [], refetch: refetchPriorAdj } = useQuery({
     queryKey: ["cam_prior_period_adjustments", periodId],
     enabled: Boolean(periodId),
@@ -253,8 +286,14 @@ export default function CAMSetup() {
   });
 
   const { data: publishedExpenses = [] } = useQuery({
-    queryKey: ["cam_expense_inputs_published", propertyId],
-    enabled: Boolean(propertyId),
+    // periodId + selectedPeriod's own start/end are in the key (not just
+    // closed over) so a period switch always refetches/refilters instead of
+    // reusing a cached result scoped to the previous period -- the exact
+    // "prior-year published amounts appearing in this year" bug this fixes
+    // was caused by this query filtering on property_id only, with no
+    // period or fiscal_year predicate at all.
+    queryKey: ["cam_expense_inputs_published", propertyId, periodId, selectedPeriod?.start_date, selectedPeriod?.end_date],
+    enabled: Boolean(propertyId) && Boolean(periodId) && Boolean(selectedPeriod),
     queryFn: async () => {
       const { data, error } = await supabase
         .from("cam_expense_inputs")
@@ -263,7 +302,17 @@ export default function CAMSetup() {
         .eq("publication_status", "published")
         .order("created_at");
       if (error) return [];
-      const rows = data || [];
+      const periodStart = selectedPeriod.start_date;
+      const periodEnd = selectedPeriod.end_date;
+      const periodYear = periodStart ? new Date(`${periodStart}T00:00:00Z`).getUTCFullYear() : null;
+      const inPeriod = (exp) => {
+        if (exp.service_period_start && exp.service_period_end) {
+          return exp.service_period_start <= periodEnd && exp.service_period_end >= periodStart;
+        }
+        if (exp.fiscal_year != null && periodYear != null) return Number(exp.fiscal_year) === periodYear;
+        return false; // no period-identifying data -- excluded rather than guessed
+      };
+      const rows = (data || []).filter(inPeriod);
       // Enrich with vendor/description (from the source Expense record) and
       // recoverability (from the classification record) -- two separate
       // best-effort lookups since actual_expense_id / classification_result_id
@@ -314,6 +363,42 @@ export default function CAMSetup() {
   });
   const doAction = (action, payload, invalidateKeys, successMsg) =>
     mutation.mutateAsync({ action, payload, invalidate: invalidateKeys }, { onSuccess: () => toast.success(successMsg ?? "Saved") });
+
+  // "Prepare CAM Automatically" -- a separate controlled backend command
+  // (prepare-cam-automatically-v2), not a cam-setup-actions-v2 action, since
+  // it orchestrates multiple existing RPCs (backfill, materialize,
+  // readiness) rather than performing one CRUD write. Idempotent: safe to
+  // rerun for the same property+period.
+  const prepareCamMutation = useMutation({
+    mutationFn: () => invokeEdgeFunction("prepare-cam-automatically-v2", { property_id: propertyId, recovery_period_id: periodId }),
+    onSuccess: (result) => {
+      setPrepareCamResult(result);
+      [
+        ["lease_recovery_policies", propertyLeaseIds.join(",")],
+        ["cam-setup-lease-premises", propertyLeaseIds.join(",")],
+        ["cam_expense_inputs_published", propertyId, periodId, selectedPeriod?.start_date, selectedPeriod?.end_date],
+        ["recovery_pools", propertyId, periodId],
+        ["cam_readiness", propertyId, periodId],
+      ].forEach((k) => queryClient.invalidateQueries({ queryKey: k }));
+      toast.success("Prepare CAM Automatically finished — review suggestions below");
+    },
+    onError: (err) => toast.error(err.message || "Prepare CAM Automatically failed"),
+  });
+
+  // Item G: controlled, versioned override for a POLICY_CONFLICT readiness
+  // exception. Only ever supersedes one of the two policies the readiness
+  // engine itself identified as conflicting (policyConflictsByLeaseId) --
+  // never an open pick-any-policy list -- and always requires a reason.
+  const resolveConflictMutation = useMutation({
+    mutationFn: ({ policyId, reason }) => camSetupAction("resolve_policy_conflict", { policy_id_to_supersede: policyId, reason }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["lease_recovery_policies", propertyLeaseIds.join(",")] });
+      queryClient.invalidateQueries({ queryKey: ["cam_readiness", propertyId, periodId] });
+      setPolicyConflictLeaseId(null);
+      toast.success("Conflict resolved");
+    },
+    onError: (err) => toast.error(err.message || "Could not resolve conflict"),
+  });
 
   // ---- Requirement 2: source-data summary ------------------------------------
   const summary = useMemo(() => {
@@ -450,6 +535,27 @@ export default function CAMSetup() {
           </Card>
         )}
 
+        {propertyId && periodId && (
+          <Card className="border-blue-200 bg-blue-50/40">
+            <CardContent className="pt-4 flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-slate-900 flex items-center gap-1.5"><Sparkles className="w-4 h-4 text-blue-600" /> Prepare CAM Automatically</p>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Loads approved leases, premises, policies and published expenses for this property and period, then suggests pools, participants and expense assignments to review below. Nothing is finalized without your confirmation. Safe to run more than once.
+                </p>
+              </div>
+              <Button
+                id="btn-prepare-cam-automatically"
+                onClick={() => prepareCamMutation.mutate()}
+                disabled={prepareCamMutation.isPending}
+              >
+                {prepareCamMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Sparkles className="w-4 h-4 mr-1.5" />}
+                Prepare CAM Automatically
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
         {propertyId && periodId && <SourceDataSummaryCard />}
 
         <Dialog open={calendarDialog} onOpenChange={setCalendarDialog}>
@@ -500,6 +606,74 @@ export default function CAMSetup() {
                 refetchPeriods();
                 if (created?.period?.id) setPeriodId(created.period.id);
               }}>Create Period</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={Boolean(prepareCamResult)} onOpenChange={(open) => { if (!open) setPrepareCamResult(null); }}>
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader><DialogTitle>Prepare CAM Automatically — Results</DialogTitle></DialogHeader>
+            {prepareCamResult && (
+              <div className="space-y-4 text-sm">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="border rounded p-2"><p className="text-xs text-slate-500">Policies materialized</p><p className="text-lg font-semibold">{prepareCamResult.created?.policies_materialized ?? 0}</p></div>
+                  <div className="border rounded p-2"><p className="text-xs text-slate-500">Suggested pools</p><p className="text-lg font-semibold">{prepareCamResult.suggested?.pools?.length ?? 0}</p></div>
+                  <div className="border rounded p-2"><p className="text-xs text-slate-500">Suggested expense assignments</p><p className="text-lg font-semibold">{prepareCamResult.suggested?.expense_assignments?.length ?? 0}</p></div>
+                  <div className="border rounded p-2"><p className="text-xs text-slate-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3 text-red-600" /> Blocking exceptions</p><p className="text-lg font-semibold">{prepareCamResult.blocking?.length ?? 0}</p></div>
+                </div>
+
+                {prepareCamResult.conflicting?.duplicate_lease_groups?.length > 0 && (
+                  <div className="border border-amber-300 bg-amber-50 rounded p-3">
+                    <p className="font-semibold text-amber-900 mb-1.5">Possible duplicate leases found ({prepareCamResult.conflicting.duplicate_lease_groups.length})</p>
+                    <p className="text-xs text-amber-800 mb-2">These were excluded from suggestions until resolved. Nothing was merged or deleted automatically.</p>
+                    <ul className="space-y-1.5">
+                      {prepareCamResult.conflicting.duplicate_lease_groups.map((g, i) => (
+                        <li key={i} className="text-xs text-amber-900">
+                          <span className="font-medium">{g.tenant_name}</span> — {g.lease_count} lease records{g.likely_duplicate ? " (likely duplicate)" : " (possible multi-premises)"}
+                          <br /><span className="text-amber-700">{g.reason}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {prepareCamResult.conflicting?.materialization_blocked?.length > 0 && (
+                  <div className="border border-red-300 bg-red-50 rounded p-3">
+                    <p className="font-semibold text-red-900 mb-1.5">Rules that could not be materialized ({prepareCamResult.conflicting.materialization_blocked.length})</p>
+                    <ul className="space-y-1 text-xs text-red-800">
+                      {prepareCamResult.conflicting.materialization_blocked.map((m, i) => <li key={i}>{m.reason}</li>)}
+                    </ul>
+                  </div>
+                )}
+
+                {prepareCamResult.suggested?.pools?.length > 0 && (
+                  <div>
+                    <p className="font-semibold mb-1.5">Suggested pools</p>
+                    <ul className="space-y-1 text-xs">
+                      {prepareCamResult.suggested.pools.map((p, i) => (
+                        <li key={i} className="flex justify-between border-b py-1">
+                          <span>{p.category_name || p.expense_category_id}</span>
+                          <span className="text-slate-500">{p.expense_count} expenses · {fmtCurrency(p.expense_total)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-xs text-slate-500 mt-1.5">Go to Step 2 (Pools) to confirm these suggestions.</p>
+                  </div>
+                )}
+
+                {prepareCamResult.missing?.leases_without_any_policy?.length > 0 && (
+                  <div className="border border-slate-200 rounded p-3">
+                    <p className="font-semibold mb-1.5">Leases still missing any recovery policy ({prepareCamResult.missing.leases_without_any_policy.length})</p>
+                    <ul className="text-xs text-slate-600 space-y-0.5">
+                      {prepareCamResult.missing.leases_without_any_policy.map((l, i) => <li key={i}>{l.tenant_name}</li>)}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPrepareCamResult(null)}>Close</Button>
+              <Button id="btn-prepare-cam-goto-pools" onClick={() => { setPrepareCamResult(null); setStep(2); }}>Review Pools →</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -1308,6 +1482,7 @@ export default function CAMSetup() {
                 <div className="space-y-1">
                   {blocking.map((item, i) => {
                     const jump = resolutionLink(item);
+                    const isPolicyConflict = item.code === "POLICY_CONFLICT" && policyConflictsByLeaseId.has(item.entityId);
                     return (
                       <div key={i} className="flex items-start justify-between gap-2 p-2 bg-red-50 rounded text-sm">
                         <div className="flex items-start gap-2">
@@ -1317,7 +1492,11 @@ export default function CAMSetup() {
                             <div className="text-xs text-slate-500">{item.rawMessage}</div>
                           </div>
                         </div>
-                        {jump && <Button size="sm" variant="outline" onClick={() => setStep(jump)}>Resolve →</Button>}
+                        {isPolicyConflict ? (
+                          <Button size="sm" variant="outline" id="btn-resolve-policy-conflict" onClick={() => setPolicyConflictLeaseId(item.entityId)}>Resolve Conflict →</Button>
+                        ) : (
+                          jump && <Button size="sm" variant="outline" onClick={() => setStep(jump)}>Resolve →</Button>
+                        )}
                       </div>
                     );
                   })}
@@ -1346,6 +1525,40 @@ export default function CAMSetup() {
             )}
           </CardContent>
         </Card>
+
+        <Dialog open={Boolean(policyConflictLeaseId)} onOpenChange={(open) => { if (!open) setPolicyConflictLeaseId(null); }}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader><DialogTitle>Resolve Policy Conflict</DialogTitle></DialogHeader>
+            <p className="text-xs text-slate-500">
+              These two active policies cover the same lease and expense category with overlapping effective dates. Choose which one to supersede and provide a reason — this is recorded as a versioned, audited override, not a silent change.
+            </p>
+            {(policyConflictsByLeaseId.get(policyConflictLeaseId)?.[0] ?? []).map((pol) => {
+              const summ = summarizePolicy(pol, pol.lease_recovery_policy_steps, categoryNamesById);
+              return (
+                <div key={pol.id} className="border rounded p-3 space-y-2">
+                  <p className="text-sm font-semibold">{pol.leases?.tenant_name ?? "—"} — {summ.hasCategory ? summ.categoryName : "Category not derivable"}</p>
+                  <p className="text-xs text-slate-600">{summ.shareDescription} · Effective {summ.effectiveFrom}{summ.effectiveTo ? ` → ${summ.effectiveTo}` : ""}</p>
+                  <p className="text-xs text-slate-500">Source evidence: {pol.source_evidence?.exact_source_text || "—"}</p>
+                  <Textarea
+                    placeholder="Reason for superseding this policy (required)"
+                    value={conflictReasons[pol.id] || ""}
+                    onChange={(e) => setConflictReasons({ ...conflictReasons, [pol.id]: e.target.value })}
+                  />
+                  <Button
+                    size="sm" variant="outline" id={`btn-supersede-policy-${pol.id}`}
+                    disabled={!conflictReasons[pol.id]?.trim() || resolveConflictMutation.isPending}
+                    onClick={() => resolveConflictMutation.mutate({ policyId: pol.id, reason: conflictReasons[pol.id] })}
+                  >
+                    Supersede This Policy
+                  </Button>
+                </div>
+              );
+            })}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPolicyConflictLeaseId(null)}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }

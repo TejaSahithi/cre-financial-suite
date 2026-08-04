@@ -56,6 +56,7 @@ const navSections = [
       { label: "Overview", page: "CAMDashboard" },
       { label: "Setup", page: "CAMSetup" },
       { label: "Runs", page: "CAMRun" },
+      { label: "Budget Readiness", page: "BudgetReadiness" },
     ]
   },
   { label: "Revenue", icon: TrendingUp, page: "Revenue" },

@@ -2286,14 +2286,26 @@ export const expenseService = {
           expense.linked_expense_rule_id ||
           expense.recovery_rule_id ||
           linkedExpenseRuleId;
-        camEligible =
-          existingClassification?.cam_eligible ||
-          expense.cam_eligible ||
-          (recoveryStatus === "recoverable"
-            ? "yes"
-            : recoveryStatus === "conditional"
-              ? "conditional"
-              : "no");
+        {
+          const camEligibleCandidate =
+            existingClassification?.cam_eligible ||
+            expense.cam_eligible ||
+            (recoveryStatus === "recoverable"
+              ? "yes"
+              : recoveryStatus === "conditional"
+                ? "conditional"
+                : "no");
+          // A stale existingClassification.cam_eligible ("yes") can survive
+          // here even after preserveManualReview recomputes recoveryStatus
+          // above to non_recoverable/excluded — the two fields live on the
+          // same row but aren't guaranteed to have been written together.
+          // Never let a non-recoverable/excluded row carry cam_eligible="yes"
+          // forward, regardless of which field the "yes" came from.
+          camEligible =
+            (recoveryStatus === "non_recoverable" || recoveryStatus === "excluded") && camEligibleCandidate === "yes"
+              ? "no"
+              : camEligibleCandidate;
+        }
         recoveryMethod =
           existingClassification?.recovery_method ||
           expense.recovery_method ||

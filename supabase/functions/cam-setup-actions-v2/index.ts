@@ -25,6 +25,11 @@
 //
 //   POLICIES
 //     resolve_missing_policy_value → record_cam_prior_period_adjustment RPC
+//     resolve_policy_conflict     → resolve_cam_policy_conflict RPC (controlled
+//                                    versioned override -- supersedes one of two
+//                                    genuinely conflicting policies with a
+//                                    mandatory reason; refuses to act absent an
+//                                    actual conflict)
 //
 //   EXPENSES
 //     assign_expense_to_pool      → assign_cam_input_to_pool RPC
@@ -72,6 +77,7 @@ const VALID_ACTIONS = new Set([
   "remove_pool_participant",
   // Policies
   "resolve_missing_policy_value",
+  "resolve_policy_conflict",
   // Expenses
   "assign_expense_to_pool",
   // Estimates / Adjustments
@@ -377,6 +383,30 @@ Deno.serve(async (req: Request) => {
         p_state: state,
         p_amount: amount,
         p_notes: notes,
+      });
+      if (error) throw new Error(error.message);
+      result = data;
+
+    } else if (action === "resolve_policy_conflict") {
+      // Controlled versioned override for a POLICY_CONFLICT readiness
+      // exception (two active policies on the same lease, same category,
+      // overlapping effective window) -- NOT unrestricted manual rule
+      // selection. resolve_cam_policy_conflict re-verifies a genuine
+      // conflict exists before superseding anything, and always requires a
+      // reason.
+      const policyIdToSupersede = requireUUID(body?.policy_id_to_supersede, "policy_id_to_supersede");
+      const reason = requireString(body?.reason, "reason");
+
+      const { data: policyRow, error: policyError } = await supabaseAdmin
+        .from("lease_recovery_policies").select("lease_id, leases(property_id)").eq("id", policyIdToSupersede).eq("org_id", orgId).maybeSingle();
+      if (policyError) throw new Error(policyError.message);
+      if (!policyRow) throw new Error("Policy not found for this organization");
+      await guardProperty(policyRow.leases?.property_id);
+
+      const { data, error } = await supabaseAdmin.rpc("resolve_cam_policy_conflict", {
+        ...actorArgs,
+        p_policy_id_to_supersede: policyIdToSupersede,
+        p_reason: reason,
       });
       if (error) throw new Error(error.message);
       result = data;

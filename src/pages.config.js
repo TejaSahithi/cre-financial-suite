@@ -70,6 +70,7 @@ const CAMPoolDetail = lazy(() => import('./pages/CAMPoolDetail'));
 const CAMLeaseDetail = lazy(() => import('./pages/CAMLeaseDetail'));
 const CAMExceptionReview = lazy(() => import('./pages/CAMExceptionReview'));
 const CAMApproval = lazy(() => import('./pages/CAMApproval'));
+const BudgetReadiness = lazy(() => import('./pages/BudgetReadiness'));
 const ContactUs = lazy(() => import('./pages/ContactUs'));
 const CreateBudget = lazy(() => import('./pages/CreateBudget'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -153,6 +154,7 @@ export const PAGES = {
     "CAMLeaseDetail": CAMLeaseDetail,
     "CAMExceptionReview": CAMExceptionReview,
     "CAMApproval": CAMApproval,
+    "BudgetReadiness": BudgetReadiness,
     "CAMPosting": CAMRun,
     "CAMRealPropertyGate": CAMRealPropertyGate,
     "ContactUs": ContactUs,

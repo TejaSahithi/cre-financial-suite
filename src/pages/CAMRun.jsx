@@ -103,10 +103,29 @@ async function workflowAction(action, payload) {
 export default function CAMRun() {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const propertyIdParam = searchParams.get("property_id") || "";
-  const periodIdParam = searchParams.get("recovery_period_id") || "";
-  const [propertyId, setPropertyId] = useState(propertyIdParam);
-  const [periodId, setPeriodId] = useState(periodIdParam);
+  // propertyId/periodId are derived DIRECTLY from the URL on every render,
+  // not mirrored into useState. React Router does not remount this
+  // component when only the query string changes on the same route (e.g.
+  // arriving via a Link from CAM Setup with a newly-selected period while
+  // this page was already mounted) -- a useState(paramFromUrl) initializer
+  // only runs once at mount, so it would silently keep whatever period was
+  // selected before, showing "select a recovery period" or the wrong
+  // period even though an eligible one was just chosen. Deriving live from
+  // searchParams (the same pattern CAMSetup.jsx uses) makes the URL the
+  // single source of truth instead of a stale local copy of it.
+  const propertyId = searchParams.get("property_id") || "";
+  const periodId = searchParams.get("recovery_period_id") || "";
+  const setPropertyId = (v) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (v) next.set("property_id", v); else next.delete("property_id");
+    next.delete("recovery_period_id");
+    return next;
+  });
+  const setPeriodId = (v) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (v) next.set("recovery_period_id", v); else next.delete("recovery_period_id");
+    return next;
+  });
   const [runMode, setRunMode] = useState("posting_eligible");
 
   // Dialog states for posting / lifecycle
@@ -339,11 +358,11 @@ export default function CAMRun() {
 
       {/* Selectors */}
       <div className="flex flex-wrap items-center gap-3">
-        <Select value={propertyId} onValueChange={(v) => { setPropertyId(v); setPeriodId(""); setSearchParams({ property_id: v }); }}>
+        <Select value={propertyId} onValueChange={setPropertyId}>
           <SelectTrigger className="w-64"><SelectValue placeholder="Select property" /></SelectTrigger>
           <SelectContent>{properties.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
         </Select>
-        <Select value={periodId} onValueChange={(v) => { setPeriodId(v); setSearchParams({ property_id: propertyId, recovery_period_id: v }); }} disabled={!propertyId || periods.length === 0}>
+        <Select value={periodId} onValueChange={setPeriodId} disabled={!propertyId || periods.length === 0}>
           <SelectTrigger className="w-64"><SelectValue placeholder={periods.length === 0 ? "No recovery periods yet" : "Select recovery period"} /></SelectTrigger>
           <SelectContent>{periods.map((p) => <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>)}</SelectContent>
         </Select>

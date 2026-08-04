@@ -84,7 +84,17 @@ Deno.serve(async (req: Request) => {
         .select("*")
         .eq("org_id", orgId)
         .eq("property_id", propertyId)
-        .eq("publication_status", "published"),
+        .eq("publication_status", "published")
+        // Overlap with the selected recovery_period, not just property --
+        // without this, a published expense from ANY prior fiscal year
+        // shows up under every period (confirmed against real production
+        // data: 6 of 6 published rows for one property are fiscal_year=2025
+        // with no service_period, and this query had no period predicate
+        // at all).
+        .or(
+          `and(service_period_start.lte.${period.end_date},service_period_end.gte.${period.start_date}),` +
+          `and(service_period_start.is.null,fiscal_year.eq.${new Date(`${period.start_date}T00:00:00Z`).getUTCFullYear()})`
+        ),
       poolIds.length > 0
         ? supabaseAdmin.from("cam_input_pool_assignments").select("*").eq("org_id", orgId).in("recovery_pool_id", poolIds)
         : Promise.resolve({ data: [], error: null }),

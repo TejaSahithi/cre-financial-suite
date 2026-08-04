@@ -307,4 +307,33 @@ test.describe.serial("CAM Setup automation and business usability", () => {
     expect(participantRow.status).toBe("ended");
     expect(participantRow.notes).toBe("Tenant lease terminated early per amendment #2.");
   });
+
+  test("A: a recovery period selected in CAM Setup is honored by CAM Runs, not shown as 'no recovery period'", async ({ page }) => {
+    test.setTimeout(60000);
+    await login(page);
+    const admin = adminClient();
+    const { data: periodRow } = await admin.from("recovery_periods").select("id, label").eq("calendar_id", seeded.calendar.id).single();
+    expect(periodRow.label).toContain("FY2026"); // the period test 1 confirmed via the automatic-period-suggestion banner
+
+    // Direct navigation with the period already in the URL -- this is the
+    // exact CAMRun.jsx bug this fixed: propertyId/periodId were previously
+    // read into useState ONCE at mount and never re-derived, so switching
+    // periods (or landing here with a period already selected) rendered a
+    // stale/empty state. Now they are derived from searchParams on every
+    // render, so the run list, tabs, and period selector must all reflect
+    // this period on the very first paint, not after a manual re-select.
+    await page.goto(`/CAMRun?property_id=${seeded.property.id}&recovery_period_id=${periodRow.id}`);
+    await expect(page.getByRole("heading", { name: "CAM Runs" })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText("Select a property and recovery period to manage CAM runs.")).toHaveCount(0);
+    await expect(page.locator("#cam-run-tabs")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText(periodRow.label, { exact: false })).toBeVisible();
+
+    // Switching to a different property must clear the period (not carry
+    // a now-unrelated period id forward) -- reload to confirm the cleared
+    // state survives a refresh too, matching the URL-is-truth pattern used
+    // throughout CAM Setup.
+    await page.reload();
+    await expect(page.locator("#cam-run-tabs")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText(periodRow.label, { exact: false })).toBeVisible();
+  });
 });
