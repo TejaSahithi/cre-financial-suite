@@ -210,3 +210,59 @@ Deno.test({
     assertEquals(result.missing.published_expenses_outside_period.length, 0);
   },
 });
+
+Deno.test({
+  name: "prepareCamAutomatically: publishes an approved, recoverable, CAM-eligible rule to CAM; leaves a conditional rule unpublished with a reason; idempotent on rerun",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { actor, org, property, period } = await setUpOrgPropertyPeriod(admin, suffix);
+
+    // Root cause this test locks in: a rule can be approval_status='approved'
+    // (and even materialize into a policy) while published_to_cam stays
+    // false forever, because recoverable_from_tenant/cam_eligible are a
+    // SEPARATE gate from approval_status -- exactly the real-world A1/FY2026
+    // shape (18 approved rules, all published_to_cam=false, only 5 actually
+    // recoverable='yes'/cam_eligible='yes').
+    // Distinct tenant_name per lease -- otherwise both leases (same default
+    // square_footage, no building_id) collide into detectDuplicateLeaseGroups'
+    // own duplicate-detection key and get excluded from publishing for an
+    // unrelated reason, defeating the point of this test.
+    const ready = await createApprovedLeaseWithRule(admin, org, property, actor, { tenant_name: "Ready Tenant LLC" });
+    const readyUpdate = await admin.from("lease_expense_rules").update({
+      review_status: "approved", recoverable_from_tenant: "yes", cam_eligible: "yes",
+    }).eq("id", ready.rule.id);
+    assertNoError(readyUpdate.error);
+
+    const conditional = await createApprovedLeaseWithRule(admin, org, property, actor, { tenant_name: "Conditional Tenant LLC" });
+    const conditionalUpdate = await admin.from("lease_expense_rules").update({
+      review_status: "approved", recoverable_from_tenant: "conditional", cam_eligible: "conditional",
+    }).eq("id", conditional.rule.id);
+    assertNoError(conditionalUpdate.error);
+
+    const first = await prepareCamAutomatically(admin, {
+      orgId: org.id, propertyId: property.id, recoveryPeriodId: period.id,
+      actorUserId: actor.userId, actorEmail: actor.email,
+    });
+    assertEquals(first.created.rules_published_to_cam, 1);
+    assertEquals(first.missing.rules_not_publishable_to_cam.length, 1);
+    assertEquals(first.missing.rules_not_publishable_to_cam[0].rule_id, conditional.rule.id);
+    assertEquals(first.missing.rules_not_publishable_to_cam[0].blockers.includes("not_recoverable"), true);
+
+    const { data: readyAfter } = await admin.from("lease_expense_rules").select("published_to_cam").eq("id", ready.rule.id).single();
+    assertEquals(readyAfter!.published_to_cam, true);
+    const { data: conditionalAfter } = await admin.from("lease_expense_rules").select("published_to_cam").eq("id", conditional.rule.id).single();
+    assertEquals(conditionalAfter!.published_to_cam, false);
+
+    // Rerun: idempotent -- already-published rule is counted as already
+    // published, not published a second time or errored on.
+    const second = await prepareCamAutomatically(admin, {
+      orgId: org.id, propertyId: property.id, recoveryPeriodId: period.id,
+      actorUserId: actor.userId, actorEmail: actor.email,
+    });
+    assertEquals(second.created.rules_published_to_cam, 0);
+    assertEquals(second.created.rules_already_published_to_cam, 1);
+  },
+});

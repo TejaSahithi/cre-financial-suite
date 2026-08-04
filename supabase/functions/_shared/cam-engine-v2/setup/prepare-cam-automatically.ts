@@ -83,6 +83,66 @@ async function callRpc(supabaseAdmin: any, fn: string, args: Record<string, unkn
   return { data, error };
 }
 
+// Real gap found investigating why A1/FY2026 showed zero finalized
+// CAM-eligible expenses despite materialized policies existing:
+// lease_expense_rules.published_to_cam gates expenseService.js's
+// isAutomaticCamReady (and send_expense_classification_to_cam_workflow's
+// own publish check) independently of approval_status -- a rule can be
+// approved and even materialized into a policy while published_to_cam
+// stays false forever, because nothing in the live product ever called
+// publish_lease_expense_rule_to_cam_workflow either (the same class of gap
+// as materialize_lease_recovery_policy before this module existed).
+// deriveServerCamPublishBlockers is the existing, already-deployed,
+// deterministic gate (publish-lease-expense-rule-to-cam edge function) --
+// reused here verbatim rather than re-derived, so this step can never
+// publish a rule the manual UI action would have refused.
+import { deriveServerCamPublishBlockers } from "../../lease-expense-rule-cam-publish-workflow.ts";
+
+async function publishEligibleRulesToCam(
+  supabaseAdmin: any,
+  approvedRules: any[],
+  duplicateLeaseIds: Set<string>,
+  orgId: string,
+  actorUserId: string,
+  actorEmail: string,
+) {
+  let published = 0;
+  let alreadyPublished = 0;
+  const notPublishable: any[] = [];
+
+  for (const rule of approvedRules) {
+    if (rule.published_to_cam === true) {
+      alreadyPublished += 1;
+      continue;
+    }
+    if (duplicateLeaseIds.has(rule.lease_id)) {
+      notPublishable.push({ rule_id: rule.id, lease_id: rule.lease_id, blockers: ["duplicate_lease_pending_review"] });
+      continue;
+    }
+    const blockers = deriveServerCamPublishBlockers(rule);
+    if (blockers.length > 0 && !(blockers.length === 1 && blockers[0] === "already_published")) {
+      notPublishable.push({ rule_id: rule.id, lease_id: rule.lease_id, blockers });
+      continue;
+    }
+    const { data, error } = await supabaseAdmin.rpc("publish_lease_expense_rule_to_cam_workflow", {
+      p_org_id: orgId,
+      p_rule_id: rule.id,
+      p_actor_user_id: actorUserId,
+      p_actor_email: actorEmail,
+      p_idempotency_key: `prepare-cam-automatically:${rule.id}`,
+      p_request_payload: { source: "prepare_cam_automatically" },
+    });
+    if (error) {
+      notPublishable.push({ rule_id: rule.id, lease_id: rule.lease_id, blockers: [error.message] });
+      continue;
+    }
+    if (data?.already_published) alreadyPublished += 1;
+    else published += 1;
+  }
+
+  return { published, alreadyPublished, notPublishable };
+}
+
 export async function prepareCamAutomatically(supabaseAdmin: any, params: PrepareParams) {
   const { orgId, propertyId, recoveryPeriodId, actorUserId, actorEmail } = params;
 
@@ -131,6 +191,23 @@ export async function prepareCamAutomatically(supabaseAdmin: any, params: Prepar
   const policyBackfillReport = backfillResult.data?.report?.recovery_policies_from_rules ?? null;
   const policiesMaterializedCount = policyBackfillReport?.created ?? 0;
   const materializationBlocked = policyBackfillReport?.blocked_examples ?? [];
+
+  // ---- Step 4b: publish every approved, recoverable, CAM-eligible rule to
+  // CAM (see publishEligibleRulesToCam above for why this step exists).
+  // Independent of policy materialization -- a rule can be blocked here
+  // (e.g. still "conditional" recoverability) while its policy already
+  // materialized fine, or vice versa.
+  const { data: approvedRulesForPublish, error: approvedRulesError } = await supabaseAdmin
+    .from("lease_expense_rules")
+    .select("*")
+    .eq("org_id", orgId)
+    .eq("approval_status", "approved")
+    .in("lease_id", approvedLeases.map((l: any) => l.id).length > 0 ? approvedLeases.map((l: any) => l.id) : ["00000000-0000-0000-0000-000000000000"]);
+  if (approvedRulesError) throw new Error(`Failed to load lease expense rules: ${approvedRulesError.message}`);
+
+  const rulePublishResult = await publishEligibleRulesToCam(
+    supabaseAdmin, approvedRulesForPublish || [], duplicateLeaseIds, orgId, actorUserId, actorEmail,
+  );
 
   // ---- Reload policies + steps now that materialization has run ----
   const { data: policies, error: policiesError } = await supabaseAdmin
@@ -305,6 +382,8 @@ export async function prepareCamAutomatically(supabaseAdmin: any, params: Prepar
     created: {
       backfill: backfillResult.data?.report ?? null,
       policies_materialized: policiesMaterializedCount,
+      rules_published_to_cam: rulePublishResult.published,
+      rules_already_published_to_cam: rulePublishResult.alreadyPublished,
     },
     suggested: {
       pools: suggestedPools,
@@ -315,6 +394,7 @@ export async function prepareCamAutomatically(supabaseAdmin: any, params: Prepar
       leases_without_any_policy: approvedLeases.filter((l: any) => !(policies || []).some((p: any) => p.lease_id === l.id)).map((l: any) => ({ lease_id: l.id, tenant_name: l.tenant_name })),
       unassigned_expenses_no_single_candidate: unassignedNoSuggestion,
       published_expenses_outside_period: publishedExpensesOutOfPeriod.map((e: any) => ({ id: e.id, fiscal_year: e.fiscal_year, service_period_start: e.service_period_start, service_period_end: e.service_period_end, amount: e.amount })),
+      rules_not_publishable_to_cam: rulePublishResult.notPublishable,
     },
     conflicting: {
       duplicate_lease_groups: duplicateLeaseGroups,
