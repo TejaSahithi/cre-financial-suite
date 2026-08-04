@@ -14,7 +14,7 @@ export const MODULE_DEFINITIONS = {
   vendors:        { label: "Vendors",            pages: ["Vendors"] },  // nested under expenses in nav
   leases:         { label: "Leases",             pages: ["Leases", "LeaseUpload", "LeaseReview", "LeaseRentSchedule", "RentProjection", "CriticalDates"] },
   expenses:       { label: "Expenses",           pages: ["Expenses", "AddExpense", "BulkImport", "LeaseExpenseRules", "LeaseExpenseClassification", "ExpenseReview", "ExpenseProjection"] },
-  cam:            { label: "CAM Engine",         pages: ["CAMDashboard", "CAMSetup", "CAMCalculation"] },
+  cam:            { label: "CAM Engine",         pages: ["CAMDashboard", "CAMSetup", "CAMSetupV2", "CAMCalculation", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "CAMPosting", "CAMRealPropertyGate"] },
   billing:        { label: "Billing",            pages: ["Billing"] },  // billing nested under tenants in nav
   revenue:        { label: "Revenue",            pages: ["Revenue"] },
   budgets:        { label: "Budget Studio",      pages: ["BudgetDashboard", "CreateBudget", "BudgetReview"] },

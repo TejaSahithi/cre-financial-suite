@@ -6,7 +6,7 @@
 -- review_expense_classification gains two new OPTIONAL trailing parameters
 -- (p_remainder_accepted, p_remainder_reason) — this CHANGES its parameter
 -- signature, so (per this session's established lesson from
--- 20260902000000_snapshot_publish_rpc.sql) a plain CREATE OR REPLACE would
+-- 20269900000002_snapshot_publish_rpc.sql) a plain CREATE OR REPLACE would
 -- create a SECOND overload instead of replacing the function. The old
 -- 7-parameter signature is explicitly dropped first. Existing callers that
 -- only pass the original 7 arguments are unaffected — the 2 new parameters

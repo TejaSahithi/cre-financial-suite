@@ -70,7 +70,7 @@ ALTER TABLE public.cam_expense_inputs
 -- with a partial one scoped to publication_status='published' — the same
 -- "at most one CURRENT row per series" shape as
 -- publish_computation_snapshot's own partial unique index
--- (20260902000000_snapshot_publish_rpc.sql), so withdraw-then-republish can
+-- (20269900000002_snapshot_publish_rpc.sql), so withdraw-then-republish can
 -- create a new version without violating uniqueness against the withdrawn
 -- row it replaced.
 DROP INDEX IF EXISTS idx_cam_expense_inputs_classification;

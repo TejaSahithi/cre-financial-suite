@@ -1,4 +1,4 @@
--- Small additive follow-up to 20260904000000/20260905000000: two columns
+-- Small additive follow-up to 20269900000004/20269900000005: two columns
 -- needed to enforce "allocated amount total must not exceed the approved
 -- expense amount" and "unresolved remainder exists without an accepted
 -- exception" from this PR's finalize/publish readiness checks. No new

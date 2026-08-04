@@ -2,39 +2,27 @@
 -- FIX: Supabase Security Definer Views advisor warnings
 -- Rebuilds view definitions with security_invoker = true so they are evaluated
 -- under the client context instead of bypass privileges.
+--
+-- Workstream B.1 migration-history repair note (2026-08-03): this file
+-- originally also (re)created extraction_runs_safe, extraction_stage_runs_safe,
+-- and provider_invocations_safe here. Their underlying tables
+-- (extraction_runs, extraction_stage_runs, provider_invocations) are not
+-- created until migration 20260825000000_extraction_runs_provenance.sql, a
+-- month later -- so those three CREATE VIEW statements have always failed
+-- on a genuine from-scratch replay (confirmed via `supabase db reset
+-- --local`), which is exactly what blocked a clean database build. They
+-- were also entirely redundant even when they didn't error: migration
+-- 20260825000000 recreates all three itself with DIFFERENT, deliberate
+-- security semantics ("Deliberately NOT security_invoker = true", see that
+-- file), so this migration's versions would have been immediately
+-- superseded a month later regardless. Removed here rather than
+-- reordered/moved, since nothing downstream depends on this specific
+-- migration being the one that defines them. latest_snapshots is untouched
+-- below -- its source table (computation_snapshots) already existed at
+-- this point in history and this is its real, non-redundant definition.
 -- ===========================================================================
 
--- 1. extraction_runs_safe
-DROP VIEW IF EXISTS public.extraction_runs_safe;
-CREATE VIEW public.extraction_runs_safe 
-WITH (security_invoker = true) AS
-SELECT id, org_id, uploaded_file_id, lease_id, generation_id, run_type,
-       provider_pipeline, contract_version, status, error_code,
-       started_at, completed_at, created_at, updated_at
-FROM public.extraction_runs
-WHERE public.is_member_of_org(org_id);
-
--- 2. extraction_stage_runs_safe
-DROP VIEW IF EXISTS public.extraction_stage_runs_safe;
-CREATE VIEW public.extraction_stage_runs_safe 
-WITH (security_invoker = true) AS
-SELECT id, org_id, run_id, stage, attempt, status, provider, error_code,
-       started_at, finished_at, created_at, updated_at
-FROM public.extraction_stage_runs
-WHERE public.is_member_of_org(org_id);
-
--- 3. provider_invocations_safe
-DROP VIEW IF EXISTS public.provider_invocations_safe;
-CREATE VIEW public.provider_invocations_safe 
-WITH (security_invoker = true) AS
-SELECT id, org_id, run_id, stage_run_id, provider, operation, model, location,
-       chunk_index, provider_attempt, status, success, failure_classification,
-       input_tokens, output_tokens, latency_ms, requested_at, completed_at,
-       request_artifact_status, response_artifact_status, created_at
-FROM public.provider_invocations
-WHERE public.is_member_of_org(org_id);
-
--- 4. latest_snapshots (rebuild with security_invoker = true and versioning columns)
+-- latest_snapshots (rebuild with security_invoker = true and versioning columns)
 DROP VIEW IF EXISTS public.latest_snapshots;
 CREATE VIEW public.latest_snapshots 
 WITH (security_invoker = true) AS
@@ -61,9 +49,6 @@ WHERE status = 'completed'
 ORDER BY org_id, property_id, engine_type, fiscal_year, computed_at DESC;
 
 -- Re-apply grants
-GRANT SELECT ON public.extraction_runs_safe TO authenticated;
-GRANT SELECT ON public.extraction_stage_runs_safe TO authenticated;
-GRANT SELECT ON public.provider_invocations_safe TO authenticated;
 GRANT SELECT ON public.latest_snapshots TO authenticated;
 
 -- Reload schema

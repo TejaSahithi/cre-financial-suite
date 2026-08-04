@@ -1,5 +1,5 @@
 -- Expense Classification -> CAM Publication boundary: RPC layer.
--- Companion to 20260904000000_cam_publication_boundary.sql (schema).
+-- Companion to 20269900000004_cam_publication_boundary.sql (schema).
 --
 -- Preserves the existing Send-to-CAM calling contract exactly:
 -- send_expense_classification_to_cam_workflow keeps its name and full

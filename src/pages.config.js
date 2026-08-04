@@ -64,6 +64,12 @@ const BulkImport = lazy(() => import('./pages/BulkImport'));
 const CAMCalculation = lazy(() => import('./pages/CAMCalculation'));
 const CAMDashboard = lazy(() => import('./pages/CAMDashboard'));
 const CAMSetup = lazy(() => import('./pages/CAMSetup'));
+const CAMSetupV2 = lazy(() => import('./pages/CAMSetupV2'));
+const CAMRun = lazy(() => import('./pages/CAMRun'));
+const CAMPoolDetail = lazy(() => import('./pages/CAMPoolDetail'));
+const CAMLeaseDetail = lazy(() => import('./pages/CAMLeaseDetail'));
+const CAMExceptionReview = lazy(() => import('./pages/CAMExceptionReview'));
+const CAMApproval = lazy(() => import('./pages/CAMApproval'));
 const ContactUs = lazy(() => import('./pages/ContactUs'));
 const CreateBudget = lazy(() => import('./pages/CreateBudget'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -123,6 +129,8 @@ const LeaseExpenseClassification = lazy(() => import('./pages/LeaseExpenseClassi
 const LeaseExpenseRules = lazy(() => import('./pages/LeaseExpenseRules'));
 const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 const SecurityQuestionsSetup = lazy(() => import('./pages/SecurityQuestionsSetup'));
+const CAMPosting = lazy(() => import('./pages/CAMPosting'));
+const CAMRealPropertyGate = lazy(() => import('./pages/CAMRealPropertyGate'));
 
 
 export const PAGES = {
@@ -139,6 +147,14 @@ export const PAGES = {
     "CAMCalculation": CAMCalculation,
     "CAMDashboard": CAMDashboard,
     "CAMSetup": CAMSetup,
+    "CAMSetupV2": CAMSetupV2,
+    "CAMRun": CAMRun,
+    "CAMPoolDetail": CAMPoolDetail,
+    "CAMLeaseDetail": CAMLeaseDetail,
+    "CAMExceptionReview": CAMExceptionReview,
+    "CAMApproval": CAMApproval,
+    "CAMPosting": CAMPosting,
+    "CAMRealPropertyGate": CAMRealPropertyGate,
     "ContactUs": ContactUs,
     "CreateBudget": CreateBudget,
     "Dashboard": Dashboard,

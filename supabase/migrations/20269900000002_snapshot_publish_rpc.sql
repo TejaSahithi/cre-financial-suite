@@ -100,7 +100,7 @@ END $$;
 --    fully preserved; this only constrains what may be simultaneously
 --    'completed'. NULLS NOT DISTINCT (same convention as
 --    cam_calculations_org_property_scope_year_key in
---    20260901000000_cam_scope_columns.sql) so org-level snapshots (NULL
+--    20269900000001_cam_scope_columns.sql) so org-level snapshots (NULL
 --    property_id/scope_level/scope_id) and annual snapshots (NULL month)
 --    are still deduplicated correctly rather than every NULL comparing as
 --    distinct — this is exactly what makes two annual (month IS NULL)
