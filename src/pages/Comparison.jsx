@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { CAMCalculationService, PropertyService, LeaseService, ExpenseService, BudgetService } from "@/services/api";
+import { PropertyService, LeaseService, ExpenseService, BudgetService } from "@/services/api";
 
 import { useQuery } from "@tanstack/react-query";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -16,7 +16,14 @@ export default function Comparison() {
   const { data: leases = [] } = useQuery({ queryKey: ['leases'], queryFn: () => LeaseService.list() });
   const { data: expenses = [] } = useQuery({ queryKey: ['expenses'], queryFn: () => ExpenseService.list() });
   const { data: budgets = [] } = useQuery({ queryKey: ['budgets'], queryFn: () => BudgetService.list() });
-  const { data: camCalcs = [] } = useQuery({ queryKey: ['cam-calcs'], queryFn: () => CAMCalculationService.list() });
+  const { data: camCalcs = [] } = useQuery({
+    queryKey: ["cam-comparison-runs"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("cam_runs").select("*, cam_run_lease_results(*)");
+      if (error) return [];
+      return data ?? [];
+    },
+  });
   const { data: properties = [] } = useQuery({ queryKey: ['properties'], queryFn: () => PropertyService.list() });
 
   // Aggregate by year

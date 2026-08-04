@@ -57,37 +57,8 @@ export async function fetchPropertyCamConfig(propertyId) {
 }
 
 export async function savePropertyCamConfig(propertyId, values) {
-  if (!propertyId || propertyId === "all") {
-    throw new Error("Select a property before saving CAM configuration");
-  }
-
-  // Server-side validated + audited via save_property_cam_config (RPC) —
-  // see docs/server-owned-workflow-pattern.md. Was previously a direct
-  // client upsert with no range validation on config_values and no audit
-  // trail on the write.
-  const configValues = {
-    allocation_method: values.allocation_method,
-    admin_fee_pct: Number(values.admin_fee_pct ?? 0),
-    management_fee_pct: Number(values.management_fee_pct ?? 0),
-    management_fee_basis: values.management_fee_basis ?? "shared_pool",
-    gross_up_enabled: Boolean(values.gross_up_enabled),
-    gross_up_target_occupancy_pct: Number(values.gross_up_target_occupancy_pct ?? 95),
-    gross_up_apply_to: values.gross_up_apply_to ?? "controllable",
-    cam_cap_rate: Number(values.cam_cap_rate ?? 0),
-    vacancy_handling: values.vacancy_handling ?? "include_vacant",
-    property_pool_denominator_mode: values.property_pool_denominator_mode ?? "property_total_sqft",
-    building_pool_denominator_mode: values.building_pool_denominator_mode ?? "building_total_sqft",
-  };
-
-  const result = await invokeEdgeFunction("save-property-cam-config", {
-    property_id: propertyId,
-    cam_calculation_method: values.cam_calculation_method ?? "pro_rata",
-    expense_recovery_method: values.expense_recovery_method ?? "base_year",
-    fiscal_year_start: values.fiscal_year_start ?? 1,
-    config_values: configValues,
-  });
-
-  return { row: result.row, values: normalizeConfig(result.row) };
+  console.warn("[LEGACY_CAM_WRITE] savePropertyCamConfig called. Legacy property rule overrides are retired; use pool defaults or materialized policies via cam-setup-actions-v2.");
+  throw new Error("Property-level CAM rule overrides are retired. Configure pool defaults or materialized policies in Setup.");
 }
 
 // ─── Per-Lease CAM Rules ──────────────────────────────────────────────────────
@@ -138,9 +109,6 @@ export async function fetchLeaseConfig(leaseId) {
 export async function saveLeaseConfig(leaseId, values) {
   if (!leaseId) throw new Error("Lease ID is required");
 
-  // Server-side validated + audited via save_lease_config (RPC) — see
-  // docs/server-owned-workflow-pattern.md. Was previously a direct client
-  // upsert with no range validation on config_values and no audit trail.
   const configValues = {
     ...(Array.isArray(values.cam_rule_lines) ? { cam_rule_lines: values.cam_rule_lines } : {}),
     cam_applicable: values.cam_applicable !== false,
@@ -167,28 +135,14 @@ export async function saveLeaseConfig(leaseId, values) {
   return { row: result.row, values: normalizeLeaseConfig(result.row) };
 }
 
-// ─── Per-Lease CAM Profiles (CAMSetup.jsx) ────────────────────────────────────
+// ─── Per-Lease CAM Profiles (Retired) ──────────────────────────────────────────
 
-// Server-side validated + audited via save_cam_profile (RPC) — Phase 6CAM-1.
-// Was previously a direct client update() with no audit trail. patch is the
-// exact 12-field shape CAMSetup.jsx's EditForm already builds.
 export async function saveCamProfile(profileId, patch) {
-  if (!profileId) throw new Error("CAM profile ID is required");
-  const result = await invokeEdgeFunction("save-cam-profile", {
-    profile_id: profileId,
-    patch,
-  });
-  return result?.profile ?? null;
+  console.warn("[LEGACY_CAM_WRITE] saveCamProfile called. Legacy cam_profiles table is retired.");
+  throw new Error("cam_profiles writes are retired. Materialized recovery policies are managed in Setup.");
 }
 
-// Server-side validated + audited via approve_cam_profile (RPC) — Phase
-// 6CAM-1. Was previously a direct client update() that always wrote
-// approved_by: null (no trigger ever populated it); the RPC now sets
-// approved_by to the authenticated actor's email.
 export async function approveCamProfile(profileId) {
-  if (!profileId) throw new Error("CAM profile ID is required");
-  const result = await invokeEdgeFunction("approve-cam-profile", {
-    profile_id: profileId,
-  });
-  return result?.profile ?? null;
+  console.warn("[LEGACY_CAM_WRITE] approveCamProfile called. Legacy cam_profiles table is retired.");
+  throw new Error("cam_profiles approvals are retired. Materialized recovery policies are managed in Setup.");
 }

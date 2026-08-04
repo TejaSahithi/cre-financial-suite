@@ -1,5 +1,5 @@
 import React from "react";
-import { CAMCalculationService, InvoiceService, LeaseService, TenantService } from "@/services/api";
+import { InvoiceService, LeaseService, TenantService } from "@/services/api";
 
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
@@ -24,9 +24,13 @@ export default function TenantDetail() {
   });
 
   const { data: camCalcs = [] } = useQuery({
-    queryKey: ['tenant-cam', tenantName],
-    queryFn: () => CAMCalculationService.filter({ tenant_name: tenantName }),
-    enabled: !!tenantName,
+    queryKey: ["tenant-cam-results", tenantName],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("cam_run_lease_results").select("*, leases!inner(tenant_name)").eq("leases.tenant_name", tenantName);
+      if (error) return [];
+      return data ?? [];
+    },
+    enabled: Boolean(tenantName),
   });
 
   const { data: invoices = [] } = useQuery({

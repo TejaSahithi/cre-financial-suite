@@ -14,7 +14,7 @@ import PropertyContributionChart from "@/components/revenue/PropertyContribution
 import TenantRevenueDistribution from "@/components/revenue/TenantRevenueDistribution";
 import PropertyDrillDown from "@/components/revenue/PropertyDrillDown";
 import TenantDrillDown from "@/components/revenue/TenantDrillDown";
-import { PropertyService, LeaseService, CAMCalculationService, UnitService, BuildingService, PortfolioService } from "@/services/api";
+import { PropertyService, LeaseService, UnitService, BuildingService, PortfolioService } from "@/services/api";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { Button } from "@/components/ui/button";
 import { downloadCSV, createPageUrl } from "@/utils";
@@ -37,8 +37,12 @@ export default function Revenue() {
     queryFn: () => LeaseService.list(),
   });
   const { data: camCalcs = [] } = useQuery({
-    queryKey: ["revenue-cam"],
-    queryFn: () => CAMCalculationService.list(),
+    queryKey: ["cam-runs-revenue"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("cam_runs").select("*, cam_run_lease_results(*)");
+      if (error) return [];
+      return data ?? [];
+    },
   });
   const { data: buildings = [] } = useQuery({
     queryKey: ["revenue-buildings"],

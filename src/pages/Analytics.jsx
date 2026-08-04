@@ -1,5 +1,5 @@
 import React from "react";
-import { CAMCalculationService, PropertyService, LeaseService, ExpenseService } from "@/services/api";
+import { PropertyService, LeaseService, ExpenseService } from "@/services/api";
 
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +12,14 @@ export default function Analytics() {
   const { data: properties = [] } = useQuery({ queryKey: ['properties'], queryFn: () => PropertyService.list() });
   const { data: leases = [] } = useQuery({ queryKey: ['leases'], queryFn: () => LeaseService.list() });
   const { data: expenses = [] } = useQuery({ queryKey: ['expenses'], queryFn: () => ExpenseService.list() });
-  const { data: camCalcs = [] } = useQuery({ queryKey: ['cam-calcs'], queryFn: () => CAMCalculationService.list() });
+  const { data: camCalcs = [] } = useQuery({
+    queryKey: ["cam-analytics-runs"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("cam_runs").select("*, cam_run_lease_results(*)");
+      if (error) return [];
+      return data ?? [];
+    },
+  });
 
   const totalSF = properties.reduce((s, p) => s + (p.total_sf || 0), 0);
   const totalRevenue = leases.filter(l => l.status !== 'expired').reduce((s, l) => s + (l.annual_rent || l.base_rent * 12 || 0), 0);

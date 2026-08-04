@@ -18,7 +18,7 @@ export const ENTITIES = {
   Budget:            'budgets',
   Vendor:            'vendors',
   Invoice:           'invoices',
-  CAMCalculation:    'cam_calculations',
+  CAMCalculation:    'cam_runs',
   GLAccount:         'gl_accounts',
   Document:          'documents',
   Organization:      'organizations',

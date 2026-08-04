@@ -1,5 +1,5 @@
-import React from "react";
-import { BudgetService, CAMCalculationService, LeaseService } from "@/services/api";
+import { supabase } from "@/services/supabaseClient";
+import { BudgetService, LeaseService } from "@/services/api";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -14,9 +14,13 @@ export default function PropertyCAMTab({ propertyId, canRunCalculation = true })
   const prevYear = currentYear - 1;
 
   const { data: camCalcs = [] } = useQuery({
-    queryKey: ['cam-prop', propertyId],
-    queryFn: () => CAMCalculationService.filter({ property_id: propertyId }),
-    enabled: !!propertyId,
+    queryKey: ['cam-prop-runs', propertyId],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("cam_runs").select("*").eq("property_id", propertyId);
+      if (error) return [];
+      return data ?? [];
+    },
+    enabled: Boolean(propertyId),
   });
 
   const { data: leases = [] } = useQuery({

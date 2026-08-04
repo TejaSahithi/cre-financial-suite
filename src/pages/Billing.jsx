@@ -3,7 +3,6 @@ import {
   UnitService,
   BuildingService,
   InvoiceService,
-  CAMCalculationService,
   PropertyService,
   LeaseService,
   TenantService,
@@ -68,7 +67,14 @@ export default function Billing() {
 
   const { data: invoices = [] } = useQuery({ queryKey: ["invoices"], queryFn: () => InvoiceService.list("-created_at") });
   const { data: leases = [] } = useQuery({ queryKey: ["leases-billing"], queryFn: () => LeaseService.list() });
-  const { data: camCalcs = [] } = useQuery({ queryKey: ["cam-billing"], queryFn: () => CAMCalculationService.list() });
+  const { data: camCalcs = [] } = useQuery({
+    queryKey: ["cam-billing-results"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("cam_run_lease_results").select("*, leases(tenant_name)");
+      if (error) return [];
+      return data ?? [];
+    },
+  });
   const { data: properties = [] } = useQuery({ queryKey: ["bill-properties"], queryFn: () => PropertyService.list() });
   const { data: buildings = [] } = useQuery({ queryKey: ["bill-buildings"], queryFn: () => BuildingService.list() });
   const { data: units = [] } = useQuery({ queryKey: ["bill-units"], queryFn: () => UnitService.list() });

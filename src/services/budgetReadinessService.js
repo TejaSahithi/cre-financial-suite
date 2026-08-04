@@ -12,8 +12,7 @@ export async function checkBudgetReadiness(supabase, { propertyId, fiscalYear, o
     supabase.from("leases").select("id, abstract_status").eq("property_id", propertyId).eq("status", "active"),
     supabase.from("lease_expense_rule_sets").select("id").eq("property_id", propertyId).eq("status", "approved"),
     supabase.from("expense_classifications").select("id, classification_status").eq("property_id", propertyId).eq("org_id", orgId),
-    // Required consequence of cam_calculations/computation_snapshots becoming
-    // scope-aware: a property can now have multiple completed "cam" snapshots
+    // Scope-aware CAM snapshots: a property can now have multiple completed "cam" snapshots
     // for the same fiscal_year (property + any building/unit runs), so
     // .maybeSingle() would start erroring as soon as a building/unit CAM run
     // exists alongside the property one. Budget readiness has always meant
@@ -103,7 +102,7 @@ export async function checkBudgetReadiness(supabase, { propertyId, fiscalYear, o
       message: camSnapshot
         ? `CAM snapshot from ${new Date(camSnapshot.computed_at).toLocaleDateString()}`
         : `No CAM snapshot for FY ${fiscalYear} — budget will exclude CAM recovery`,
-      actionPage: "CAMCalculation",
+      actionPage: "CAMRun",
     },
   ];
 

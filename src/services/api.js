@@ -1610,7 +1610,6 @@ export const TenantService = createEntityService('Tenant');
 export const ExpenseService = createEntityService('Expense');
 export const BudgetService = createEntityService('Budget');
 export const VendorService = createEntityService('Vendor');
-export const CAMCalculationService = createEntityService('CAMCalculation');
 export const GLAccountService = createEntityService('GLAccount');
 export const DocumentService = createEntityService('Document');
 export const OrganizationService = createEntityService('Organization');
