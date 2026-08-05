@@ -429,7 +429,7 @@ function downloadTemplate(moduleType) {
 // ─────────────────────────────────────────────────────────────────────────────
 // EditableCell — uses defaultValue + onBlur to avoid focus-loss on keystroke
 // ─────────────────────────────────────────────────────────────────────────────
-const EditableCell = React.memo(({ value, placeholder, isRequired, isEmpty, onChange }) => {
+const EditableCell = React.memo(({ value, placeholder, isRequired, isEmpty, options, onChange }) => {
   const inputRef = useRef(null);
 
   // Sync external value changes (e.g. new file loaded)
@@ -438,6 +438,28 @@ const EditableCell = React.memo(({ value, placeholder, isRequired, isEmpty, onCh
       inputRef.current.value = value ?? '';
     }
   }, [value]);
+
+  if (Array.isArray(options) && options.length > 0) {
+    return (
+      <select
+        value={value ?? ''}
+        onChange={e => onChange(e.target.value)}
+        className={[
+          'w-full text-xs px-1.5 py-1 rounded border transition-colors outline-none bg-white cursor-pointer',
+          isRequired && isEmpty
+            ? 'border-red-400 bg-red-50 text-red-800 font-semibold'
+            : 'border-slate-200 hover:border-blue-400 focus:border-blue-500 text-slate-800',
+        ].join(' ')}
+      >
+        <option value="">{placeholder || 'Select building...'}</option>
+        {options.map(opt => (
+          <option key={opt.id || opt.value || opt.label} value={opt.value}>
+            {opt.label || opt.name || opt.value}
+          </option>
+        ))}
+      </select>
+    );
+  }
 
   return (
     <input
@@ -463,7 +485,7 @@ EditableCell.displayName = 'EditableCell';
 // property/building names/codes, so they do not need one global picker.
 const REQUIRES_PROPERTY = new Set(['building', 'unit']);
 // Bulk creation mirrors the normal forms: choose one parent scope explicitly.
-const CAN_RESOLVE_PROPERTY_PER_ROW = new Set();
+const CAN_RESOLVE_PROPERTY_PER_ROW = new Set(['building', 'unit', 'lease', 'tenant', 'revenue', 'expense', 'invoice', 'gl_account']);
 const DEFER_STORE_MODULES = new Set(['property', 'building', 'unit']);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -853,9 +875,9 @@ export default function BulkImportModal({
         toast.error('Pick a target property before uploading this file.');
         return;
       }
-      if (needsBuildingPick && !targetBuildingId) {
-        toast.error('Pick a target building before uploading this file.');
-        return;
+      // Buildings can be selected from dropdown per row or from target building picker
+      if (needsBuildingPick && targetBuildingId) {
+        // Building target selected explicitly
       }
 
       // CSV and Excel do not need the document-ingestion Edge Functions. Parse
@@ -1012,7 +1034,7 @@ export default function BulkImportModal({
       : 0;
 
   const missingTargetProperty = needsPropertyPick && !effectivePropertyId;
-  const missingTargetBuilding = needsBuildingPick && !effectiveBuildingId;
+  const missingTargetBuilding = needsBuildingPick && !effectiveBuildingId && (!Array.isArray(rows) || rows.some(row => !rowHasBuildingReference(row)));
   const missingRowPropertyReference = rowsMissingPropertyReference > 0;
   const missingRowBuildingReference = rowsMissingBuildingReference > 0;
 
@@ -1464,7 +1486,7 @@ export default function BulkImportModal({
                 }}
                 className="w-full text-sm px-3 py-2 rounded border border-blue-300 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
               >
-                <option value="">{canUseOptionalPropertyPick ? 'Resolve from each row' : 'Select a property'}</option>
+                <option value="">Resolve property from each row (or select per row)</option>
                 {propertyOptions.map(p => (
                   <option key={p.id} value={p.id}>
                     {p.name}{p.address ? ` — ${p.address}` : ''}
@@ -1493,7 +1515,7 @@ export default function BulkImportModal({
                 disabled={!effectivePropertyId}
                 className="w-full text-sm px-3 py-2 rounded border border-blue-300 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-slate-100"
               >
-                <option value="">Select a building</option>
+                <option value="">Resolve building from each row (or select per row)</option>
                 {buildingOptions
                   .filter(building => !effectivePropertyId || building.property_id === effectivePropertyId)
                   .map(building => (
@@ -1652,6 +1674,24 @@ export default function BulkImportModal({
                             {fieldDefs.map(f => {
                               const isEmpty    = !row[f.key] && row[f.key] !== 0;
                               const isBad      = f.required && isEmpty;
+                              let cellOptions = null;
+                              if (['building_name', 'building_id', 'building_id_code'].includes(f.key) && buildingOptions.length > 0) {
+                                const scoped = effectivePropertyId
+                                  ? buildingOptions.filter(b => b.property_id === effectivePropertyId)
+                                  : buildingOptions;
+                                cellOptions = scoped.map(b => ({
+                                  id: b.id,
+                                  value: b.name || b.building_id_code || b.id,
+                                  label: `${b.name || 'Building'}${b.building_id_code ? ` (${b.building_id_code})` : ''}`
+                                }));
+                              } else if (['property_name', 'property_id', 'property_id_code'].includes(f.key) && propertyOptions.length > 0) {
+                                cellOptions = propertyOptions.map(p => ({
+                                  id: p.id,
+                                  value: p.name || p.id,
+                                  label: p.name
+                                }));
+                              }
+
                               return (
                                 <td key={f.key} className="p-0.5 border-r border-slate-100">
                                   <EditableCell
@@ -1660,6 +1700,7 @@ export default function BulkImportModal({
                                     isRequired={f.required}
                                     isEmpty={isEmpty}
                                     isBad={isBad}
+                                    options={cellOptions}
                                     onChange={val => handleCellChange(rIdx, f.key, val)}
                                   />
                                 </td>
