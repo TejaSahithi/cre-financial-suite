@@ -2278,10 +2278,21 @@ Deno.serve(async (req: Request) => {
         postNormalizeCheck.enrichmentStatus !== "completed" &&
         postNormalizeCheck.enrichmentStatus !== "running"
       ) {
-        if (getEnrichBoundedStageMode() === "active") {
-          await enqueueBoundedEnrichStage({ supabaseAdmin, orgId, fileId, stage: firstEnrichBoundedStage(), generationId: job.generation_id ?? null, moduleType: fileRecord.module_type, logger });
-        } else {
-          await enqueueEnrichmentJob({ supabaseAdmin, orgId, fileId, moduleType: fileRecord.module_type, logger });
+        // Double-check pipeline_jobs to make sure an active bounded enrich stage isn't already running or queued
+        const { data: existingEnrichJob } = await supabaseAdmin
+          .from("pipeline_jobs")
+          .select("id, status")
+          .eq("uploaded_file_id", fileId)
+          .in("stage", ["enrich_clauses", firstEnrichBoundedStage()])
+          .in("status", ["queued", "running", "completed"])
+          .maybeSingle();
+
+        if (!existingEnrichJob) {
+          if (getEnrichBoundedStageMode() === "active") {
+            await enqueueBoundedEnrichStage({ supabaseAdmin, orgId, fileId, stage: firstEnrichBoundedStage(), generationId: job.generation_id ?? null, moduleType: fileRecord.module_type, logger });
+          } else {
+            await enqueueEnrichmentJob({ supabaseAdmin, orgId, fileId, moduleType: fileRecord.module_type, logger });
+          }
         }
       }
       // state === "not_durable" or "unknown": safe default is to skip the

@@ -3375,7 +3375,7 @@ Deno.serve(async (req: Request) => {
     const { data: fileRecord, error: fetchError } = await selectUploadedFileWithV3Fallback(
       supabaseAdmin,
       "id, org_id, file_name, file_url, file_size, mime_type, module_type, " +
-        "status, review_required, document_subtype, extraction_method, docling_raw",
+        "status, review_required, document_subtype, extraction_method, docling_raw, active_generation_id",
       file_id,
       orgId,
     );
