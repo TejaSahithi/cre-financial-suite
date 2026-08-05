@@ -194,8 +194,14 @@ Deno.test({
     const { actor, org, property, period } = await setUpOrgPropertyPeriod(admin, suffix);
     const { category } = await createApprovedLeaseWithRule(admin, org, property, actor);
 
+    // The canonical category goes in expense_category_id; `category` is the
+    // display label only. This test previously wrote the category UUID into
+    // the TEXT `category` column, which is exactly the confusion migration
+    // 039 exists to end (specification 8.3).
     await insertOne(admin, "cam_expense_inputs", {
-      org_id: org.id, property_id: property.id, category: category.id, amount: 2500,
+      org_id: org.id, property_id: property.id,
+      expense_category_id: category.id, category: category.category_name ?? "Utilities",
+      amount: 2500,
       publication_status: "published", service_period_start: "2026-03-01", service_period_end: "2026-03-31", status: "cam_ready",
     });
 
@@ -208,6 +214,17 @@ Deno.test({
     assertEquals(result.suggested.pools[0].expense_category_id, category.id);
     assertEquals(Number(result.suggested.pools[0].expense_total), 2500);
     assertEquals(result.missing.published_expenses_outside_period.length, 0);
+    // Step G: every suggestion must state the exact category UUID and the
+    // scope match that produced it.
+    assertEquals(result.suggested.pools[0].matched_on.field, "expense_category_id");
+    assertEquals(result.suggested.pools[0].matched_on.value, category.id);
+    assertEquals(result.suggested.pools[0].scope_match.property_id, property.id);
+    assertEquals(result.suggested.pools[0].scope_match.recovery_period_id, period.id);
+    assertEquals(result.suggested.pools[0].source, "policy_and_expense");
+    // Source counts / monetary totals (specification 10.2).
+    assertEquals(result.counts.published_expenses, 1);
+    assertEquals(result.counts.published_amount, "2500.00");
+    assertEquals(result.counts.uncategorized_expenses, 0);
   },
 });
 

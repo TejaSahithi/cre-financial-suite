@@ -35,7 +35,7 @@ create policy vendors_select
   to authenticated
   using (
     public.is_super_admin()
-    or org_id in (select unnest(public.get_my_org_ids()))
+    or org_id in (select public.get_my_org_ids())
   );
 
 drop policy if exists vendors_insert on public.vendors;

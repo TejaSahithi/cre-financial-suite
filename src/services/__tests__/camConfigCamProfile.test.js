@@ -1,77 +1,64 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { saveCamProfile, approveCamProfile } from '@/services/camConfig';
 
-// Feature: enterprise-readiness-hardening Phase 6CAM-1 (save_cam_profile /
-// approve_cam_profile). These wrappers are thin pass-throughs to their edge
-// functions -- the real validation/idempotency/audit behavior is covered by
-// supabase/functions/_tests/cam-profile-workflows.property.test.ts. These
-// tests only prove the frontend call sites send the right shape and no
-// longer perform any direct supabase.from("cam_profiles").update() write.
+/**
+ * cam_profiles is RETIRED.
+ *
+ * These wrappers used to be thin pass-throughs to the save-cam-profile /
+ * approve-cam-profile edge functions. The legacy CAM profile model was
+ * superseded by materialized recovery policies managed in CAM Setup, and
+ * migration 20269900000038 drops the cam_profiles table outright (aborting if
+ * it still holds rows).
+ *
+ * camConfig.js was updated to fail closed — both wrappers now throw before
+ * doing anything — but this suite still asserted the old pass-through
+ * behaviour, which is why it was failing. It now pins the retirement itself:
+ * the contract these tests protect is that NO write path to cam_profiles can
+ * be reached from the application, which is precisely the precondition
+ * migration 038 depends on.
+ */
 const invokeEdgeFunctionMock = vi.fn();
 
 vi.mock('@/services/edgeFunctions', () => ({
   invokeEdgeFunction: (...args) => invokeEdgeFunctionMock(...args),
 }));
 
-describe('camConfig.saveCamProfile', () => {
+describe('camConfig.saveCamProfile (retired)', () => {
   beforeEach(() => {
     invokeEdgeFunctionMock.mockReset();
   });
 
-  it('calls save-cam-profile with the profile id and patch', async () => {
-    invokeEdgeFunctionMock.mockResolvedValue({
-      error: false,
-      changed: true,
-      profile: { id: 'profile-1', cam_structure: 'NNN' },
-      audit_log_id: 'audit-1',
-    });
-
-    const result = await saveCamProfile('profile-1', { cam_structure: 'NNN', admin_fee_percent: 5 });
-
-    expect(invokeEdgeFunctionMock).toHaveBeenCalledWith('save-cam-profile', {
-      profile_id: 'profile-1',
-      patch: { cam_structure: 'NNN', admin_fee_percent: 5 },
-    });
-    expect(result.id).toBe('profile-1');
-    expect(result.cam_structure).toBe('NNN');
+  it('refuses to write and explains where the behaviour moved to', async () => {
+    await expect(saveCamProfile('profile-1', { cam_structure: 'NNN' }))
+      .rejects.toThrow(/cam_profiles writes are retired/i);
   });
 
-  it('rejects a missing profile id without calling the edge function', async () => {
-    await expect(saveCamProfile(null, { cam_structure: 'NNN' })).rejects.toThrow('CAM profile ID is required');
+  it('never reaches the save-cam-profile edge function', async () => {
+    await expect(saveCamProfile('profile-1', { cam_structure: 'NNN' })).rejects.toThrow();
+    // The critical assertion for migration 038: no runtime caller can touch
+    // cam_profiles, so dropping the table cannot break a live code path.
     expect(invokeEdgeFunctionMock).not.toHaveBeenCalled();
   });
 
-  it('returns null when the edge function reports no profile', async () => {
-    invokeEdgeFunctionMock.mockResolvedValue({ error: false, changed: false, profile: null });
-    const result = await saveCamProfile('profile-2', {});
-    expect(result).toBeNull();
+  it('refuses regardless of arguments, including a missing profile id', async () => {
+    await expect(saveCamProfile(null, { cam_structure: 'NNN' })).rejects.toThrow();
+    await expect(saveCamProfile(undefined, undefined)).rejects.toThrow();
+    expect(invokeEdgeFunctionMock).not.toHaveBeenCalled();
   });
 });
 
-describe('camConfig.approveCamProfile', () => {
+describe('camConfig.approveCamProfile (retired)', () => {
   beforeEach(() => {
     invokeEdgeFunctionMock.mockReset();
   });
 
-  it('calls approve-cam-profile with the profile id', async () => {
-    invokeEdgeFunctionMock.mockResolvedValue({
-      error: false,
-      changed: true,
-      profile: { id: 'profile-1', status: 'approved', approved_by: 'reviewer@example.test' },
-      audit_log_id: 'audit-2',
-    });
-
-    const result = await approveCamProfile('profile-1');
-
-    expect(invokeEdgeFunctionMock).toHaveBeenCalledWith('approve-cam-profile', {
-      profile_id: 'profile-1',
-    });
-    expect(result.status).toBe('approved');
-    expect(result.approved_by).toBe('reviewer@example.test');
+  it('refuses to approve and explains where the behaviour moved to', async () => {
+    await expect(approveCamProfile('profile-1'))
+      .rejects.toThrow(/cam_profiles approvals are retired/i);
   });
 
-  it('rejects a missing profile id without calling the edge function', async () => {
-    await expect(approveCamProfile(undefined)).rejects.toThrow('CAM profile ID is required');
+  it('never reaches the approve-cam-profile edge function', async () => {
+    await expect(approveCamProfile('profile-1')).rejects.toThrow();
     expect(invokeEdgeFunctionMock).not.toHaveBeenCalled();
   });
 });

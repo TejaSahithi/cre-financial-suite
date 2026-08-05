@@ -257,20 +257,30 @@ export async function prepareCamAutomatically(supabaseAdmin: any, params: Prepar
   for (const pool of existingPools || []) for (const cat of pool.recovery_pool_categories || []) if (cat.inclusion_mode === "include") alreadyCoveredCategoryIds.add(cat.expense_category_id);
 
   // ---- Step 6: suggested recovery pools ----
-  const byCategory = new Map<string, { leaseIds: Set<string>; expenseCount: number; expenseTotal: number }>();
+  const byCategory = new Map<string, { leaseIds: Set<string>; expenseCount: number; expenseTotal: number; fromPolicy: boolean; fromExpense: boolean; expenseIds: string[] }>();
+  const newCategoryEntry = () => ({ leaseIds: new Set<string>(), expenseCount: 0, expenseTotal: 0, fromPolicy: false, fromExpense: false, expenseIds: [] as string[] });
   for (const step of approvedPolicySteps) {
     if (!step.expense_category_id) continue;
     if (!["CALCULATE_SHARE", "DIRECT_ASSIGN"].includes(step.step_type)) continue;
     if (duplicateLeaseIds.has(step.lease_id)) continue; // don't let a flagged-duplicate lease drive a pool suggestion
-    if (!byCategory.has(step.expense_category_id)) byCategory.set(step.expense_category_id, { leaseIds: new Set(), expenseCount: 0, expenseTotal: 0 });
+    if (!byCategory.has(step.expense_category_id)) byCategory.set(step.expense_category_id, newCategoryEntry());
     byCategory.get(step.expense_category_id)!.leaseIds.add(step.lease_id);
+    byCategory.get(step.expense_category_id)!.fromPolicy = true;
   }
   for (const exp of publishedExpensesInPeriod) {
-    if (!exp.category) continue;
-    if (!byCategory.has(exp.category)) byCategory.set(exp.category, { leaseIds: new Set(), expenseCount: 0, expenseTotal: 0 });
-    const entry = byCategory.get(exp.category)!;
+    // Canonical category only. byCategory is keyed by
+    // lease_recovery_policy_steps.expense_category_id (a UUID), so keying it
+    // by the free-text label here produced categories that matched no policy
+    // and no pool (specification 8.3, 16). An input with no canonical
+    // category is reported below as a blocker rather than silently keyed by
+    // its label.
+    if (!exp.expense_category_id) continue;
+    if (!byCategory.has(exp.expense_category_id)) byCategory.set(exp.expense_category_id, newCategoryEntry());
+    const entry = byCategory.get(exp.expense_category_id)!;
     entry.expenseCount += 1;
     entry.expenseTotal += Number(exp.amount || 0);
+    entry.fromExpense = true;
+    entry.expenseIds.push(exp.id);
   }
   const suggestedPools = [...byCategory.entries()]
     .filter(([categoryId]) => !alreadyCoveredCategoryIds.has(categoryId))
@@ -280,6 +290,19 @@ export async function prepareCamAutomatically(supabaseAdmin: any, params: Prepar
       policy_lease_count: entry.leaseIds.size,
       expense_count: entry.expenseCount,
       expense_total: entry.expenseTotal,
+      // Provenance (specification step G): every suggestion states the exact
+      // canonical category UUID and the scope match that produced it, so a
+      // reviewer can verify rather than trust it.
+      source: entry.fromPolicy && entry.fromExpense ? "policy_and_expense" : entry.fromPolicy ? "policy" : "expense",
+      matched_on: { field: "expense_category_id", value: categoryId },
+      scope_match: { property_id: propertyId, recovery_period_id: recoveryPeriodId, period_start: periodStart, period_end: periodEnd },
+      source_expense_input_ids: entry.expenseIds,
+      match_explanation:
+        `Canonical expense_category_id ${categoryId}`
+        + (entry.fromPolicy ? ` matched ${entry.leaseIds.size} approved lease policy step(s)` : "")
+        + (entry.fromPolicy && entry.fromExpense ? " and" : "")
+        + (entry.fromExpense ? ` matched ${entry.expenseCount} published expense(s) totalling ${entry.expenseTotal.toFixed(2)}` : "")
+        + ` within property ${propertyId} for period ${periodStart}..${periodEnd}.`,
     }))
     .sort((a, b) => b.expense_total - a.expense_total);
 
@@ -324,6 +347,18 @@ export async function prepareCamAutomatically(supabaseAdmin: any, params: Prepar
         premises_id: premises.id,
         effective_area_sqft: currentArea?.recovery_area_sqft ?? null,
         reason: "Approved policy includes this category; premises overlap this recovery period.",
+        // Provenance (specification step G).
+        matched_on: { field: "expense_category_id", value: categoryId },
+        scope_match: {
+          property_id: propertyId,
+          premises_effective_from: premises.effective_from,
+          premises_effective_to: premises.effective_to,
+          period_start: periodStart,
+          period_end: periodEnd,
+        },
+        match_explanation:
+          `Lease ${lease.id} has an approved policy step for canonical expense_category_id ${categoryId}, `
+          + `and premises ${premises.id} sits in property ${propertyId} overlapping ${periodStart}..${periodEnd}.`,
       });
     }
     return suggestions;
@@ -357,11 +392,35 @@ export async function prepareCamAutomatically(supabaseAdmin: any, params: Prepar
     const alreadyAssigned = assignedByExpenseId.get(exp.id) ?? 0;
     const unassignedBalance = Number(exp.amount || 0) - alreadyAssigned;
     if (unassignedBalance <= 0.005) continue;
-    const candidatePools = exp.category ? (poolsByCategoryId.get(exp.category) ?? []) : [];
+    const candidatePools = exp.expense_category_id ? (poolsByCategoryId.get(exp.expense_category_id) ?? []) : [];
     if (candidatePools.length === 1) {
-      suggestedAssignments.push({ cam_expense_input_id: exp.id, recovery_pool_id: candidatePools[0].id, pool_name: candidatePools[0].name, amount: unassignedBalance });
+      suggestedAssignments.push({
+        cam_expense_input_id: exp.id,
+        recovery_pool_id: candidatePools[0].id,
+        pool_name: candidatePools[0].name,
+        amount: unassignedBalance,
+        // Provenance (specification step G): the exact category UUID and the
+        // pool/period scope that made this the single candidate.
+        matched_on: { field: "expense_category_id", value: exp.expense_category_id },
+        scope_match: {
+          property_id: propertyId,
+          recovery_period_id: recoveryPeriodId,
+          pool_scope_type: candidatePools[0].scope_type ?? null,
+          pool_scope_id: candidatePools[0].scope_id ?? null,
+        },
+        match_explanation:
+          `Published input ${exp.id} carries canonical expense_category_id ${exp.expense_category_id}, which pool `
+          + `"${candidatePools[0].name}" includes and no other pool in this period accepts.`,
+      });
     } else {
-      unassignedNoSuggestion.push({ cam_expense_input_id: exp.id, category: exp.category, amount: unassignedBalance, candidate_pool_count: candidatePools.length });
+      unassignedNoSuggestion.push({
+        cam_expense_input_id: exp.id,
+        expense_category_id: exp.expense_category_id ?? null,
+        category: exp.category,
+        amount: unassignedBalance,
+        candidate_pool_count: candidatePools.length,
+        reason: exp.expense_category_id ? (candidatePools.length === 0 ? "NO_POOL_ACCEPTS_CATEGORY" : "MULTIPLE_CANDIDATE_POOLS") : "EXPENSE_CATEGORY_MISSING",
+      });
     }
   }
 
@@ -376,9 +435,35 @@ export async function prepareCamAutomatically(supabaseAdmin: any, params: Prepar
   if (readiness.error) throw new Error(`Readiness check failed: ${readiness.error.message}`);
 
   // ---- Step 11: structured result ----
+  // Source counts and monetary totals (specification 10.2 / step G). These
+  // make "empty" states self-explaining: a reviewer can see whether Setup is
+  // empty because no source data exists, or because it exists and did not
+  // resolve.
+  const publishedAmountInPeriod = publishedExpensesInPeriod.reduce((s: number, e: any) => s + Number(e.amount || 0), 0);
+  const uncategorizedInPeriod = publishedExpensesInPeriod.filter((e: any) => !e.expense_category_id && Math.abs(Number(e.amount ?? 0)) > 0);
+  const uncategorizedAmount = uncategorizedInPeriod.reduce((s: number, e: any) => s + Number(e.amount || 0), 0);
+  const assignedAmount = [...assignedByExpenseId.values()].reduce((s: number, v: number) => s + v, 0);
+  const counts = {
+    approved_leases: approvedLeases.length,
+    duplicate_groups: duplicateLeaseGroups.length,
+    calculation_ready_policies: (policies || []).length,
+    published_expenses: publishedExpensesInPeriod.length,
+    published_amount: publishedAmountInPeriod.toFixed(2),
+    assigned_amount: assignedAmount.toFixed(2),
+    unassigned_amount: (publishedAmountInPeriod - assignedAmount).toFixed(2),
+    categorized_expenses: publishedExpensesInPeriod.length - uncategorizedInPeriod.length,
+    uncategorized_expenses: uncategorizedInPeriod.length,
+    uncategorized_amount: uncategorizedAmount.toFixed(2),
+    published_expenses_outside_period: publishedExpensesOutOfPeriod.length,
+    suggested_pools: suggestedPools.length,
+    suggested_assignments: suggestedAssignments.length,
+    estimate_schedules: (estimateSchedules || []).length,
+  };
+
   return {
     property_id: propertyId,
     recovery_period_id: recoveryPeriodId,
+    counts,
     created: {
       backfill: backfillResult.data?.report ?? null,
       policies_materialized: policiesMaterializedCount,
@@ -393,6 +478,17 @@ export async function prepareCamAutomatically(supabaseAdmin: any, params: Prepar
     missing: {
       leases_without_any_policy: approvedLeases.filter((l: any) => !(policies || []).some((p: any) => p.lease_id === l.id)).map((l: any) => ({ lease_id: l.id, tenant_name: l.tenant_name })),
       unassigned_expenses_no_single_candidate: unassignedNoSuggestion,
+      // Published inputs whose text label did not resolve to exactly one
+      // canonical category. These cannot drive a pool suggestion or an
+      // assignment and would otherwise vanish from Setup entirely; surfacing
+      // them keeps the source count honest and gives the user a direct
+      // action (specification 11.2, 18.2, 27).
+      // Scoped to published, period-overlapping, financially material
+      // (nonzero) inputs only — a zero-amount input cannot change a recovery,
+      // so it must not raise a blocker (specification 18.1).
+      published_expenses_without_canonical_category: publishedExpensesInPeriod
+        .filter((e: any) => !e.expense_category_id && Math.abs(Number(e.amount ?? 0)) > 0)
+        .map((e: any) => ({ id: e.id, category_label: e.category ?? null, amount: e.amount, code: "EXPENSE_CATEGORY_MISSING" })),
       published_expenses_outside_period: publishedExpensesOutOfPeriod.map((e: any) => ({ id: e.id, fiscal_year: e.fiscal_year, service_period_start: e.service_period_start, service_period_end: e.service_period_end, amount: e.amount })),
       rules_not_publishable_to_cam: rulePublishResult.notPublishable,
     },

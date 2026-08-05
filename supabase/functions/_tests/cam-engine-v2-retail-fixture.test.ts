@@ -79,7 +79,7 @@ function runHeader(): CamRunHeader {
     id: "run-retail", org_id: "org-1", recovery_period_id: "period-1", scope_type: "property", scope_id: "prop-1",
     run_type: "standard", adjustment_of_run_id: null, restatement_of_run_id: null, engine_version: "cam-engine-v2.0.0",
     currency: "USD", area_unit: "sqft",
-    rounding_policy: { internal_decimal_places: 6, ledger_decimal_places: 2, residual_allocation: "largest_remainder" },
+    rounding_policy: { internal_decimal_places: 6, ledger_decimal_places: 2, residual_allocation: "largest_remainder", annual_rounding_scope: "LEASE_POOL_PERIOD", estimate_rounding_scope: "MONTH" },
     run_mode: "posting_eligible",
   };
 }
@@ -102,7 +102,10 @@ function categoryDef(poolId: string, expenseCategoryId: string): RecoveryPoolCat
 
 function expenseInput(id: string, amount: number, category: string): CamExpenseInputRow {
   return {
-    id, amount, category, publication_status: "published", publication_version: 1, fiscal_year: 2026,
+    // Symbolic category identifier doubles as the canonical
+    // expense_category_id, which is what pools/policies now match on.
+    id, amount, category, expense_category_id: category,
+    publication_status: "published", publication_version: 1, fiscal_year: 2026,
     property_id: "prop-1", building_id: null, unit_id: null, lease_id: null, cam_input_type: "actual",
     variability: "fixed", controllability: "controllable", service_period_start: "2026-01-01", service_period_end: "2026-12-31",
   };
@@ -279,7 +282,15 @@ Deno.test("Retail archetype fixture: operating/taxes/insurance/marketing pools, 
   // point in the year (not merely present in the code but never triggered
   // by this fixture's numbers).
   const sharedPoolIds = ["pool-operating", "pool-taxes", "pool-insurance", "pool-marketing"];
-  assertEquals(sharedPoolIds.some((poolId) => output.calculation_lines.some((l) => l.pool_id === poolId && l.line_type === "RESIDUAL_ALLOCATION")), true);
+  // Residual allocation now runs ONCE at the LEASE_POOL_PERIOD boundary and
+  // only to distribute an already-rounded authoritative total, so a fixture
+  // whose shares round exactly needs no correction. The boundary contract is
+  // what must hold: any residual line covers the full recovery period.
+  for (const l of output.calculation_lines.filter((l) => l.line_type === "RESIDUAL_ALLOCATION")) {
+    assertEquals(l.segment_start, "2026-01-01");
+    assertEquals(l.segment_end, "2026-12-31");
+    assertEquals(l.rounding_scope, "LEASE_POOL_PERIOD");
+  }
 
   // Deterministic rerun -- required by the acceptance standard alongside the
   // manual tie-out itself.

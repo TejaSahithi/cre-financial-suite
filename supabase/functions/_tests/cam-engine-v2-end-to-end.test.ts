@@ -105,7 +105,11 @@ async function setUpReadyProperty(admin: ReturnType<typeof adminClient>, suffix:
   await insertOne(admin, "space_area_measurements", { org_id: org.id, scope_type: "property", scope_id: property.id, area_type: "rentable", area_sqft: 100000, effective_from: "2026-01-01" });
 
   const expenseInput = await insertOne(admin, "cam_expense_inputs", {
-    org_id: org.id, property_id: property.id, lease_id: lease.id, amount: 12000, category: category.id,
+    // Canonical category goes in expense_category_id; `category` is the
+    // display label. This previously wrote the UUID into the TEXT column,
+    // which is the exact confusion migration 039 ends (specification 8.3).
+    org_id: org.id, property_id: property.id, lease_id: lease.id, amount: 12000,
+    expense_category_id: category.id, category: category.category_name,
     publication_status: "published", publication_version: 1, fiscal_year: 2026, cam_input_type: "actual",
     variability: "variable", controllability: "controllable", service_period_start: "2026-01-01", service_period_end: "2026-12-31",
   });

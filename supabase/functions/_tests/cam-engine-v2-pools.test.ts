@@ -15,6 +15,7 @@ function expenseInput(overrides: Partial<CamExpenseInputRow>): CamExpenseInputRo
     id: "exp-1",
     amount: 1200,
     category: "utilities",
+    expense_category_id: "utilities",
     publication_status: "published",
     publication_version: 1,
     fiscal_year: 2026,
@@ -92,6 +93,9 @@ function poolAmount(overrides: Partial<PoolSegmentAmount>): PoolSegmentAmount {
     pool_id: "pool-1",
     segment: { start: "2026-01-01", end: "2026-01-31", monthIndex: 1 },
     category: "utilities",
+    // Symbolic category identifier doubles as the canonical
+    // expense_category_id, which is what pool categories match on.
+    expense_category_id: "utilities",
     amount: 100,
     source_expense_input_id: "exp-1",
     variability: "variable",

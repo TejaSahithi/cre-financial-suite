@@ -24,7 +24,7 @@ function runHeader(overrides: Partial<CamRunHeader> = {}): CamRunHeader {
     id: "run-1", org_id: "org-1", recovery_period_id: "period-1", scope_type: "property", scope_id: "prop-1",
     run_type: "standard", adjustment_of_run_id: null, restatement_of_run_id: null, engine_version: "cam-engine-v2.0.0",
     currency: "USD", area_unit: "sqft",
-    rounding_policy: { internal_decimal_places: 6, ledger_decimal_places: 2, residual_allocation: "largest_remainder" },
+    rounding_policy: { internal_decimal_places: 6, ledger_decimal_places: 2, residual_allocation: "largest_remainder", annual_rounding_scope: "LEASE_POOL_PERIOD", estimate_rounding_scope: "MONTH" },
     run_mode: "preview",
     ...overrides,
   };
@@ -44,11 +44,21 @@ function pool(overrides: Partial<RecoveryPool> = {}, categories: RecoveryPoolCat
 }
 
 function expenseInput(overrides: Partial<CamExpenseInputRow> = {}): CamExpenseInputRow {
-  return {
-    id: uid("exp"), amount: 12000, category: "utilities", publication_status: "published", publication_version: 1,
+  const base = {
+    id: uid("exp"), amount: 12000, category: "utilities", publication_status: "published" as const, publication_version: 1,
     fiscal_year: 2026, property_id: "prop-1", building_id: null, unit_id: null, lease_id: null, cam_input_type: "actual",
-    variability: "variable", controllability: "controllable", service_period_start: "2026-01-01", service_period_end: "2026-12-31",
+    variability: "variable" as const, controllability: "controllable" as const,
+    service_period_start: "2026-01-01", service_period_end: "2026-12-31",
     ...overrides,
+  };
+  // These fixtures use symbolic category identifiers ("utilities") for both
+  // the pool's expense_category_id and the input's label. Category matching
+  // is now on the canonical expense_category_id, so mirror the symbolic
+  // category onto it unless a case sets one explicitly (a null override is
+  // honoured — that is how EXPENSE_CATEGORY_MISSING is exercised).
+  return {
+    ...base,
+    expense_category_id: "expense_category_id" in overrides ? overrides.expense_category_id! : base.category,
   };
 }
 
@@ -491,7 +501,7 @@ Deno.test("Golden 18 — estimates greater than actual: tenant is owed a credit 
 Deno.test("Golden 19 — rounding: internal precision uses run.rounding_policy.internal_decimal_places, ledger output uses ledger_decimal_places", async () => {
   const exp = expenseInput({ amount: 100 });
   const input = baseInput({
-    run: runHeader({ rounding_policy: { internal_decimal_places: 6, ledger_decimal_places: 2, residual_allocation: "largest_remainder" } }),
+    run: runHeader({ rounding_policy: { internal_decimal_places: 6, ledger_decimal_places: 2, residual_allocation: "largest_remainder", annual_rounding_scope: "LEASE_POOL_PERIOD", estimate_rounding_scope: "MONTH" } }),
     published_expense_inputs: [exp], pool_assignments: [poolAssignment(exp.id, "pool-1", { amount: 100 })],
     pool_lease_participants: [participant("pool-1", "lease-1")],
     area_measurements: [areaMeasurement("prop-1", 3)], // deliberately awkward divisor to force rounding

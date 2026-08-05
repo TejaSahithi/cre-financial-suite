@@ -75,7 +75,7 @@ async function createTestUser(adminClient: any, email: string, orgId: string) {
     .insert({
       user_id: authData.user.id,
       org_id: orgId,
-      role: 'member',
+      role: 'editor', // 'member' is not in memberships_role_check; the role vocabulary is super_admin|org_admin|manager|editor|viewer|finance|auditor
       status: 'active'
     });
   

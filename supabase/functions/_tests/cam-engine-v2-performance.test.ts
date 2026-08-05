@@ -39,7 +39,7 @@ function buildLargePropertyInput(leaseCount: number): CamRunInput {
     default_gross_up_target_pct: null, created_at: "", updated_at: "", categories: [], scope_members: [],
   };
   const expense: CamExpenseInputRow = {
-    id: "exp-1", amount: poolAmount, category: "utilities", publication_status: "published", publication_version: 1,
+    id: "exp-1", amount: poolAmount, category: "utilities", expense_category_id: "utilities", publication_status: "published", publication_version: 1,
     fiscal_year: 2026, property_id: "prop-1", building_id: null, unit_id: null, lease_id: null, cam_input_type: "actual",
     variability: "variable", controllability: "controllable", service_period_start: "2026-01-01", service_period_end: "2026-12-31",
   };
@@ -82,7 +82,7 @@ function buildLargePropertyInput(leaseCount: number): CamRunInput {
     run: {
       id: "run-perf", org_id: "org-1", recovery_period_id: "period-1", scope_type: "property", scope_id: "prop-1",
       run_type: "standard", adjustment_of_run_id: null, restatement_of_run_id: null, engine_version: "cam-engine-v2.0.0",
-      currency: "USD", area_unit: "sqft", rounding_policy: { internal_decimal_places: 6, ledger_decimal_places: 2, residual_allocation: "largest_remainder" },
+      currency: "USD", area_unit: "sqft", rounding_policy: { internal_decimal_places: 6, ledger_decimal_places: 2, residual_allocation: "largest_remainder", annual_rounding_scope: "LEASE_POOL_PERIOD", estimate_rounding_scope: "MONTH" },
       run_mode: "preview",
     },
     recovery_period: period, pools: [pool], published_expense_inputs: [expense], pool_assignments: [assignment],

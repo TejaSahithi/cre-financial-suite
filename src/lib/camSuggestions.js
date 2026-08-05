@@ -23,23 +23,45 @@ export function suggestPools(approvedPolicySteps, publishedExpenses, categoryNam
     if (!step.expense_category_id) continue;
     if (!["CALCULATE_SHARE", "DIRECT_ASSIGN"].includes(step.step_type)) continue;
     const key = step.expense_category_id;
-    if (!byCategory.has(key)) byCategory.set(key, { leaseIds: new Set(), expenseCount: 0, expenseTotal: 0 });
+    if (!byCategory.has(key)) byCategory.set(key, { leaseIds: new Set(), expenseCount: 0, expenseTotal: 0, fromPolicy: false, fromExpense: false });
     byCategory.get(key).leaseIds.add(step.lease_id);
+    byCategory.get(key).fromPolicy = true;
   }
 
+  // Migration 039 adds cam_expense_inputs.expense_category_id. Where it is not
+  // yet deployed the field is absent from every row; in that case expenses
+  // simply cannot contribute a canonical-keyed suggestion, and the caller is
+  // told so through `canonical_category_available` rather than being shown a
+  // silently short list. Falling back to label matching here is exactly the
+  // defect 039 exists to remove, so it is deliberately NOT done.
+  const canonicalAvailable = (publishedExpenses || []).some(
+    (r) => r && Object.prototype.hasOwnProperty.call(r, "expense_category_id"),
+  );
+
   for (const exp of publishedExpenses || []) {
-    if (!exp.category) continue;
-    const key = exp.category;
-    if (!byCategory.has(key)) byCategory.set(key, { leaseIds: new Set(), expenseCount: 0, expenseTotal: 0 });
+    // Canonical category only. This map is keyed by
+    // lease_recovery_policy_steps.expense_category_id (a UUID); keying it by
+    // the free-text label produced phantom "categories" that matched no
+    // policy and no pool. An input with no canonical category is reported
+    // through EXPENSE_CATEGORY_MISSING instead of inventing a pool for it.
+    if (!exp.expense_category_id) continue;
+    const key = exp.expense_category_id;
+    if (!byCategory.has(key)) byCategory.set(key, { leaseIds: new Set(), expenseCount: 0, expenseTotal: 0, fromPolicy: false, fromExpense: false });
     const entry = byCategory.get(key);
     entry.expenseCount += 1;
     entry.expenseTotal += Number(exp.amount || 0);
+    entry.fromExpense = true;
   }
 
   const suggestions = [];
   for (const [categoryId, entry] of byCategory.entries()) {
     if (alreadyCoveredCategoryIds?.has(categoryId)) continue;
     const categoryName = categoryNamesById?.get(categoryId) ?? null;
+    // Provenance: which source produced this suggestion, so the user can see
+    // exactly why it appeared rather than trusting an unexplained row.
+    const source = entry.fromPolicy && entry.fromExpense
+      ? "policy_and_expense"
+      : entry.fromPolicy ? "policy" : "expense";
     suggestions.push({
       expense_category_id: categoryId,
       category_name: categoryName,
@@ -47,6 +69,11 @@ export function suggestPools(approvedPolicySteps, publishedExpenses, categoryNam
       policy_lease_count: entry.leaseIds.size,
       expense_count: entry.expenseCount,
       expense_total: entry.expenseTotal,
+      source,
+      canonical_category_available: canonicalAvailable,
+      match_explanation: `Matched on canonical expense_category_id ${categoryId}`
+        + (entry.fromPolicy ? ` · ${entry.leaseIds.size} approved policy step(s)` : "")
+        + (entry.fromExpense ? ` · ${entry.expenseCount} published expense(s)` : ""),
     });
   }
   return suggestions.sort((a, b) => (b.expense_total - a.expense_total) || (b.policy_lease_count - a.policy_lease_count));

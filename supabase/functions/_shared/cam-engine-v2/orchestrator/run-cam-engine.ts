@@ -52,7 +52,7 @@ import { reconcileEstimates } from "../reconciliation/estimate-reconciliation.ts
 import { applyLargestRemainderAllocation } from "../reconciliation/residual-allocation.ts";
 import type { CamRunInput, CamRunLeaseContext } from "../contracts/cam-input.ts";
 import type { CalcException, CalculationLine, CamRunOutput, LeaseResult, PoolResult } from "../contracts/cam-output.ts";
-import type { LeasePremises, LeasePremisesAreaPeriod, LeasePremisesSpace, RecoveryPoolCategory } from "../contracts/cam-domain-types.ts";
+import type { LeasePremises, LeasePremisesAreaPeriod, LeasePremisesSpace, RecoveryPoolCategory, RoundingScope } from "../contracts/cam-domain-types.ts";
 
 const segKey = (s: { start: string; end: string }) => `${s.start}|${s.end}`;
 const UNCATEGORIZED = "__uncategorized__";
@@ -95,8 +95,15 @@ function roundTo(value: number, places: number): number {
  * Falls back to LEASE_POOL_PERIOD if the field is absent (backward
  * compatibility with runs persisted before Phase 4B).
  */
-function annualRoundingScope(policy: CamRunInput["run"]["rounding_policy"]): string {
-  return (policy as Record<string, unknown>).annual_rounding_scope as string ?? "LEASE_POOL_PERIOD";
+function annualRoundingScope(policy: CamRunInput["run"]["rounding_policy"]): RoundingScope {
+  // annual_rounding_scope is a declared, required field on RoundingPolicy, so
+  // the previous `policy as Record<string, unknown>` cast was both unnecessary
+  // and a hard TS2352 error (RoundingPolicy has no string index signature),
+  // which blocked `deno check` across every module importing this file. The
+  // runtime `??` fallback is retained deliberately: runs persisted before
+  // Phase 4B can carry a rounding_policy JSON blob without this key, and a
+  // replayed snapshot must still round at the documented default.
+  return policy?.annual_rounding_scope ?? "LEASE_POOL_PERIOD";
 }
 
 /**
@@ -225,6 +232,15 @@ export async function runCamEngine(input: CamRunInput): Promise<CamRunOutput> {
   const lines: CalculationLine[] = [];
   const internalPlaces = input.run.rounding_policy.internal_decimal_places ?? 6;
   const ledgerPlaces = input.run.rounding_policy.ledger_decimal_places ?? 2;
+  // Frozen onto every boundary-crossing calculation line so a reader can see
+  // which policy actually produced the number, without re-deriving it.
+  const roundingPolicyDisclosure = {
+    internal_decimal_places: internalPlaces,
+    ledger_decimal_places: ledgerPlaces,
+    annual_rounding_scope: annualRoundingScope(input.run.rounding_policy),
+    estimate_rounding_scope: input.run.rounding_policy.estimate_rounding_scope ?? "MONTH",
+    residual_allocation: input.run.rounding_policy.residual_allocation ?? "largest_remainder",
+  };
   const input_hash = await computeInputHash(input);
 
   if (compareDates(input.recovery_period.start_date, input.recovery_period.end_date) > 0) {
@@ -271,7 +287,8 @@ export async function runCamEngine(input: CamRunInput): Promise<CamRunOutput> {
     const relevantAssignments = input.pool_assignments.filter((a) => a.recovery_pool_id === pool.id);
     const { amounts, exceptions: assemblyExceptions } = assembleSegmentAmounts(segments, input.published_expense_inputs, relevantAssignments);
     exceptions.push(...assemblyExceptions);
-    const { included, excluded } = applyCategoryInclusionExclusion(amounts, { [pool.id]: pool.categories });
+    const { included, excluded, exceptions: categoryExceptions } = applyCategoryInclusionExclusion(amounts, { [pool.id]: pool.categories });
+    exceptions.push(...categoryExceptions);
 
     let poolActual = 0, poolExcluded = 0;
     const segmentRawMap = new Map<string, PoolSegmentRaw>();
@@ -360,7 +377,12 @@ export async function runCamEngine(input: CamRunInput): Promise<CamRunOutput> {
     const includedTotalRaw = raw.includedAmounts.reduce((s, a) => s + a.amount, 0);
     for (const a of raw.includedAmounts) {
       const shareOfSegment = includedTotalRaw > 0 ? a.amount / includedTotalRaw : 0;
-      const categoryKey = a.category ?? UNCATEGORIZED;
+      // Keyed by canonical expense_category_id: this map is read below with
+      // the policy's own lease_recovery_policy_steps.expense_category_id
+      // (a public.expense_categories UUID). Keying it by the free-text
+      // label instead made every lookup miss, so each tenant's eligible
+      // input amount resolved to 0 (specification 8.3).
+      const categoryKey = a.expense_category_id ?? UNCATEGORIZED;
       const adjustedShare = grossUp.adjustedPool * shareOfSegment;
       perCategory.set(categoryKey, (perCategory.get(categoryKey) ?? 0) + adjustedShare);
       const split = perCategoryControl.get(categoryKey) ?? { controllable: 0, uncontrollable: 0 };
@@ -532,29 +554,24 @@ export async function runCamEngine(input: CamRunInput): Promise<CamRunOutput> {
     residualGroups.set(pc.groupKey, list);
   }
 
-  const correctedShareByContribution = new Map<PendingContribution, number>();
-  for (const members of residualGroups.values()) {
-    if (members.length < 2) continue;
-    const targetTotal = roundTo(members.reduce((s, m) => s + m.rawShareAmount, 0), ledgerPlaces);
-    const { results } = applyLargestRemainderAllocation(
-      members.map((m) => ({ key: m.leaseId, rawAmount: m.rawShareAmount })),
-      targetTotal, ledgerPlaces,
-    );
-    results.forEach((r, i) => {
-      const member = members[i]; // applyLargestRemainderAllocation preserves input order
-      correctedShareByContribution.set(member, r.finalAmount);
-      if (r.residualAdjustment !== 0) {
-        lines.push({
-          lease_id: member.leaseId, pool_id: member.ctx.poolId, sequence: 0, line_type: "RESIDUAL_ALLOCATION", category: null,
-          formula_code: "LARGEST_REMAINDER",
-          input_amount: r.naiveRoundedAmount, output_amount: r.finalAmount, adjustment: r.residualAdjustment,
-          policy_step_id: null,
-          explanation: `Deterministic largest-remainder residual allocation: ${r.residualAdjustment > 0 ? "added" : "removed"} ${Math.abs(r.residualAdjustment)} to reconcile ${members.length} tenants' independently-rounded shares back to the pool's exact adjusted category total`,
-          segment_start: member.ctx.segment.start, segment_end: member.ctx.segment.end,
-        });
-      }
-    });
-  }
+  // Phase 5 rounding correction — residual allocation NO LONGER runs here.
+  //
+  // It previously ran per (pool, category, SEGMENT): it rounded each tenant's
+  // segment share to ledger precision and fed that ROUNDED value into the
+  // remaining policy steps. With twelve monthly segments that injected ledger
+  // rounding twelve times per pool, mid-calculation, and the errors compounded
+  // through base-year, cap and fee steps — the source of the observed annual
+  // drift.
+  //
+  // The authoritative rule is now: intermediate values stay at full precision,
+  // aggregation happens at lease + pool + period, rounding happens ONCE at
+  // that boundary, and largest-remainder allocation is used ONLY to distribute
+  // that already-rounded authoritative total among its child lines. That work
+  // now happens in the boundary block below.
+  //
+  // residualGroups is still built above because it is what marks a contribution
+  // as belonging to a shared pool; it simply no longer mutates any amount.
+  void residualGroups;
 
   // ---- Finalize: run each contribution's remaining steps (from its
   // possibly-residual-corrected share), accumulate per lease at FULL
@@ -572,7 +589,18 @@ export async function runCamEngine(input: CamRunInput): Promise<CamRunOutput> {
   // internalPlaces precision, round exactly once at the annual boundary.
   //
   // annualRecoveryByLease stores UNROUNDED internal-precision totals.
-  const annualRecoveryByLease = new Map<string, number>();
+  // Every contribution now runs its remaining steps from its OWN full-precision
+  // share. Nothing is rounded here, and nothing is rounded between steps.
+  // Accumulation is keyed by the configured aggregation boundary.
+  const boundaryScope = annualRoundingScope(input.run.rounding_policy);
+  // LEASE_POOL_PERIOD (default) aggregates per lease per pool; LEASE_PERIOD
+  // aggregates a lease across all its pools. Both round exactly once.
+  const boundaryKeyFor = (leaseId: string, poolId: string | null) =>
+    boundaryScope === "LEASE_PERIOD" ? `${leaseId}|__all_pools__` : `${leaseId}|${poolId ?? "__no_pool__"}`;
+
+  interface BoundaryBucket { leaseId: string; poolId: string | null; raw: number; }
+  const boundaryBuckets = new Map<string, BoundaryBucket>();
+
   for (const pc of pendingContributions) {
     exceptions.push(...pc.shareExceptions);
     lines.push(...pc.shareLines);
@@ -581,21 +609,71 @@ export async function runCamEngine(input: CamRunInput): Promise<CamRunOutput> {
     if (pc.groupKey === null) {
       contribution = pc.rawShareAmount;
     } else {
-      // Only a group that actually went through residual correction (2+
-      // members) has a ledger-rounded corrected value here. A group of
-      // exactly one member was intentionally skipped (no residual concept
-      // for a single recipient) — its raw, full-internal-precision share
-      // must flow forward UNCHANGED, exactly as it did before this pass
-      // was split, so single-lease scenarios remain byte-identical.
-      const startingAmount = correctedShareByContribution.get(pc) ?? pc.rawShareAmount;
-      const stepResult = runPolicySteps(pc.remainingSteps, startingAmount, pc.ctx);
+      const stepResult = runPolicySteps(pc.remainingSteps, pc.rawShareAmount, pc.ctx);
       exceptions.push(...stepResult.exceptions);
       lines.push(...stepResult.lines);
       contribution = stepResult.finalAmount;
     }
-    // Accumulate at internalPlaces — do NOT round here.
-    const prev = annualRecoveryByLease.get(pc.leaseId) ?? 0;
-    annualRecoveryByLease.set(pc.leaseId, roundTo(prev + contribution, internalPlaces));
+
+    const bKey = boundaryKeyFor(pc.leaseId, pc.ctx.poolId ?? null);
+    const bucket = boundaryBuckets.get(bKey) ?? { leaseId: pc.leaseId, poolId: pc.ctx.poolId ?? null, raw: 0 };
+    bucket.raw += contribution; // full precision — never rounded here
+    boundaryBuckets.set(bKey, bucket);
+  }
+
+  // ---- THE rounding boundary. Round once per (lease, pool, period), and use
+  // largest-remainder ONLY to distribute the already-rounded authoritative
+  // pool total across the leases sharing it, so that
+  //     SUM(round(lease_pool_i)) == round(SUM(lease_pool_i))
+  // for every pool, with a deterministic, reproducible tie-break. ----
+  const roundedByBoundary = new Map<string, { rounded: number; raw: number; residual: number }>();
+  const bucketsByPool = new Map<string, BoundaryBucket[]>();
+  for (const b of boundaryBuckets.values()) {
+    const poolKey = b.poolId ?? "__no_pool__";
+    const list = bucketsByPool.get(poolKey) ?? [];
+    list.push(b);
+    bucketsByPool.set(poolKey, list);
+  }
+
+  for (const [poolKey, members] of bucketsByPool) {
+    // Deterministic ordering so repeated runs allocate residuals identically.
+    members.sort((a, b) => a.leaseId.localeCompare(b.leaseId));
+    const authoritativeTotal = roundTo(members.reduce((s, m) => s + m.raw, 0), ledgerPlaces);
+    const { results } = applyLargestRemainderAllocation(
+      members.map((m) => ({ key: m.leaseId, rawAmount: m.raw })),
+      authoritativeTotal, ledgerPlaces,
+    );
+    results.forEach((r, i) => {
+      const m = members[i]; // applyLargestRemainderAllocation preserves input order
+      const key = boundaryKeyFor(m.leaseId, m.poolId);
+      roundedByBoundary.set(key, { rounded: r.finalAmount, raw: m.raw, residual: roundTo(r.finalAmount - m.raw, internalPlaces) });
+
+      if (r.residualAdjustment !== 0) {
+        lines.push({
+          lease_id: m.leaseId, pool_id: m.poolId, sequence: 0, line_type: "RESIDUAL_ALLOCATION", category: null,
+          formula_code: "LARGEST_REMAINDER",
+          input_amount: r.naiveRoundedAmount, output_amount: r.finalAmount, adjustment: r.residualAdjustment,
+          policy_step_id: null,
+          explanation:
+            `Deterministic largest-remainder allocation at ${boundaryScope}: ${r.residualAdjustment > 0 ? "added" : "removed"} ` +
+            `${Math.abs(r.residualAdjustment)} so the ${members.length} leases sharing pool ${poolKey} sum exactly to the ` +
+            `rounded authoritative total ${authoritativeTotal}. Applied to an already-rounded total only — never mid-calculation.`,
+          segment_start: input.recovery_period.start_date, segment_end: input.recovery_period.end_date,
+          unrounded_aggregate: m.raw, rounding_scope: boundaryScope,
+          rounded_amount: r.finalAmount, rounding_residual: r.residualAdjustment,
+          rounding_policy: roundingPolicyDisclosure,
+        });
+      }
+    });
+  }
+
+  // Lease annual recovery = sum of its rounded (lease, pool, period) amounts.
+  const annualRecoveryByLease = new Map<string, number>();
+  const unroundedByLease = new Map<string, number>();
+  for (const [key, v] of roundedByBoundary) {
+    const leaseId = key.split("|")[0];
+    annualRecoveryByLease.set(leaseId, roundTo((annualRecoveryByLease.get(leaseId) ?? 0) + v.rounded, ledgerPlaces));
+    unroundedByLease.set(leaseId, (unroundedByLease.get(leaseId) ?? 0) + v.raw);
   }
 
   const leaseResults: LeaseResult[] = [];
@@ -603,13 +681,15 @@ export async function runCamEngine(input: CamRunInput): Promise<CamRunOutput> {
 
   for (const lease of input.leases) {
     // The unrounded aggregate: full internal precision accumulated above.
-    const unroundedAggregate = annualRecoveryByLease.get(lease.id) ?? 0;
+    const unroundedAggregate = unroundedByLease.get(lease.id) ?? 0;
 
     // Round ONCE at the configured annual boundary (LEASE_POOL_PERIOD by
     // default — per Phase 4B decision 1). Monthly estimate charges are
     // always rounded at MONTH inside reconcileEstimates, independent of
     // this boundary.
-    const annualRecovery = roundTo(unroundedAggregate, ledgerPlaces);
+    // Already rounded once at the boundary above (and residual-allocated
+    // there). Do NOT round again — this is a sum of ledger-precision values.
+    const annualRecovery = annualRecoveryByLease.get(lease.id) ?? 0;
     const residualAdjustment = roundTo(annualRecovery - unroundedAggregate, internalPlaces);
 
     // Emit the mandatory ROUNDING_DETAIL line so the ledger is always
@@ -623,8 +703,14 @@ export async function runCamEngine(input: CamRunInput): Promise<CamRunOutput> {
       output_amount: annualRecovery,
       adjustment: residualAdjustment,
       policy_step_id: null,
-      explanation: `Annual CAM recovery rounded at ${scopeLabel}: unrounded aggregate ${unroundedAggregate} → ${annualRecovery}` +
-        (residualAdjustment !== 0 ? ` (residual ${residualAdjustment > 0 ? "+" : ""}${residualAdjustment})` : " (exact, no residual)"),
+      explanation: `Annual CAM recovery rounded once at ${scopeLabel}: unrounded aggregate ${unroundedAggregate} → ${annualRecovery}` +
+        (residualAdjustment !== 0 ? ` (residual ${residualAdjustment > 0 ? "+" : ""}${residualAdjustment})` : " (exact, no residual)") +
+        `. No intermediate policy step was rounded; ledger precision is applied at this boundary only.`,
+      unrounded_aggregate: unroundedAggregate,
+      rounding_scope: scopeLabel,
+      rounded_amount: annualRecovery,
+      rounding_residual: residualAdjustment,
+      rounding_policy: roundingPolicyDisclosure,
       segment_start: input.recovery_period.start_date,
       segment_end: input.recovery_period.end_date,
     });

@@ -29,7 +29,18 @@ export type AreaUnit = "sqft" | "sqm";
 export interface CamExpenseInputRow {
   id: string;
   amount: number;
+  // Frozen human-readable label (e.g. 'Insurance'). Display/audit only —
+  // specification 8.3: "Keep the text label only for display/audit
+  // snapshots." Never match categories on this field.
   category: string | null;
+  // Canonical expense category (public.expense_categories.id). This is the
+  // ONLY authoritative key for category matching: recovery_pool_categories
+  // and lease_recovery_policy_steps both key on this UUID, so comparing them
+  // against `category` can never match (specification 8.3: "Do not compare a
+  // category UUID with a text value such as Insurance"). NULL means the
+  // source label could not be resolved to exactly one category and the row
+  // must block via EXPENSE_CATEGORY_MISSING rather than be guessed.
+  expense_category_id: string | null;
   publication_status: "published" | "withdrawn" | "superseded";
   publication_version: number;
   fiscal_year: number | null;

@@ -57,6 +57,27 @@ export interface CalculationLine {
   segment_start: string;
   /** ISO date — the effective-date segment this line covers (or period start/end for annual lines). */
   segment_end: string;
+
+  // --- Rounding disclosure (specification 21.18 / 22) ----------------------
+  // Populated on lines that cross a rounding boundary. Intermediate
+  // policy-step lines carry high-precision input/output and leave these null:
+  // they are deliberately NOT rounded, so there is nothing to disclose.
+  /** The full-precision value before any ledger rounding was applied. */
+  unrounded_aggregate?: number | null;
+  /** The boundary this line was rounded at, e.g. LEASE_POOL_PERIOD. */
+  rounding_scope?: string | null;
+  /** The value after rounding once at `rounding_scope`. */
+  rounded_amount?: number | null;
+  /** rounded_amount - unrounded_aggregate, including any largest-remainder correction. */
+  rounding_residual?: number | null;
+  /** The rounding policy actually in force for this run, frozen onto the line. */
+  rounding_policy?: {
+    internal_decimal_places: number;
+    ledger_decimal_places: number;
+    annual_rounding_scope: string;
+    estimate_rounding_scope: string;
+    residual_allocation: string;
+  } | null;
 }
 
 export interface PoolResult {

@@ -35,7 +35,7 @@ create policy units_select on public.units
   for select to authenticated
   using (
     public.is_super_admin()
-    or org_id in (select unnest(public.get_my_org_ids()))
+    or org_id in (select public.get_my_org_ids())
   );
 
 drop policy if exists units_insert on public.units;

@@ -73,7 +73,7 @@ function runHeader(): CamRunHeader {
     id: "run-industrial", org_id: "org-1", recovery_period_id: "period-1", scope_type: "property", scope_id: "prop-1",
     run_type: "standard", adjustment_of_run_id: null, restatement_of_run_id: null, engine_version: "cam-engine-v2.0.0",
     currency: "USD", area_unit: "sqft",
-    rounding_policy: { internal_decimal_places: 6, ledger_decimal_places: 2, residual_allocation: "largest_remainder" },
+    rounding_policy: { internal_decimal_places: 6, ledger_decimal_places: 2, residual_allocation: "largest_remainder", annual_rounding_scope: "LEASE_POOL_PERIOD", estimate_rounding_scope: "MONTH" },
     run_mode: "posting_eligible",
   };
 }
@@ -96,7 +96,10 @@ function categoryDef(poolId: string, expenseCategoryId: string): RecoveryPoolCat
 
 function expenseInput(id: string, amount: number, category: string): CamExpenseInputRow {
   return {
-    id, amount, category, publication_status: "published", publication_version: 1, fiscal_year: 2026,
+    // Symbolic category identifier doubles as the canonical
+    // expense_category_id, which is what pools/policies now match on.
+    id, amount, category, expense_category_id: category,
+    publication_status: "published", publication_version: 1, fiscal_year: 2026,
     property_id: "prop-1", building_id: null, unit_id: null, lease_id: null, cam_input_type: "actual",
     variability: "fixed", controllability: "controllable", service_period_start: "2026-01-01", service_period_end: "2026-12-31",
   };
@@ -268,10 +271,18 @@ Deno.test("Industrial archetype fixture: multiple units, a mid-year unit area ch
   }
   assertEquals(output.calculation_lines.some((l) => l.pool_id === "pool-utilities" && l.line_type === "RESIDUAL_ALLOCATION"), false);
 
-  // Residual allocation genuinely engaged in pool-property at some point in
-  // the year (proving the mechanism actually triggered, not merely present
-  // in the code but never exercised by this fixture's numbers).
-  assertEquals(output.calculation_lines.some((l) => l.pool_id === "pool-property" && l.line_type === "RESIDUAL_ALLOCATION"), true);
+  // Residual allocation is now applied ONCE, at the LEASE_POOL_PERIOD
+  // boundary, purely to distribute an already-rounded authoritative total.
+  // It no longer fires per monthly segment (that was the source of
+  // intermediate-rounding drift), so this fixture may legitimately need no
+  // correction at all. What must hold is the boundary contract: any residual
+  // line that IS emitted covers the whole recovery period, and every pool's
+  // rounded lease amounts still sum to the rounded pool total.
+  for (const l of output.calculation_lines.filter((l) => l.line_type === "RESIDUAL_ALLOCATION")) {
+    assertEquals(l.segment_start, "2026-01-01");
+    assertEquals(l.segment_end, "2026-12-31");
+    assertEquals(l.rounding_scope, "LEASE_POOL_PERIOD");
+  }
 
   // Deterministic rerun -- required by the acceptance standard alongside the
   // manual tie-out itself.

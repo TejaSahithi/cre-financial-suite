@@ -37,13 +37,48 @@ export function normalizeReadiness(rpcReadiness) {
  * these, so they are computed here, client-side, read-only, and merged
  * alongside (never instead of) the engine's own exceptions.
  */
+/**
+ * True when the loaded rows actually carry the canonical category column.
+ *
+ * Migration 039 adds cam_expense_inputs.expense_category_id. Until it is
+ * deployed to a given environment the field is simply absent from the payload,
+ * and `!row.expense_category_id` would be true for EVERY row — turning a
+ * correct blocker into a false-blocker storm across the whole property. So the
+ * canonical check is only applied where the column demonstrably exists.
+ * Deliberately checks property presence, not truthiness: a legitimately
+ * unresolved row has the property set to null, which must still be flagged.
+ */
+export function hasCanonicalCategoryColumn(rows) {
+  return (rows || []).some((r) => r && Object.prototype.hasOwnProperty.call(r, "expense_category_id"));
+}
+
 export function computeExpenseGapExceptions(publishedExpenses) {
   const items = [];
+  const canonicalAvailable = hasCanonicalCategoryColumn(publishedExpenses);
   for (const exp of publishedExpenses || []) {
-    if (!exp.category) {
+    // Blocking condition is the missing CANONICAL category, not the missing
+    // label. Pools and policies match on expense_category_id, so an expense
+    // carrying a label such as 'Insurance' that never resolved to exactly one
+    // category is just as unusable as one with no label at all — and the
+    // engine already blocks it. Checking the label alone let that case pass
+    // Setup and then fail in the run (specification 8.3, 18.1).
+    // Scope: a published, financially material (nonzero) expense only. A
+    // zero-amount input cannot change any recovery, so blocking Setup on its
+    // category would be an irrelevant blocker (specification 18.1: every
+    // issue must be scoped to actual financial relevance). Property/period
+    // scoping is applied by the caller's query before this runs.
+    const isMaterial = Math.abs(Number(exp.amount ?? 0)) > 0;
+    // Pre-039 environments fall back to the label-presence check, which is the
+    // most this schema can honestly assert there.
+    const categoryMissing = canonicalAvailable ? !exp.expense_category_id : !exp.category;
+    if (categoryMissing && isMaterial) {
       items.push({
         severity: "blocking", code: "EXPENSE_CATEGORY_MISSING", entityType: "cam_expense_inputs", entityId: exp.id,
-        message: readinessExceptionLabel("EXPENSE_CATEGORY_MISSING"), rawMessage: `Expense ${exp.id} has no category`, source: "setup_ui",
+        message: readinessExceptionLabel("EXPENSE_CATEGORY_MISSING"),
+        rawMessage: exp.category
+          ? `Expense ${exp.id} has the category label "${exp.category}" but it does not resolve to exactly one canonical expense category`
+          : `Expense ${exp.id} has no category`,
+        source: "setup_ui",
       });
     }
     if (!exp.service_period_start || !exp.service_period_end) {
