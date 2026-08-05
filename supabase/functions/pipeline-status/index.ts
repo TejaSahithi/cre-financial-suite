@@ -340,9 +340,29 @@ function formatFileRecord(record: Record<string, any>, extras: Record<string, an
         facts_unmapped_count: openaiFactLedgerDebug.facts_unmapped_count ?? null,
         mapped_non_null_field_count: openaiFactLedgerDebug.mapped_non_null_field_count ?? null,
         invalid_or_omitted_claim_count: openaiFactLedgerDebug.invalid_or_omitted_claim_count ?? null,
+        // Split the above into its two very different causes: an omitted field
+        // means the model never mentioned it (truncated/abandoned answer),
+        // which is diagnostically nothing like a wrong value. finish_reason
+        // "length" is the direct truncation signal.
+        omitted_field_count: openaiFactLedgerDebug.omitted_field_count ?? null,
+        omitted_field_ratio: openaiFactLedgerDebug.omitted_field_ratio ?? null,
+        max_omitted_field_ratio: openaiFactLedgerDebug.max_omitted_field_ratio ?? null,
+        finish_reason: openaiFactLedgerDebug.finish_reason ?? null,
+        schema_field_count: openaiFactLedgerDebug.schema_field_count ?? null,
+        max_output_tokens: openaiFactLedgerDebug.max_output_tokens ?? null,
+        output_tokens: openaiFactLedgerDebug.output_tokens ?? null,
         failure_classification: openaiFactLedgerDebug.failure_classification ?? null,
         failure_http_status: openaiFactLedgerDebug.failure_http_status ?? null,
         document_index_source: openaiFactLedgerDebug.document_index_source ?? null,
+        // Sectioned/large-document architecture only: a failed section means
+        // that slice of the lease produced no usable answer at all (see
+        // failure_classification "SECTIONED_RESPONSE_SECTION_FAILURES").
+        section_count: openaiFactLedgerDebug.section_count ?? null,
+        section_failure_count: openaiFactLedgerDebug.section_failure_count ?? null,
+        section_failure_ratio: openaiFactLedgerDebug.section_failure_ratio ?? null,
+        max_section_failure_ratio: openaiFactLedgerDebug.max_section_failure_ratio ?? null,
+        section_deadline_exhausted: openaiFactLedgerDebug.section_deadline_exhausted ?? null,
+        failed_sections: openaiFactLedgerDebug.failed_sections ?? null,
       }
       : null,
     ui_review_payload: record.ui_review_payload ?? null,

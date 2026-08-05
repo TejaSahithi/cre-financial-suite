@@ -165,7 +165,8 @@ export function getAllowedPagesForRole(role) {
  * @param {string} pageName - the page key
  * @returns {boolean}
  */
-export function canAccess(role, pageName) {
+export function canAccess(role, pageName, user = null) {
+  if (isSuperAdmin(user)) return true;
   const resolvedRole = resolveRoleForAccess(role);
   if (!pageName) return true;
   if (PUBLIC_PAGES.includes(pageName)) return true;
@@ -197,11 +198,10 @@ export function getPermissions(role) {
  * Filter nav sections based on role.
  * Returns a new array with only accessible items.
  */
-export function filterNavForRole(navSections, role) {
-  if (!role) return [];
+export function filterNavForRole(navSections, role, user = null) {
+  const isSuper = isSuperAdmin(user) || role === "super_admin" || role === "admin";
+  if (!role && !isSuper) return [];
   const resolvedRole = resolveRoleForAccess(role);
-  // SuperAdmin sees all nav items
-  const isSuperAdmin = resolvedRole === "admin" || resolvedRole === "super_admin";
   
   const allowed = ROLE_PAGES[resolvedRole];
   const allowedSet = new Set(allowed || []);
@@ -210,14 +210,14 @@ export function filterNavForRole(navSections, role) {
     .map(item => {
       // If it's a top-level page, check access
       if (item.page) {
-        if (ADMIN_ONLY_PAGES.includes(item.page) && !isSuperAdmin) return null;
-        if (!isSuperAdmin && !allowedSet.has(item.page)) return null;
+        if (ADMIN_ONLY_PAGES.includes(item.page) && !isSuper) return null;
+        if (!isSuper && !allowedSet.has(item.page)) return null;
       }
       
       if (item.children) {
         const filteredChildren = item.children.filter(c => {
-          if (ADMIN_ONLY_PAGES.includes(c.page) && !isSuperAdmin) return false;
-          if (isSuperAdmin) return true;
+          if (ADMIN_ONLY_PAGES.includes(c.page) && !isSuper) return false;
+          if (isSuper) return true;
           return allowedSet.has(c.page);
         });
         if (filteredChildren.length === 0) return null;
@@ -229,16 +229,21 @@ export function filterNavForRole(navSections, role) {
     .filter(Boolean);
 }
 
-export function filterNavForAllowedPages(navSections, allowedPages) {
+export function filterNavForAllowedPages(navSections, allowedPages, user = null) {
   const allowedSet = new Set(allowedPages || []);
+  const isSuper = isSuperAdmin(user);
   return navSections
     .map((item) => {
       if (item.page) {
-        return allowedSet.has(item.page) ? item : null;
+        if (ADMIN_ONLY_PAGES.includes(item.page) && !isSuper) return null;
+        return (allowedSet.has(item.page) || isSuper) ? item : null;
       }
 
       if (item.children) {
-        const filteredChildren = item.children.filter((child) => allowedSet.has(child.page));
+        const filteredChildren = item.children.filter((child) => {
+          if (ADMIN_ONLY_PAGES.includes(child.page)) return isSuper;
+          return allowedSet.has(child.page) || isSuper;
+        });
         if (filteredChildren.length === 0) return null;
         return { ...item, children: filteredChildren };
       }

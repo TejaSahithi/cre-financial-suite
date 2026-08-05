@@ -2,7 +2,7 @@ import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
 import { useModuleAccess } from '@/lib/ModuleAccessContext';
-import { canAccess, PUBLIC_PAGES } from '@/lib/rbac';
+import { canAccess, PUBLIC_PAGES, isSuperAdmin } from '@/lib/rbac';
 import AccessDenied from '@/components/AccessDenied';
 import LayoutWrapper from '@/app/LayoutWrapper';
 
@@ -16,10 +16,15 @@ export default function RbacGuard({ pageName, children }) {
     return <Navigate to="/Login" replace />;
   }
 
+  // SuperAdmin has full access to all pages across all org contexts
+  if (isSuperAdmin(user)) {
+    return children;
+  }
+
   const hasExplicitPagePermissions = Object.keys(pageAccess || {}).length > 0;
   const roleAllowsPage = hasExplicitPagePermissions 
     ? Boolean(pageAccess?.[pageName]) 
-    : canAccess(user.role, pageName);
+    : canAccess(user.role, pageName, user);
 
   if (!roleAllowsPage) {
     return (

@@ -29,6 +29,7 @@ const {
   selectWithRetry,
   isReviewReadyEnrichmentTransportFailure,
   completeEnrichmentWithWarning,
+  normalizeFailureAlreadyPersisted,
 } = __test__;
 
 const ORG_ID = "org-1";
@@ -509,6 +510,27 @@ Deno.test({
   },
 });
 
+Deno.test({
+  name: "normalizeFailureAlreadyPersisted: structured normalize failures are not converted into manual_review_fallback by the worker",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn() {
+    assertEquals(normalizeFailureAlreadyPersisted({
+      status: 422,
+      error_code: "AI_EMPTY_EXTRACTION",
+      data: {
+        error_code: "AI_EMPTY_EXTRACTION",
+        processing_status: "failed_empty_extraction",
+        ui_review_payload: { schema_version: 2, records: [] },
+      },
+    }), true);
+    assertEquals(normalizeFailureAlreadyPersisted({
+      status: 400,
+      error_code: "NORMALIZE_FAILED",
+      data: { error_code: "NORMALIZE_FAILED" },
+    }), false);
+  },
+});
 Deno.test({
   name: "parkLeaseForManualReview: normalize-pdf-output's own provider-failure diagnostics (failure_provider_error_code/request_id/request_url) survive the fallback overwrite instead of being silently discarded",
   sanitizeResources: false,

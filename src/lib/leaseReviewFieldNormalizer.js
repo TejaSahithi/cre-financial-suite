@@ -42,7 +42,7 @@ import {
   REQUIRED_FIELD_KEYS,
 } from "@/lib/leaseReviewSchema";
 import { collectExtractedDocumentItems } from "@/components/lease-review/utils/dynamicFields";
-import { validateFieldValue } from "@/components/lease-review/utils/fieldValidator";
+import { validateFieldValue, validateFieldEvidenceSupport } from "@/components/lease-review/utils/fieldValidator";
 import { LEASE_FIELD_CONTRACT, LEASE_REVIEW_CANONICAL_TABS, getFieldContract, resolveCanonicalFieldKey } from "@/lib/leaseFieldContract";
 import { buildCurrentReviewPolicy, resolveCurrentReviewProfile } from "@/lib/leaseReviewCurrentPolicy";
 import { getFieldAliases } from "@/lib/leaseFieldResolver";
@@ -717,6 +717,19 @@ function requiredFieldHasValue(byKey, key) {
   return getFieldAliases(key).some((aliasKey) => hasRowValue(byKey.get(aliasKey)));
 }
 
+function requiredFieldHasValueWithAlternates(byKey, key) {
+  if (requiredFieldHasValue(byKey, key)) return true;
+  const contract = getFieldContract(key);
+  return (contract?.alternateFieldKeys || []).some((alternateKey) => requiredFieldHasValue(byKey, alternateKey));
+}
+
+function isReviewBlockingStandardRow(row, requiredKeySet) {
+  if (!row || row.rowType !== "standard") return false;
+  const canonicalKey = row.canonicalKey || row.fieldKey || row.field_key;
+  if (!requiredKeySet.has(canonicalKey)) return false;
+  return row.status === "needs_review" || row.status === "manual_required";
+}
+
 // Phase 39: signature-date fields whose only evidence describes when the
 // ORIGINAL lease was entered into (not this document's own execution) must
 // not be treated as an accepted/evidence-verified signature fact. Scoped to
@@ -1052,12 +1065,18 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
       ...(Array.isArray(evidence?.validationErrors) ? evidence.validationErrors : []),
       ...(Array.isArray(evidence?.validation_errors) ? evidence.validation_errors : []),
     ];
+    const valueFromTypedLeaseColumn = reviewedValue === undefined
+      && typedColumnValue !== undefined
+      && Object.is(value, typedColumnValue);
     if (!evidenceOverrideReason && isMeaningfulValue(value)) {
       const validationResult = validateFieldValue(canonicalKey, value);
-      if (!validationResult.valid) {
+      const supportValidation = validationResult.valid && !valueFromTypedLeaseColumn
+        ? validateFieldEvidenceSupport(canonicalKey, value, evidence)
+        : validationResult;
+      if (!supportValidation.valid) {
         validationErrors.push(`${canonicalKey}_failed_validation`);
         const preservedSourceText = evidence?.sourceText || evidence?.sourceClause || null;
-        evidenceOverrideReason = validationResult.reason || "Extracted value failed field type validation.";
+        evidenceOverrideReason = supportValidation.reason || "Extracted value failed field/source validation.";
         invalidValueRejected = true;
         value = null;
         evidence = {
@@ -2009,7 +2028,8 @@ export function normalizeApprovalBlockers(lease, standardFields, currentReviewPo
     // Phase 39: same narrow carve-out as hasRowValue() above - a required
     // field whose value was rejected as an invalid layout/markup artifact
     // must not become a NEW blocker as a side effect of that display fix.
-    const hasValue = row ? (isMeaningfulValue(row.value) || row.invalidValueRejected === true) : false;
+    const hasValue = (row ? (isMeaningfulValue(row.value) || row.invalidValueRejected === true) : false)
+      || requiredFieldHasValueWithAlternates(byKey, contract.canonicalKey);
     if (appliesToProfile && !hasValue) missingFields.push(contract.canonicalKey);
     if (currentReviewPolicy?.applyBaseLeaseBlockers !== false) {
       if (contract.requiredForBudget && !hasValue) budgetBlockers.push(contract.canonicalKey);
@@ -2026,7 +2046,7 @@ export function normalizeApprovalBlockers(lease, standardFields, currentReviewPo
       // name (e.g. premises_address) is satisfied by its populated,
       // evidence-backed canonical alias (e.g. property_address) - see
       // requiredFieldHasValue() above.
-      const policyHasValue = requiredFieldHasValue(byKey, key);
+      const policyHasValue = requiredFieldHasValueWithAlternates(byKey, key);
       if (!missingFields.includes(key) && !policyHasValue) {
         missingFields.push(key);
       }
@@ -2228,8 +2248,8 @@ export function buildReadinessSummary({ standardFields, dynamicFindings, expense
   // independent missing-required-fields computation doesn't reproduce the
   // same legacy-key-name false positive (e.g. premises_address vs.
   // property_address).
-  const missingRequired = requiredKeys.filter((key) => !requiredFieldHasValue(byKey, key));
-  const needsReview = standardFields.filter((row) => row.status === "needs_review" || row.status === "manual_required");
+  const missingRequired = requiredKeys.filter((key) => !requiredFieldHasValueWithAlternates(byKey, key));
+  const needsReview = standardFields.filter((row) => isReviewBlockingStandardRow(row, requiredKeySet));
   const sourceBacked = standardFields.filter((row) => row.evidenceVerified);
   const tabSummaries = LEASE_REVIEW_CANONICAL_TABS.map((tab) => {
     const rows = tabs?.[tab.key] || [];
@@ -2240,8 +2260,8 @@ export function buildReadinessSummary({ standardFields, dynamicFindings, expense
       rows: rows.length,
       complete: standardRows.filter(hasRowValue).length,
       totalStandard: standardRows.length,
-      missingRequired: standardRows.filter((row) => requiredKeySet.has(row.canonicalKey) && !hasRowValue(row)).length,
-      needsReview: rows.filter((row) => row.status === "needs_review" || row.status === "manual_required").length,
+      missingRequired: standardRows.filter((row) => requiredKeySet.has(row.canonicalKey) && !requiredFieldHasValueWithAlternates(byKey, row.canonicalKey)).length,
+      needsReview: rows.filter((row) => isReviewBlockingStandardRow(row, requiredKeySet)).length,
     };
   });
 

@@ -32,8 +32,32 @@ export interface BoundedStageTelemetry {
   memory_usage_rss_bytes?: number | null;
 }
 
+/**
+ * Approximate payload size for telemetry, WITHOUT materialising a copy of the
+ * payload.
+ *
+ * This previously did `new TextEncoder().encode(JSON.stringify(value)).length`
+ * on the stage input AND the stage output. For a bounded enrich stage that is
+ * ~3x peak memory for a number nobody calculates with: the payload itself,
+ * plus a full JSON string copy of it, plus a full Uint8Array copy of that
+ * string — all inside a worker that is already holding the document. It also
+ * grows with the pipeline: each successive enrich_evidence_* stage carries a
+ * larger accumulated payload, so the later stages serialise the most, which
+ * matches the production failure landing on the third domain stage while the
+ * first two complete.
+ *
+ * Measuring is now opt-in. When
+ * LEASE_ENRICH_STAGE_TELEMETRY_MEASURE_BYTES is not enabled the function
+ * returns null, which the emitted contract already allows and documents as
+ * "best-effort, approximate -- absent when unavailable". Nothing downstream
+ * computes with these values; they are diagnostics.
+ */
 function safeByteLength(value: unknown): number | null {
   if (value == null) return 0;
+  const measure =
+    (Deno.env.get("LEASE_ENRICH_STAGE_TELEMETRY_MEASURE_BYTES") ?? "").trim()
+      .toLowerCase();
+  if (measure !== "1" && measure !== "true") return null;
   try {
     return new TextEncoder().encode(JSON.stringify(value)).length;
   } catch {
@@ -43,7 +67,8 @@ function safeByteLength(value: unknown): number | null {
 
 function safeMemoryUsage(): number | null {
   try {
-    return typeof Deno !== "undefined" && typeof (Deno as any).memoryUsage === "function"
+    return typeof Deno !== "undefined" &&
+        typeof (Deno as any).memoryUsage === "function"
       ? (Deno as any).memoryUsage().rss ?? null
       : null;
   } catch {
@@ -51,9 +76,23 @@ function safeMemoryUsage(): number | null {
   }
 }
 
-export function startBoundedStageTelemetry(args: { stage: string; stageVersion: string; generationId: string | null; input?: unknown }) {
+export function startBoundedStageTelemetry(
+  args: {
+    stage: string;
+    stageVersion: string;
+    generationId: string | null;
+    input?: unknown;
+  },
+) {
   const startedAt = new Date().toISOString();
   const startedAtMs = Date.now();
+  // Copy only tiny scalar identifiers into the returned closure. Keeping the
+  // original args object alive can retain large input payloads such as
+  // docling_raw.text_blocks for the duration of the stage, exactly when the
+  // worker is building large evidence-domain outputs.
+  const stage = args.stage;
+  const stageVersion = args.stageVersion;
+  const generationId = args.generationId;
   const inputBytes = safeByteLength(args.input);
   return {
     finish(finishArgs: {
@@ -67,9 +106,9 @@ export function startBoundedStageTelemetry(args: { stage: string; stageVersion: 
     } = {}): BoundedStageTelemetry {
       const completedAt = new Date().toISOString();
       return {
-        stage: args.stage,
-        stage_version: args.stageVersion,
-        generation_id: args.generationId,
+        stage,
+        stage_version: stageVersion,
+        generation_id: generationId,
         input_bytes: inputBytes,
         output_bytes: safeByteLength(finishArgs.output),
         page_count: finishArgs.pageCount ?? null,

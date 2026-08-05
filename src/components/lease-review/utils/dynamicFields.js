@@ -17,6 +17,7 @@ import {
 } from "@/lib/leaseReviewSchema";
 import { getFieldAliases, resolveLeaseField } from "@/lib/leaseFieldResolver";
 import { entryValue, entrySourceText, entrySourcePage } from "@/components/lease-review/utils/fieldExtractors";
+import { validateFieldEvidenceSupport } from "@/components/lease-review/utils/fieldValidator";
 
 // Single canonical implementation - delegates to leaseReviewSchema so both
 // call sites (dynamicFields and LeaseReview) use identical filtering logic.
@@ -1119,6 +1120,21 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   if (!usedRecoveredValue && isMeaningfulValue(valueBeforeValidation) && !isMeaningfulValue(schemaValue)) {
     validationErrors.push(`${key}_failed_validation`);
   }
+  const supportValidation = validateFieldEvidenceSupport(key, schemaValue, {
+    sourceText: effectiveFullSourceText,
+    sourceClause: effectiveSourceText,
+    sourcePage: effectiveSourcePage,
+    extractionStatus: field.status ?? field.extraction_status ?? derived?.extractionStatus ?? evidence.extractionStatus,
+    evidenceType: field.evidence_type ?? field.evidenceType ?? derived?.evidenceType ?? evidence.evidenceType,
+    sourceFieldKeys: Array.isArray(derived?.sourceFieldKeys) && derived.sourceFieldKeys.length > 0
+      ? derived.sourceFieldKeys
+      : persistedSourceFieldKeys,
+    derivationTrace: derived?.derivationTrace ?? persistedDerivationTrace,
+  });
+  if (isMeaningfulValue(schemaValue) && !supportValidation.valid) {
+    validationErrors.push(`${key}_failed_validation`);
+    schemaValue = null;
+  }
   const hardValidationFailed = hasHardValidationError(validationErrors);
   if (hardValidationFailed && isMeaningfulValue(schemaValue)) {
     schemaValue = null;
@@ -1243,6 +1259,7 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     field_key: key,
     label: field.label ?? field.field_label ?? titleizeFieldKey(key),
     field_label: field.field_label ?? field.label ?? titleizeFieldKey(key),
+    value: schemaValue,
     display_value: schemaValue,
     normalized_value: schemaValue,
     raw_value: usedRecoveredValue ? schemaValue : field.raw_value ?? evidence.rawValue ?? schemaValue,

@@ -50,6 +50,47 @@ function maxWholeDocumentPromptChars(): number {
     : 400_000;
 }
 
+/**
+ * A finish_reason that means the model's JSON was cut off mid-response.
+ *
+ * llm.ts has documented since it was written that `finishReason === "length"`
+ * means truncated JSON, but nothing in the extraction path ever checked it.
+ * A truncated strict response still parses (the structured-output layer
+ * repairs/validates the envelope), so it arrived here looking like a normal
+ * success that merely happened to mention very few fields — the difference
+ * between "the lease genuinely says nothing about these 47 fields" and "the
+ * answer was cut off after 3" was invisible, and the run was surfaced to the
+ * user as "Extraction ready".
+ */
+function isTruncatedFinishReason(finishReason: unknown): boolean {
+  const value = String(finishReason ?? "").toLowerCase();
+  return value === "length" || value === "max_tokens" || value === "max_output_tokens";
+}
+
+/**
+ * Fraction of requested fields that may be omitted from BOTH `claims` and
+ * `notStatedFieldKeys` before the response is rejected as unusable.
+ *
+ * An omission is a protocol violation, not a business answer: a field the
+ * lease is silent about must be reported in `notStatedFieldKeys`. A handful of
+ * omissions is model sloppiness worth tolerating; losing most of the schema
+ * means the answer was truncated or the model gave up, and accepting it
+ * silently publishes a near-empty extraction as a completed review.
+ *
+ * Default 0.5 is deliberately permissive so this cannot fail runs that were
+ * previously fine — the observed failure omitted 47 of 50 fields (94%).
+ */
+function maxOmittedFieldRatio(): number {
+  // A blank/whitespace-only value must mean "unset", not 0 — Number("") is 0,
+  // which would silently switch the guard into its strictest mode and fail
+  // every run over a single stray omission. A var that exists but is empty is
+  // a very common deployment state, so this is checked before parsing.
+  const raw = (Deno.env.get("LEASE_WHOLE_DOCUMENT_LLM_MAX_OMITTED_FIELD_RATIO") ?? "").trim();
+  if (raw === "") return 0.5;
+  const configured = Number(raw);
+  return Number.isFinite(configured) && configured >= 0 && configured <= 1 ? configured : 0.5;
+}
+
 function maxWholeDocumentOutputTokens(): number {
   const configured = Number(
     Deno.env.get("LEASE_WHOLE_DOCUMENT_LLM_MAX_OUTPUT_TOKENS") ??
@@ -662,6 +703,32 @@ function sectionDeadlineReserveMs(): number {
   return envBoundedInt("LEASE_WHOLE_DOCUMENT_LLM_SECTION_DEADLINE_RESERVE_MS", 20_000, 5_000, 60_000);
 }
 
+/**
+ * Fraction of section calls that may fail (truncated, mass-omission, invalid
+ * structured response, context limit) before the whole sectioned run is
+ * rejected as unusable.
+ *
+ * A failed section is not model sloppiness -- `runWholeDocumentLlmOnCompact`
+ * already tolerates up to `maxOmittedFieldRatio()` missing fields per call
+ * before it reports `method: "fallback"`. By the time a section reaches that
+ * state, its slice of the document produced no usable answer at all. Without
+ * this guard, `mergeSectionedWholeDocumentResults` only counted the failure in
+ * `section_failure_count` diagnostics and still returned the run as a success,
+ * silently reporting every field that only appeared in that slice as
+ * "not_stated_or_not_found_in_sections" -- the exact same silent-data-loss
+ * shape the per-call guards above were added to close, one layer up.
+ *
+ * Default 0 is deliberately strict (unlike `maxOmittedFieldRatio`'s 0.5):
+ * there is no legitimate reason for an entire section call to fail, so any
+ * failure is worth surfacing rather than absorbing.
+ */
+function maxSectionFailureRatio(): number {
+  const raw = (Deno.env.get("LEASE_WHOLE_DOCUMENT_LLM_MAX_SECTION_FAILURE_RATIO") ?? "").trim();
+  if (raw === "") return 0;
+  const configured = Number(raw);
+  return Number.isFinite(configured) && configured >= 0 && configured <= 1 ? configured : 0;
+}
+
 function isMeaningfulValue(value: unknown): boolean {
   if (value == null) return false;
   if (typeof value === "string") return value.trim().length > 0;
@@ -846,8 +913,40 @@ async function runWholeDocumentLlmOnCompact(args: {
     );
   }
 
+  // The response parsed, but a truncated response parses too. Treat a
+  // cut-off answer as a hard failure rather than silently accepting whichever
+  // fields happened to fit inside the token budget.
+  if (isTruncatedFinishReason((response as { finishReason?: unknown }).finishReason)) {
+    return failureResult(
+      args.startedAt,
+      `Whole-document structured call was truncated (finish_reason=${
+        String((response as { finishReason?: unknown }).finishReason)
+      }). The model ran out of output tokens before it could report every field, so the ` +
+      `response is incomplete and must not be published as an extraction. Raise ` +
+      `LEASE_WHOLE_DOCUMENT_LLM_MAX_OUTPUT_TOKENS or reduce the field set for this call.`,
+      {
+        failure_classification: "RESPONSE_TRUNCATED",
+        structured_status: response.status,
+        finish_reason: (response as { finishReason?: unknown }).finishReason ?? null,
+        model: response.model,
+        response_id: response.responseId,
+        input_tokens: response.inputTokens,
+        output_tokens: response.outputTokens,
+        max_output_tokens: maxWholeDocumentOutputTokens(),
+        schema_field_count: args.fields.length,
+        compact_document: compact.diagnostics,
+      },
+    );
+  }
+
   const extractedFields: Record<string, ExtractedField> = {};
   const validationErrors: ValidationError[] = [];
+  // Counted separately from validationErrors: an omission means the model
+  // never mentioned the field at all, which is a protocol violation and the
+  // signature of a truncated or abandoned answer. Other validation errors
+  // (wrong type, duplicate, null-with-status-found) are per-field data
+  // problems and must not trip the mass-omission guard below.
+  let omittedFieldCount = 0;
   const fieldStatuses: Record<string, string> = {};
   const evidenceAnchors: Array<Record<string, unknown>> = [];
   let evidenceVerifiedCount = 0;
@@ -895,6 +994,7 @@ async function runWholeDocumentLlmOnCompact(args: {
         fieldStatuses[fieldKey] = "not_stated";
         continue;
       }
+      omittedFieldCount++;
       validationErrors.push({
         field: fieldKey,
         message: "Strict response omitted the field from both claims and notStatedFieldKeys.",
@@ -984,6 +1084,39 @@ async function runWholeDocumentLlmOnCompact(args: {
     });
   }
 
+  // Mass-omission guard. A response that never mentions most of the schema is
+  // not a lease that happens to be silent — a genuinely silent field is
+  // reported in notStatedFieldKeys and is NOT counted here. This is the
+  // signature of an answer that was truncated or abandoned, and without this
+  // check it reached the user as a completed review carrying a handful of
+  // fields (observed: 3 of 50 kept, 47 omitted, no failure recorded).
+  const omittedRatio = args.fields.length > 0 ? omittedFieldCount / args.fields.length : 0;
+  if (omittedFieldCount > 0 && omittedRatio > maxOmittedFieldRatio()) {
+    return failureResult(
+      args.startedAt,
+      `Whole-document strict response omitted ${omittedFieldCount} of ${args.fields.length} requested ` +
+      `fields (${(omittedRatio * 100).toFixed(1)}%) from both claims and notStatedFieldKeys, above the ` +
+      `${(maxOmittedFieldRatio() * 100).toFixed(1)}% limit. The response is incomplete rather than the ` +
+      `lease being silent, so it must not be published as an extraction.`,
+      {
+        failure_classification: "STRICT_RESPONSE_MASS_OMISSION",
+        structured_status: response.status,
+        finish_reason: (response as { finishReason?: unknown }).finishReason ?? null,
+        model: response.model,
+        response_id: response.responseId,
+        input_tokens: response.inputTokens,
+        output_tokens: response.outputTokens,
+        max_output_tokens: maxWholeDocumentOutputTokens(),
+        schema_field_count: args.fields.length,
+        omitted_field_count: omittedFieldCount,
+        omitted_field_ratio: Number(omittedRatio.toFixed(4)),
+        max_omitted_field_ratio: maxOmittedFieldRatio(),
+        invalid_or_omitted_claim_count: validationErrors.length,
+        compact_document: compact.diagnostics,
+      },
+    );
+  }
+
   const dynamicResult = buildDynamicItems({
     findings: response.data.dynamicFindings,
     compact,
@@ -1051,6 +1184,15 @@ async function runWholeDocumentLlmOnCompact(args: {
           facts_unmapped_count: 0,
           mapped_non_null_field_count: nonNullFieldCount,
           invalid_or_omitted_claim_count: validationErrors.length,
+          // Split out so a partial answer is legible: `omitted` means the
+          // model never mentioned the field (protocol violation), while the
+          // remainder are per-field data problems. Previously both were
+          // collapsed into one number, which is why a 94% loss looked the
+          // same as a few bad values.
+          omitted_field_count: omittedFieldCount,
+          omitted_field_ratio: args.fields.length > 0 ? Number((omittedFieldCount / args.fields.length).toFixed(4)) : 0,
+          max_omitted_field_ratio: maxOmittedFieldRatio(),
+          finish_reason: (response as { finishReason?: unknown }).finishReason ?? null,
           schema_field_count: args.fields.length,
           evidence_verified_count: evidenceVerifiedCount,
           needs_review_count: needsReviewCount,
@@ -1105,6 +1247,7 @@ function mergeSectionedWholeDocumentResults(args: {
   const validationErrors: ValidationError[] = [];
   const dynamicItems: any[] = [];
   const expenseRuleCandidates: any[] = [];
+  const failedSections: Array<Record<string, unknown>> = [];
   let llmCallCount = 0;
   let inputTokens = 0;
   let outputTokens = 0;
@@ -1128,6 +1271,12 @@ function mergeSectionedWholeDocumentResults(args: {
     outputTokens += Number(debug.output_tokens ?? 0) || 0;
     if (result.method === "fallback" || !Array.isArray(result.rows) || result.rows.length === 0) {
       sectionFailureCount++;
+      failedSections.push({
+        section_index: sectionIndex + 1,
+        failure_classification: debug.failure_classification ?? null,
+        finish_reason: debug.finish_reason ?? null,
+        message: result.warnings?.[0] ?? null,
+      });
     }
     if (Array.isArray(debug.dynamic_items)) dynamicItems.push(...debug.dynamic_items);
     if (Array.isArray(debug.expense_rule_candidates)) {
@@ -1160,6 +1309,37 @@ function mergeSectionedWholeDocumentResults(args: {
       existing.push(candidate);
       candidatesByField.set(fieldKey, existing);
     }
+  }
+
+  // Aggregate section-failure guard. Each section call already absorbed its
+  // own tolerable sloppiness (see maxOmittedFieldRatio); a section reaching
+  // `method: "fallback"` means that slice of the document was never actually
+  // answered. Publishing the merge anyway would silently report every field
+  // that only appears in a failed section as "not stated", indistinguishable
+  // from the lease genuinely being silent about it.
+  const sectionFailureRatio = args.sectionCount > 0 ? sectionFailureCount / args.sectionCount : 0;
+  if (sectionFailureCount > 0 && sectionFailureRatio > maxSectionFailureRatio()) {
+    return failureResult(
+      args.startedAt,
+      `Sectioned whole-document LLM failed ${sectionFailureCount} of ${args.sectionCount} section calls ` +
+      `(${(sectionFailureRatio * 100).toFixed(1)}%), above the ${(maxSectionFailureRatio() * 100).toFixed(1)}% ` +
+      `limit. Each failed section means its slice of the document produced no usable answer, so fields that ` +
+      `only appear there would otherwise be silently reported as not stated. The response is incomplete and ` +
+      `must not be published as an extraction.`,
+      {
+        failure_classification: "SECTIONED_RESPONSE_SECTION_FAILURES",
+        architecture: "llm_sectioned_reduce",
+        section_count: args.sectionCount,
+        section_failure_count: sectionFailureCount,
+        section_failure_ratio: Number(sectionFailureRatio.toFixed(4)),
+        max_section_failure_ratio: maxSectionFailureRatio(),
+        section_deadline_exhausted: Boolean(args.deadlineExhausted),
+        failed_sections: failedSections,
+        original_prompt_chars: args.originalPromptChars,
+        max_input_chars: args.maxInputChars,
+        compact_document: args.parentCompact.diagnostics,
+      },
+    );
   }
 
   const mergedRecord: ExtractedRecord = { rowIndex: 0, fields: {} };
@@ -1325,6 +1505,9 @@ function mergeSectionedWholeDocumentResults(args: {
           conflict_fields: conflictFields,
           section_count: args.sectionCount,
           section_failure_count: sectionFailureCount,
+          section_failure_ratio: Number(sectionFailureRatio.toFixed(4)),
+          max_section_failure_ratio: maxSectionFailureRatio(),
+          failed_sections: failedSections,
           section_deadline_exhausted: Boolean(args.deadlineExhausted),
           section_document_budget_chars: args.sectionDocumentBudget,
           original_prompt_chars: args.originalPromptChars,
@@ -1490,6 +1673,9 @@ export const __test__ = {
   verifyEvidence,
   maxWholeDocumentPromptChars,
   maxWholeDocumentOutputTokens,
+  isTruncatedFinishReason,
+  maxOmittedFieldRatio,
+  maxSectionFailureRatio,
   normalizeDynamicFieldKey,
   validateDynamicValue,
   buildDynamicItems,

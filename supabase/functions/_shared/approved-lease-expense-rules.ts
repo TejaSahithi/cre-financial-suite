@@ -580,6 +580,25 @@ function paymentTreatment(rule: any, recoverable: string): string {
   return "not_applicable";
 }
 
+function hasLeaseSourcePage(rule: any): boolean {
+  const page = numberOrNull(rule?.source_page ?? rule?.page_number);
+  return page != null && page > 0;
+}
+
+function isApprovalReadyLeaseRule(rule: any, payment: string, recoverable: string, camEligible: string): boolean {
+  const sourceText = exactSourceText(rule);
+  if (!sourceText || !hasLeaseSourcePage(rule)) return false;
+  if (payment === "tenant_direct_contract") return true;
+  if (payment === "included_in_base_rent" || includedInBaseRent(rule)) return true;
+  return recoverable === "yes" && ["yes", "no"].includes(camEligible);
+}
+
+function shouldPublishPreparedRuleToCam(rule: any, payment: string, recoverable: string, camEligible: string): boolean {
+  if (!isApprovalReadyLeaseRule(rule, payment, recoverable, camEligible)) return false;
+  if (payment === "included_in_base_rent" || payment === "tenant_direct_contract") return false;
+  if (includedInBaseRent(rule) || rule?.is_excluded === true) return false;
+  return recoverable === "yes" && camEligible === "yes";
+}
 function billingTreatment(rule: any, payment: string): string {
   const explicit = normalizeToken(rule?.billing_treatment);
   if (["included", "direct_bill", "cam_estimate", "reconciliation", "none"].includes(explicit)) return explicit;
@@ -619,6 +638,8 @@ function prepareRulePayload(lease: any, orgId: string, rule: any) {
   const recoverable = recoverableDecision(rule);
   const camEligible = camEligibleDecision(rule, recoverable);
   const payment = paymentTreatment(rule, recoverable);
+  const approvalReady = isApprovalReadyLeaseRule(rule, payment, recoverable, camEligible);
+  const publishToCam = shouldPublishPreparedRuleToCam(rule, payment, recoverable, camEligible);
   const recoveryMethod =
     normalizeToken(rule?.recovery_method) ||
     (payment === "included_in_base_rent" ? "included_in_base_rent" : "manual_review");
@@ -654,7 +675,7 @@ function prepareRulePayload(lease: any, orgId: string, rule: any) {
       expense_category_id: null,
       expense_category: category,
       expense_subcategory: cleanText(rule?.expense_subcategory || rule?.subcategory_name) || null,
-      row_status: "needs_review",
+      row_status: approvalReady ? "mapped" : "needs_review",
       mentioned_in_lease: true,
       included_in_base_rent: includedInBaseRent(rule),
       recoverable_from_tenant: recoverable,
@@ -692,9 +713,11 @@ function prepareRulePayload(lease: any, orgId: string, rule: any) {
       confidence_score: confidence,
       confidence,
       extraction_status: extractionStatus,
-      review_status: "needs_review",
-      approval_status: "draft",
-      published_to_cam: false,
+      review_status: approvalReady ? "approved" : "needs_review",
+      approval_status: approvalReady ? "approved" : "draft",
+      published_to_cam: publishToCam,
+      approved_by: approvalReady ? lease?.abstract_approved_by ?? lease?.approved_by ?? null : null,
+      approved_at: approvalReady ? lease?.abstract_approved_at ?? lease?.approved_at ?? new Date().toISOString() : null,
       notes: notes || null,
       source: "lease_workflow",
       created_from: "approved_lease_expense_publication",
@@ -822,6 +845,87 @@ async function resolveExpenseCategoryIds(
 // performs no write; callers still get a stable { persisted, error }-shaped
 // result so publishApprovedLeaseExpenseArtifacts's response contract is
 // unchanged.
+async function promoteApprovedLeaseRuleRows(supabaseAdmin: any, orgId: string, lease: any, actorUserId: string | null) {
+  const { data: rows, error } = await supabaseAdmin
+    .from("lease_expense_rules")
+    .select("*")
+    .eq("org_id", orgId)
+    .eq("lease_id", lease.id);
+  if (error) throw new Error(`Could not load approved lease expense rules for promotion: ${error.message}`);
+
+  let approved = 0;
+  let publishedToCam = 0;
+  let ruleSetsApproved = 0;
+  const effectiveRows: any[] = [];
+
+  for (const row of asArray(rows)) {
+    const recoverable = recoverableDecision(row);
+    const camEligible = camEligibleDecision(row, recoverable);
+    const payment = paymentTreatment(row, recoverable);
+    const approvalReady = isApprovalReadyLeaseRule(row, payment, recoverable, camEligible);
+    if (!approvalReady) {
+      effectiveRows.push(row);
+      continue;
+    }
+
+    const publishToCam = shouldPublishPreparedRuleToCam(row, payment, recoverable, camEligible);
+    const patch = {
+      row_status: normalizeToken(row.row_status) === "needs_review" ? "mapped" : row.row_status,
+      review_status: "approved",
+      approval_status: "approved",
+      published_to_cam: publishToCam || row.published_to_cam === true,
+      approved_by: row.approved_by ?? actorUserId ?? null,
+      approved_at: row.approved_at ?? lease?.abstract_approved_at ?? lease?.approved_at ?? new Date().toISOString(),
+    };
+    if (
+      row.review_status !== patch.review_status ||
+      row.approval_status !== patch.approval_status ||
+      row.published_to_cam !== patch.published_to_cam ||
+      row.row_status !== patch.row_status ||
+      row.approved_by !== patch.approved_by ||
+      row.approved_at !== patch.approved_at
+    ) {
+      const { error: updateError } = await supabaseAdmin
+        .from("lease_expense_rules")
+        .update(patch)
+        .eq("id", row.id)
+        .eq("org_id", orgId);
+      if (updateError) throw new Error(`Could not promote approved lease expense rule ${row.id}: ${updateError.message}`);
+    }
+    approved += 1;
+    if (patch.published_to_cam) publishedToCam += 1;
+    effectiveRows.push({ ...row, ...patch });
+  }
+
+  const rowsBySet = new Map<string, any[]>();
+  for (const row of effectiveRows) {
+    const ruleSetId = cleanText(row?.rule_set_id);
+    if (!ruleSetId) continue;
+    if (!rowsBySet.has(ruleSetId)) rowsBySet.set(ruleSetId, []);
+    rowsBySet.get(ruleSetId)!.push(row);
+  }
+
+  for (const [ruleSetId, setRows] of rowsBySet.entries()) {
+    const activeRows = setRows.filter((row) => normalizeToken(row?.approval_status) !== "superseded");
+    if (activeRows.length === 0) continue;
+    const allApproved = activeRows.every((row) => normalizeToken(row?.approval_status) === "approved");
+    if (!allApproved) continue;
+    const { error: setUpdateError } = await supabaseAdmin
+      .from("lease_expense_rule_sets")
+      .update({
+        status: "approved",
+        approved_by: actorUserId ?? lease?.abstract_approved_by ?? lease?.approved_by ?? null,
+        approved_at: lease?.abstract_approved_at ?? lease?.approved_at ?? new Date().toISOString(),
+      })
+      .eq("id", ruleSetId)
+      .eq("org_id", orgId)
+      .eq("lease_id", lease.id);
+    if (setUpdateError) throw new Error(`Could not promote approved lease expense rule set ${ruleSetId}: ${setUpdateError.message}`);
+    ruleSetsApproved += 1;
+  }
+
+  return { approved, published_to_cam: publishedToCam, rule_sets_approved: ruleSetsApproved };
+}
 async function persistCamProfile(_supabaseAdmin: any, _orgId: string, _lease: any, camProfile: any) {
   if (!isObject(camProfile)) return { persisted: false };
   // cam-legacy-scan-allow: retirement telemetry, not a live reference.
@@ -877,6 +981,7 @@ export async function publishApprovedLeaseExpenseArtifacts({
         storedWorkflow?.cam_profile,
       )
       : { persisted: false, error: null };
+    const promotion = await promoteApprovedLeaseRuleRows(supabaseAdmin, orgId, lease, actorUserId);
     return {
       status: "already_persisted",
       lease_id: lease.id,
@@ -885,6 +990,9 @@ export async function publishApprovedLeaseExpenseArtifacts({
       workflow_found: Boolean(storedWorkflow),
       rules_persisted: Number(existingRuleCount || 0),
       rules_generated: 0,
+      rules_approved: promotion.approved,
+      rules_published_to_cam: promotion.published_to_cam,
+            rule_sets_approved: promotion.rule_sets_approved,
       regenerated: false,
       expense_rule_source: expenseRuleSource || null,
       reason: hasPublishableWorkflowExpenseRules
@@ -977,6 +1085,8 @@ export async function publishApprovedLeaseExpenseArtifacts({
   });
   if (saveError) throw new Error(`Could not persist approved lease expense rules: ${saveError.message}`);
 
+  const promotion = await promoteApprovedLeaseRuleRows(supabaseAdmin, orgId, lease, actorUserId);
+
   return {
     status: "persisted",
     lease_id: lease.id,
@@ -987,6 +1097,9 @@ export async function publishApprovedLeaseExpenseArtifacts({
     workflow_clauses_found: asArray(storedWorkflow?.lease_clauses).length,
     rules_generated: expenseRules.length,
     rules_persisted: Number(saved?.rule_count ?? prepared.length),
+    rules_approved: promotion.approved,
+    rules_published_to_cam: promotion.published_to_cam,
+    rule_sets_approved: promotion.rule_sets_approved,
     rule_set_id: saved?.rule_set_id ?? existingSet?.id ?? null,
     regenerated: false,
     expense_rule_source: expenseRuleSource || (rawDocumentFallbackRules.length > 0 ? "typescript_schema_raw_document_fallback" : null),

@@ -17,7 +17,7 @@
  * _tests/enrich-evidence-domain-split.test.ts.
  */
 
-import { getFieldContract } from "../field-contract.ts";
+import { type FieldGroup, getFieldContract } from "../field-contract.ts";
 import { FIELD_GROUP_TO_LLM_CALL_DOMAIN } from "../deterministic-candidates.ts";
 import { LLM_CALL_DOMAINS, type LlmCallDomain } from "../section-router.ts";
 
@@ -29,12 +29,32 @@ export function domainForField(fieldKey: string): LlmCallDomain | null {
   return FIELD_GROUP_TO_LLM_CALL_DOMAIN[group] ?? null;
 }
 
-export function getSchemaEntriesForDomain(schemaEntries: SchemaEntry[], domain: LlmCallDomain): SchemaEntry[] {
-  return schemaEntries.filter(([fieldKey]) => domainForField(fieldKey) === domain);
+export function getSchemaEntriesForDomain(
+  schemaEntries: SchemaEntry[],
+  domain: LlmCallDomain,
+): SchemaEntry[] {
+  return schemaEntries.filter(([fieldKey]) =>
+    domainForField(fieldKey) === domain
+  );
 }
 
-export function getSchemaEntriesWithNoDomain(schemaEntries: SchemaEntry[]): SchemaEntry[] {
-  return schemaEntries.filter(([fieldKey]) => domainForField(fieldKey) === null);
+export function getSchemaEntriesForFieldGroups(
+  schemaEntries: SchemaEntry[],
+  groups: readonly FieldGroup[],
+): SchemaEntry[] {
+  const allowed = new Set(groups);
+  return schemaEntries.filter(([fieldKey]) => {
+    const group = getFieldContract(fieldKey)?.group;
+    return group ? allowed.has(group) : false;
+  });
+}
+
+export function getSchemaEntriesWithNoDomain(
+  schemaEntries: SchemaEntry[],
+): SchemaEntry[] {
+  return schemaEntries.filter(([fieldKey]) =>
+    domainForField(fieldKey) === null
+  );
 }
 
 /**
