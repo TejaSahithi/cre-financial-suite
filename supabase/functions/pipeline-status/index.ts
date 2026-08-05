@@ -10,6 +10,9 @@ import {
   sanitizeLog,
   summarizeNormalizedOutput,
 } from "./status-utils.ts";
+import { ENRICH_STAGE_SEQUENCE } from "../_shared/extraction/enrich-bounded-stage/stage-sequence.ts";
+import { readBoundedStageResults, STAGE_RESULT_VERSION } from "../_shared/extraction/enrich-bounded-stage/stage-persistence.ts";
+import { enqueueBoundedEnrichStage } from "../_shared/extraction/enrich-bounded-stage/dispatch.ts";
 
 const FULL_FILE_SELECT = [
   "id",
@@ -196,6 +199,65 @@ async function fetchLatestJob(supabaseAdmin: any, fileId: string, orgId: string)
   return { data, warning: null };
 }
 
+function isLeaseLikeModule(moduleType: unknown) {
+  return /lease/i.test(String(moduleType ?? ""));
+}
+
+function boundedStageEntryCompletedForGeneration(entry: any, generationId: string | null) {
+  return entry?.status === "completed" &&
+    entry?.generation_id === generationId &&
+    entry?.stage_version === STAGE_RESULT_VERSION;
+}
+
+async function maybeResumeBoundedEnrichment(supabaseAdmin: any, record: Record<string, any>, orgId: string) {
+  const fileId = record?.id;
+  const generationId = record?.active_generation_id ?? null;
+  const enrichmentState = String(record?.enrichment_status ?? record?.ui_review_payload?.enrichment_status ?? "").toLowerCase();
+  const readiness = String(record?.review_readiness ?? "").toLowerCase();
+  if (!fileId || !generationId || !isLeaseLikeModule(record?.module_type)) return null;
+  if (!["", "pending"].includes(enrichmentState) && !["", "pending"].includes(readiness)) return null;
+
+  const results = readBoundedStageResults(record?.normalized_output);
+  if (boundedStageEntryCompletedForGeneration(results.enrich_truth_assembly, generationId)) return null;
+
+  const { data: activeJobs, error: activeError } = await supabaseAdmin
+    .from("pipeline_jobs")
+    .select("id, stage, status, created_at")
+    .eq("uploaded_file_id", fileId)
+    .eq("org_id", orgId)
+    .eq("generation_id", generationId)
+    .like("stage", "enrich_%")
+    .in("status", ["queued", "running"])
+    .limit(1);
+  if (activeError || (Array.isArray(activeJobs) && activeJobs.length > 0)) return null;
+
+  let nextStage = null;
+  for (const stage of ENRICH_STAGE_SEQUENCE) {
+    const entry = results[stage];
+    if (entry?.status === "failed") return null;
+    if (!boundedStageEntryCompletedForGeneration(entry, generationId)) {
+      nextStage = stage;
+      break;
+    }
+  }
+  if (!nextStage) return null;
+
+  const nextIndex = ENRICH_STAGE_SEQUENCE.indexOf(nextStage);
+  const priorResolved = ENRICH_STAGE_SEQUENCE.slice(0, nextIndex).every((stage) =>
+    boundedStageEntryCompletedForGeneration(results[stage], generationId)
+  );
+  if (!priorResolved) return null;
+
+  const enqueued = await enqueueBoundedEnrichStage({
+    supabaseAdmin,
+    orgId,
+    fileId,
+    stage: nextStage,
+    generationId,
+    moduleType: record?.module_type,
+  });
+  return enqueued?.id ? { resumed_stage: nextStage, job_id: enqueued.id, existing: !!enqueued.existing } : null;
+}
 async function fetchRecentLogs(supabaseAdmin: any, fileId: string, orgId: string) {
   const { data, error } = await supabaseAdmin
     .from("pipeline_logs")
@@ -421,6 +483,10 @@ Deno.serve(async (req: Request) => {
         fileResult.data.docling_raw = fileResult.data.azure_raw_response ?? fileResult.data.docling_raw ?? null;
       }
 
+      const resumeResult = includeDetails
+        ? await maybeResumeBoundedEnrichment(supabaseAdmin, fileResult.data, orgId)
+        : null;
+
       const latestJobResult = includeDetails
         ? await fetchLatestJob(supabaseAdmin, fileId, orgId)
         : { data: null, warning: null };
@@ -438,6 +504,7 @@ Deno.serve(async (req: Request) => {
         latest_job: latestJob,
         recent_logs: (recentLogsResult.data || []).map(sanitizeLog),
         schema_warnings: schemaWarnings,
+        bounded_enrichment_resume: resumeResult,
         ...display,
       }));
     }

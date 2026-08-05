@@ -214,9 +214,17 @@ export default function useFileStatus(fileId, options = {}) {
 
       const latestJobStatus = data?.latest_job?.status;
       const hasActiveJob = latestJobStatus && ACTIVE_JOB_STATUSES.has(latestJobStatus);
+      const readiness = String(data?.review_readiness || "").toLowerCase();
+      const enrichment = String(data?.enrichment_state || "").toLowerCase();
+      const readinessStillPending = ["", "pending"].includes(readiness);
+      const enrichmentStillPending = ["", "pending", "queued", "running", "started"].includes(enrichment);
+      const reviewPipelineStillSettling =
+        includeDetailsOption === true &&
+        ["review_required", "completed"].includes(String(data?.status || "").toLowerCase()) &&
+        (readinessStillPending || enrichmentStillPending);
 
-      // Stop polling if we've reached a terminal status and no current job is still active.
-      if (data?.status && TERMINAL_STATUSES.has(data.status) && !hasActiveJob) {
+      // Stop polling if we've reached a terminal status and no current job/readiness work is still active.
+      if (data?.status && TERMINAL_STATUSES.has(data.status) && !hasActiveJob && !reviewPipelineStillSettling) {
         clearTimer();
         return;
       }
