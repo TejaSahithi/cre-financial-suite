@@ -165,7 +165,8 @@ export function getAllowedPagesForRole(role) {
  * @param {string} pageName - the page key
  * @returns {boolean}
  */
-export function canAccess(role, pageName) {
+export function canAccess(role, pageName, user = null) {
+  if (isSuperAdmin(user)) return true;
   const resolvedRole = resolveRoleForAccess(role);
   if (!pageName) return true;
   if (PUBLIC_PAGES.includes(pageName)) return true;

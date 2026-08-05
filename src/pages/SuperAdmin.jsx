@@ -425,7 +425,7 @@ export default function SuperAdmin() {
     );
   }
 
-  if (!user || user.role !== "admin") {
+  if (!user || (!isSuperAdmin(user) && user.role !== "admin")) {
     return (
       <div className="flex flex-col items-center justify-center h-96 text-center px-4">
         <div className="w-16 h-16 bg-red-100 rounded-2xl flex items-center justify-center mb-4">
