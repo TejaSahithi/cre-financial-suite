@@ -125,3 +125,14 @@ Deno.test("assertAuthoritativeLeaseExtractionResult: accepts explicit legacy fal
     });
   });
 });
+
+Deno.test("classifyNoMeaningfulExtraction: whole-document invalid/omitted claims are reported as WHOLE_DOCUMENT_LLM_FAILED, not AI_EMPTY_EXTRACTION", () => {
+  const result = normalizeTest.classifyNoMeaningfulExtraction({
+    extraction_mode: "whole_document_llm_v2",
+    invalid_or_omitted_claim_count: 52,
+    facts_extracted_count: 1,
+    facts_mapped_count: 1,
+  }, 1, 1);
+  assertEquals(result.errorCode, "WHOLE_DOCUMENT_LLM_FAILED");
+  assertEquals(result.wholeDocumentFailureClassification, "invalid_or_omitted_claims:52");
+});

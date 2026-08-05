@@ -60,7 +60,11 @@ Deno.test("telemetry: by default the stage input and output are never serialized
       generationId: "gen-1",
       input: input.payload,
     });
-    const emitted = telemetry.finish({ output: output.payload, pageCount: 42, candidateCount: 7 });
+    const emitted = telemetry.finish({
+      output: output.payload,
+      pageCount: 42,
+      candidateCount: 7,
+    });
 
     // The load-bearing assertions: no copy of either payload was made.
     assertEquals(input.serialized(), 0);
@@ -105,7 +109,10 @@ Deno.test("telemetry: the cheap diagnostics that do NOT require a copy are still
 Deno.test("telemetry: a null payload still reports 0 bytes without serializing", () => {
   withFlag(undefined, () => {
     const telemetry = startBoundedStageTelemetry({
-      stage: "enrich_evidence_expenses_and_cam", stageVersion: "v1", generationId: null, input: null,
+      stage: "enrich_evidence_expenses_and_cam",
+      stageVersion: "v1",
+      generationId: null,
+      input: null,
     });
     const emitted = telemetry.finish({ output: null });
     assertEquals(emitted.input_bytes, 0);
@@ -113,15 +120,43 @@ Deno.test("telemetry: a null payload still reports 0 bytes without serializing",
   });
 });
 
+Deno.test("telemetry: finish uses copied scalar metadata, not the mutable args object", () => {
+  withFlag(undefined, () => {
+    const args: any = {
+      stage: "enrich_evidence_expenses_and_cam",
+      stageVersion: "v1",
+      generationId: "gen-1",
+      input: tripwirePayload().payload,
+    };
+    const telemetry = startBoundedStageTelemetry(args);
+
+    args.stage = "mutated_stage";
+    args.stageVersion = "mutated_version";
+    args.generationId = "mutated_generation";
+    args.input = tripwirePayload().payload;
+
+    const emitted = telemetry.finish({});
+    assertEquals(emitted.stage, "enrich_evidence_expenses_and_cam");
+    assertEquals(emitted.stage_version, "v1");
+    assertEquals(emitted.generation_id, "gen-1");
+  });
+});
 Deno.test("telemetry: byte measurement can be re-enabled deliberately for debugging", () => {
   for (const enabled of ["1", "true", "TRUE"]) {
     withFlag(enabled, () => {
       const input = tripwirePayload();
       const telemetry = startBoundedStageTelemetry({
-        stage: "enrich_evidence_expenses_and_cam", stageVersion: "v1", generationId: null, input: input.payload,
+        stage: "enrich_evidence_expenses_and_cam",
+        stageVersion: "v1",
+        generationId: null,
+        input: input.payload,
       });
       const emitted = telemetry.finish({});
-      assertEquals(input.serialized(), 1, `expected opt-in measurement for ${enabled}`);
+      assertEquals(
+        input.serialized(),
+        1,
+        `expected opt-in measurement for ${enabled}`,
+      );
       assertEquals(typeof emitted.input_bytes, "number");
     });
   }
@@ -132,10 +167,17 @@ Deno.test("telemetry: an unset, blank or unrecognised flag value leaves measurem
     withFlag(value, () => {
       const input = tripwirePayload();
       const telemetry = startBoundedStageTelemetry({
-        stage: "enrich_evidence_expenses_and_cam", stageVersion: "v1", generationId: null, input: input.payload,
+        stage: "enrich_evidence_expenses_and_cam",
+        stageVersion: "v1",
+        generationId: null,
+        input: input.payload,
       });
       telemetry.finish({});
-      assertEquals(input.serialized(), 0, `expected measurement OFF for ${JSON.stringify(value)}`);
+      assertEquals(
+        input.serialized(),
+        0,
+        `expected measurement OFF for ${JSON.stringify(value)}`,
+      );
     });
   }
 });

@@ -1497,6 +1497,7 @@ export const __test__ = {
   stopForCancellation,
   isReviewReadyEnrichmentTransportFailure,
   completeEnrichmentWithWarning,
+  normalizeFailureAlreadyPersisted,
 };
 
 function parserFailureAlreadyPersisted(parseResult: any): boolean {
@@ -1514,6 +1515,21 @@ function parserFailureAlreadyPersisted(parseResult: any): boolean {
     ].includes(parserErrorCode) ||
     /parse_(ocr_failed|empty_text|insufficient_text|failed)|blocked_pipeline_failure/i.test(parserStatus) ||
     /invalid_grant|account not found|Failed to get Google access token/i.test(message)
+  );
+}
+function normalizeFailureAlreadyPersisted(normalizeResult: any): boolean {
+  const errorCode = String(normalizeResult?.data?.error_code || normalizeResult?.error_code || "");
+  const processingStatus = String(normalizeResult?.data?.processing_status || normalizeResult?.data?.normalize_status || "");
+  const hasBlockedPayload = normalizeResult?.data?.ui_review_payload &&
+    typeof normalizeResult.data.ui_review_payload === "object";
+  return Boolean(
+    [
+      "AI_EMPTY_EXTRACTION",
+      "FIELD_MAPPING_FAILED",
+      "WHOLE_DOCUMENT_LLM_FAILED",
+    ].includes(errorCode) ||
+      /failed_empty_extraction|blocked_pipeline_failure/i.test(processingStatus) ||
+      hasBlockedPayload
   );
 }
 
@@ -2155,6 +2171,32 @@ Deno.serve(async (req: Request) => {
             normalizeResult,
             "normalize_transport_not_durable",
           );
+        }
+
+        if (isLeaseModule && normalizeFailureAlreadyPersisted(normalizeResult)) {
+          // normalize-pdf-output already persisted a structured blocked payload
+          // with the real extraction diagnostics. Do not overwrite it with the
+          // generic manual_review_fallback shell; that hides whether OpenAI ran
+          // and why the current attempt failed.
+          await failJob(supabaseAdmin, job, errorCode, message);
+          await logger.event("normalize", "failed", {
+            error_code: errorCode,
+            error_message: message,
+            metadata: {
+              job_id: job.id,
+              status: normalizeResult.status,
+              blocked_pipeline_failure: true,
+              preserved_normalize_payload: true,
+            },
+          });
+          return jsonResponse({
+            error: true,
+            error_code: errorCode,
+            job_id: job.id,
+            stage: "normalize",
+            blocked_pipeline_failure: true,
+            message,
+          }, 200);
         }
 
         if (isLeaseModule) {

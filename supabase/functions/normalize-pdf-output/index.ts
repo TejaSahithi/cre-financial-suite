@@ -44,6 +44,8 @@ import { checkGenerationStillActive } from "../_shared/extraction/generation-fen
 import { checkStageInputAgainstLimits } from "../_shared/extraction/enrich-stage-limits.ts";
 import {
   ENRICH_EVIDENCE_DOMAIN_STAGES,
+  EXPENSES_AND_CAM_EVIDENCE_SUBSTAGES,
+  isExpensesAndCamEvidenceSubstage,
   isEnrichBoundedStageName,
   isFinalEnrichBoundedStage,
   firstEnrichBoundedStage,
@@ -57,7 +59,7 @@ import {
   type BoundedStageResultEntry,
 } from "../_shared/extraction/enrich-bounded-stage/stage-persistence.ts";
 import { startBoundedStageTelemetry } from "../_shared/extraction/enrich-bounded-stage/telemetry.ts";
-import { getSchemaEntriesForDomain, getSchemaEntriesWithNoDomain, reorderStandardFieldsBySchema, type LlmCallDomain } from "../_shared/extraction/enrich-bounded-stage/domain-fields.ts";
+import { getSchemaEntriesForDomain, getSchemaEntriesForFieldGroups, getSchemaEntriesWithNoDomain, reorderStandardFieldsBySchema, type LlmCallDomain } from "../_shared/extraction/enrich-bounded-stage/domain-fields.ts";
 import { isEnrichEvidenceDomainStage, getDomainForEnrichStage } from "../_shared/extraction/domains/domain-stage-registry.ts";
 import { cleanEvidenceSnippet, findPageForSnippet, resolveVerifiedSourcePage } from "../_shared/extraction/evidence-index.ts";
 import { detectFileMagic } from "../_shared/file-magic.ts";
@@ -384,9 +386,12 @@ function compareRaceWinnerMetadata(current: Record<string, unknown> | null, winn
 }
 function toExtractionModuleType(moduleType: string): ExtractionModuleType {
   switch (moduleType) {
+    case "lease":
     case "leases": return "lease";
+    case "expense":
     case "expenses": return "expense";
     case "invoices": return "expense";
+    case "property":
     case "properties": return "property";
     case "revenue": return "revenue";
     case "building":
@@ -2173,6 +2178,27 @@ function countMeaningfulRowValues(rows: Array<Record<string, unknown>> | undefin
   }
   return count;
 }
+function classifyNoMeaningfulExtraction(openaiDebug: any, factsExtractedCount: number, factsMappedCount: number): { errorCode: string; wholeDocumentFailureClassification: string } {
+  const isWholeDocumentMode = openaiDebug?.extraction_mode === "whole_document_llm_v2";
+  const explicitClassification = isWholeDocumentMode
+    ? String(openaiDebug?.failure_classification ?? "").trim()
+    : "";
+  const invalidOrOmittedCount = Number(openaiDebug?.invalid_or_omitted_claim_count ?? 0);
+  const implicitWholeDocumentFailure = isWholeDocumentMode && (
+    invalidOrOmittedCount > 0 ||
+    factsExtractedCount > 0 ||
+    factsMappedCount > 0
+  );
+  const wholeDocumentFailureClassification = explicitClassification ||
+    (implicitWholeDocumentFailure && invalidOrOmittedCount > 0 ? `invalid_or_omitted_claims:${invalidOrOmittedCount}` : "") ||
+    (implicitWholeDocumentFailure ? "no_non_null_fields" : "");
+  const errorCode = wholeDocumentFailureClassification
+    ? "WHOLE_DOCUMENT_LLM_FAILED"
+    : factsExtractedCount > 0 && factsMappedCount === 0
+      ? "FIELD_MAPPING_FAILED"
+      : "AI_EMPTY_EXTRACTION";
+  return { errorCode, wholeDocumentFailureClassification };
+}
 
 function normalizeFactLedgerResume(value: unknown): import("../_shared/extraction/openai-fact-ledger/types.ts").FactLedgerResumeState | undefined {
   if (!value || typeof value !== "object") return undefined;
@@ -2679,6 +2705,59 @@ function handleEnrichEvidenceDomainStage(args: {
   });
 }
 
+const EXPENSES_AND_CAM_SUBSTAGE_GROUPS: Record<string, string[]> = {
+  enrich_evidence_expenses_recoveries: ["expenses_recoveries"],
+  enrich_evidence_cam_rules: ["cam_rules"],
+  enrich_evidence_taxes: ["taxes"],
+  enrich_evidence_insurance: ["insurance"],
+  enrich_evidence_utilities: ["utilities"],
+};
+
+function handleEnrichEvidenceFieldGroupStage(args: {
+  stage: EnrichBoundedStageName;
+  derivation: unknown;
+  extractionModuleType: ExtractionModuleType;
+  row: Record<string, unknown>;
+  moduleType: string;
+  doclingRaw: Record<string, unknown> | null;
+  truthAssemblyCanonicalFields: ReturnType<typeof assembleCanonicalFields>["canonicalFields"];
+  fileRecord: any;
+  normalizedOutput: any;
+}): any {
+  const { stage, derivation, extractionModuleType, row, moduleType, doclingRaw, truthAssemblyCanonicalFields, fileRecord, normalizedOutput } = args;
+  const groups = EXPENSES_AND_CAM_SUBSTAGE_GROUPS[stage] ?? [];
+  const schema = getSchema(extractionModuleType);
+  const allSchemaEntries = Object.entries(schema).filter(([, def]) => !(def as any).derived);
+  const groupEntries = getSchemaEntriesForFieldGroups(allSchemaEntries, groups as any);
+  const values = stripInternalKeys(row);
+  if (isLeaseModuleType(moduleType) && isBlank(values.notes)) {
+    const camNote = extractCamNoteFromText(doclingRaw);
+    if (camNote) values.notes = camNote;
+  }
+  const fieldConfidencesRow = (row._field_confidences ?? {}) as Record<string, number>;
+  const fieldSourcesRow = (row._field_sources ?? {}) as Record<string, string>;
+  const fieldEvidenceRow = (row._field_evidence ?? {}) as Record<string, any>;
+  const calculatorDerivationTraces = (row._derivation_traces ?? {}) as Record<string, string>;
+  const calculatorDerivationSourceFields = (row._derivation_source_fields ?? {}) as Record<string, string[]>;
+  const rowConfidence = normalizeConfidence((row as any).confidence_score ?? normalizedOutput.metadata?.avgConfidence);
+  const source = sourceFromMethod(fileRecord.extraction_method ?? normalizedOutput.method);
+  return buildStandardFieldsForEntries({
+    schemaEntries: groupEntries, index: 0, values, workflowOutput: derivation,
+    fieldConfidences: fieldConfidencesRow, fieldSources: fieldSourcesRow, fieldEvidence: fieldEvidenceRow,
+    calculatorDerivationTraces, calculatorDerivationSourceFields, doclingRaw, extractionModuleType,
+    truthAssemblyCanonicalFields, source, rowConfidence,
+  });
+}
+
+function combineExpensesAndCamSubstageData(results: Record<string, BoundedStageResultEntry>): any[] | null {
+  const combined: any[] = [];
+  for (const substage of EXPENSES_AND_CAM_EVIDENCE_SUBSTAGES) {
+    const stageData = getCompletedStageData(results, substage as EnrichBoundedStageName);
+    if (!Array.isArray(stageData)) return null;
+    combined.push(...stageData);
+  }
+  return combined;
+}
 async function handleBoundedEnrichStage(args: {
   supabaseAdmin: any;
   orgId: string;
@@ -2801,7 +2880,11 @@ async function handleBoundedEnrichStage(args: {
     stage,
     stageVersion: STAGE_RESULT_VERSION,
     generationId,
-    input: { text_blocks: doclingRaw?.text_blocks, full_text_length: (doclingRaw?.full_text as string | undefined)?.length ?? 0 },
+    input: {
+      text_block_count: Array.isArray(doclingRaw?.text_blocks) ? doclingRaw!.text_blocks.length : 0,
+      full_text_length: (doclingRaw?.full_text as string | undefined)?.length ?? 0,
+      page_count: Number((doclingRaw as any)?.page_count) || 0,
+    },
   });
 
   // --- 6. hard limits, checked before every stage executes. Real bounded-
@@ -2823,7 +2906,22 @@ async function handleBoundedEnrichStage(args: {
   let stageData: any = null;
 
   try {
-    if (isEnrichEvidenceDomainStage(stage)) {
+    if (isExpensesAndCamEvidenceSubstage(stage)) {
+      const derivation = getCompletedStageData(boundedResults, "enrich_derivation");
+      if (!derivation) return jsonResponse({ error: true, error_code: "PRIOR_STAGE_MISSING", message: "enrich_derivation must complete before Expenses/CAM evidence sub-stages" }, 422);
+      stageData = handleEnrichEvidenceFieldGroupStage({
+        stage,
+        derivation, extractionModuleType, row, moduleType, doclingRaw,
+        truthAssemblyCanonicalFields, fileRecord, normalizedOutput,
+      });
+    } else if (stage === "enrich_evidence_expenses_and_cam") {
+      const combined = combineExpensesAndCamSubstageData(boundedResults);
+      if (!combined) return jsonResponse({ error: true, error_code: "PRIOR_STAGE_MISSING", message: "all Expenses/CAM evidence sub-stages must complete before the Expenses/CAM reducer" }, 422);
+      const schema = getSchema(extractionModuleType);
+      const allSchemaEntries = Object.entries(schema).filter(([, def]) => !(def as any).derived);
+      const domainEntries = getSchemaEntriesForDomain(allSchemaEntries, "expenses_and_cam" as any);
+      stageData = reorderStandardFieldsBySchema(combined, domainEntries);
+    } else if (isEnrichEvidenceDomainStage(stage)) {
       // Phase 4.5: dynamic dispatch replacing what used to be 5 fallthrough
       // `case "enrich_evidence_<domain>":` labels -- isEnrichEvidenceDomainStage
       // is a registry-membership check (not a stage.startsWith(...) guess),
@@ -2973,7 +3071,16 @@ async function handleBoundedEnrichStage(args: {
   // stage -- see the requirement that only final assembly is the canonical
   // publisher). ---
   const finalTelemetry = telemetry.finish({
-    output: stageData,
+    output: {
+      stage,
+      output_kind: stage === "enrich_truth_assembly"
+        ? "assembled_payload"
+        : Array.isArray(stageData)
+          ? "standard_fields"
+          : "stage_data",
+      field_count: Array.isArray(stageData) ? stageData.length : null,
+      has_enriched_payload: Boolean(stageData?.enriched_payload),
+    },
     pageCount,
     tableCount: Array.isArray((doclingRaw as any)?.tables) ? (doclingRaw as any).tables.length : null,
   });
@@ -3761,15 +3868,11 @@ Deno.serve(async (req: Request) => {
         // reviewer can still see exactly what failed and why via
         // error_code/error_message, rather than a payload that looks like a
         // normal, genuinely-empty document.
-        const wholeDocumentFailureClassification =
-          openaiDebugForVerification?.extraction_mode === "whole_document_llm_v2"
-            ? String(openaiDebugForVerification?.failure_classification ?? "").trim()
-            : "";
-        const errorCode = wholeDocumentFailureClassification
-          ? "WHOLE_DOCUMENT_LLM_FAILED"
-          : factsExtractedCount > 0 && factsMappedCount === 0
-            ? "FIELD_MAPPING_FAILED"
-            : "AI_EMPTY_EXTRACTION";
+        const { errorCode, wholeDocumentFailureClassification } = classifyNoMeaningfulExtraction(
+          openaiDebugForVerification,
+          factsExtractedCount,
+          factsMappedCount,
+        );
         const reason = errorCode === "WHOLE_DOCUMENT_LLM_FAILED"
           ? `Authoritative whole-document LLM extraction failed (${wholeDocumentFailureClassification}). ` +
             `Warnings: ${(result.warnings ?? []).join("; ")}`
@@ -4446,4 +4549,5 @@ export const __test__ = {
   isLocalSupabaseUrl,
   localProviderMocksEnabled,
   externalProviderCallsDisabled,
+  classifyNoMeaningfulExtraction,
 };
