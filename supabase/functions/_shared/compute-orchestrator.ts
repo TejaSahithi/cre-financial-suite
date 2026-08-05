@@ -62,7 +62,6 @@ function engineTypeForFunction(fn: string): ComputeEngineType {
   if (fn === "compute-revenue") return "revenue";
   if (fn === "compute-budget") return "budget";
   if (fn === "compute-expense") return "expense";
-  if (fn === "compute-cam") return "cam";
   if (fn === "compute-reconciliation") return "reconciliation";
   // Default to the module it most closely resembles to satisfy the CHECK.
   return "reconciliation";
@@ -188,7 +187,11 @@ function getComputeJobs(moduleType: ModuleType, propertyIds: string[], fiscalYea
         break;
       case "expenses":
         jobs.push(createComputeJob("compute-expense", { property_id: pid, fiscal_year: fiscalYear }, pid, fiscalYear));
-        jobs.push(createComputeJob("compute-cam", { property_id: pid, fiscal_year: fiscalYear }, pid, fiscalYear));
+        // compute-cam is retired (HTTP 410); CAM V2 calculation is
+        // period-based (run-cam-calculation-v2, keyed off a selected
+        // recovery_period_id) and triggered explicitly from CAM Setup/CAM
+        // Run, not from a generic property+fiscal_year upload event — there
+        // is no equivalent automatic job to schedule here.
         jobs.push(createComputeJob("compute-budget", { property_id: pid, fiscal_year: fiscalYear, action: "generate" }, pid, fiscalYear));
         break;
       case "revenue":
@@ -196,7 +199,6 @@ function getComputeJobs(moduleType: ModuleType, propertyIds: string[], fiscalYea
         jobs.push(createComputeJob("compute-budget", { property_id: pid, fiscal_year: fiscalYear, action: "generate" }, pid, fiscalYear));
         break;
       case "cam":
-        jobs.push(createComputeJob("compute-cam", { property_id: pid, fiscal_year: fiscalYear }, pid, fiscalYear));
         jobs.push(createComputeJob("compute-budget", { property_id: pid, fiscal_year: fiscalYear, action: "generate" }, pid, fiscalYear));
         break;
       case "budgets":

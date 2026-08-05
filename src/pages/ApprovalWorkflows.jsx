@@ -45,8 +45,8 @@ export default function ApprovalWorkflows() {
         supabase.from("leases").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("abstract_status", "approved"),
         supabase.from("lease_expense_rule_sets").select("id", { count: "exact", head: true }).eq("org_id", orgId).neq("status", "approved"),
         supabase.from("lease_expense_rule_sets").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("status", "approved"),
-        supabase.from("cam_profiles").select("id", { count: "exact", head: true }).eq("org_id", orgId).neq("status", "approved"),
-        supabase.from("cam_profiles").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("status", "approved"),
+        supabase.from("lease_recovery_policies").select("id", { count: "exact", head: true }).eq("org_id", orgId).neq("status", "approved"),
+        supabase.from("lease_recovery_policies").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("status", "approved"),
       ]);
       result.drafts = leasesAbstractDrafts?.count ?? 0;
       result.approvedAbstracts = leasesAbstractApproved?.count ?? 0;
@@ -102,8 +102,8 @@ export default function ApprovalWorkflows() {
       label: "CAM Setup",
       icon: Settings,
       page: "CAMSetup",
-      description: "Per-lease CAM profile (tenant RSF, building RSF, pro-rata share, cap, admin fee, gross-up). Blocks approval when building RSF is missing.",
-      enforces: "Profile in Manual Required state cannot be approved; CAM Calculation only runs against approved profiles.",
+      description: "Recovery policies (tenant share, cap, admin fee, gross-up steps) are materialized directly from approved Lease Expense Rules.",
+      enforces: "A policy left in draft/rejected/superseded blocks CAM readiness for that lease until resolved via CAM Setup.",
       badges: [
         { label: `${counts.camPending ?? 0} pending`, style: "bg-amber-100 text-amber-800" },
         { label: `${counts.camApproved ?? 0} approved`, style: "bg-emerald-100 text-emerald-700" },

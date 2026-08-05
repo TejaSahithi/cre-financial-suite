@@ -1587,21 +1587,26 @@ export default function LeaseReview() {
     };
     setCustomFieldSaving(true);
     try {
-      // Persist value + evidence into extraction_data so readFieldValue picks it up
+      // Persist value + evidence into extraction_data (via the server-owned
+      // update-lease-extraction-field RPC, not a direct table write) so
+      // readFieldValue picks it up.
+      const fieldPatch = { value: value.trim() || null, source_text: sourceText.trim() || null, source_page: sourcePage ? Number(sourcePage) : null, extraction_status: "manually_added", manually_edited: true };
+      const fieldEvidencePatch = { source_text: sourceText.trim() || null, source_page: sourcePage ? Number(sourcePage) : null, extraction_status: "manually_added" };
+      await updateLeaseExtractionField({
+        leaseId: lease.id,
+        fieldArea: "field_value",
+        action: "custom_field_added",
+        fieldKey: key,
+        patch: { field: fieldPatch, field_evidence: fieldEvidencePatch },
+      });
       const ed = lease.extraction_data || {};
-      const updatedEd = {
-        ...ed,
-        fields: {
-          ...(ed.fields || {}),
-          [key]: { value: value.trim() || null, source_text: sourceText.trim() || null, source_page: sourcePage ? Number(sourcePage) : null, extraction_status: "manually_added", manually_edited: true },
+      updateLeaseQueryCache(queryClient, leaseId, {
+        extraction_data: {
+          ...ed,
+          fields: { ...(ed.fields || {}), [key]: fieldPatch },
+          field_evidence: { ...(ed.field_evidence || {}), [key]: fieldEvidencePatch },
         },
-        field_evidence: {
-          ...(ed.field_evidence || {}),
-          [key]: { source_text: sourceText.trim() || null, source_page: sourcePage ? Number(sourcePage) : null, extraction_status: "manually_added" },
-        },
-      };
-      const { error: saveErr } = await supabase.from("leases").update({ extraction_data: updatedEd }).eq("id", lease.id);
-      if (saveErr) throw saveErr;
+      });
       // Also add to fieldReviews so Accept/Reject work immediately
       const nextReviews = { ...fieldReviews, [key]: { status: REVIEW_STATUSES.PENDING, value: value.trim() || null, reviewed_at: new Date().toISOString() } };
       setFieldReviews(nextReviews);

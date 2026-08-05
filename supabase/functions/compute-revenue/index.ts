@@ -83,8 +83,7 @@ function computeMonthlyProjections(
   months: { month: number; year: number }[],
   leases: Record<string, any>[],
   revenueRecords: Record<string, any>[],
-  camCalc: Record<string, any> | null,
-  totalPropertySqft: number
+  annualCam: number
 ): MonthlyProjection[] {
   const projections: MonthlyProjection[] = [];
 
@@ -99,23 +98,11 @@ function computeMonthlyProjections(
     );
 
     // --- CAM recovery ---
-    let camRecovery = 0;
-    if (camCalc && activeLeaseCount > 0) {
-      const annualCam = Number(camCalc.annual_cam) || 0;
-      const camPerSf = Number(camCalc.cam_per_sf) || 0;
-
-      if (camPerSf > 0 && totalPropertySqft > 0) {
-        // Pro-rate per tenant's sqft
-        const activeSqft = activeLeases.reduce(
-          (sum: number, lease: any) => sum + (Number(lease.square_footage) || 0),
-          0
-        );
-        camRecovery = (camPerSf * activeSqft) / 12;
-      } else {
-        // Flat annual / 12
-        camRecovery = annualCam / 12;
-      }
-    }
+    // cam-legacy-scan-allow: historical note, not a live reference.
+    // Flat annual (posted CAM V2 pool total for the fiscal year) / 12.
+    // There is no per-sqft rate stored in CAM V2 to pro-rate by tenant sqft
+    // the way the legacy cam_calculations.cam_per_sf column allowed.
+    const camRecovery = activeLeaseCount > 0 ? annualCam / 12 : 0;
 
     // --- Other income (from revenues table, excluding base_rent and cam_recovery) ---
     const otherIncome = revenueRecords
@@ -244,33 +231,53 @@ Deno.serve(async (req: Request) => {
     const allRevenues = revenueRecords ?? [];
 
     // ---------------------------------------------------------------
-    // 4. Fetch latest cam_calculations for property + fiscal_year
+    // 4. Fetch posted CAM V2 pool totals for property + fiscal_year
     //
-    // Required consequence of cam_calculations becoming scope-aware
-    // (20260901000000_cam_scope_columns.sql): a property can now have
-    // multiple cam_calculations rows for the same fiscal_year — one
-    // property-level plus any building/unit-level runs — so this
-    // .maybeSingle() would start erroring ("multiple rows returned") as
-    // soon as any building/unit-scoped CAM calculation exists alongside
-    // the property-level one. Revenue projection has always wanted the
-    // property-wide CAM recovery figure, which is exactly the
-    // scope_level='property' row, so that filter restores the original
-    // single-row guarantee rather than changing what this function
-    // computes. (Note: this query still doesn't filter by org_id — a
-    // separate, pre-existing gap left as-is here; out of scope for this
-    // PR, which only touches what CAM's own scope change requires.)
+    // cam-legacy-scan-allow: historical note, not a live reference.
+    // cam_calculations was archived to legacy_cam_calculations
+    // (20269900000029_archive_legacy_cam_objects.sql) once CAM V2 replaced
+    // the legacy engine — it no longer exists under that name. The
+    // authoritative current-schema equivalent of "annual CAM total for
+    // this property/year" is the sum of cam_run_pool_results.adjusted_pool
+    // across every POSTED cam_runs row scoped to this property whose
+    // recovery period overlaps fiscal_year.
     // ---------------------------------------------------------------
-    const { data: camCalc, error: camErr } = await supabaseAdmin
-      .from("cam_calculations")
-      .select("property_id, fiscal_year, annual_cam, cam_per_sf")
-      .eq("property_id", property_id)
-      .eq("fiscal_year", fiscal_year)
-      .eq("scope_level", "property")
-      .maybeSingle();
+    const { data: postedRuns, error: camRunsErr } = await supabaseAdmin
+      .from("cam_runs")
+      .select("id, recovery_periods(start_date, end_date)")
+      .eq("org_id", orgId)
+      .eq("scope_type", "property")
+      .eq("scope_id", property_id)
+      .eq("status", "posted");
 
-    if (camErr) {
-      console.error("[compute-revenue] cam_calculations fetch error:", camErr.message);
+    if (camRunsErr) {
+      console.error("[compute-revenue] cam_runs fetch error:", camRunsErr.message);
     }
+
+    const fiscalYearRunIds = (postedRuns ?? [])
+      .filter((run: any) => {
+        const period = run.recovery_periods;
+        if (!period?.start_date) return false;
+        const startYear = new Date(period.start_date + "T00:00:00Z").getUTCFullYear();
+        const endYear = period.end_date ? new Date(period.end_date + "T00:00:00Z").getUTCFullYear() : startYear;
+        return fiscal_year >= startYear && fiscal_year <= endYear;
+      })
+      .map((run: any) => run.id);
+
+    let annualCam = 0;
+    if (fiscalYearRunIds.length > 0) {
+      const { data: poolResults, error: poolErr } = await supabaseAdmin
+        .from("cam_run_pool_results")
+        .select("adjusted_pool")
+        .in("cam_run_id", fiscalYearRunIds);
+      if (poolErr) {
+        console.error("[compute-revenue] cam_run_pool_results fetch error:", poolErr.message);
+      } else {
+        annualCam = (poolResults ?? []).reduce((sum: number, r: any) => sum + (Number(r.adjusted_pool) || 0), 0);
+      }
+    }
+
+    const camAvailable = fiscalYearRunIds.length > 0;
 
     // ---------------------------------------------------------------
     // 5-6. Compute monthly projections for the fiscal year (months 1-12)
@@ -284,8 +291,7 @@ Deno.serve(async (req: Request) => {
       fiscalMonths,
       allLeases,
       allRevenues,
-      camCalc ?? null,
-      totalPropertySqft
+      annualCam
     );
 
     // ---------------------------------------------------------------
@@ -337,8 +343,7 @@ Deno.serve(async (req: Request) => {
       rollingMonths,
       allLeases,
       rollingRevenues,
-      camCalc ?? null,
-      totalPropertySqft
+      annualCam
     );
 
     // ---------------------------------------------------------------
@@ -355,10 +360,10 @@ Deno.serve(async (req: Request) => {
         total_property_sqft: totalPropertySqft,
         lease_count: allLeases.length,
         revenue_record_count: allRevenues.length,
-        cam_available: camCalc != null,
+        cam_available: camAvailable,
         _compute: {
           page_scope: ["Revenue"],
-          source_tables: ["properties", "leases", "revenues", "cam_calculations"],
+          source_tables: ["properties", "leases", "revenues", "cam_runs", "cam_run_pool_results"],
           source_row_ids: {
             leases: allLeases.map((lease: any) => lease.id).sort(),
             revenues: allRevenues.map((row: any) => row.id).sort(),

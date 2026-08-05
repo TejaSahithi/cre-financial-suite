@@ -2,7 +2,7 @@
  * ChargeScheduleAndPreview — read-only Charge Schedule and Invoice Preview
  * surfaces inside the Billing page. Both views derive from approved data:
  *   - approved lease abstracts (base rent, lease term)
- *   - approved CAM profiles (pro-rata share)
+ *   - approved CAM V2 recovery policies (pro-rata share)
  *   - actual recoverable expenses (baseline for CAM allocation)
  *
  * Generating actual invoices is still handled by the existing "Generate
@@ -74,13 +74,13 @@ export function ChargeScheduleTab({ propertyId }) {
 
   const leaseIds = approvedLeases.map((l) => l.id);
 
-  const { data: camProfiles = [] } = useQuery({
-    queryKey: ["charge-schedule-cam", leaseIds.join(",")],
+  const { data: recoveryPolicies = [] } = useQuery({
+    queryKey: ["charge-schedule-recovery-policies", leaseIds.join(",")],
     queryFn: async () => {
       if (leaseIds.length === 0) return [];
       const { data, error } = await supabase
-        .from("cam_profiles")
-        .select("id, lease_id, tenant_pro_rata_share, status, admin_fee_percent")
+        .from("lease_recovery_policies")
+        .select("id, lease_id, status, lease_recovery_policy_steps(step_type, parameters)")
         .in("lease_id", leaseIds);
       if (error) return [];
       return data || [];
@@ -124,17 +124,23 @@ export function ChargeScheduleTab({ propertyId }) {
     enabled: propertyIds.length > 0,
   });
 
-  const profileByLease = useMemo(() => {
+  const policiesByLease = useMemo(() => {
     const m = new Map();
-    for (const p of camProfiles) m.set(p.lease_id, p);
+    for (const p of recoveryPolicies) {
+      const list = m.get(p.lease_id) || [];
+      list.push(p);
+      m.set(p.lease_id, list);
+    }
     return m;
-  }, [camProfiles]);
+  }, [recoveryPolicies]);
 
   const rows = useMemo(() => {
     return approvedLeases.map((lease) => {
       const baseRent = Number(lease.monthly_rent || (lease.annual_rent ? lease.annual_rent / 12 : 0)) || 0;
-      const profile = profileByLease.get(lease.id);
-      const proRata = profile?.tenant_pro_rata_share != null ? Number(profile.tenant_pro_rata_share) / 100 : 0;
+      const policies = policiesByLease.get(lease.id) || [];
+      const policy = policies.find((p) => p.status === "approved") || policies[0] || null;
+      const shareStep = policy?.lease_recovery_policy_steps?.find((s) => s.step_type === "CALCULATE_SHARE") || null;
+      const proRata = shareStep?.parameters?.tenant_share_percent != null ? Number(shareStep.parameters.tenant_share_percent) / 100 : 0;
       const totals = expenseTotals[lease.property_id] || { cam: 0, tax: 0, insurance: 0, utilities: 0, other: 0 };
       const cam = (totals.cam / 12) * proRata;
       const tax = (totals.tax / 12) * proRata;
@@ -151,10 +157,10 @@ export function ChargeScheduleTab({ propertyId }) {
         utilities,
         other,
         total,
-        profileReady: profile?.status === "approved",
+        profileReady: policy?.status === "approved",
       };
     });
-  }, [approvedLeases, profileByLease, expenseTotals]);
+  }, [approvedLeases, policiesByLease, expenseTotals]);
 
   const totals = rows.reduce(
     (acc, r) => ({
@@ -304,13 +310,13 @@ function ChargePreviewInner({ propertyId, holdState, setHoldState, approvedState
   }, [leases, propertyId]);
 
   const leaseIds = approvedLeases.map((l) => l.id);
-  const { data: camProfiles = [] } = useQuery({
-    queryKey: ["invoice-preview-cam", leaseIds.join(",")],
+  const { data: recoveryPolicies = [] } = useQuery({
+    queryKey: ["invoice-preview-recovery-policies", leaseIds.join(",")],
     queryFn: async () => {
       if (leaseIds.length === 0) return [];
       const { data, error } = await supabase
-        .from("cam_profiles")
-        .select("id, lease_id, tenant_pro_rata_share, status")
+        .from("lease_recovery_policies")
+        .select("id, lease_id, status")
         .in("lease_id", leaseIds);
       if (error) return [];
       return data || [];
@@ -318,20 +324,21 @@ function ChargePreviewInner({ propertyId, holdState, setHoldState, approvedState
     enabled: leaseIds.length > 0,
   });
 
-  const profileByLease = useMemo(() => {
+  const policyReadyByLease = useMemo(() => {
     const m = new Map();
-    for (const p of camProfiles) m.set(p.lease_id, p);
+    for (const p of recoveryPolicies) {
+      if (p.status === "approved") m.set(p.lease_id, true);
+    }
     return m;
-  }, [camProfiles]);
+  }, [recoveryPolicies]);
 
   const rows = approvedLeases.map((lease) => {
     const baseRent = Number(lease.monthly_rent || (lease.annual_rent ? lease.annual_rent / 12 : 0)) || 0;
-    const profile = profileByLease.get(lease.id);
     return {
       id: lease.id,
       tenant: lease.tenant_name || "—",
       monthly: baseRent,
-      profileReady: profile?.status === "approved",
+      profileReady: policyReadyByLease.get(lease.id) === true,
     };
   });
 

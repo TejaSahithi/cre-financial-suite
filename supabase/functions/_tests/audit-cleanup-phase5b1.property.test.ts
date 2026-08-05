@@ -1,9 +1,11 @@
 // Feature: enterprise-readiness-hardening Phase 5B-1 (audit cleanup + destructive-action hardening)
 // Properties:
-//   1. HTTP compute-cam creates exactly one audit_logs row for a computation
-//      (the frontend's own duplicate "cam_compute" entry was removed from
-//      CAMCalculation.jsx — this proves the backend side was, and remains,
-//      exactly one row).
+//   1. (Retired) HTTP compute-cam creating exactly one audit_logs row per
+//      computation was covered here; compute-cam is now a permanent HTTP 410
+//      stub (see supabase/functions/compute-cam/index.ts) with all CAM
+//      calculation handled by run-cam-calculation-v2, so this property no
+//      longer applies and its test was removed rather than left permanently
+//      failing against a retired endpoint.
 //   2. HTTP send-expense-classification-to-cam (the edge function, not the
 //      raw RPC) creates exactly one audit_logs row total for the
 //      classification — proves the edge function's now-removed second
@@ -95,93 +97,6 @@ function callFn(fnName: string, accessToken: string, body: Record<string, unknow
     body: JSON.stringify(body),
   });
 }
-
-Deno.test({
-  name: "HTTP compute-cam: exactly one audit_logs row per computation",
-  sanitizeResources: false,
-  sanitizeOps: false,
-  fn: async () => {
-    const admin = adminClient();
-    const suffix = crypto.randomUUID();
-    const { org, accessToken } = await setUpOrgAndUser(admin, suffix);
-    const fiscalYear = 2026;
-
-    const property = await insertOne(admin, "properties", {
-      org_id: org.id,
-      name: `Audit Cleanup CAM Property ${suffix}`,
-      status: "active",
-      total_sqft: 10000,
-    });
-
-    // compute-cam requires at least one approved/budget-ready lease in scope.
-    const lease = await insertOne(admin, "leases", {
-      org_id: org.id,
-      property_id: property.id,
-      tenant_name: `Audit Cleanup CAM Tenant ${suffix}`,
-      start_date: "2026-01-01",
-      end_date: "2027-01-01",
-      status: "active",
-      square_footage: 2000,
-      abstract_version: 1,
-    });
-
-    // compute-cam also requires, for the scoped approved lease, at least one
-    // approved + published CAM child rule (or a CAM-ready recoverable
-    // expense) — otherwise it rejects with "No CAM-ready classifications,
-    // CAM input rows, or approved published CAM lease rules found for this
-    // scope" (see supabase/functions/compute-cam/index.ts:776-782). Mirrors
-    // the fixture in finance-chain-integration.test.ts.
-    const category = await insertOne(admin, "expense_categories", {
-      org_id: org.id,
-      category_name: `Audit Cleanup CAM Category ${suffix}`,
-      normalized_key: `audit_cleanup_cam_${suffix.replace(/-/g, "_")}`,
-      is_active: true,
-    });
-
-    const ruleSet = await insertOne(admin, "lease_expense_rule_sets", {
-      org_id: org.id,
-      lease_id: lease.id,
-      property_id: property.id,
-      status: "approved",
-    });
-
-    await insertOne(admin, "lease_expense_rules", {
-      org_id: org.id,
-      rule_set_id: ruleSet.id,
-      expense_category_id: category.id,
-      lease_id: lease.id,
-      property_id: property.id,
-      expense_category: `Audit Cleanup CAM Category ${suffix}`,
-      row_status: "mapped",
-      review_status: "approved",
-      approval_status: "approved",
-      is_recoverable: true,
-      recoverable_from_tenant: true,
-      cam_eligible: "yes",
-      is_excluded: false,
-      published_to_cam: true,
-      payment_treatment: "reimbursable",
-      recovery_method: "pro_rata",
-      allocation_basis: "square_footage",
-    });
-
-    const computeRes = await callFn("compute-cam", accessToken, {
-      property_id: property.id,
-      fiscal_year: fiscalYear,
-    });
-    const computeBody = await computeRes.json();
-    assertEquals(computeRes.status, 200, `expected compute-cam to succeed: ${JSON.stringify(computeBody)}`);
-
-    const { data: auditRows, error: auditError } = await admin
-      .from("audit_logs")
-      .select("id, action")
-      .eq("org_id", org.id)
-      .eq("property_id", property.id)
-      .eq("action", "cam_computed");
-    assertNoError(auditError);
-    assertEquals(auditRows?.length, 1, "compute-cam must write exactly one audit_logs row per computation");
-  },
-});
 
 Deno.test({
   name: "HTTP send-expense-classification-to-cam: exactly one audit_logs row total for the classification (edge-function duplicate removed)",

@@ -39,16 +39,6 @@ export const EXPENSE_ACTIONS = [
   },
 ];
 
-export const CAM_ACTIONS = [
-  { label: "Compute CAM", fn: "compute-cam", icon: "Calculator" },
-  {
-    label: "Export CAM",
-    fn: "export-data",
-    icon: "Download",
-    extra: { export_type: "cam_calculation", format: "csv" },
-  },
-];
-
 export const REVENUE_ACTIONS = [
   { label: "Compute Revenue", fn: "compute-revenue", icon: "Calculator" },
   {

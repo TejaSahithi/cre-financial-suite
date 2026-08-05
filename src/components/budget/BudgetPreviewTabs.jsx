@@ -1,7 +1,7 @@
 /**
  * BudgetPreviewTabs — read-only Revenue / Expense / Recovery previews
  * derived strictly from approved lease data, approved expense rules, and
- * approved CAM profiles. Surfaced as a tab inside the Budget Studio's
+ * approved CAM V2 recovery policies. Surfaced as a tab inside the Budget Studio's
  * Create Budget page so reviewers can sanity-check the inputs before
  * generating a budget draft.
  *
@@ -62,19 +62,20 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
 
   const leaseIds = approvedLeases.map((l) => l.id);
 
-  // CAM profiles for approved leases — drives Recovery preview.
-  const { data: camProfiles = [] } = useQuery({
-    queryKey: ["budget-preview-cam-profiles", leaseIds.join(",")],
+  // Recovery policies for approved leases — drives Recovery preview. Pro-rata
+  // share lives on a CALCULATE_SHARE policy step's parameters, not a flat
+  // column, since CAM V2 policies are materialized directly from approved
+  // Lease Expense Rules.
+  const { data: recoveryPolicies = [] } = useQuery({
+    queryKey: ["budget-preview-recovery-policies", leaseIds.join(",")],
     queryFn: async () => {
       if (leaseIds.length === 0) return [];
       const { data, error } = await supabase
-        .from("cam_profiles")
-        .select(
-          "id, lease_id, tenant_pro_rata_share, status, included_expenses, excluded_expenses, admin_fee_percent, cam_cap_type, cam_cap_percent, recovery_status, cam_structure",
-        )
+        .from("lease_recovery_policies")
+        .select("id, lease_id, status, policy_type, lease_recovery_policy_steps(step_type, parameters)")
         .in("lease_id", leaseIds);
       if (error) {
-        console.warn("[BudgetPreviewTabs] cam profile query failed:", error.message);
+        console.warn("[BudgetPreviewTabs] recovery policy query failed:", error.message);
         return [];
       }
       return data || [];
@@ -145,26 +146,38 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
   const totalRecoverableExpense = expenseRows.reduce((sum, r) => sum + r.recoverable, 0);
 
   const recoveryRows = useMemo(() => {
-    const profileByLease = new Map(camProfiles.map((p) => [p.lease_id, p]));
+    // A lease may have multiple policies (multi-pool, or draft/superseded
+    // history) — prefer the approved one(s); take the first CALCULATE_SHARE
+    // step's tenant_share_percent as the representative pro-rata figure, a
+    // single flat percentage per lease for this estimate-only preview.
+    const policiesByLease = new Map();
+    for (const policy of recoveryPolicies) {
+      const list = policiesByLease.get(policy.lease_id) || [];
+      list.push(policy);
+      policiesByLease.set(policy.lease_id, list);
+    }
     return approvedLeases.map((lease) => {
-      const profile = profileByLease.get(lease.id) || null;
-      const proRata = profile?.tenant_pro_rata_share != null ? Number(profile.tenant_pro_rata_share) / 100 : null;
+      const policies = policiesByLease.get(lease.id) || [];
+      const policy = policies.find((p) => p.status === "approved") || policies[0] || null;
+      const shareStep = policy?.lease_recovery_policy_steps?.find((s) => s.step_type === "CALCULATE_SHARE") || null;
+      const proRata = shareStep?.parameters?.tenant_share_percent != null ? Number(shareStep.parameters.tenant_share_percent) / 100 : null;
       // Recovery preview applies tenant pro-rata share to the property's
-      // total recoverable expense baseline. Approved-only.
+      // total recoverable expense baseline, regardless of policy approval
+      // state — only the readiness badge below gates on approval.
       const annualRecovery = proRata != null ? totalRecoverableExpense * proRata : null;
-      const recoveryMethod = profile?.cam_structure || profile?.recovery_status || (proRata != null ? "Pro-rata" : "—");
-      const profileReady = profile?.status === "approved";
+      const recoveryMethod = policy?.policy_type || (proRata != null ? "Pro-rata" : "—");
+      const policyReady = policy?.status === "approved";
       return {
         lease,
-        profile,
+        policy,
         proRata,
         annualRecovery,
         monthlyRecovery: annualRecovery != null ? annualRecovery / 12 : null,
         recoveryMethod,
-        profileReady,
+        profileReady: policyReady,
       };
     });
-  }, [approvedLeases, camProfiles, totalRecoverableExpense]);
+  }, [approvedLeases, recoveryPolicies, totalRecoverableExpense]);
 
   const totalAnnualRecovery = recoveryRows.reduce((sum, r) => sum + (r.annualRecovery || 0), 0);
 
@@ -318,7 +331,7 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {recoveryRows.map(({ lease, recoveryMethod, proRata, annualRecovery, monthlyRecovery, profile, profileReady }) => (
+                      {recoveryRows.map(({ lease, recoveryMethod, proRata, annualRecovery, monthlyRecovery, policy, profileReady }) => (
                         <TableRow key={lease.id}>
                           <TableCell className="text-sm font-medium">{lease.tenant_name || "—"}</TableCell>
                           <TableCell className="text-sm text-slate-600">{recoveryMethod}</TableCell>
@@ -336,12 +349,12 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
                               className={`text-[10px] ${
                                 profileReady
                                   ? "bg-emerald-100 text-emerald-700"
-                                  : profile
+                                  : policy
                                   ? "bg-amber-100 text-amber-800"
                                   : "bg-slate-100 text-slate-600"
                               }`}
                             >
-                              {profileReady ? "Approved" : profile?.status || "No profile"}
+                              {profileReady ? "Approved" : policy?.status || "No policy"}
                             </Badge>
                           </TableCell>
                         </TableRow>

@@ -810,42 +810,23 @@ async function resolveExpenseCategoryIds(
   });
 }
 
-async function persistCamProfile(supabaseAdmin: any, orgId: string, lease: any, camProfile: any) {
+// cam-legacy-scan-allow: retirement notice, not a live reference.
+// Legacy CAM profile seed step — DEPRECATED / RETIRED. This used to upsert
+// raw LLM extraction output (workflow.cam_profile) into the now-retired
+// cam_profiles table as a draft starting point for manual CAM setup. There
+// is no CAM V2 equivalent: recovery policies are materialized exclusively
+// from approved lease_expense_rules (materialize_lease_recovery_policy),
+// not from raw extraction output, and their step-based shape (RSF/pro-rata/
+// cap/admin-fee/gross-up as separate lease_recovery_policy_steps rows) is
+// not a mechanical translation target for this flat 19-field payload. This
+// performs no write; callers still get a stable { persisted, error }-shaped
+// result so publishApprovedLeaseExpenseArtifacts's response contract is
+// unchanged.
+async function persistCamProfile(_supabaseAdmin: any, _orgId: string, _lease: any, camProfile: any) {
   if (!isObject(camProfile)) return { persisted: false };
-  const payload = {
-    org_id: orgId,
-    lease_id: lease.id,
-    property_id: lease?.property_id ?? null,
-    cam_structure: camProfile.cam_structure ?? null,
-    recovery_status: camProfile.recovery_status ?? null,
-    cam_start_date: camProfile.cam_start_date ?? null,
-    cam_end_date: camProfile.cam_end_date ?? null,
-    estimate_frequency: camProfile.estimate_frequency ?? null,
-    reconciliation_frequency: camProfile.reconciliation_frequency ?? null,
-    tenant_rsf: numberOrNull(camProfile.tenant_rsf),
-    building_rsf: numberOrNull(camProfile.building_rsf),
-    tenant_pro_rata_share: numberOrNull(camProfile.tenant_pro_rata_share),
-    cam_cap_type: camProfile.cam_cap_type ?? null,
-    cam_cap_percent: numberOrNull(camProfile.cam_cap_percent),
-    admin_fee_percent: numberOrNull(camProfile.admin_fee_percent),
-    gross_up_percent: numberOrNull(camProfile.gross_up_percent),
-    included_expenses: asArray(camProfile.included_expenses),
-    excluded_expenses: asArray(camProfile.excluded_expenses),
-    actual_cam_expense: numberOrNull(camProfile.actual_cam_expense),
-    estimated_cam_billed: numberOrNull(camProfile.estimated_cam_billed),
-    reconciliation_amount: numberOrNull(camProfile.reconciliation_amount),
-    tenant_balance_due_or_credit: numberOrNull(camProfile.tenant_balance_due_or_credit),
-    status: "draft",
-    source: "approved_lease_workflow",
-  };
-  const { error } = await supabaseAdmin.from("cam_profiles").upsert(payload, { onConflict: "lease_id" });
-  if (error) {
-    return {
-      persisted: false,
-      error: `Could not publish the approved lease CAM profile: ${error.message}`,
-    };
-  }
-  return { persisted: true };
+  // cam-legacy-scan-allow: retirement telemetry, not a live reference.
+  console.warn("[LEGACY_CAM_API_INVOKED] persistCamProfile called with extraction cam_profile data; the legacy cam_profiles seed step is retired and performs no write.");
+  return { persisted: false, retired: true };
 }
 
 export async function publishApprovedLeaseExpenseArtifacts({

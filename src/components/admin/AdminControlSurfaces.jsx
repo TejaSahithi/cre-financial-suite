@@ -138,11 +138,11 @@ function ApprovalWorkflowsSurface() {
   const { data: budgets = [] } = useOrgQuery("Budget");
   const { data: recons = [] } = useOrgQuery("Reconciliation");
 
-  const { data: camProfiles = [] } = useQuery({
-    queryKey: ["admin-cam-profiles"],
+  const { data: recoveryPolicies = [] } = useQuery({
+    queryKey: ["admin-lease-recovery-policies"],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("cam_profiles")
+        .from("lease_recovery_policies")
         .select("id, status, lease_id");
       if (error) return [];
       return data || [];
@@ -156,11 +156,11 @@ function ApprovalWorkflowsSurface() {
       const status = String(lease.status || "").toLowerCase();
       return ["draft", "pending_review", "under_review"].includes(abstract) || ["review_required", "draft"].includes(status);
     }).length;
-    const camReady = camProfiles.filter((profile) => String(profile.status || "").toLowerCase() === "approved").length;
+    const camReady = recoveryPolicies.filter((policy) => String(policy.status || "").toLowerCase() === "approved").length;
     const pendingBudgets = budgets.filter((budget) => !["approved", "locked"].includes(String(budget.status || "").toLowerCase())).length;
     const pendingRecons = recons.filter((recon) => String(recon.status || "").toLowerCase() !== "approved").length;
     return { approvedAbstracts, pendingLeaseReview, camReady, pendingBudgets, pendingRecons };
-  }, [budgets, camProfiles, leases, recons]);
+  }, [budgets, recoveryPolicies, leases, recons]);
 
   const workflowRows = [
     {
@@ -179,7 +179,7 @@ function ApprovalWorkflowsSurface() {
     },
     {
       artifact: "CAM Setup",
-      stages: "Build CAM profile -> Validate -> Approve setup",
+      stages: "Approve Lease Expense Rules -> Materialize recovery policy -> Resolve readiness blockers",
       owner: "CAM Analyst",
       liveStatus: `${metrics.camReady} ready`,
       surface: "CAM Setup",

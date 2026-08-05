@@ -54,10 +54,13 @@ const SNAPSHOT_BACKED_EXPORTS = new Set<ExportType>([
 
 const FALLBACK_TABLE_MAP: Record<ExportType, string> = {
   rent_schedule: "rent_schedules",
-  cam_calculation: "cam_calculations",
+  // cam_calculation / cam_packet are retired (see the early
+  // LEGACY_CAM_ENGINE_RETIRED throw below) — these two entries are
+  // unreachable and only present to satisfy Record<ExportType, string>.
+  cam_calculation: "__retired__",
   budget: "budgets",
   reconciliation: "reconciliations",
-  cam_packet: "cam_calculations",
+  cam_packet: "__retired__",
   expenses: "expenses",
   revenue: "revenues",
   budget_book: "budgets",
@@ -623,214 +626,6 @@ async function buildBudgetExportRows({
   );
 }
 
-async function buildCamPacketExportRows({
-  supabaseAdmin,
-  orgId,
-  propertyId,
-  fiscalYear,
-  propertyName,
-  camSnapshot,
-  leaseId,
-}: {
-  supabaseAdmin: any;
-  orgId: string;
-  propertyId: string;
-  fiscalYear: number;
-  propertyName: string;
-  camSnapshot: any;
-  leaseId?: string | null;
-}): Promise<Record<string, any>[]> {
-  if (!camSnapshot?.outputs) {
-    throw new Error(
-      `No CAM snapshot found for property="${propertyId}" and fiscal_year=${fiscalYear}. Run compute-cam first.`,
-    );
-  }
-
-  const outputs = camSnapshot.outputs as Record<string, any>;
-  const inputs = (camSnapshot.inputs ?? {}) as Record<string, any>;
-  const ruleEvidence: any[] = Array.isArray(inputs.rule_evidence) ? inputs.rule_evidence : [];
-
-  let tenantCharges: any[] = Array.isArray(outputs.tenant_charges) ? outputs.tenant_charges : [];
-  if (leaseId) {
-    tenantCharges = tenantCharges.filter((t: any) => t.lease_id === leaseId);
-  }
-
-  // Fetch lease details for tenant enrichment
-  const leaseIds = tenantCharges.map((t: any) => t.lease_id).filter(Boolean);
-  let leaseMap: Record<string, any> = {};
-  if (leaseIds.length > 0) {
-    const { data: leases } = await supabaseAdmin
-      .from("leases")
-      .select("id, tenant_name, start_date, end_date, monthly_rent, annual_rent, square_footage, lease_type, status")
-      .in("id", leaseIds);
-    for (const l of leases ?? []) {
-      leaseMap[l.id] = l;
-    }
-  }
-
-  // Fetch reconciliation snapshot for expense pool breakdown (best-effort)
-  const { data: reconSnapshot } = await supabaseAdmin
-    .from("computation_snapshots")
-    .select("id, outputs, computed_at")
-    .eq("org_id", orgId)
-    .eq("property_id", propertyId)
-    .eq("engine_type", "reconciliation")
-    .eq("fiscal_year", fiscalYear)
-    .order("computed_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const reconLineItems: any[] = Array.isArray(reconSnapshot?.outputs?.line_items)
-    ? reconSnapshot.outputs.line_items
-    : [];
-
-  const rows: Record<string, any>[] = [];
-
-  // ── Section 1: Packet header ─────────────────────────────────────────────
-  rows.push({
-    record_type: "cam_packet_header",
-    property_name: propertyName,
-    property_id: propertyId,
-    fiscal_year: fiscalYear,
-    snapshot_id: camSnapshot.id ?? "Not available",
-    computed_at: camSnapshot.computed_at ?? "Not available",
-    engine_version: camSnapshot.engine_version ?? "Not available",
-    input_hash: camSnapshot.input_hash ?? "Not available",
-    tenant_filter: leaseId ?? "all_tenants",
-    reconciliation_snapshot_id: reconSnapshot?.id ?? "Not available",
-  });
-
-  // ── Section 2: Property-level CAM summary ────────────────────────────────
-  rows.push({
-    record_type: "cam_packet_property_summary",
-    property_name: propertyName,
-    fiscal_year: fiscalYear,
-    total_cam: round2(outputs.total_cam),
-    cam_per_sf: round2(outputs.cam_per_sf),
-    total_recoverable: round2(outputs.total_recoverable),
-    total_billed: round2(outputs.total_billed),
-    direct_allocations: round2(outputs.direct_allocations),
-    gross_up_adjustment: round2(outputs.gross_up_adjustment),
-    admin_fees: round2(outputs.admin_fees),
-    management_fees: round2(outputs.management_fees),
-    total_shared_before_fees: round2(outputs.total_shared_before_fees),
-    prior_payments: "Not available",
-    final_adjustment: "Not available",
-  });
-
-  // ── Section 3: Per-tenant charge rows ────────────────────────────────────
-  for (const tenant of tenantCharges) {
-    const lease = leaseMap[tenant.lease_id] ?? {};
-    rows.push({
-      record_type: "cam_packet_tenant",
-      property_name: propertyName,
-      fiscal_year: fiscalYear,
-      tenant_name: tenant.tenant_name ?? lease.tenant_name ?? "Not available",
-      lease_id: tenant.lease_id ?? "Not available",
-      lease_type: lease.lease_type ?? "Not available",
-      lease_start: lease.start_date ?? "Not available",
-      lease_end: lease.end_date ?? "Not available",
-      square_footage: round2(tenant.square_footage ?? lease.square_footage),
-      pro_rata_share: tenant.pro_rata_share ?? "Not available",
-      annual_cam: round2(tenant.annual_cam),
-      monthly_cam: round2(tenant.monthly_cam),
-      raw_share_before_caps: round2(tenant.raw_share_before_caps),
-      base_year_adjustment: round2(tenant.base_year_adjustment),
-      cap_adjustment: round2(tenant.cap_adjustment),
-      gross_up_applied: tenant.gross_up_applied ? "Yes" : "No",
-      cap_applied: tenant.cap_applied ? "Yes" : "No",
-      prior_payments: "Not available",
-      amount_owed_or_refund: "Not available",
-    });
-  }
-
-  // ── Section 4: Expense pool breakdown (from reconciliation snapshot) ─────
-  if (reconLineItems.length > 0) {
-    for (const item of reconLineItems) {
-      rows.push({
-        record_type: "cam_packet_expense_pool",
-        property_name: propertyName,
-        fiscal_year: fiscalYear,
-        category: item.category,
-        budgeted_amount: round2(item.budget),
-        actual_amount: round2(item.actual),
-        variance: round2(item.variance),
-        variance_pct: round2(item.variance_pct),
-        flagged: item.flagged ? "Yes" : "No",
-        source: "reconciliation_snapshot",
-      });
-    }
-  } else {
-    rows.push({
-      record_type: "cam_packet_expense_pool",
-      property_name: propertyName,
-      fiscal_year: fiscalYear,
-      category: "Not available",
-      budgeted_amount: "Not available",
-      actual_amount: "Not available",
-      variance: "Not available",
-      variance_pct: "Not available",
-      flagged: "Not available",
-      source: "no_reconciliation_snapshot",
-    });
-  }
-
-  // ── Section 5: Lease evidence citations ──────────────────────────────────
-  const filteredEvidence = leaseId
-    ? ruleEvidence.filter((e: any) => e.lease_id === leaseId)
-    : ruleEvidence;
-
-  if (filteredEvidence.length > 0) {
-    for (const ev of filteredEvidence) {
-      const tenantCharge = tenantCharges.find((t: any) => t.lease_id === ev.lease_id);
-      rows.push({
-        record_type: "cam_packet_evidence",
-        property_name: propertyName,
-        fiscal_year: fiscalYear,
-        tenant_name: tenantCharge?.tenant_name ?? "Not available",
-        lease_id: ev.lease_id ?? "Not available",
-        rule_id: ev.rule_id ?? "Not available",
-        category: ev.category ?? "Not available",
-        source_page: ev.source_page ?? "Not available",
-        source_text: ev.source_text ?? "Not available",
-        confidence_score: ev.confidence_score ?? "Not available",
-        approved_by: ev.approved_by ?? "Not available",
-        approved_at: ev.approved_at ?? "Not available",
-        field_review_id: ev.field_review_id ?? "Not available",
-      });
-    }
-  } else {
-    rows.push({
-      record_type: "cam_packet_evidence",
-      property_name: propertyName,
-      fiscal_year: fiscalYear,
-      tenant_name: "Not available",
-      lease_id: "Not available",
-      rule_id: "Not available",
-      category: "Not available",
-      source_page: "Not available",
-      source_text: "No lease evidence found in CAM snapshot inputs",
-      confidence_score: "Not available",
-      approved_by: "Not available",
-      approved_at: "Not available",
-      field_review_id: "Not available",
-    });
-  }
-
-  // ── Section 6: Calculation assumptions ───────────────────────────────────
-  const assumptions: string[] = Array.isArray(outputs.assumptions) ? outputs.assumptions : [];
-  for (const assumption of assumptions) {
-    rows.push({
-      record_type: "cam_packet_assumption",
-      property_name: propertyName,
-      fiscal_year: fiscalYear,
-      assumption,
-    });
-  }
-
-  return rows;
-}
-
 async function buildBudgetBookExportRows({
   supabaseAdmin,
   orgId,
@@ -1135,6 +930,24 @@ Deno.serve(async (req: Request) => {
       throw new Error('Only "csv" format is currently supported');
     }
 
+    // cam_calculation / cam_packet depended entirely on computation_snapshots
+    // rows with engine_type='cam', which only the now-retired compute-cam
+    // Edge Function ever wrote (run-cam-calculation-v2 writes to
+    // cam_runs/cam_run_pool_results/cam_run_lease_results instead, never
+    // computation_snapshots). Retired rather than reimplemented: the packet's
+    // field set (total_cam, cam_per_sf, raw_share_before_caps,
+    // base_year_adjustment, cap_adjustment, gross_up_applied, cap_applied,
+    // ...) has no one-to-one column in the CAM V2 result tables, and
+    // approximating them would silently translate a write into invented
+    // figures rather than real ones. Both export types are unreachable from
+    // the live UI today (PipelineActions.jsx's CAM_ACTIONS is unused;
+    // cam_packet has no frontend caller at all).
+    if (export_type === "cam_calculation" || export_type === "cam_packet") {
+      throw new Error(
+        `LEGACY_CAM_ENGINE_RETIRED: The "${export_type}" export is retired along with compute-cam. Use posted cam_run_statements / cam_charge_exports (see CAM Runs > Statements & Export) for authoritative CAM output.`,
+      );
+    }
+
     const isBudgetExport = export_type === "budget" || export_type === "budget_book";
 
     // ---------------------------------------------------------------
@@ -1235,17 +1048,7 @@ Deno.serve(async (req: Request) => {
 
     let rows: Record<string, any>[] = [];
 
-    if (export_type === "cam_packet") {
-      rows = await buildCamPacketExportRows({
-        supabaseAdmin,
-        orgId,
-        propertyId: resolvedPropertyId,
-        fiscalYear: resolvedFiscalYear,
-        propertyName,
-        camSnapshot: snapshot,
-        leaseId: lease_id ?? null,
-      });
-    } else if (export_type === "budget") {
+    if (export_type === "budget") {
       rows = await buildBudgetExportRows({
         supabaseAdmin,
         orgId,
@@ -1391,8 +1194,18 @@ Deno.serve(async (req: Request) => {
     );
   } catch (err) {
     console.error("[export-data] Error:", err.message);
-    
-    // For 'No data found' errors, return a 200 with error: true so 
+
+    if (err.message?.includes("LEGACY_CAM_ENGINE_RETIRED")) {
+      return new Response(
+        JSON.stringify({ error: true, message: err.message, code: "LEGACY_CAM_ENGINE_RETIRED" }),
+        {
+          status: 410,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+
+    // For 'No data found' errors, return a 200 with error: true so
     // the frontend can gracefully show a toast instead of a 400 crash
     if (err.message?.includes("No data found")) {
       return new Response(
