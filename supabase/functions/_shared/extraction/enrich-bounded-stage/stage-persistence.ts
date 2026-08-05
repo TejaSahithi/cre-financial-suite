@@ -18,7 +18,7 @@
  * assembleCanonicalFields() already consumes, unchanged.
  */
 
-import type { EnrichBoundedStageName } from "./stage-sequence.ts";
+import { ENRICH_STAGE_SEQUENCE, type EnrichBoundedStageName } from "./stage-sequence.ts";
 
 export type BoundedStageStatus = "completed" | "failed" | "incomplete";
 
@@ -132,7 +132,40 @@ export function priorStagesResolved(results: BoundedStageResults, sequenceUpToEx
     return entry != null && entry.status !== "failed";
   });
 }
+export function boundedStageEntryCompletedForGeneration(entry: any, generationId: string | null) {
+  return entry?.status === "completed" &&
+    entry?.generation_id === generationId &&
+    entry?.stage_version === STAGE_RESULT_VERSION;
+}
 
+export function resolveNextBoundedEnrichStageToResume(args: {
+  results: BoundedStageResults;
+  generationId: string | null;
+  sequence?: readonly EnrichBoundedStageName[];
+}): EnrichBoundedStageName | null {
+  const { results, generationId, sequence = ENRICH_STAGE_SEQUENCE } = args;
+  const stages = [...sequence];
+  if (stages.length === 0) return null;
+
+  const finalStage = stages[stages.length - 1];
+  if (boundedStageEntryCompletedForGeneration(results[finalStage], generationId)) return null;
+
+  for (const stage of stages) {
+    const entry = results[stage];
+    if (entry?.status === "failed" && entry?.generation_id === generationId && entry?.stage_version === STAGE_RESULT_VERSION) {
+      return null;
+    }
+  }
+
+  let lastCompletedIndex = -1;
+  for (let index = 0; index < stages.length; index += 1) {
+    if (boundedStageEntryCompletedForGeneration(results[stages[index]], generationId)) {
+      lastCompletedIndex = index;
+    }
+  }
+
+  return stages[lastCompletedIndex + 1] ?? null;
+}
 /**
  * Idempotency guard: a stage handler must call this BEFORE doing any real
  * work (no recompute, no Azure/OpenAI calls, no duplicate persistence) --

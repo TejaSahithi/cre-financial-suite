@@ -11,7 +11,7 @@ import {
   summarizeNormalizedOutput,
 } from "./status-utils.ts";
 import { ENRICH_STAGE_SEQUENCE } from "../_shared/extraction/enrich-bounded-stage/stage-sequence.ts";
-import { readBoundedStageResults, STAGE_RESULT_VERSION } from "../_shared/extraction/enrich-bounded-stage/stage-persistence.ts";
+import { readBoundedStageResults, resolveNextBoundedEnrichStageToResume } from "../_shared/extraction/enrich-bounded-stage/stage-persistence.ts";
 import { enqueueBoundedEnrichStage } from "../_shared/extraction/enrich-bounded-stage/dispatch.ts";
 
 const FULL_FILE_SELECT = [
@@ -203,11 +203,6 @@ function isLeaseLikeModule(moduleType: unknown) {
   return /lease/i.test(String(moduleType ?? ""));
 }
 
-function boundedStageEntryCompletedForGeneration(entry: any, generationId: string | null) {
-  return entry?.status === "completed" &&
-    entry?.generation_id === generationId &&
-    entry?.stage_version === STAGE_RESULT_VERSION;
-}
 
 async function maybeResumeBoundedEnrichment(supabaseAdmin: any, record: Record<string, any>, orgId: string) {
   const fileId = record?.id;
@@ -218,8 +213,6 @@ async function maybeResumeBoundedEnrichment(supabaseAdmin: any, record: Record<s
   if (!["", "pending"].includes(enrichmentState) && !["", "pending"].includes(readiness)) return null;
 
   const results = readBoundedStageResults(record?.normalized_output);
-  if (boundedStageEntryCompletedForGeneration(results.enrich_truth_assembly, generationId)) return null;
-
   const { data: activeJobs, error: activeError } = await supabaseAdmin
     .from("pipeline_jobs")
     .select("id, stage, status, created_at")
@@ -231,22 +224,8 @@ async function maybeResumeBoundedEnrichment(supabaseAdmin: any, record: Record<s
     .limit(1);
   if (activeError || (Array.isArray(activeJobs) && activeJobs.length > 0)) return null;
 
-  let nextStage = null;
-  for (const stage of ENRICH_STAGE_SEQUENCE) {
-    const entry = results[stage];
-    if (entry?.status === "failed") return null;
-    if (!boundedStageEntryCompletedForGeneration(entry, generationId)) {
-      nextStage = stage;
-      break;
-    }
-  }
+  const nextStage = resolveNextBoundedEnrichStageToResume({ results, generationId, sequence: ENRICH_STAGE_SEQUENCE });
   if (!nextStage) return null;
-
-  const nextIndex = ENRICH_STAGE_SEQUENCE.indexOf(nextStage);
-  const priorResolved = ENRICH_STAGE_SEQUENCE.slice(0, nextIndex).every((stage) =>
-    boundedStageEntryCompletedForGeneration(results[stage], generationId)
-  );
-  if (!priorResolved) return null;
 
   const enqueued = await enqueueBoundedEnrichStage({
     supabaseAdmin,

@@ -31,6 +31,7 @@ import {
   isStageAlreadyCompleted,
   mergeBoundedStageResult,
   readBoundedStageResults,
+  resolveNextBoundedEnrichStageToResume,
   STAGE_RESULT_VERSION,
 } from "../_shared/extraction/enrich-bounded-stage/stage-persistence.ts";
 import { enqueueBoundedEnrichStage } from "../_shared/extraction/enrich-bounded-stage/dispatch.ts";
@@ -150,6 +151,45 @@ function makeMockSupabase(
 // ===========================================================================
 // 1. Exact stage order
 // ===========================================================================
+Deno.test("enrich-bounded-stages: resume continues after latest completed stage when older stage entries are missing", () => {
+  const generationId = "gen-stuck-after-rent";
+  const completed = (stage: string) => ({
+    status: "completed",
+    generation_id: generationId,
+    stage_version: STAGE_RESULT_VERSION,
+    completed_at: "2026-08-05T18:00:00.000Z",
+    data: { stage },
+  });
+
+  const nextStage = resolveNextBoundedEnrichStageToResume({
+    generationId,
+    results: {
+      enrich_derivation: completed("enrich_derivation"),
+      enrich_evidence_core_terms: completed("enrich_evidence_core_terms"),
+      enrich_evidence_rent_and_charges: completed("enrich_evidence_rent_and_charges"),
+    },
+  });
+
+  assertEquals(nextStage, "enrich_evidence_expenses_recoveries");
+});
+
+Deno.test("enrich-bounded-stages: resume stops once truth assembly is complete", () => {
+  const generationId = "gen-complete";
+  const nextStage = resolveNextBoundedEnrichStageToResume({
+    generationId,
+    results: {
+      enrich_truth_assembly: {
+        status: "completed",
+        generation_id: generationId,
+        stage_version: STAGE_RESULT_VERSION,
+        completed_at: "2026-08-05T18:00:00.000Z",
+        data: {},
+      },
+    },
+  });
+
+  assertEquals(nextStage, null);
+});
 Deno.test("enrich-bounded-stages: exact stage order -- Expenses/CAM is split into sub-stages, then reduced back to the canonical domain", () => {
   assertEquals(ENRICH_STAGE_SEQUENCE, [
     "enrich_clauses",
