@@ -1,4 +1,4 @@
-﻿import {
+import {
   toNumber,
   asNumberOrNull,
   normalizeText,
@@ -53,6 +53,7 @@ import {
   getRuleCamExclusionReason,
   getRuleClassificationExclusionReason,
   isActualClassificationEligible,
+  isLeaseDerivedRule,
   isRuleCamEligible,
   isRuleClassificationEligible,
 } from "@/lib/expenseEligibility";
@@ -1198,8 +1199,13 @@ async function fetchApprovedClassificationRules(scope = {}) {
   const accessiblePropertyIds = new Set((leases || []).map((lease) => lease.property_id).filter(Boolean));
   const accessibleTenantIds = new Set((leases || []).map((lease) => lease.tenant_id).filter(Boolean));
 
+  // Only rules extracted directly from the lease document are eligible for
+  // classification matching. Coverage-gap / checklist rules (those that do
+  // NOT pass isLeaseDerivedRule) must never be used to match actual expenses
+  // — they are reviewed on the LeaseExpenseRules "Coverage Gaps" tab, not
+  // consumed by the classification engine.
   const allApprovedRules = (data || [])
-    .filter((rule) => isStrictlyApprovedLeaseRule(rule))
+    .filter((rule) => isStrictlyApprovedLeaseRule(rule) && isLeaseDerivedRule(rule))
     .map((rule) => hydrateClassificationRule(rule, { leaseById, unitById, ruleSetById }));
 
   const accessibleApprovedRules = allApprovedRules.filter((rule) => {
@@ -3272,12 +3278,20 @@ export const expenseService = {
       ? approvedRules.length
       : (rulesResult.classificationEligibleCount ?? approvedRules.length);
 
+    // Detect unlinked actuals: approved actual expenses that have no lease_id.
+    // These cannot auto-match to any rule (matching requires a lease scope).
+    // Surfacing this flag lets the Classification page show an actionable warning
+    // directing users to link expenses to leases from the Actual Expenses page.
+    const unlinkedActualsCount = approvedActuals.filter((actual) => !actual.lease_id).length;
+
     return {
       approvedRules,
       approvedActuals,
       existingClassifications,
       ruleExclusions,
       actualExclusions,
+      hasUnlinkedExpenses: unlinkedActualsCount > 0,
+      unlinkedActualsCount,
       summary: {
         rulesCount: approvedRules.length,
         classificationEligibleCount,
@@ -3287,6 +3301,7 @@ export const expenseService = {
         rawApprovedActualsCount,
         rulesExcludedCount: rawApprovedRulesCount - approvedRules.length,
         actualsExcludedCount: rawApprovedActualsCount - approvedActuals.length,
+        unlinkedActualsCount,
       },
     };
   },

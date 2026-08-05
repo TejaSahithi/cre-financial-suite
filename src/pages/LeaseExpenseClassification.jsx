@@ -200,6 +200,8 @@ export default function LeaseExpenseClassification() {
   const ruleExclusions = workspace.ruleExclusions || {};
   const actualExclusions = workspace.actualExclusions || {};
   const workspaceSummary = workspace.summary || {};
+  const hasUnlinkedExpenses = workspace.hasUnlinkedExpenses || false;
+  const unlinkedActualsCount = workspace.unlinkedActualsCount || 0;
   const [showClassificationDebug, setShowClassificationDebug] = useState(false);
 
   const rows = useMemo(() => {
@@ -751,6 +753,26 @@ export default function LeaseExpenseClassification() {
           </div>
         )}
 
+        {!isLoading && hasUnlinkedExpenses && (
+          <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-900">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+            <div className="flex-1">
+              <p className="text-sm font-semibold">Some Expenses Are Not Linked to a Lease</p>
+              <p className="mt-1 text-xs text-amber-700">
+                {unlinkedActualsCount} approved expense{unlinkedActualsCount === 1 ? '' : 's'} have no lease linked.
+                These cannot be automatically matched to lease rules. Open each expense on the{' '}
+                <button
+                  className="font-semibold underline"
+                  onClick={() => navigate(createPageUrl("Expenses"))}
+                >
+                  Actual Expenses
+                </button>
+                {' '}page and set the Lease field to enable matching.
+              </p>
+            </div>
+          </div>
+        )}
+
         {import.meta.env.DEV && diagnostics && (
           <Card className="border-dashed border-slate-300 bg-slate-50">
             <CardContent className="space-y-3 p-4 text-xs text-slate-700">
@@ -1109,8 +1131,13 @@ export default function LeaseExpenseClassification() {
                                 {humanize(row.camEligible)}
                               </Badge>
                               <p className="mt-1 text-[11px] text-slate-500">{row.camDecision}</p>
-                              {!readiness.alreadyPublished && readiness.blockers.length > 0 && (
-                                <p className="mt-0.5 text-[10px] text-rose-500">{readiness.blockers.length} blocker{readiness.blockers.length === 1 ? "" : "s"} — hover for detail</p>
+                              {/* Only show red blockers for matched rows — rule_missing_actual (coverage gaps)
+                                  are expected gaps, not errors, so blockers are suppressed to reduce noise. */}
+                              {row.rowType !== "rule_missing_actual" && !readiness.alreadyPublished && readiness.blockers.length > 0 && (
+                                <p className="mt-0.5 text-[10px] text-rose-500">{readiness.blockers.length} blocker{readiness.blockers.length === 1 ? '' : 's'} — hover for detail</p>
+                              )}
+                              {row.rowType === "rule_missing_actual" && (
+                                <p className="mt-0.5 text-[10px] text-slate-400">Provide CAM rule amount</p>
                               )}
                             </TableCell>
                             <TableCell className="max-w-[200px]" title={row.message}>
