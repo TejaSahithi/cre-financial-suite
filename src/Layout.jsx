@@ -180,9 +180,9 @@ export default function Layout({ children, currentPageName }) {
   const { enabledModules, pageAccess } = useModuleAccess();
   const allowedPageNames = Object.keys(pageAccess || {}).filter(Boolean);
   const baseNav = allowedPageNames.length > 0
-    ? filterNavForAllowedPages(navSections, allowedPageNames)
-    : filterNavForRole(navSections, user?.role);
-  const visibleNav = filterNavForModules(baseNav, enabledModules);
+    ? filterNavForAllowedPages(navSections, allowedPageNames, user)
+    : filterNavForRole(navSections, user?.role, user);
+  const visibleNav = filterNavForModules(baseNav, enabledModules, user);
   const currentPageLabel = PAGE_LABELS[currentPageName] || currentPageName;
 
   // Handle unauthenticated state if on a protected page

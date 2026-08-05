@@ -68,10 +68,13 @@ export function getModuleForPage(pageName) {
   return null;
 }
 
+import { isSuperAdmin } from "@/lib/rbac";
+
 /**
  * Filter nav sections based on enabled modules.
  */
-export function filterNavForModules(navSections, enabledModules) {
+export function filterNavForModules(navSections, enabledModules, user = null) {
+  if (isSuperAdmin(user)) return navSections;
   const pages = getEnabledPages(enabledModules);
   if (pages === null) return navSections; // no restriction
   return navSections
