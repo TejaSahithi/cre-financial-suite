@@ -17,7 +17,7 @@ import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { __test__ } from "../_shared/extraction/whole-document-llm/extractor.ts";
 import { getSchema } from "../_shared/extraction/schemas.ts";
 
-const { maxSectionFailureRatio, mergeSectionedWholeDocumentResults } = __test__;
+const { maxSectionFailureRatio, mergeSectionedWholeDocumentResults, shouldRetryDirectWholeDocumentWithSectioned } = __test__;
 
 const FIELDS = Object.entries(getSchema("lease"))
   .filter(([, def]) => !(def as any).derived)
@@ -96,6 +96,49 @@ function failedSection(classification: string, finishReason: string | null = nul
   };
 }
 
+Deno.test("direct whole-document incomplete response retries with sectioned extraction", () => {
+  const result = {
+    rows: [],
+    method: "fallback",
+    warnings: [],
+    validationErrors: [],
+    metadata: {
+      extractionDebug: {
+        openai_fact_ledger: {
+          extraction_mode: "whole_document_llm_v2",
+          architecture: "llm_direct_schema",
+          invalid_or_omitted_claim_count: 46,
+          facts_extracted_count: 0,
+          facts_mapped_count: 0,
+        },
+      },
+    },
+  };
+
+  assertEquals(shouldRetryDirectWholeDocumentWithSectioned(result), true);
+});
+
+Deno.test("direct whole-document valid rows do not retry with sectioned extraction", () => {
+  const result = {
+    rows: [{ tenant_name: "Mindful Tech Solutions, Inc." }],
+    method: "llm_only",
+    warnings: [],
+    validationErrors: [],
+    metadata: {
+      extractionDebug: {
+        openai_fact_ledger: {
+          extraction_mode: "whole_document_llm_v2",
+          architecture: "llm_direct_schema",
+          invalid_or_omitted_claim_count: 2,
+          facts_extracted_count: 1,
+          facts_mapped_count: 1,
+        },
+      },
+    },
+  };
+
+  assertEquals(shouldRetryDirectWholeDocumentWithSectioned(result), false);
+});
 Deno.test("section failure ratio: default is strict (any section failure fails)", () => {
   assertEquals(maxSectionFailureRatio(), 0);
 });

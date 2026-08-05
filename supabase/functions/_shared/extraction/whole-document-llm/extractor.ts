@@ -101,6 +101,60 @@ function maxWholeDocumentOutputTokens(): number {
     : 16_384;
 }
 
+function sectionedRetryAfterDirectFailureEnabled(): boolean {
+  return (Deno.env.get("LEASE_WHOLE_DOCUMENT_LLM_SECTIONED_RETRY_ON_INCOMPLETE") ?? "true").trim().toLowerCase() !== "false";
+}
+
+function rowHasMeaningfulScalarValue(row: Record<string, unknown> | null | undefined): boolean {
+  if (!row || typeof row !== "object") return false;
+  for (const [key, value] of Object.entries(row)) {
+    if (key.startsWith("_")) continue;
+    if (value == null) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
+    if (Array.isArray(value) && value.length === 0) continue;
+    if (typeof value === "object") continue;
+    return true;
+  }
+  return false;
+}
+
+function shouldRetryDirectWholeDocumentWithSectioned(result: ExtractionPipelineResult): boolean {
+  if (!sectionedRetryAfterDirectFailureEnabled()) return false;
+  const debug = (result.metadata as any)?.extractionDebug?.openai_fact_ledger ?? null;
+  if (debug?.extraction_mode !== "whole_document_llm_v2") return false;
+  if (debug?.architecture && debug.architecture !== "llm_direct_schema") return false;
+  const noUsableRows = !Array.isArray(result.rows) || result.rows.length === 0 || !result.rows.some((row) => rowHasMeaningfulScalarValue(row as Record<string, unknown>));
+  if (!noUsableRows) return false;
+
+  const classification = String(debug?.failure_classification ?? "").trim();
+  if (["STRICT_RESPONSE_MASS_OMISSION", "RESPONSE_TRUNCATED"].includes(classification)) return true;
+
+  const invalidOrOmittedCount = Number(debug?.invalid_or_omitted_claim_count ?? 0);
+  const factsExtractedCount = Number(debug?.facts_extracted_count ?? 0);
+  const factsMappedCount = Number(debug?.facts_mapped_count ?? 0);
+  return invalidOrOmittedCount > 0 && factsExtractedCount === 0 && factsMappedCount === 0;
+}
+
+function mergeDirectRetryDiagnostics(sectionedResult: ExtractionPipelineResult, directResult: ExtractionPipelineResult): ExtractionPipelineResult {
+  const directDebug = (directResult.metadata as any)?.extractionDebug?.openai_fact_ledger ?? {};
+  const result = { ...sectionedResult, metadata: { ...(sectionedResult.metadata as any) } } as any;
+  result.warnings = [
+    "Direct whole-document LLM response was incomplete; retried with sectioned extraction.",
+    ...(directResult.warnings ?? []),
+    ...(sectionedResult.warnings ?? []),
+  ];
+  result.metadata.extractionDebug = { ...(result.metadata.extractionDebug ?? {}) };
+  result.metadata.extractionDebug.openai_fact_ledger = {
+    ...(result.metadata.extractionDebug.openai_fact_ledger ?? {}),
+    direct_retry: {
+      reason: directDebug.failure_classification ?? "invalid_or_omitted_claims",
+      invalid_or_omitted_claim_count: directDebug.invalid_or_omitted_claim_count ?? null,
+      facts_extracted_count: directDebug.facts_extracted_count ?? null,
+      facts_mapped_count: directDebug.facts_mapped_count ?? null,
+    },
+  };
+  return result;
+}
 function failureResult(
   startedAt: number,
   message: string,
@@ -1655,7 +1709,7 @@ export async function runWholeDocumentLlmPipeline(
     });
   }
 
-  return await runWholeDocumentLlmOnCompact({
+  const directResult = await runWholeDocumentLlmOnCompact({
     document: compact,
     moduleType: args.moduleType,
     fields,
@@ -1666,6 +1720,21 @@ export async function runWholeDocumentLlmPipeline(
     operation: "whole_document_lease_extraction_v2",
     section: null,
   });
+
+  if (shouldRetryDirectWholeDocumentWithSectioned(directResult)) {
+    const sectionedResult = await runSectionedWholeDocumentLlmPipeline({
+      baseArgs: args,
+      compact,
+      fields,
+      systemPrompt,
+      startedAt,
+      maxInputChars,
+      originalPromptChars,
+    });
+    return mergeDirectRetryDiagnostics(sectionedResult, directResult);
+  }
+
+  return directResult;
 }
 
 export const __test__ = {
@@ -1682,4 +1751,5 @@ export const __test__ = {
   buildExpenseRuleCandidates,
   buildCompactSections,
   mergeSectionedWholeDocumentResults,
+  shouldRetryDirectWholeDocumentWithSectioned,
 };
