@@ -12,7 +12,7 @@ import {
 } from "./status-utils.ts";
 import { ENRICH_STAGE_SEQUENCE } from "../_shared/extraction/enrich-bounded-stage/stage-sequence.ts";
 import { readBoundedStageResults, resolveNextBoundedEnrichStageToResume } from "../_shared/extraction/enrich-bounded-stage/stage-persistence.ts";
-import { enqueueBoundedEnrichStage } from "../_shared/extraction/enrich-bounded-stage/dispatch.ts";
+import { dispatchBoundedEnrichStageWorker, enqueueBoundedEnrichStage } from "../_shared/extraction/enrich-bounded-stage/dispatch.ts";
 
 const FULL_FILE_SELECT = [
   "id",
@@ -204,6 +204,29 @@ function isLeaseLikeModule(moduleType: unknown) {
 }
 
 
+const BOUNDED_ENRICH_QUEUED_REDISPATCH_AFTER_MS = 30_000;
+const BOUNDED_ENRICH_RUNNING_REDISPATCH_AFTER_MS = 10 * 60_000;
+
+function ageMs(value: unknown, now = Date.now()) {
+  const parsed = Date.parse(String(value ?? ""));
+  return Number.isFinite(parsed) ? now - parsed : Number.POSITIVE_INFINITY;
+}
+
+function activeBoundedJobRedispatchReason(job: Record<string, any>, now = Date.now()) {
+  const status = String(job?.status ?? "").toLowerCase();
+  const freshestTimestamp = job?.updated_at ?? job?.started_at ?? job?.created_at ?? job?.available_at;
+  const queuedTimestamp = job?.available_at ?? job?.created_at ?? job?.updated_at;
+  const jobAgeMs = status === "queued" ? ageMs(queuedTimestamp, now) : ageMs(freshestTimestamp, now);
+
+  if (status === "queued" && jobAgeMs >= BOUNDED_ENRICH_QUEUED_REDISPATCH_AFTER_MS) {
+    return { reason: "queued_dispatch_not_durable", age_ms: jobAgeMs };
+  }
+  if (status === "running" && jobAgeMs >= BOUNDED_ENRICH_RUNNING_REDISPATCH_AFTER_MS) {
+    return { reason: "running_worker_stale_reclaim", age_ms: jobAgeMs };
+  }
+  return null;
+}
+
 async function maybeResumeBoundedEnrichment(supabaseAdmin: any, record: Record<string, any>, orgId: string) {
   const fileId = record?.id;
   const generationId = record?.active_generation_id ?? null;
@@ -215,14 +238,33 @@ async function maybeResumeBoundedEnrichment(supabaseAdmin: any, record: Record<s
   const results = readBoundedStageResults(record?.normalized_output);
   const { data: activeJobs, error: activeError } = await supabaseAdmin
     .from("pipeline_jobs")
-    .select("id, stage, status, created_at")
+    .select("id, stage, status, attempt, max_attempts, available_at, started_at, created_at, updated_at")
     .eq("uploaded_file_id", fileId)
     .eq("org_id", orgId)
     .eq("generation_id", generationId)
     .like("stage", "enrich_%")
     .in("status", ["queued", "running"])
+    .order("created_at", { ascending: true })
     .limit(1);
-  if (activeError || (Array.isArray(activeJobs) && activeJobs.length > 0)) return null;
+
+  if (activeError) return null;
+
+  const activeJob = Array.isArray(activeJobs) ? activeJobs[0] : null;
+  if (activeJob) {
+    const redispatch = activeBoundedJobRedispatchReason(activeJob);
+    if (!redispatch) return null;
+
+    dispatchBoundedEnrichStageWorker(activeJob.id);
+    return {
+      resumed_stage: activeJob.stage,
+      job_id: activeJob.id,
+      existing: true,
+      redispatched: true,
+      redispatch_reason: redispatch.reason,
+      redispatch_age_ms: redispatch.age_ms,
+      job_status: activeJob.status,
+    };
+  }
 
   const nextStage = resolveNextBoundedEnrichStageToResume({ results, generationId, sequence: ENRICH_STAGE_SEQUENCE });
   if (!nextStage) return null;
