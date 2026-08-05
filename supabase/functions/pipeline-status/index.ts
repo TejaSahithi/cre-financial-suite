@@ -227,6 +227,31 @@ function activeBoundedJobRedispatchReason(job: Record<string, any>, now = Date.n
   return null;
 }
 
+function normalizedOutputReadyForBoundedEnrichment(record: Record<string, any>, generationId: string | null) {
+  const normalizedOutput = record?.normalized_output;
+  if (!normalizedOutput || typeof normalizedOutput !== "object" || !Array.isArray(normalizedOutput.rows)) {
+    return false;
+  }
+  const normalizedGenerationId = normalizedOutput?.metadata?.generation_id ?? null;
+  return Boolean(normalizedGenerationId && generationId && normalizedGenerationId === generationId);
+}
+
+async function findActiveNormalizePrerequisite(supabaseAdmin: any, fileId: string, orgId: string, generationId: string) {
+  const { data, error } = await supabaseAdmin
+    .from("pipeline_jobs")
+    .select("id, stage, status, available_at, started_at, created_at, updated_at")
+    .eq("uploaded_file_id", fileId)
+    .eq("org_id", orgId)
+    .eq("generation_id", generationId)
+    .in("stage", ["parse", "normalize"])
+    .in("status", ["queued", "running"])
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  if (error) return null;
+  return Array.isArray(data) ? data[0] ?? null : null;
+}
+
 async function maybeResumeBoundedEnrichment(supabaseAdmin: any, record: Record<string, any>, orgId: string) {
   const fileId = record?.id;
   const generationId = record?.active_generation_id ?? null;
@@ -234,6 +259,19 @@ async function maybeResumeBoundedEnrichment(supabaseAdmin: any, record: Record<s
   const readiness = String(record?.review_readiness ?? "").toLowerCase();
   if (!fileId || !generationId || !isLeaseLikeModule(record?.module_type)) return null;
   if (!["", "pending"].includes(enrichmentState) && !["", "pending"].includes(readiness)) return null;
+
+  const prerequisiteJob = await findActiveNormalizePrerequisite(supabaseAdmin, fileId, orgId, generationId);
+  if (prerequisiteJob) {
+    return {
+      waiting_for_stage: prerequisiteJob.stage,
+      job_id: prerequisiteJob.id,
+      job_status: prerequisiteJob.status,
+    };
+  }
+
+  if (!normalizedOutputReadyForBoundedEnrichment(record, generationId)) {
+    return { waiting_for_stage: "normalize", reason: "normalized_output_not_ready" };
+  }
 
   const results = readBoundedStageResults(record?.normalized_output);
   const { data: activeJobs, error: activeError } = await supabaseAdmin
@@ -290,6 +328,13 @@ async function maybeResumeBoundedEnrichment(supabaseAdmin: any, record: Record<s
   });
   return enqueued?.id ? { resumed_stage: nextStage, job_id: enqueued.id, existing: !!enqueued.existing } : null;
 }
+
+export const __test__ = {
+  activeBoundedJobRedispatchReason,
+  findActiveNormalizePrerequisite,
+  maybeResumeBoundedEnrichment,
+  normalizedOutputReadyForBoundedEnrichment,
+};
 async function fetchRecentLogs(supabaseAdmin: any, fileId: string, orgId: string) {
   const { data, error } = await supabaseAdmin
     .from("pipeline_logs")
