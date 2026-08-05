@@ -340,6 +340,17 @@ function formatFileRecord(record: Record<string, any>, extras: Record<string, an
         facts_unmapped_count: openaiFactLedgerDebug.facts_unmapped_count ?? null,
         mapped_non_null_field_count: openaiFactLedgerDebug.mapped_non_null_field_count ?? null,
         invalid_or_omitted_claim_count: openaiFactLedgerDebug.invalid_or_omitted_claim_count ?? null,
+        // Split the above into its two very different causes: an omitted field
+        // means the model never mentioned it (truncated/abandoned answer),
+        // which is diagnostically nothing like a wrong value. finish_reason
+        // "length" is the direct truncation signal.
+        omitted_field_count: openaiFactLedgerDebug.omitted_field_count ?? null,
+        omitted_field_ratio: openaiFactLedgerDebug.omitted_field_ratio ?? null,
+        max_omitted_field_ratio: openaiFactLedgerDebug.max_omitted_field_ratio ?? null,
+        finish_reason: openaiFactLedgerDebug.finish_reason ?? null,
+        schema_field_count: openaiFactLedgerDebug.schema_field_count ?? null,
+        max_output_tokens: openaiFactLedgerDebug.max_output_tokens ?? null,
+        output_tokens: openaiFactLedgerDebug.output_tokens ?? null,
         failure_classification: openaiFactLedgerDebug.failure_classification ?? null,
         failure_http_status: openaiFactLedgerDebug.failure_http_status ?? null,
         document_index_source: openaiFactLedgerDebug.document_index_source ?? null,
