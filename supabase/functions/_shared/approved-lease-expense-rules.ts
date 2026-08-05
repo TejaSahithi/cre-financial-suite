@@ -217,6 +217,9 @@ function categoriesFromEvidence(item: any, text: string): string[] {
   for (const entry of FALLBACK_EXPENSE_CATEGORY_PATTERNS) {
     if (entry.patterns.some((pattern) => pattern.test(text))) categories.add(entry.category);
   }
+  if (categories.has("common_area_maintenance") && /\b(?:cam|common\s+area\s+maintenance)\b/i.test(text)) {
+    categories.delete("repairs_maintenance");
+  }
   return [...categories];
 }
 
@@ -926,6 +929,55 @@ async function promoteApprovedLeaseRuleRows(supabaseAdmin: any, orgId: string, l
 
   return { approved, published_to_cam: publishedToCam, rule_sets_approved: ruleSetsApproved };
 }
+async function materializeApprovedLeaseRecoveryPolicies(
+  supabaseAdmin: any,
+  orgId: string,
+  lease: any,
+  actorUserId: string | null,
+  actorEmail: string | null,
+) {
+  if (!actorUserId) {
+    return {
+      created: 0,
+      reused: 0,
+      blocked: 0,
+      blocked_examples: [{ reason: "actor_user_id_required" }],
+    };
+  }
+
+  const { data: rows, error } = await supabaseAdmin
+    .from("lease_expense_rules")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("lease_id", lease.id)
+    .eq("approval_status", "approved");
+  if (error) throw new Error(`Could not load approved rules for CAM policy materialization: ${error.message}`);
+
+  let created = 0;
+  let reused = 0;
+  let blocked = 0;
+  const blockedExamples: any[] = [];
+
+  for (const row of asArray(rows)) {
+    const ruleId = cleanText(row?.id);
+    if (!UUID_RE.test(ruleId)) continue;
+    const { data, error: materializeError } = await supabaseAdmin.rpc("materialize_lease_recovery_policy", {
+      p_org_id: orgId,
+      p_rule_id: ruleId,
+      p_actor_user_id: actorUserId,
+      p_actor_email: actorEmail,
+    });
+    if (materializeError) {
+      blocked += 1;
+      blockedExamples.push({ rule_id: ruleId, reason: materializeError.message || "materialization_failed" });
+      continue;
+    }
+    if (data?.already_materialized === true) reused += 1;
+    else created += 1;
+  }
+
+  return { created, reused, blocked, blocked_examples: blockedExamples };
+}
 async function persistCamProfile(_supabaseAdmin: any, _orgId: string, _lease: any, camProfile: any) {
   if (!isObject(camProfile)) return { persisted: false };
   // cam-legacy-scan-allow: retirement telemetry, not a live reference.
@@ -982,6 +1034,13 @@ export async function publishApprovedLeaseExpenseArtifacts({
       )
       : { persisted: false, error: null };
     const promotion = await promoteApprovedLeaseRuleRows(supabaseAdmin, orgId, lease, actorUserId);
+    const camPolicies = await materializeApprovedLeaseRecoveryPolicies(
+      supabaseAdmin,
+      orgId,
+      lease,
+      actorUserId,
+      actorEmail,
+    );
     return {
       status: "already_persisted",
       lease_id: lease.id,
@@ -992,7 +1051,11 @@ export async function publishApprovedLeaseExpenseArtifacts({
       rules_generated: 0,
       rules_approved: promotion.approved,
       rules_published_to_cam: promotion.published_to_cam,
-            rule_sets_approved: promotion.rule_sets_approved,
+      rule_sets_approved: promotion.rule_sets_approved,
+      cam_policies_materialized: camPolicies.created,
+      cam_policies_reused: camPolicies.reused,
+      cam_policies_blocked: camPolicies.blocked,
+      cam_policy_blocked_examples: camPolicies.blocked_examples,
       regenerated: false,
       expense_rule_source: expenseRuleSource || null,
       reason: hasPublishableWorkflowExpenseRules
@@ -1086,6 +1149,13 @@ export async function publishApprovedLeaseExpenseArtifacts({
   if (saveError) throw new Error(`Could not persist approved lease expense rules: ${saveError.message}`);
 
   const promotion = await promoteApprovedLeaseRuleRows(supabaseAdmin, orgId, lease, actorUserId);
+  const camPolicies = await materializeApprovedLeaseRecoveryPolicies(
+    supabaseAdmin,
+    orgId,
+    lease,
+    actorUserId,
+    actorEmail,
+  );
 
   return {
     status: "persisted",
@@ -1100,6 +1170,10 @@ export async function publishApprovedLeaseExpenseArtifacts({
     rules_approved: promotion.approved,
     rules_published_to_cam: promotion.published_to_cam,
     rule_sets_approved: promotion.rule_sets_approved,
+    cam_policies_materialized: camPolicies.created,
+    cam_policies_reused: camPolicies.reused,
+    cam_policies_blocked: camPolicies.blocked,
+    cam_policy_blocked_examples: camPolicies.blocked_examples,
     rule_set_id: saved?.rule_set_id ?? existingSet?.id ?? null,
     regenerated: false,
     expense_rule_source: expenseRuleSource || (rawDocumentFallbackRules.length > 0 ? "typescript_schema_raw_document_fallback" : null),
@@ -1116,6 +1190,7 @@ export const __test__ = {
   prepareRulePayload,
   dedupePreparedRules,
   resolveExpenseCategoryIds,
+  materializeApprovedLeaseRecoveryPolicies,
   isSourceBackedExpenseRule,
   shouldPublishWorkflowExpenseRules,
   fallbackExpenseRulesFromWorkflowEvidence,

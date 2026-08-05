@@ -722,6 +722,27 @@ function sourceEvidenceMustContainValue(fieldKey: string, fieldType?: string) {
     /(?:rent|amount|deposit|fee|percent|pct|rate|cap|share|rsf|sqft|sf|months|days|date)$/i.test(fieldKey) ||
     /^(?:monthly_rent|annual_rent|rent_per_sf|security_deposit|square_footage|building_rsf|lease_term_months|renewal_notice_months|termination_notice_months|escalation_rate|cam_amount|cam_cap_pct|admin_fee_pct|gross_up_threshold)$/.test(fieldKey);
 }
+
+function isBareClauseReferenceValue(value: unknown) {
+  const text = cleanEvidenceSnippet(value);
+  if (!text) return false;
+  return /^(?:(?:section|article|paragraph|para\.?|sec\.?)\s*)?\d{1,3}(?:\.\d{1,3}){0,2}\s*[.)]?$/i.test(text);
+}
+
+function shouldPromoteBareReferenceField(fieldKey: string, fieldType?: string, description?: unknown) {
+  if (fieldType && fieldType !== "string") return false;
+  if (/(?:^|_)(?:name|address|phone|email|date|amount|rent|deposit|fee|percent|pct|rate|months|days|number|rsf|sqft|sf|floor|unit|suite|type|status)(?:_|$)/i.test(fieldKey)) return false;
+  const haystack = `${fieldKey} ${String(description ?? "")}`.toLowerCase();
+  return /(?:clause|provision|responsibil|rights?|scope|description|maintenance|repair|default|remed|renewal|termination|notice|assignment|sublett|consent|parking|hazardous|casualty|damage|condemnation|force\s*majeure|guaranty|waiver|indemnif|surrender|estoppel|signage|utilities|tax|insurance|cam|expense|legal|option)/i.test(haystack);
+}
+
+function promoteBareReferenceFromSource(sourceText: unknown) {
+  const text = capSourceText(String(sourceText ?? ""), 520);
+  if (!text) return null;
+  return text
+    .replace(/^(?:(?:section|article|paragraph|para\.?|sec\.?)\s*)?\d{1,3}(?:\.\d{1,3}){0,2}\s*[.)]?\s*/i, "")
+    .trim() || text;
+}
 function expandEvidenceSnippet(text: string, matchStart: number, matchLength: number) {
   const snippet = boundedSourceSnippet(text, matchStart, matchLength);
   if (snippet) return { snippet, quality: "exact" as const };
@@ -1419,14 +1440,14 @@ function buildStandardFieldsForEntries(args: {
       const truthAssemblyPublishId = publishIdFor(fieldKey);
       const truthAssemblyResult = truthAssemblyCanonicalFields[truthAssemblyPublishId];
       const truthAssemblyActive = !!truthAssemblyResult && truthAssemblyResult.status !== "not_stated";
-      const effectiveValue = truthAssemblyActive ? truthAssemblyResult.value : value;
+      let effectiveValue = truthAssemblyActive ? truthAssemblyResult.value : value;
       const effectiveSourceText = truthAssemblyActive && truthAssemblyResult.sourceText != null ? truthAssemblyResult.sourceText : mergedSourceText;
       const effectiveSourcePage = truthAssemblyActive && truthAssemblyResult.sourcePage != null ? truthAssemblyResult.sourcePage : mergedSourcePage;
       const effectiveFieldConfidence = truthAssemblyActive
         ? (normalizeConfidence(truthAssemblyResult.confidenceComponents.final) ?? effectiveConfidence)
         : effectiveConfidence;
       const truthAssemblyHasOwnEvidence = truthAssemblyActive && (truthAssemblyResult.sourceText != null || truthAssemblyResult.sourcePage != null);
-      const effectiveStatus =
+      let effectiveStatus =
         truthAssemblyActive && truthAssemblyResult.status === "conflicting" ? "conflict_detected"
         : truthAssemblyActive && truthAssemblyResult.status === "needs_review" ? "needs_review"
         // A canonical "verified"/"derived_verified" result with its OWN
@@ -1438,6 +1459,18 @@ function buildStandardFieldsForEntries(args: {
         : truthAssemblyHasOwnEvidence && truthAssemblyResult.status === "derived_verified" ? "calculated"
         : truthAssemblyHasOwnEvidence && truthAssemblyResult.status === "verified" ? "extracted"
         : finalStatus;
+      const validationErrors = Array.isArray(workflowField?.validation_errors) ? [...workflowField.validation_errors] : [];
+      if (isBareClauseReferenceValue(effectiveValue)) {
+        if (shouldPromoteBareReferenceField(fieldKey, fieldType, def.description) && effectiveSourceText) {
+          effectiveValue = promoteBareReferenceFromSource(effectiveSourceText);
+          effectiveStatus = effectiveStatus === "extracted" ? "needs_review" : effectiveStatus;
+          validationErrors.push("Value was a section reference only; promoted display value from the supporting clause text for reviewer verification.");
+        } else if (!sourceTextSupportsValue(effectiveSourceText, effectiveValue, fieldKey, fieldType)) {
+          effectiveValue = null;
+          effectiveStatus = "missing";
+          validationErrors.push("Extracted value was only a section reference and was not supported as the field's actual value.");
+        }
+      }
 
       const truthAssemblyReviewField = buildReviewField({
         recordIndex: index,
@@ -1480,7 +1513,7 @@ function buildStandardFieldsForEntries(args: {
         decision: llmEvidence?.decision ?? null,
         status: effectiveStatus,
         editable: workflowField?.editable ?? true,
-        validationErrors: Array.isArray(workflowField?.validation_errors) ? workflowField.validation_errors : [],
+        validationErrors,
       });
       // Additive transparency fields -- new keys only, mirrors
       // buildMinimalReviewPayload's own equivalent addition.
@@ -3101,6 +3134,8 @@ async function handleBoundedEnrichStage(args: {
   const updates: Record<string, unknown> = { normalized_output: updatedNormalizedOutput, updated_at: new Date().toISOString() };
   if (stage === "enrich_truth_assembly") {
     updates.ui_review_payload = stageData.enriched_payload;
+    updates.enrichment_status = "completed";
+    updates.error_message = null;
   }
 
   const { error: persistError } = await supabaseAdmin.from("uploaded_files").update(updates).eq("id", fileId);

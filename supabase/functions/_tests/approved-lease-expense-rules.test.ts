@@ -271,3 +271,75 @@ Deno.test("approved publication fallback can build rules from stored raw documen
   assertEquals(rules[0].source_page, 7);
   assertEquals(__test__.isSourceBackedExpenseRule(rules[0]), true);
 });
+
+Deno.test("approved publication materializes approved lease rules into CAM policies", async () => {
+  const ruleOne = "11111111-1111-4111-8111-111111111111";
+  const ruleTwo = "22222222-2222-4222-8222-222222222222";
+  const calls: any[] = [];
+  const queryResult = (result: any) => {
+    const builder: any = {
+      select: () => builder,
+      eq: () => builder,
+      then: (resolve: any, reject: any) => Promise.resolve(result).then(resolve, reject),
+    };
+    return builder;
+  };
+  const supabaseAdmin = {
+    from: (table: string) => {
+      assertEquals(table, "lease_expense_rules");
+      return queryResult({ data: [{ id: ruleOne }, { id: ruleTwo }, { id: "not-a-uuid" }], error: null });
+    },
+    rpc: async (fn: string, args: any) => {
+      assertEquals(fn, "materialize_lease_recovery_policy");
+      calls.push(args);
+      if (args.p_rule_id === ruleTwo) {
+        return { data: null, error: { message: "effective date blocked" } };
+      }
+      return { data: { already_materialized: false }, error: null };
+    },
+  };
+
+  const result = await __test__.materializeApprovedLeaseRecoveryPolicies(
+    supabaseAdmin,
+    "33333333-3333-4333-8333-333333333333",
+    { id: "44444444-4444-4444-8444-444444444444" },
+    "55555555-5555-4555-8555-555555555555",
+    "approver@example.test",
+  );
+
+  assertEquals(calls.length, 2);
+  assertEquals(calls[0].p_rule_id, ruleOne);
+  assertEquals(calls[0].p_actor_email, "approver@example.test");
+  assertEquals(result.created, 1);
+  assertEquals(result.reused, 0);
+  assertEquals(result.blocked, 1);
+  assertEquals(result.blocked_examples, [{ rule_id: ruleTwo, reason: "effective date blocked" }]);
+});
+
+Deno.test("approved publication reports CAM materialization as reused when policy already exists", async () => {
+  const ruleId = "11111111-1111-4111-8111-111111111111";
+  const queryResult = (result: any) => {
+    const builder: any = {
+      select: () => builder,
+      eq: () => builder,
+      then: (resolve: any, reject: any) => Promise.resolve(result).then(resolve, reject),
+    };
+    return builder;
+  };
+  const supabaseAdmin = {
+    from: () => queryResult({ data: [{ id: ruleId }], error: null }),
+    rpc: async () => ({ data: { already_materialized: true }, error: null }),
+  };
+
+  const result = await __test__.materializeApprovedLeaseRecoveryPolicies(
+    supabaseAdmin,
+    "33333333-3333-4333-8333-333333333333",
+    { id: "44444444-4444-4444-8444-444444444444" },
+    "55555555-5555-4555-8555-555555555555",
+    "approver@example.test",
+  );
+
+  assertEquals(result.created, 0);
+  assertEquals(result.reused, 1);
+  assertEquals(result.blocked, 0);
+});

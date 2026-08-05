@@ -875,6 +875,90 @@ Deno.test("enrich-bounded-stages: pooled evidence covers fields from all 5 domai
 // 15/16/17. Failure product-safety: partial payload not review-ready, 546 is
 // terminal (not a warning), original error preserved.
 // ===========================================================================
+Deno.test("enrich-bounded-stages: final truth assembly persists terminal enrichment_status on uploaded_files", async () => {
+  const supabaseAdmin = makeMockSupabase({
+    rows: {
+      uploaded_files: {
+        id: FILE_ID,
+        org_id: ORG_ID,
+        active_generation_id: GEN_ID,
+        module_type: "lease",
+        file_name: "lease.pdf",
+        document_subtype: "base_lease",
+        review_required: true,
+        extraction_method: "azure_layout",
+        enrichment_status: "pending",
+        docling_raw: LEASE_DOCLING_RAW,
+        normalized_output: seedNormalizedOutputThroughDerivation(),
+        ui_review_payload: { enrichment_status: "pending", records: [{ fields: {} }] },
+      },
+      pipeline_jobs: { id: JOB_ID, status: "running" },
+    },
+  });
+  const jsonResponse = (body: any, status = 200) =>
+    new Response(JSON.stringify(body), { status });
+  const callStage = async (stage: any) => {
+    const response = await handleBoundedEnrichStage({
+      supabaseAdmin,
+      orgId: ORG_ID,
+      fileId: FILE_ID,
+      pipelineJobId: JOB_ID,
+      generationId: GEN_ID,
+      stage,
+      jsonResponse,
+    });
+    assertEquals(response.status, 200);
+    return response.json();
+  };
+
+  for (const stage of [
+    "enrich_evidence_core_terms",
+    "enrich_evidence_rent_and_charges",
+    ...EXPENSES_AND_CAM_EVIDENCE_SUBSTAGES,
+    "enrich_evidence_expenses_and_cam",
+    "enrich_evidence_operating_obligations",
+    "enrich_evidence_legal_rights_and_dates",
+  ]) {
+    const body = await callStage(stage);
+    assertEquals(body.status, "completed");
+  }
+
+  const finalBody = await callStage("enrich_truth_assembly");
+  assertEquals(finalBody.status, "completed");
+  assertEquals(supabaseAdmin.__rows.uploaded_files.enrichment_status, "completed");
+  assertEquals(supabaseAdmin.__rows.uploaded_files.ui_review_payload.enrichment_status, "completed");
+  assert(
+    supabaseAdmin.__updates.some((update: any) =>
+      update.table === "uploaded_files" && update.patch.enrichment_status === "completed"
+    ),
+    "final bounded assembly must persist uploaded_files.enrichment_status",
+  );
+});
+
+Deno.test("enrich-bounded-stages: review values never surface bare section numbers for clause fields", () => {
+  const clauseText = "2.15 Permitted Transfer. Tenant shall not make any Transfer without the prior consent of Landlord, which Landlord shall not unreasonably withhold or delay.";
+  const payload = buildReviewPayload({
+    fileId: FILE_ID,
+    fileName: "lease.pdf",
+    moduleType: "leases",
+    documentSubtype: "base_lease",
+    extractionMethod: "llm_only",
+    reviewRequired: true,
+    doclingRaw: { full_text: clauseText, text_blocks: [{ text: clauseText, page: 6 }] },
+    result: {
+      rows: [{ assignment_provisions: "2.", _field_evidence: { assignment_provisions: { source_text: clauseText, source_page: 6 } } }],
+      method: "llm_only",
+      warnings: [],
+      validationErrors: [],
+      metadata: {},
+    },
+  });
+  const remedies = payload.records[0].standard_fields.find((field: any) => field.field_key === "assignment_provisions");
+  assert(remedies, "assignment_provisions field must be present");
+  assertNotEquals(remedies.value, "2.");
+  assert(String(remedies.value).includes("Permitted Transfer"));
+  assertEquals(remedies.status, "needs_review");
+});
 Deno.test("enrich-bounded-stages: a DOWNSTREAM_FUNCTION_FAILED (546-shaped) outcome is a plain terminal failure -- no soft/warning path exists in the bounded chain", async () => {
   const supabaseAdmin = makeMockSupabase({
     rows: {

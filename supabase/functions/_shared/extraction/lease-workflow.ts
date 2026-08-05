@@ -660,6 +660,25 @@ function cleanSummaryValue(value: unknown) {
     .trim();
 }
 
+function isBareClauseReferenceValue(value: unknown) {
+  const text = cleanSummaryValue(value);
+  if (!text) return false;
+  return /^(?:(?:section|article|paragraph|para\.?|sec\.?)\s*)?\d{1,3}(?:\.\d{1,3}){0,2}\s*[.)]?$/i.test(text);
+}
+
+function sourceTextAsDisplayValue(sourceText: unknown) {
+  const text = cleanSourceText(sourceText);
+  if (!text) return null;
+  return text
+    .replace(/^(?:(?:section|article|paragraph|para\.?|sec\.?)\s*)?\d{1,3}(?:\.\d{1,3}){0,2}\s*[.)]?\s*/i, "")
+    .trim()
+    .slice(0, 520) || text.slice(0, 520);
+}
+
+function normalizeDisplayValueAgainstSource(value: unknown, sourceText: unknown) {
+  if (!isBareClauseReferenceValue(value)) return value ?? null;
+  return sourceTextAsDisplayValue(sourceText) ?? null;
+}
 function extractFirstMoneyValue(value: unknown): number | null {
   const text = String(value ?? "");
   const money = text.match(/\$\s*([\d,]+(?:\.\d{2})?)/);
@@ -2187,6 +2206,9 @@ export function createDocumentItem(args: Record<string, unknown>) {
   const mapsToFixedField = Boolean(args.maps_to_fixed_field ?? (fieldKey && FIXED_REVIEW_FIELD_KEYS.has(fieldKey)));
   const mapsToExistingField = Boolean(args.maps_to_existing_field ?? args.maps_to_fixed_field ?? fieldKey);
   const displayTab = args.display_tab || displayTabForItem(args.item_type, args.business_area, fieldKey);
+  const displayValue = normalizeDisplayValueAgainstSource(args.value, safeSourceText);
+  const normalizedValue = normalizeDisplayValueAgainstSource(args.normalized_value ?? args.value, safeSourceText);
+  const rawValue = normalizeDisplayValueAgainstSource(args.raw_value ?? args.value, safeSourceText);
   return {
     item_id: String(args.item_id || crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`),
     document_id: args.document_id ?? null,
@@ -2201,9 +2223,9 @@ export function createDocumentItem(args: Record<string, unknown>) {
     field_key: fieldKey,
     category: args.category ?? null,
     subcategory: args.subcategory ?? null,
-    value: args.value ?? null,
-    normalized_value: args.normalized_value ?? args.value ?? null,
-    raw_value: args.raw_value ?? args.value ?? null,
+    value: displayValue,
+    normalized_value: normalizedValue,
+    raw_value: rawValue,
     source_text: safeSourceText,
     source_page: args.source_page ?? null,
     confidence: args.confidence ?? (safeSourceText ? 0.78 : 0.35),
