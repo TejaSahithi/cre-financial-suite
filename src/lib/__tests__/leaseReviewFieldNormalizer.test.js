@@ -81,6 +81,43 @@ describe("leaseReviewFieldNormalizer smoke test", () => {
     expect(tenantRow.group).toBe("parties");
   });
 
+  it("recovers concise standard values from cited source text when canonical values are missing", () => {
+    const lease = {
+      id: "source-backed-missing-values",
+      extraction_data: {
+        fields: {
+          lease_date: null,
+          square_footage: null,
+          billing_frequency: null,
+          lease_term_months: null,
+          escalation_rate: null,
+          escalation_type: null,
+          escalation_timing: null,
+        },
+        field_evidence: {
+          lease_date: { source_text: "Date: January 9, 2024", source_page: 1, extraction_status: "not_found" },
+          square_footage: { source_text: "Premises containing approximately 1,110 rentable square feet", source_page: 1, extraction_status: "not_found" },
+          billing_frequency: { source_text: "Rent: $1,400 per month", source_page: 1, extraction_status: "not_found" },
+          lease_term_months: { source_text: "(a) Lease Term: Year to Year", source_page: 1, extraction_status: "not_found" },
+          escalation_rate: { source_text: "The Rent will increase 5% each year of renewal.", source_page: 1, extraction_status: "not_found" },
+          escalation_type: { source_text: "The Rent will increase 5% each year of renewal.", source_page: 1, extraction_status: "not_found" },
+          escalation_timing: { source_text: "The Rent will increase 5% each year of renewal.", source_page: 1, extraction_status: "not_found" },
+        },
+      },
+    };
+
+    const rows = normalizeStandardFields(lease);
+    const byKey = Object.fromEntries(rows.map((row) => [row.canonicalKey, row]));
+
+    expect(byKey.lease_date.value).toBe("2024-01-09");
+    expect(byKey.square_footage.value).toBe(1110);
+    expect(byKey.billing_frequency.value).toBe("monthly");
+    expect(byKey.lease_term_months.value).toBe(12);
+    expect(byKey.escalation_rate.value).toBe("5%");
+    expect(byKey.escalation_type.value).toBe("fixed_pct");
+    expect(byKey.escalation_timing.value).toBe("lease_anniversary");
+    expect(byKey.lease_date.validationMessage).toMatch(/Recovered normalized value|source text/i);
+  });
   it("does not mistake a recurring month/day anniversary for the final lease expiration", () => {
     const lease = {
       id: "recurring-expiration-lease",

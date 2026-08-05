@@ -1,3 +1,4 @@
 export function isLeaseReviewEnrichmentInFlight(status) {
-  return status === "pending" || status === "running";
+  const normalized = String(status ?? "").trim().toLowerCase();
+  return normalized === "" || normalized === "pending" || normalized === "queued" || normalized === "running" || normalized === "started";
 }

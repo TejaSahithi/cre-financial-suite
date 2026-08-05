@@ -362,10 +362,37 @@ export default function LeaseReview() {
     // latest fetched data directly) since enrichmentStatus/isEnrichmentInFlight
     // are derived further down this component, after this query is declared.
     refetchInterval: (query) => {
-      const status = query.state.data?.ui_review_payload?.enrichment_status;
-      return isLeaseReviewEnrichmentInFlight(status) ? 4000 : false;
+      const row = query.state.data;
+      const status = row?.enrichment_status ?? row?.ui_review_payload?.enrichment_status;
+      const readiness = String(row?.review_readiness ?? "").trim().toLowerCase();
+      return isLeaseReviewEnrichmentInFlight(status) || readiness === "pending" ? 4000 : false;
     },
   });
+
+  const enrichmentResumeAttemptedRef = useRef(null);
+  useEffect(() => {
+    if (!resolvedSourceFileId || !uploadedFile) return;
+    const readiness = String(uploadedFile.review_readiness ?? "").trim().toLowerCase();
+    const enrichment = uploadedFile.enrichment_status ?? uploadedFile.ui_review_payload?.enrichment_status ?? null;
+    if (!isLeaseReviewEnrichmentInFlight(enrichment) && readiness !== "pending") return;
+    const attemptKey = `${resolvedSourceFileId}:${uploadedFile.active_generation_id ?? "none"}:${readiness}:${String(enrichment ?? "")}`;
+    const now = Date.now();
+    const previousAttempt = enrichmentResumeAttemptedRef.current;
+    if (previousAttempt?.key === attemptKey && now - previousAttempt.at < 15000) return;
+    enrichmentResumeAttemptedRef.current = { key: attemptKey, at: now };
+    invokeEdgeFunction(
+      "pipeline-status",
+      { file_id: resolvedSourceFileId, include_details: true },
+      {},
+      { page: "LeaseReview", action: "resume_bounded_enrichment" },
+    )
+      .then(() => {
+        queryClient.invalidateQueries({ queryKey: ["uploaded_file_for_lease", resolvedSourceFileId] });
+      })
+      .catch((err) => {
+        console.warn("[LeaseReview] bounded enrichment resume check failed:", err?.message || err);
+      });
+  }, [resolvedSourceFileId, uploadedFile, queryClient]);
 
   const reviewDocumentQuery = useReviewDocument({
     uploadedFileId: resolvedSourceFileId,
@@ -398,8 +425,11 @@ export default function LeaseReview() {
   const finalizeReadinessAttemptedRef = useRef(null);
   useEffect(() => {
     if (!lease?.org_id || !resolvedSourceFileId || !uploadedFile) return;
-    if (uploadedFile.review_readiness !== null && uploadedFile.review_readiness !== undefined) return;
-    const attemptKey = `${resolvedSourceFileId}:${uploadedFile.active_generation_id ?? "none"}`;
+    const readiness = String(uploadedFile.review_readiness ?? "").trim().toLowerCase();
+    const enrichment = String(uploadedFile.enrichment_status ?? uploadedFile.ui_review_payload?.enrichment_status ?? "").trim().toLowerCase();
+    const canFinalizePending = readiness === "pending" && ["completed", "completed_with_warnings", "partial", "failed"].includes(enrichment);
+    if (uploadedFile.review_readiness !== null && uploadedFile.review_readiness !== undefined && !canFinalizePending) return;
+    const attemptKey = `${resolvedSourceFileId}:${uploadedFile.active_generation_id ?? "none"}:${readiness}:${enrichment}`;
     if (finalizeReadinessAttemptedRef.current === attemptKey) return;
     finalizeReadinessAttemptedRef.current = attemptKey;
     supabase
@@ -1776,6 +1806,7 @@ export default function LeaseReview() {
           edited_at: new Date().toISOString(),
           source: "review_accept",
           extraction_status: isManualOverride ? extractionStatus : "manual_resolved",
+          validation_errors: [],
           ...(sourcePage != null ? { source_page: sourcePage, page: sourcePage, page_number: sourcePage } : {}),
           ...(sourceText
             ? {
@@ -1791,6 +1822,7 @@ export default function LeaseReview() {
           raw_value: evidence.rawValue ?? value,
           value,
           extraction_status: fieldPatch.extraction_status,
+          validation_errors: [],
           ...(sourcePage != null ? { source_page: sourcePage, page_number: sourcePage } : {}),
           ...(sourceText ? { source_text: sourceText, exact_source_text: sourceText, source_clause: sourceText } : {}),
         };
@@ -1892,7 +1924,7 @@ export default function LeaseReview() {
   const openEdit = (field) => {
     const key = getReviewFieldKey(field);
     setEditingField(key ? { ...field, key } : field);
-    const current = key ? readFieldValue(lease, key) : null;
+    const current = key ? readFieldValue(leaseFull || lease, key) : null;
     setEditValue(current == null ? "" : String(current));
   };
 
@@ -1912,21 +1944,48 @@ export default function LeaseReview() {
       val = val === true || val === "true" || val === "yes";
     }
 
-    const previousValue = readFieldValue(lease, key);
+    const previousValue = readFieldValue(leaseFull || lease, key);
+    const existingFieldRecord = lease?.extraction_data?.fields?.[key] || {};
+    const existingEvidenceRecord = lease?.extraction_data?.field_evidence?.[key] || {};
+    const existingEvidence = readFieldEvidence(leaseFull || lease, key);
+    const sourceText = existingEvidence?.sourceText ?? existingFieldRecord.source_text ?? null;
+    const sourcePage = existingEvidence?.sourcePage ?? existingFieldRecord.source_page ?? null;
 
     setFieldSaving(true);
     try {
-      const fieldPatch = { value: val, manually_edited: true, edited_at: new Date().toISOString() };
+      const editedAt = new Date().toISOString();
+      const fieldPatch = {
+        ...existingFieldRecord,
+        value: val,
+        raw_value: val,
+        manually_edited: true,
+        edited_at: editedAt,
+        source: "manual",
+        extraction_status: "manual_edited",
+        validation_errors: [],
+        ...(sourcePage != null ? { source_page: sourcePage, page: sourcePage, page_number: sourcePage } : {}),
+        ...(sourceText ? { source_text: sourceText, exact_source_text: sourceText, source_clause: sourceText, snippet: sourceText } : {}),
+      };
+      const evidencePatch = {
+        ...existingEvidenceRecord,
+        value: val,
+        raw_value: val,
+        extraction_status: "manual_edited",
+        validation_errors: [],
+        ...(sourcePage != null ? { source_page: sourcePage, page_number: sourcePage } : {}),
+        ...(sourceText ? { source_text: sourceText, exact_source_text: sourceText, source_clause: sourceText } : {}),
+      };
       await updateLeaseExtractionField({
         leaseId: lease.id,
         fieldArea: "field_value",
         action: "field_evidence_edit",
         fieldKey: key,
-        patch: { field: fieldPatch },
+        patch: { field: fieldPatch, field_evidence: evidencePatch },
       });
       const nextExtraction = {
         ...(lease.extraction_data || {}),
         fields: { ...(lease.extraction_data?.fields || {}), [key]: fieldPatch },
+        field_evidence: { ...(lease.extraction_data?.field_evidence || {}), [key]: evidencePatch },
       };
       updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
@@ -1948,6 +2007,15 @@ export default function LeaseReview() {
         field: editingField,
         status: REVIEW_STATUSES.EDITED,
         value: val,
+        evidence: {
+          sourceText,
+          sourcePage,
+          rawValue: val,
+          extractionStatus: "manual_edited",
+          evidenceType: "reviewer_override",
+          sourceTextQuality: sourceText ? "reviewer_confirmed" : "manual_override",
+        },
+        note: fieldReviews[key]?.note || "Reviewer edited normalized value.",
         previousReview: { value: previousValue, status: fieldReviews[key]?.status },
       });
 
@@ -3703,9 +3771,12 @@ export default function LeaseReview() {
             const mergedFieldRecord = {
               ...existingFieldRecord,
               value: val,
+              raw_value: evidencePatch.raw_value !== undefined ? evidencePatch.raw_value : val,
               manually_edited: true,
               edited_at: new Date().toISOString(),
               source: "manual",
+              extraction_status: evidencePatch.extraction_status ?? "manual_edited",
+              validation_errors: [],
               ...(evidencePatch.raw_value !== undefined ? { raw_value: evidencePatch.raw_value } : {}),
               ...(evidencePatch.source_page !== undefined
                 ? { source_page: evidencePatch.source_page, page: evidencePatch.source_page, page_number: evidencePatch.source_page }
@@ -3721,21 +3792,20 @@ export default function LeaseReview() {
               ...(evidencePatch.confidence !== undefined
                 ? { confidence_score: evidencePatch.confidence, confidence: evidencePatch.confidence }
                 : {}),
-              ...(evidencePatch.extraction_status !== undefined
-                ? { extraction_status: evidencePatch.extraction_status }
-                : {}),
             };
 
             // Mirror the same evidence shape under field_evidence (the
             // separate map review-approve / Re-extract write to).
             const mergedEvidenceRecord = {
               ...existingEvidenceRecord,
-              ...(evidencePatch.raw_value !== undefined ? { raw_value: evidencePatch.raw_value } : {}),
+              value: val,
+              raw_value: evidencePatch.raw_value !== undefined ? evidencePatch.raw_value : val,
+              extraction_status: evidencePatch.extraction_status ?? "manual_edited",
+              validation_errors: [],
               ...(evidencePatch.source_page !== undefined ? { source_page: evidencePatch.source_page, page_number: evidencePatch.source_page } : {}),
               ...(evidencePatch.source_text !== undefined
                 ? { source_text: evidencePatch.source_text, exact_source_text: evidencePatch.source_text, source_clause: evidencePatch.source_text }
                 : {}),
-              ...(evidencePatch.extraction_status !== undefined ? { extraction_status: evidencePatch.extraction_status } : {}),
             };
 
             // Confidence map (0-100 ints) mirrored separately so the
@@ -3784,6 +3854,15 @@ export default function LeaseReview() {
                 field: { ...f, key },
                 status: REVIEW_STATUSES.EDITED,
                 value: val,
+                evidence: {
+                  sourceText: mergedEvidenceRecord.source_text ?? mergedFieldRecord.source_text ?? null,
+                  sourcePage: mergedEvidenceRecord.source_page ?? mergedFieldRecord.source_page ?? null,
+                  rawValue: mergedEvidenceRecord.raw_value ?? val,
+                  extractionStatus: mergedEvidenceRecord.extraction_status ?? "manual_edited",
+                  evidenceType: "reviewer_override",
+                  sourceTextQuality: mergedEvidenceRecord.source_text ? "reviewer_confirmed" : "manual_override",
+                },
+                note: fieldReviews[key]?.note || "Reviewer edited normalized value.",
                 previousReview: { value: previousValue, status: fieldReviews[key]?.status },
               });
             } catch (auditErr) {

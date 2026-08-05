@@ -522,7 +522,9 @@ function propertyAddressEvidenceIsWrongPartyAddress(evidence) {
 
 function recoverDateFromSourceText(text) {
   const explicitMonthDate = text.match(REVIEW_MONTH_DATE_PATTERN)?.[0];
-  return toIsoDate(explicitMonthDate || text);
+  if (explicitMonthDate) return toIsoDate(explicitMonthDate);
+  const numericDate = String(text ?? "").match(/\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/)?.[0];
+  return toIsoDate(numericDate || text);
 }
 
 function isLabelOnlyDynamicValue(label, value, key = null) {
@@ -547,6 +549,34 @@ function recoverStandardValueFromEvidence(canonicalKey, evidence) {
 
   if (canonicalKey === "expiration_date" || canonicalKey === "end_date" || canonicalKey.endsWith("_date")) {
     return recoverDateFromSourceText(text);
+  }
+
+  if (canonicalKey === "lease_term_months") {
+    return parseLeaseTermMonths(text);
+  }
+
+  if (canonicalKey === "billing_frequency") {
+    if (/\b(?:monthly|per\s+month|each\s+month)\b/i.test(text)) return "monthly";
+    if (/\bannual(?:ly)?\b|per\s+year|each\s+year/i.test(text)) return "annual";
+    if (/\bquarterly\b/i.test(text)) return "quarterly";
+  }
+
+  if (canonicalKey === "lease_type") {
+    if (/\bgross\b|full[-\s]?service/i.test(text)) return "gross";
+    if (/\btriple\s+net\b|\bnnn\b/i.test(text)) return "nnn";
+    if (/\bmodified\s+gross\b/i.test(text)) return "modified_gross";
+  }
+
+  if (canonicalKey === "escalation_rate" || canonicalKey === "renewal_escalation_percent") {
+    return clausePercentValue(text);
+  }
+
+  if (canonicalKey === "escalation_type" || canonicalKey === "renewal_type") {
+    if (/increase[s]?\s+\d+(?:\.\d+)?\s*%|increase[s]?.*\b(?:five|three|two|one)\s+percent/i.test(text)) return "fixed_pct";
+  }
+
+  if (canonicalKey === "escalation_timing") {
+    if (/anniversary|each\s+year|annually/i.test(text)) return "lease_anniversary";
   }
 
   if (canonicalKey === "square_footage" || canonicalKey === "building_rsf") {
@@ -1099,6 +1129,36 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
       statusOverride = grossNoSeparateCharge.status;
     }
 
+    const recoveredMissingValue = !isMeaningfulValue(value)
+      ? recoverStandardValueFromEvidence(canonicalKey, evidence)
+      : null;
+    if (isMeaningfulValue(recoveredMissingValue)) {
+      value = recoveredMissingValue;
+      confidence = Math.max(typeof confidence === "number" ? confidence : 0, 0.9);
+      fallbackReviewReason = "Recovered normalized value from the cited source text because the extraction returned no canonical answer.";
+      fallbackSourceProvider = fallbackSourceProvider || "source_text_missing_value_recovery";
+      const recoveredSourceText = evidence?.sourceText ?? evidence?.source_text ?? null;
+      const recoveredSourceClause = evidence?.sourceClause ?? evidence?.source_clause ?? recoveredSourceText;
+      evidence = {
+        ...(evidence || {}),
+        value,
+        rawValue: value,
+        raw_value: value,
+        sourceText: recoveredSourceText,
+        source_text: recoveredSourceText,
+        sourceClause: recoveredSourceClause,
+        source_clause: recoveredSourceClause,
+        extractionStatus: EXTRACTION_STATUSES.EXTRACTED,
+        extraction_status: EXTRACTION_STATUSES.EXTRACTED,
+        evidenceType: "extracted",
+        evidence_type: "extracted",
+        sourceTextQuality: SOURCE_TEXT_QUALITIES.PARTIAL,
+        source_text_quality: SOURCE_TEXT_QUALITIES.PARTIAL,
+        requiresReview: true,
+        reviewReason: fallbackReviewReason,
+        review_reason: fallbackReviewReason,
+      };
+    }
     // Phase 39: reject layout/markup artifacts (e.g. "<figure>") before they
     // can be displayed as an accepted value. invalidValueRejected is read
     // downstream by hasRowValue/normalizeApprovalBlockers ONLY to keep this
@@ -1198,15 +1258,29 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
         validationErrors.push(`${canonicalKey}_failed_validation`);
         const preservedSourceText = evidence?.sourceText || evidence?.sourceClause || null;
         evidenceOverrideReason = supportValidation.reason || "Extracted value failed field/source validation.";
-        invalidValueRejected = true;
-        value = null;
-        evidence = {
-          ...(evidence || {}),
-          sourceText: preservedSourceText,
-          requiresReview: true,
-          reviewReason: evidenceOverrideReason,
-          validationErrors,
-        };
+        if (fallbackSourceProvider === "source_text_missing_value_recovery") {
+          statusOverride = "needs_review";
+          evidence = {
+            ...(evidence || {}),
+            sourceText: preservedSourceText,
+            source_text: preservedSourceText,
+            requiresReview: true,
+            reviewReason: evidenceOverrideReason,
+            review_reason: evidenceOverrideReason,
+            validationErrors,
+            validation_errors: validationErrors,
+          };
+        } else {
+          invalidValueRejected = true;
+          value = null;
+          evidence = {
+            ...(evidence || {}),
+            sourceText: preservedSourceText,
+            requiresReview: true,
+            reviewReason: evidenceOverrideReason,
+            validationErrors,
+          };
+        }
       }
     }
     const extractionStatus = resolveExtractionStatus(lease, canonicalKey, { value, confidence, evidence });

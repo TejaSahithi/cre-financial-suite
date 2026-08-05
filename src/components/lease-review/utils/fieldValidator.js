@@ -256,7 +256,7 @@ function fieldCuePattern(fieldKey) {
     expiration_date: /\b(?:expiration\s+date|expiry|end\s+date|expire|term\s+ends)\b/i,
     end_date: /\b(?:expiration\s+date|expiry|end\s+date|expire|term\s+ends)\b/i,
     rent_commencement_date: /\b(?:rent\s+commencement|rent\s+start|rent\s+begins)\b/i,
-    lease_date: /\b(?:lease\s+date|date\s*:|made|entered\s+into|executed)\b/i,
+    lease_date: /\b(?:lease\s+date|date\s*:|made\b|entered\s+into\b|executed\b)/i,
     landlord_consent: /\b(?:landlord).{0,80}\bconsent\w*\b|\bconsent\w*.{0,80}\blandlord\b/i,
     landlord_consent_for_transfer: /\b(?:landlord).{0,80}\bconsent\w*\b|\bconsent\w*.{0,80}\blandlord\b/i,
     tenant_signature_date: /\b(?:tenant|signature|signed|by:|date)\b/i,

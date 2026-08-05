@@ -18,7 +18,7 @@ async function resolveSourceFileId(supabaseAdmin: any, leaseId: string): Promise
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const FIELD_VALUE_ACTIONS = new Set(["field_evidence_edit", "custom_field_added"]);
+const FIELD_VALUE_ACTIONS = new Set(["field_evidence_edit", "field_accept_backfill", "custom_field_added"]);
 const SOURCE_LINK_ACTIONS = new Set([
   "source_file_manually_linked",
   "source_file_auto_linked",
