@@ -19,6 +19,7 @@ import {
   leaseService,
   persistLeaseExtractionMerge,
   updateLeaseExtractionField,
+  updateLeaseFieldAndColumns,
   backfillLeaseEvidence,
   sendLeaseBackForReextraction,
 } from "@/services/leaseService";
@@ -78,6 +79,7 @@ import {
   isMeaningfulValue,
   resolveSourceTextQuality,
   CURRENT_EXTRACTION_CONTRACT_VERSION,
+  resolveFieldColumns,
 } from "@/lib/leaseReviewSchema";
 import { getFieldAliases, resolveLeaseField } from "@/lib/leaseFieldResolver";
 import { createPageUrl } from "@/utils";
@@ -244,6 +246,61 @@ function approvalReasonText(reason) {
 
 function approvalBlockerDetail(blocker) {
   return `${approvalFieldLabel(blocker)} - ${approvalReasonText(blocker?.reason)}`;
+}
+
+const DATE_COLUMN_FIELD_KEYS = new Set([
+  "lease_date",
+  "start_date",
+  "end_date",
+  "commencement_date",
+  "expiration_date",
+  "rent_commencement_date",
+  "assignment_effective_date",
+  "tenant_signature_date",
+  "landlord_signature_date",
+  "option_exercise_deadline",
+]);
+
+function normalizeDateForColumn(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return raw;
+  const slash = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})$/);
+  if (slash) {
+    const year = slash[3].length === 2 ? `20${slash[3]}` : slash[3];
+    return `${year}-${slash[1].padStart(2, "0")}-${slash[2].padStart(2, "0")}`;
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw;
+  return parsed.toISOString().slice(0, 10);
+}
+
+function normalizeColumnValueForReviewField(fieldKey, value) {
+  if (!isMeaningfulValue(value)) return null;
+  if (DATE_COLUMN_FIELD_KEYS.has(fieldKey) || fieldKey.endsWith("_date")) {
+    return normalizeDateForColumn(value);
+  }
+  const fieldConfig = LEASE_REVIEW_FIELDS.find((field) => field.key === fieldKey);
+  if (NUMERIC_REVIEW_FIELDS.has(fieldKey) || fieldConfig?.type === "number" || fieldConfig?.type === "currency") {
+    const parsed = Number(String(value).replace(/[$,%\s,]/g, ""));
+    return Number.isFinite(parsed) ? parsed : value;
+  }
+  return value;
+}
+
+function buildLeaseColumnUpdatesForField(fieldKey, value) {
+  const columnValue = normalizeColumnValueForReviewField(fieldKey, value);
+  if (!isMeaningfulValue(columnValue)) return {};
+  const columns = resolveFieldColumns(fieldKey) || [];
+  return columns.reduce((acc, column) => {
+    acc[column] = columnValue;
+    return acc;
+  }, {});
+}
+
+function isReviewDraftRouteBlocked(error) {
+  return /financial-active review draft saves|package-active review draft saves|P4 reviewer decision routes/i.test(String(error?.message || error || ""));
 }
 
 export default function LeaseReview() {
@@ -505,7 +562,7 @@ export default function LeaseReview() {
   // to the new grouped sections; does not replace fieldsForTab/allReviewRows,
   // which still drive the original tab structure unchanged.
   const normalized = useMemo(
-    () => normalizeLeaseReviewData(leaseFull, { fieldReviews }),
+    () => normalizeLeaseReviewData(leaseFull, { fieldReviews, allowDiagnosticExpenseRuleFallbacks: true }),
     [leaseFull, fieldReviews],
   );
   const enterpriseTabs = normalized.tabs || {};
@@ -1649,7 +1706,15 @@ export default function LeaseReview() {
     };
     setFieldReviews(next);
     try {
-      await saveAbstractDraft({ lease, fieldReviews: next, reviewer: lease?.signed_by || null, action: status });
+      const savedLease = await saveAbstractDraft({ lease, fieldReviews: next, reviewer: lease?.signed_by || null, action: status });
+      const savedExtraction = savedLease?.extraction_data || {
+        ...(lease?.extraction_data || {}),
+        field_reviews: next,
+      };
+      updateLeaseQueryCache(queryClient, leaseId, {
+        ...(savedLease || {}),
+        extraction_data: savedExtraction,
+      });
       await logAudit({
         entityType: "LeaseFieldReview",
         entityId: lease.id,
@@ -1661,11 +1726,38 @@ export default function LeaseReview() {
         propertyId: lease.property_id || null,
       });
     } catch (err) {
+      if (isReviewDraftRouteBlocked(err)) {
+        const cachedLease = queryClient.getQueryData(["lease", leaseId]);
+        const freshLeaseForReview = Array.isArray(cachedLease) ? (cachedLease[0] ?? lease) : (cachedLease || lease);
+        const extractionData = {
+          ...(freshLeaseForReview?.extraction_data || lease?.extraction_data || {}),
+          field_reviews: next,
+        };
+        updateLeaseQueryCache(queryClient, leaseId, { extraction_data: extractionData });
+        console.warn("[LeaseReview] draft review route blocked; value was preserved through canonical field writer:", err?.message || err);
+        return;
+      }
       console.error("[LeaseReview] persistFieldAction failed:", err);
       toast.error(err?.message || "Could not save review action");
       // revert
       setFieldReviews(fieldReviews);
     }
+  };
+
+  const persistCanonicalFieldValue = async ({ key, fieldPatch, evidencePatch, confidenceScore, value }) => {
+    const columnUpdates = buildLeaseColumnUpdatesForField(key, value ?? fieldPatch?.value);
+    const patch = {
+      field: fieldPatch,
+      field_evidence: evidencePatch,
+      ...(confidenceScore !== undefined && confidenceScore !== null ? { confidence_score: confidenceScore } : {}),
+    };
+    const updateResult = await updateLeaseFieldAndColumns({
+      leaseId: lease.id,
+      fieldKey: key,
+      columnUpdates,
+      patch,
+    });
+    return { ...updateResult, columnUpdates };
   };
 
   const handleAddCustomField = async () => {
@@ -1792,16 +1884,24 @@ export default function LeaseReview() {
       return;
     }
 
+    const normalizedAcceptValue = normalizeColumnValueForReviewField(key, value) ?? value;
     const storedValue = readFieldValue(freshLease, key);
-    if (!isMeaningfulValue(storedValue) && isMeaningfulValue(value)) {
+    const shouldPromoteAcceptedValue = isMeaningfulValue(normalizedAcceptValue) && (
+      !isMeaningfulValue(storedValue)
+      || String(storedValue) !== String(normalizedAcceptValue)
+      || (Array.isArray(fieldRecord.validation_errors) && fieldRecord.validation_errors.length > 0)
+      || !isManualOverride
+    );
+    if (shouldPromoteAcceptedValue) {
       setFieldSaving(true);
       try {
         const sourceText = evidence.sourceText ?? null;
         const sourcePage = evidence.sourcePage ?? null;
+        const acceptedValue = normalizedAcceptValue;
         const fieldPatch = {
           ...(fieldRecord || {}),
-          value,
-          raw_value: evidence.rawValue ?? value,
+          value: acceptedValue,
+          raw_value: evidence.rawValue ?? acceptedValue,
           manually_edited: true,
           edited_at: new Date().toISOString(),
           source: "review_accept",
@@ -1819,29 +1919,28 @@ export default function LeaseReview() {
         };
         const evidencePatch = {
           ...(freshLease?.extraction_data?.field_evidence?.[key] || {}),
-          raw_value: evidence.rawValue ?? value,
-          value,
+          raw_value: evidence.rawValue ?? acceptedValue,
+          value: acceptedValue,
           extraction_status: fieldPatch.extraction_status,
           validation_errors: [],
           ...(sourcePage != null ? { source_page: sourcePage, page_number: sourcePage } : {}),
           ...(sourceText ? { source_text: sourceText, exact_source_text: sourceText, source_clause: sourceText } : {}),
         };
-        await updateLeaseExtractionField({
-          leaseId: lease.id,
-          fieldArea: "field_value",
-          action: "field_accept_backfill",
-          fieldKey: key,
-          patch: {
-            field: fieldPatch,
-            field_evidence: evidencePatch,
-          },
+        const updateResult = await persistCanonicalFieldValue({
+          key,
+          fieldPatch,
+          evidencePatch,
+          value: acceptedValue,
         });
-        const nextExtraction = {
+        const nextExtraction = updateResult?.extraction_data || {
           ...(freshLease.extraction_data || {}),
           fields: { ...(freshLease.extraction_data?.fields || {}), [key]: fieldPatch },
           field_evidence: { ...(freshLease.extraction_data?.field_evidence || {}), [key]: evidencePatch },
         };
-        updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
+        updateLeaseQueryCache(queryClient, leaseId, {
+          ...(updateResult?.columnUpdates || {}),
+          extraction_data: nextExtraction,
+        });
       } catch (err) {
         console.error("[LeaseReview] accept backfill failed:", err);
         toast.error(err?.message || `Could not save ${field?.label || key}`);
@@ -1852,9 +1951,9 @@ export default function LeaseReview() {
     }
 
     return persistFieldAction({
-      field: { ...field, key, value, normalized_value: value },
+      field: { ...field, key, value: normalizedAcceptValue, normalized_value: normalizedAcceptValue },
       status: REVIEW_STATUSES.ACCEPTED,
-      value,
+      value: normalizedAcceptValue,
       evidence,
       previousReview: fieldReviews[key],
     });
@@ -1943,6 +2042,7 @@ export default function LeaseReview() {
     if (editingField.type === "boolean") {
       val = val === true || val === "true" || val === "yes";
     }
+    val = normalizeColumnValueForReviewField(key, val) ?? val;
 
     const previousValue = readFieldValue(leaseFull || lease, key);
     const existingFieldRecord = lease?.extraction_data?.fields?.[key] || {};
@@ -1975,19 +2075,21 @@ export default function LeaseReview() {
         ...(sourcePage != null ? { source_page: sourcePage, page_number: sourcePage } : {}),
         ...(sourceText ? { source_text: sourceText, exact_source_text: sourceText, source_clause: sourceText } : {}),
       };
-      await updateLeaseExtractionField({
-        leaseId: lease.id,
-        fieldArea: "field_value",
-        action: "field_evidence_edit",
-        fieldKey: key,
-        patch: { field: fieldPatch, field_evidence: evidencePatch },
+      const updateResult = await persistCanonicalFieldValue({
+        key,
+        fieldPatch,
+        evidencePatch,
+        value: val,
       });
-      const nextExtraction = {
+      const nextExtraction = updateResult?.extraction_data || {
         ...(lease.extraction_data || {}),
         fields: { ...(lease.extraction_data?.fields || {}), [key]: fieldPatch },
         field_evidence: { ...(lease.extraction_data?.field_evidence || {}), [key]: evidencePatch },
       };
-      updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
+      updateLeaseQueryCache(queryClient, leaseId, {
+        ...(updateResult?.columnUpdates || {}),
+        extraction_data: nextExtraction,
+      });
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["leases"] });
       if (lease?.property_id) {
@@ -3761,17 +3863,20 @@ export default function LeaseReview() {
           }
           setFieldSaving(true);
           try {
-            const previousValue = readFieldValue(leaseFull, key);
-            const existingFieldRecord = lease.extraction_data?.fields?.[key] || {};
-            const existingEvidenceRecord = lease.extraction_data?.field_evidence?.[key] || {};
+            const cached = queryClient.getQueryData(["lease", leaseId]);
+            const freshLeaseForEdit = Array.isArray(cached) ? (cached[0] ?? leaseFull) : (cached || leaseFull);
+            const normalizedEditValue = normalizeColumnValueForReviewField(key, val) ?? val;
+            const previousValue = readFieldValue(freshLeaseForEdit, key);
+            const existingFieldRecord = freshLeaseForEdit.extraction_data?.fields?.[key] || {};
+            const existingEvidenceRecord = freshLeaseForEdit.extraction_data?.field_evidence?.[key] || {};
 
             // Build the merged field record. Reviewer-provided evidence
             // overlays the existing extractor evidence; omitted fields
             // (undefined) fall through to whatever the extractor stamped.
             const mergedFieldRecord = {
               ...existingFieldRecord,
-              value: val,
-              raw_value: evidencePatch.raw_value !== undefined ? evidencePatch.raw_value : val,
+              value: normalizedEditValue,
+              raw_value: evidencePatch.raw_value !== undefined ? evidencePatch.raw_value : normalizedEditValue,
               manually_edited: true,
               edited_at: new Date().toISOString(),
               source: "manual",
@@ -3798,8 +3903,8 @@ export default function LeaseReview() {
             // separate map review-approve / Re-extract write to).
             const mergedEvidenceRecord = {
               ...existingEvidenceRecord,
-              value: val,
-              raw_value: evidencePatch.raw_value !== undefined ? evidencePatch.raw_value : val,
+              value: normalizedEditValue,
+              raw_value: evidencePatch.raw_value !== undefined ? evidencePatch.raw_value : normalizedEditValue,
               extraction_status: evidencePatch.extraction_status ?? "manual_edited",
               validation_errors: [],
               ...(evidencePatch.source_page !== undefined ? { source_page: evidencePatch.source_page, page_number: evidencePatch.source_page } : {}),
@@ -3812,29 +3917,28 @@ export default function LeaseReview() {
             // existing confidence resolver also sees the manual value.
             const nextConfidenceScores = evidencePatch.confidence !== undefined
               ? {
-                  ...(lease.extraction_data?.confidence_scores || {}),
+                  ...(freshLeaseForEdit.extraction_data?.confidence_scores || {}),
                   [key]: evidencePatch.confidence,
                 }
-              : (lease.extraction_data?.confidence_scores || undefined);
+              : (freshLeaseForEdit.extraction_data?.confidence_scores || undefined);
 
-            await updateLeaseExtractionField({
-              leaseId: lease.id,
-              fieldArea: "field_value",
-              action: "field_evidence_edit",
-              fieldKey: key,
-              patch: {
-                field: mergedFieldRecord,
-                field_evidence: mergedEvidenceRecord,
-                ...(evidencePatch.confidence !== undefined ? { confidence_score: evidencePatch.confidence } : {}),
-              },
+            const updateResult = await persistCanonicalFieldValue({
+              key,
+              fieldPatch: mergedFieldRecord,
+              evidencePatch: mergedEvidenceRecord,
+              confidenceScore: evidencePatch.confidence,
+              value: normalizedEditValue,
             });
-            const nextExtraction = {
-              ...(lease.extraction_data || {}),
-              fields: { ...(lease.extraction_data?.fields || {}), [key]: mergedFieldRecord },
-              field_evidence: { ...(lease.extraction_data?.field_evidence || {}), [key]: mergedEvidenceRecord },
+            const nextExtraction = updateResult?.extraction_data || {
+              ...(freshLeaseForEdit.extraction_data || {}),
+              fields: { ...(freshLeaseForEdit.extraction_data?.fields || {}), [key]: mergedFieldRecord },
+              field_evidence: { ...(freshLeaseForEdit.extraction_data?.field_evidence || {}), [key]: mergedEvidenceRecord },
               ...(nextConfidenceScores ? { confidence_scores: nextConfidenceScores } : {}),
             };
-            updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
+            updateLeaseQueryCache(queryClient, leaseId, {
+              ...(updateResult?.columnUpdates || {}),
+              extraction_data: nextExtraction,
+            });
             queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
             queryClient.invalidateQueries({ queryKey: ["leases"] });
             if (lease?.property_id) {
@@ -3853,11 +3957,11 @@ export default function LeaseReview() {
               await persistFieldAction({
                 field: { ...f, key },
                 status: REVIEW_STATUSES.EDITED,
-                value: val,
+                value: normalizedEditValue,
                 evidence: {
                   sourceText: mergedEvidenceRecord.source_text ?? mergedFieldRecord.source_text ?? null,
                   sourcePage: mergedEvidenceRecord.source_page ?? mergedFieldRecord.source_page ?? null,
-                  rawValue: mergedEvidenceRecord.raw_value ?? val,
+                  rawValue: mergedEvidenceRecord.raw_value ?? normalizedEditValue,
                   extractionStatus: mergedEvidenceRecord.extraction_status ?? "manual_edited",
                   evidenceType: "reviewer_override",
                   sourceTextQuality: mergedEvidenceRecord.source_text ? "reviewer_confirmed" : "manual_override",
@@ -3917,18 +4021,14 @@ export default function LeaseReview() {
             // field_evidence[key] server-side. confidence_score is omitted
             // entirely when null so confidence_scores[key] is left untouched
             // (matching the prior direct-write behavior).
-            await updateLeaseExtractionField({
-              leaseId: lease.id,
-              fieldArea: "field_value",
-              action: "field_evidence_edit",
-              fieldKey: key,
-              patch: {
-                field: fieldPatch,
-                field_evidence: cleanPatch,
-                ...(confValue != null ? { confidence_score: confValue } : {}),
-              },
+            const updateResult = await persistCanonicalFieldValue({
+              key,
+              fieldPatch,
+              evidencePatch: cleanPatch,
+              confidenceScore: confValue,
+              value: prevField?.value ?? readFieldValue(leaseFull || lease, key),
             });
-            const nextExtraction = {
+            const nextExtraction = updateResult?.extraction_data || {
               ...(lease.extraction_data || {}),
               fields: {
                 ...(lease.extraction_data?.fields || {}),
@@ -3943,17 +4043,13 @@ export default function LeaseReview() {
                 ...(confValue != null ? { [key]: confValue } : {}),
               },
             };
-            // updateLeaseExtractionField() above already persisted this patch
-            // server-side (merged, not replaced, onto fields[key]/
-            // field_evidence[key]) - do not also write extraction_data
-            // directly here, that would be a redundant second write racing
-            // the server's own merge with a client-reconstructed object.
-            // Seed the cache with the new extraction_data immediately so the
-            // drawer / table re-render before the invalidation refetch
-            // round-trips. Previously only invalidateQueries fired here,
-            // which made the UI lag behind the actual save and looked like
-            // "Save Evidence isn't reflecting".
-            updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
+            // Seed the cache with the new extraction_data and any typed
+            // lease-column mirrors immediately so the drawer / table re-render
+            // before the invalidation refetch round-trips.
+            updateLeaseQueryCache(queryClient, leaseId, {
+              ...(updateResult?.columnUpdates || {}),
+              extraction_data: nextExtraction,
+            });
             await logAudit({
               entityType: "LeaseFieldReview",
               entityId: lease.id,

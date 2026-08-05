@@ -157,14 +157,19 @@ export function resolveNextBoundedEnrichStageToResume(args: {
     }
   }
 
-  let lastCompletedIndex = -1;
-  for (let index = 0; index < stages.length; index += 1) {
-    if (boundedStageEntryCompletedForGeneration(results[stages[index]], generationId)) {
-      lastCompletedIndex = index;
+  // Resume deterministically from the first unresolved stage in sequence
+  // order. The bounded chain can be redispatched from status polling, manual
+  // re-entry, or partially migrated rows, so later stages may exist even when
+  // an earlier stage is missing. Choosing "after the latest completed stage"
+  // skips those holes forever; choosing the first missing stage repairs the
+  // chain and lets idempotent completed stages stay untouched.
+  for (const stage of stages) {
+    if (!boundedStageEntryCompletedForGeneration(results[stage], generationId)) {
+      return stage;
     }
   }
 
-  return stages[lastCompletedIndex + 1] ?? null;
+  return null;
 }
 /**
  * Idempotency guard: a stage handler must call this BEFORE doing any real

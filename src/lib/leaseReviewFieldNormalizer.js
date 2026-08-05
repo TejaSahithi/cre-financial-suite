@@ -107,7 +107,7 @@ function isVerboseNormalizedValue(value) {
   const text = compactText(value);
   if (!text) return false;
   if (isParagraphLikeReviewValue(text)) return true;
-  return text.length > 95 && /\b(?:tenant|landlord|lease|premises|rent|source|whereas|notwithstanding|shall|will|must|agrees?)\b/i.test(text);
+  return text.length > 70 && /\b(?:tenant|landlord|lease|premises|rent|source|whereas|notwithstanding|shall|will|must|agrees?)\b/i.test(text);
 }
 
 function clausePercentValue(text) {
@@ -144,6 +144,17 @@ function conciseReviewValueFromText({ fieldKey, label, value, sourceText } = {})
   const lower = text.toLowerCase();
   if (!text) return null;
 
+  if ((/(lease_type|expense structure)/.test(context)) && /\b(?:gross|full[-\s]?service)\b/.test(lower)) return "gross";
+  if (/(full_service|included|operating_cost|recover|expense|cam|tax|insurance|utility|janitorial|maintenance)/.test(context)
+    && /\b(?:includes?|included|gross lease|full[-\s]?service)\b/.test(lower)) {
+    if (/cam|common area maintenance/.test(lower) && /tax/.test(lower) && /insurance/.test(lower)) {
+      return "CAM/taxes/insurance included in rent";
+    }
+    if (/utilities?|electric|water|sewer/.test(lower)) return "utilities included in rent";
+    if (/janitorial/.test(lower)) return "janitorial included in rent";
+    if (/maintenance|repair/.test(lower)) return "maintenance included in rent";
+    return "included in rent";
+  }
   if (/\bn\/?a\b|no separate charge|included in rent|gross lease|full[-\s]?service/.test(lower)) {
     if (/(cam|expense|base_year|expense_stop|gross_up|admin_fee|management_fee|cap)/.test(context)) return "N/A";
     if (/(lease_type|expense structure)/.test(context)) return "gross";
@@ -186,6 +197,12 @@ function conciseReviewValueFromText({ fieldKey, label, value, sourceText } = {})
   if (/separately_meter|meter_utilit/.test(context)) return "tenant may separately meter utilities";
 
   if (/(responsibility|utilities|electric|water|sewer|maintenance|repair|hvac|insurance|tax)/.test(context)) {
+    if (/rent\s+includes?.*property\s+tax|property\s+tax.*included\s+in\s+rent/i.test(text)) return "property taxes included in rent";
+    if (/rent\s+includes?.*property\s+insurance|property\s+insurance.*included\s+in\s+rent/i.test(text)) return "property insurance included in rent";
+    if (/tenant\s+does\s+pay\s+for\s+all\s+(?:electricity|utilities)|tenant\s+pays?\s+(?:all\s+)?(?:utilities|electricity|hvac|water|sewer)/i.test(text)) return "tenant pays utilities";
+    if (/tenant\s+shall\s+maintain.*insurance|tenant\s+(?:must|shall)\s+(?:carry|obtain|provide).*insurance/i.test(text)) return "tenant carries required insurance";
+    if (/landlord\s+shall\s+keep.*hvac|landlord.*maintenance.*hvac/i.test(text)) return "landlord maintains HVAC";
+    if (/tenant\s+shall\s+promptly\s+reimburse.*repair|tenant.*reimburse.*damage.*repair/i.test(text)) return "tenant reimburses damage-caused repairs";
     if (/\btenant\s+(?:shall|must|will|does|is responsible|pays?|reimburses?|maintain|carry|obtain|provide)/i.test(text)) return "tenant";
     if (/\blandlord\s+(?:shall|must|will|is responsible|pays?|reimburses?|maintain|repair|keep|provide)/i.test(text)) return "landlord";
   }

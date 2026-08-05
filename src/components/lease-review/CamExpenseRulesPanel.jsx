@@ -2,7 +2,7 @@ import React, { useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useLeaseExpenseRules } from "@/components/lease-review/SpecializedTables";
-import { isLeaseApprovedForDownstream, normalizeExpenseRuleRows } from "@/lib/leaseReviewFieldNormalizer";
+import { isLeaseApprovedForDownstream, normalizeExpenseRuleFallback, normalizeExpenseRuleRows } from "@/lib/leaseReviewFieldNormalizer";
 
 function formatValue(value) {
   if (value === null || value === undefined || value === "") return "—";
@@ -16,9 +16,9 @@ function formatValue(value) {
  * Rich path: leaseExpenseRuleService.loadRuleSet() (same hook
  * ExpenseRulesTable/CamRulesTable already use, reused via
  * useLeaseExpenseRules() — not reimplemented), normalized via
- * normalizeExpenseRuleRows(). It intentionally does not fall back to raw
- * workflow_output or no-provider rows; lease expense/CAM rules become visible
- * only after lease approval publishes them to the persisted rule tables.
+ * normalizeExpenseRuleRows(). During review, source-backed extraction fallback
+ * rows are shown so reviewers can approve or correct expense/CAM terms before
+ * the lease approval publishes official downstream rule tables.
  */
 export default function CamExpenseRulesPanel({ lease }) {
   const leaseApproved = isLeaseApprovedForDownstream(lease);
@@ -27,8 +27,8 @@ export default function CamExpenseRulesPanel({ lease }) {
     if (Array.isArray(data?.rules) && data.rules.length > 0) {
       return normalizeExpenseRuleRows(data.rules);
     }
-    return [];
-  }, [data]);
+    return normalizeExpenseRuleFallback(lease);
+  }, [data, lease]);
 
   return (
     <Card>
@@ -42,11 +42,11 @@ export default function CamExpenseRulesPanel({ lease }) {
         <Badge className="bg-slate-100 text-slate-700">{rows.length} rules</Badge>
       </CardHeader>
       <CardContent>
-        {!leaseApproved ? (
+        {!leaseApproved && rows.length === 0 ? (
           <p className="text-sm text-slate-500">
-            Lease expense/CAM rules appear after the lease abstract is approved.
+            No source-backed expense/CAM rules were captured yet. Review can continue, but downstream rule publishing waits for lease approval.
           </p>
-        ) : isLoading && rows.length === 0 ? (
+        ) : leaseApproved && isLoading && rows.length === 0 ? (
           <p className="text-sm text-slate-500">Loading expense rules…</p>
         ) : rows.length === 0 ? (
           <p className="text-sm text-slate-500">

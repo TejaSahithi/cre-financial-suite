@@ -207,9 +207,32 @@ function sourceContainsNumber(value, sourceText) {
 
 function sourceContainsIsoDate(value, sourceText) {
   const raw = String(value ?? "").trim();
-  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return false;
-  const [, year, month, day] = match;
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const slash = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})$/);
+  const monthText = raw.match(/^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(\d{1,2}),?\s+(\d{4})$/i);
+  let year;
+  let month;
+  let day;
+  if (iso) {
+    [, year, month, day] = iso;
+  } else if (slash) {
+    month = slash[1].padStart(2, "0");
+    day = slash[2].padStart(2, "0");
+    year = slash[3].length === 2 ? `20${slash[3]}` : slash[3];
+  } else if (monthText) {
+    const monthNames = [
+      "january", "february", "march", "april", "may", "june",
+      "july", "august", "september", "october", "november", "december",
+    ];
+    const cleanedMonth = monthText[1].toLowerCase().replace(/\.$/, "");
+    const monthIndex = monthNames.findIndex((name) => name.startsWith(cleanedMonth));
+    if (monthIndex < 0) return false;
+    month = String(monthIndex + 1).padStart(2, "0");
+    day = monthText[2].padStart(2, "0");
+    year = monthText[3];
+  } else {
+    return false;
+  }
   const source = normalizeEvidenceText(sourceText);
   const monthNames = [
     "january", "february", "march", "april", "may", "june",
@@ -313,7 +336,7 @@ function normalizedEnumEvidenceSupportsValue(fieldKey, value, sourceText) {
   }
   if (fieldKey === "billing_frequency") {
     const patterns = {
-      monthly: /monthly|per\s+month|each\s+month|installments?\s+due.{0,40}first\s+day/i,
+      monthly: /monthly|per\s+month|each\s+month|installments?\s+due.{0,40}first\s+day|first\s+day\s+of\s+(?:each|every)\s+(?:calendar\s+)?month/i,
       quarterly: /quarterly|per\s+quarter/,
       annual: /annual|annually|per\s+year|yearly/,
       one_time: /one\s*time|one\s+time|single\s+payment/,
@@ -347,6 +370,28 @@ function responsibilityEvidenceSupportsValue(value, sourceText) {
   return genericEvidenceSupportsValue(value, sourceText) || /\bshared\b|\bboth\b|\bpro\s+rata\b|\breimburse\b|\bseparately\s+metered\b/.test(source);
 }
 
+function sourceLooksLikeRentScheduleRow(sourceText) {
+  const raw = String(sourceText || "");
+  const source = normalizeEvidenceText(raw);
+  const hasMoney = /\$\s*\d[\d,]*(?:\.\d{2})?/.test(raw);
+  const hasDateRange = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|20\d{2})\b.{0,40}(?:-|to|through|thru).{0,40}\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|20\d{2})\b/i.test(raw);
+  return hasMoney && (hasDateRange || /\b(?:base\s+rent|rent\s+schedule|rent\s+period)\b/.test(source));
+}
+
+function fieldCueFallbackSupports(fieldKey, value, sourceText) {
+  const normalizedKey = String(fieldKey || "").trim().toLowerCase();
+  const source = normalizeEvidenceText(sourceText);
+  if (["monthly_rent", "annual_rent"].includes(normalizedKey)) {
+    return sourceContainsNumber(value, sourceText) && sourceLooksLikeRentScheduleRow(sourceText);
+  }
+  if (normalizedKey === "billing_frequency") {
+    const normalizedValue = normalizeEnumText(value);
+    if (normalizedValue === "monthly") {
+      return /\b(?:first\s+day\s+of\s+(?:each|every)\s+(?:calendar\s+)?month|monthly\s+installments?|each\s+month|per\s+month)\b/.test(source);
+    }
+  }
+  return false;
+}
 export function validateFieldEvidenceSupport(fieldKey, value, evidence = {}) {
   if (value === null || value === undefined || value === "") return { valid: true };
   const typeValidation = validateFieldValue(fieldKey, value);
@@ -366,7 +411,7 @@ export function validateFieldEvidenceSupport(fieldKey, value, evidence = {}) {
 
   const normalizedKey = String(fieldKey || "").trim().toLowerCase();
   const cue = fieldCuePattern(normalizedKey);
-  if (cue && !cue.test(String(sourceText))) {
+  if (cue && !cue.test(String(sourceText)) && !fieldCueFallbackSupports(normalizedKey, value, sourceText)) {
     return { valid: false, reason: `Source text does not contain the expected ${normalizedKey.replace(/_/g, " ")} context.` };
   }
 

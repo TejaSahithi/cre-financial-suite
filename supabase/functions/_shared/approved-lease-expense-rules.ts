@@ -15,6 +15,11 @@ function cleanText(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+function uuidOrNull(value: unknown): string | null {
+  const text = cleanText(value);
+  return UUID_RE.test(text) ? text : null;
+}
+
 function normalizeToken(value: unknown): string {
   return cleanText(value)
     .toLowerCase()
@@ -671,10 +676,10 @@ function prepareRulePayload(lease: any, orgId: string, rule: any) {
       source_field_key: cleanText(rule?.source_field_key) || null,
       org_id: orgId,
       lease_id: lease.id,
-      tenant_id: lease?.tenant_id ?? null,
-      property_id: lease?.property_id ?? null,
-      building_id: lease?.building_id ?? null,
-      unit_id: lease?.unit_id ?? null,
+      tenant_id: uuidOrNull(lease?.tenant_id),
+      property_id: uuidOrNull(lease?.property_id),
+      building_id: uuidOrNull(lease?.building_id),
+      unit_id: uuidOrNull(lease?.unit_id),
       expense_category_id: null,
       expense_category: category,
       expense_subcategory: cleanText(rule?.expense_subcategory || rule?.subcategory_name) || null,
@@ -719,7 +724,9 @@ function prepareRulePayload(lease: any, orgId: string, rule: any) {
       review_status: approvalReady ? "approved" : "needs_review",
       approval_status: approvalReady ? "approved" : "draft",
       published_to_cam: publishToCam,
-      approved_by: approvalReady ? lease?.abstract_approved_by ?? lease?.approved_by ?? null : null,
+      approved_by: approvalReady
+        ? uuidOrNull(lease?.abstract_approved_by) ?? uuidOrNull(lease?.approved_by) ?? null
+        : null,
       approved_at: approvalReady ? lease?.abstract_approved_at ?? lease?.approved_at ?? new Date().toISOString() : null,
       notes: notes || null,
       source: "lease_workflow",
@@ -877,7 +884,7 @@ async function promoteApprovedLeaseRuleRows(supabaseAdmin: any, orgId: string, l
       review_status: "approved",
       approval_status: "approved",
       published_to_cam: publishToCam || row.published_to_cam === true,
-      approved_by: row.approved_by ?? actorUserId ?? null,
+      approved_by: uuidOrNull(row.approved_by) ?? uuidOrNull(actorUserId) ?? null,
       approved_at: row.approved_at ?? lease?.abstract_approved_at ?? lease?.approved_at ?? new Date().toISOString(),
     };
     if (
@@ -917,7 +924,7 @@ async function promoteApprovedLeaseRuleRows(supabaseAdmin: any, orgId: string, l
       .from("lease_expense_rule_sets")
       .update({
         status: "approved",
-        approved_by: actorUserId ?? lease?.abstract_approved_by ?? lease?.approved_by ?? null,
+        approved_by: uuidOrNull(actorUserId) ?? uuidOrNull(lease?.abstract_approved_by) ?? uuidOrNull(lease?.approved_by) ?? null,
         approved_at: lease?.abstract_approved_at ?? lease?.approved_at ?? new Date().toISOString(),
       })
       .eq("id", ruleSetId)
@@ -936,7 +943,8 @@ async function materializeApprovedLeaseRecoveryPolicies(
   actorUserId: string | null,
   actorEmail: string | null,
 ) {
-  if (!actorUserId) {
+  const actorUuid = uuidOrNull(actorUserId);
+  if (!actorUuid) {
     return {
       created: 0,
       reused: 0,
@@ -964,7 +972,7 @@ async function materializeApprovedLeaseRecoveryPolicies(
     const { data, error: materializeError } = await supabaseAdmin.rpc("materialize_lease_recovery_policy", {
       p_org_id: orgId,
       p_rule_id: ruleId,
-      p_actor_user_id: actorUserId,
+      p_actor_user_id: actorUuid,
       p_actor_email: actorEmail,
     });
     if (materializeError) {
@@ -1001,6 +1009,7 @@ export async function publishApprovedLeaseExpenseArtifacts({
   force?: boolean;
 }) {
   if (!lease?.id) throw new Error("lease_id is required");
+  const actorUuid = uuidOrNull(actorUserId);
   if (!isLeaseApprovedForExpensePublication(lease)) {
     throw new Error("Lease abstract must be approved before expense/CAM rules can be published");
   }
@@ -1134,13 +1143,13 @@ export async function publishApprovedLeaseExpenseArtifacts({
   const { data: saved, error: saveError } = await supabaseAdmin.rpc("save_lease_expense_rule_set", {
     p_org_id: orgId,
     p_lease_id: lease.id,
-    p_actor_user_id: actorUserId,
+    p_actor_user_id: actorUuid,
     p_actor_email: actorEmail,
     p_rule_set_id: existingSet?.id ?? null,
     p_version: existingSet?.version ?? 1,
     p_status: "draft",
     p_extraction_version: publicationExtractionVersion,
-    p_property_id: lease?.property_id ?? null,
+    p_property_id: uuidOrNull(lease?.property_id),
     p_rules: prepared.map((item) => item.rule),
     p_values: prepared.map((item) => item.value).filter(Boolean),
     p_clauses: prepared.map((item) => item.clause),
@@ -1185,6 +1194,7 @@ export async function publishApprovedLeaseExpenseArtifacts({
 export const __test__ = {
   cleanText,
   normalizeToken,
+  uuidOrNull,
   exactSourceText,
   canonicalRuleKey,
   prepareRulePayload,

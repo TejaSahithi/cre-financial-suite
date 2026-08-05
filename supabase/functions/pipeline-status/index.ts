@@ -267,7 +267,18 @@ async function maybeResumeBoundedEnrichment(supabaseAdmin: any, record: Record<s
   }
 
   const nextStage = resolveNextBoundedEnrichStageToResume({ results, generationId, sequence: ENRICH_STAGE_SEQUENCE });
-  if (!nextStage) return null;
+  if (!nextStage) {
+    const { data, error } = await supabaseAdmin.rpc("finalize_lease_extraction_for_review", {
+      p_org_id: orgId,
+      p_uploaded_file_id: fileId,
+      p_generation_id: generationId,
+    });
+    if (error) {
+      console.warn("[pipeline-status] bounded enrichment appears complete but readiness finalization failed:", error.message);
+      return { finalized: false, finalization_error: error.message };
+    }
+    return { finalized: true, readiness: data?.readiness ?? null, ready: data?.ready ?? null };
+  }
 
   const enqueued = await enqueueBoundedEnrichStage({
     supabaseAdmin,

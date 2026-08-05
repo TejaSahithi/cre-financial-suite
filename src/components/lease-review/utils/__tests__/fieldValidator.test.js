@@ -307,3 +307,32 @@ describe("validateFieldEvidenceSupport - field-aware source/value alignment", ()
     expect(result.reason).toMatch(/no source text/i);
   });
 });
+
+describe("validateFieldEvidenceSupport - rent schedule and billing frequency evidence", () => {
+  it("accepts monthly rent from a source-backed rent schedule row", () => {
+    const result = validateFieldEvidenceSupport("monthly_rent", "$18,562.50", {
+      sourceText: "Jul 1, 2026 - Jun 30, 2027 $18,562.50",
+      sourcePage: 2,
+      extractionStatus: "extracted",
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it("accepts annual rent from a source-backed rent schedule row", () => {
+    const result = validateFieldEvidenceSupport("annual_rent", "$222,750.00", {
+      sourceText: "Jul 1, 2026 - Jun 30, 2027 $18,562.50 $222,750.00",
+      sourcePage: 2,
+      extractionStatus: "extracted",
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it("accepts monthly billing frequency from first-day-of-month rent language", () => {
+    const result = validateFieldEvidenceSupport("billing_frequency", "monthly", {
+      sourceText: "Base rent is due on the first day of each month without notice, demand, offset, deduction, or counterclaim.",
+      sourcePage: 2,
+      extractionStatus: "extracted",
+    });
+    expect(result.valid).toBe(true);
+  });
+});
