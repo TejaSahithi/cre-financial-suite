@@ -145,7 +145,10 @@ describe("leaseReviewCurrentPolicy", () => {
   it("keeps Lease Review action handlers while hiding advisory readiness chrome", () => {
     const source = readFileSync(resolve(process.cwd(), "src/pages/LeaseReview.jsx"), "utf8");
 
-    expect(source).toContain("const handleAccept = (field) =>");
+    expect(source).toContain("const handleAccept = async (field) =>");
+    expect(source).toContain("const reviewValue = activeReview?.value ?? activeReview?.normalized_value ?? activeReview?.normalizedValue ?? null");
+    expect(source).toContain("action: \"field_accept_backfill\"");
+    expect(source).toContain("source: \"review_accept\"");
     expect(source).toContain("const handleMarkNA = (field) =>");
     expect(source).toContain("const handleNeedsLegal = (field) =>");
     expect(source).toContain("const handleMarkManualRequired = (field) =>");
@@ -164,11 +167,16 @@ describe("leaseReviewCurrentPolicy", () => {
     expect(source).toContain("const isFieldReviewResolved = (key) => isResolvedReview(getReviewForFieldKey(key).review)");
     expect(source).toContain("const reviewKeys = [...new Set([key, ...getFieldAliases(key)])]");
     expect(source).toContain("const reviewClearsAutomatedValidation");
+    expect(source).toContain("['accepted', 'approved'].includes(reviewStatus)");
     expect(source).toContain("existingValidationErrors.length > 0 && !reviewClearsAutomatedValidation");
     expect(source).toContain("reviewStatus === REVIEW_STATUSES.EDITED && reviewClearsAutomatedValidation");
     expect(source).toContain("explicit reviewer decision; downstream treats value as not approved");
     expect(source).toContain("const hasReviewerResolvedReviewPayload");
     expect(source).toContain("uploadedFile && !isReviewReady && !hasReviewerResolvedReviewPayload");
+    expect(source).toContain("function approvalBlockerDetail(blocker)");
+    expect(source).toContain("return `${resolvedLabel} [${resolvedTab}]`");
+    expect(source).toContain(".map(approvalBlockerDetail)");
+    expect(source).not.toContain("requiredBlockerDetails.push({ key, label: fieldDef.label || key, reason: \"Field failed validation\" })");
   });
 });
 

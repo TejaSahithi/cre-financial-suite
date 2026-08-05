@@ -211,6 +211,41 @@ function leaseExtractionProviderLabel(extractionSummary) {
   return humanizeExtractionToken(extractionSummary.effectiveProvider || extractionSummary.requestedProvider);
 }
 
+const LEASE_REVIEW_TAB_LABEL_BY_KEY = Object.fromEntries(
+  LEASE_REVIEW_TABS.map((tab) => [tab.key, tab.label]),
+);
+
+const LEASE_REVIEW_FIELD_BY_KEY = Object.fromEntries(
+  LEASE_REVIEW_FIELDS.map((field) => [field.key, field]),
+);
+
+function approvalFieldTabLabel(field) {
+  const tabKey = field?.tab || field?.tab_key || field?.tabKey || field?.section || field?.group;
+  return LEASE_REVIEW_TAB_LABEL_BY_KEY[tabKey] || tabKey || "Review";
+}
+
+function approvalFieldLabel({ key, label, tab, row, fieldDef } = {}) {
+  const schemaField = LEASE_REVIEW_FIELD_BY_KEY[key];
+  const resolvedLabel = label || fieldDef?.label || row?.label || schemaField?.label || getFieldPolicyLabel(key);
+  const resolvedTab = approvalFieldTabLabel({ tab: tab || row?.tab || fieldDef?.tab || schemaField?.tab });
+  return `${resolvedLabel} [${resolvedTab}]`;
+}
+
+function approvalReasonText(reason) {
+  const text = String(reason || "").trim();
+  if (!text) return "Needs review";
+  const parts = text.split(",").map((part) => part.trim()).filter(Boolean);
+  if (parts.length > 1) return parts.map(approvalReasonText).join(", ");
+  if (/^[a-z0-9_]+_failed_validation$/i.test(text)) {
+    return `Field failed validation (${text})`;
+  }
+  return text;
+}
+
+function approvalBlockerDetail(blocker) {
+  return `${approvalFieldLabel(blocker)} - ${approvalReasonText(blocker?.reason)}`;
+}
+
 export default function LeaseReview() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -1329,6 +1364,7 @@ export default function LeaseReview() {
         reviewStatus !== REVIEW_STATUSES.N_A &&
         (
           reviewStatus === REVIEW_STATUSES.MANUAL_REQUIRED ||
+          ['accepted', 'approved'].includes(reviewStatus) ||
           (reviewHasValue && (reviewHasEvidence || reviewHasOverride))
         );
       
@@ -1342,9 +1378,14 @@ export default function LeaseReview() {
       ];
       if (existingValidationErrors.length > 0 && !reviewClearsAutomatedValidation) {
         if (isRequired) {
-          validationBlockers.push({ key, label: fieldDef.label || key, reason: existingValidationErrors.join(", ") });
-          requiredBlockers.push(key);
-          requiredBlockerDetails.push({ key, label: fieldDef.label || key, reason: "Field failed validation" });
+          validationBlockers.push({
+            key,
+            label: fieldDef.label || row?.label || key,
+            tab: row?.tab || fieldDef.tab,
+            row,
+            fieldDef,
+            reason: existingValidationErrors.join(", "),
+          });
         } else {
           optionalUnresolved.push(key);
         }
@@ -1364,7 +1405,14 @@ export default function LeaseReview() {
 
       if (isRequired && (lease?.extraction_data?.conflicts?.[key] || row?.evidence_type === "conflict") && !isResolvedReview(review)) {
         requiredBlockers.push(key);
-        requiredBlockerDetails.push({ key, label: fieldDef.label || key, reason: "Unresolved Conflict" });
+        requiredBlockerDetails.push({
+          key,
+          label: fieldDef.label || row?.label || key,
+          tab: row?.tab || fieldDef.tab,
+          row,
+          fieldDef,
+          reason: "Unresolved Conflict",
+        });
         return;
       }
       
@@ -1411,8 +1459,19 @@ export default function LeaseReview() {
       let reason = "";
 
       if (validationErrors.length > 0) {
-        validationBlockers.push({ key, label: fieldDef.label || key, reason: validationErrors.join(", ") });
-        reason = "Field failed validation";
+        if (isRequired) {
+          validationBlockers.push({
+            key,
+            label: fieldDef.label || row?.label || key,
+            tab: row?.tab || fieldDef.tab,
+            row,
+            fieldDef,
+            reason: validationErrors.join(", "),
+          });
+        } else {
+          optionalUnresolved.push(key);
+        }
+        return;
       } else if (['manual', 'manual_edited'].includes(extractionStatus) || ['edited', 'manual_resolved', REVIEW_STATUSES.N_A].includes(reviewStatus)) {
         eligible = true;
       } else if (['extracted', 'extracted_no_confidence', 'extracted_text_match'].includes(extractionStatus)) {
@@ -1468,7 +1527,14 @@ export default function LeaseReview() {
           } else {
             // Required extraction gaps are hard blockers.
             requiredBlockers.push(key);
-            requiredBlockerDetails.push({ key, label: fieldDef.label || key, reason: reason || "Needs Review" });
+            requiredBlockerDetails.push({
+              key,
+              label: fieldDef.label || row?.label || key,
+              tab: row?.tab || fieldDef.tab,
+              row,
+              fieldDef,
+              reason: reason || (hasValue ? "Needs review decision" : "Missing Value"),
+            });
           }
         } else {
           optionalUnresolved.push(key);
@@ -1503,7 +1569,7 @@ export default function LeaseReview() {
       kind: "validation_errors",
       title: `${bulkEvaluation.validationBlockers.length} field validation error(s) must be resolved before approval`,
       detail: bulkEvaluation.validationBlockers
-        .map((b) => `${b.label} (${b.reason})`)
+        .map(approvalBlockerDetail)
         .join(", "),
     });
   }
@@ -1513,7 +1579,7 @@ export default function LeaseReview() {
       kind: "required_pending",
       title: `${bulkEvaluation.requiredBlockers.length} required field(s) must be resolved before approval`,
       detail: bulkEvaluation.requiredBlockerDetails
-        .map((b) => `${b.label} (${b.reason})`)
+        .map(approvalBlockerDetail)
         .join(", "),
     });
   }
@@ -1623,7 +1689,7 @@ export default function LeaseReview() {
     }
   };
 
-  const handleAccept = (field) => {
+  const handleAccept = async (field) => {
     const key = getReviewFieldKey(field);
     if (!key) {
       toast.error("Cannot accept field: missing field key.");
@@ -1644,18 +1710,21 @@ export default function LeaseReview() {
     // value is fine.
     const cached = queryClient.getQueryData(["lease", leaseId]);
     const freshLease = Array.isArray(cached) ? (cached[0] ?? lease) : (cached || lease);
+    const activeReview = getReviewForFieldKey(key).review;
     const rowValue = field?.normalized_value ?? field?.normalizedValue ?? field?.value ?? null;
-    const value = readFieldValue(freshLease, key) ?? rowValue;
+    const reviewValue = activeReview?.value ?? activeReview?.normalized_value ?? activeReview?.normalizedValue ?? null;
+    const value = readFieldValue(freshLease, key) ?? reviewValue ?? rowValue;
     const storedEvidence = readFieldEvidence(freshLease, key);
     const evidence = {
       ...(storedEvidence || {}),
-      sourceText: storedEvidence?.sourceText ?? field?.source_text ?? field?.exact_source_text ?? field?.sourceText ?? null,
-      sourcePage: storedEvidence?.sourcePage ?? field?.source_page ?? field?.page_number ?? field?.sourcePage ?? null,
-      extractionStatus: storedEvidence?.extractionStatus ?? field?.extraction_status ?? field?.status ?? null,
-      evidenceType: storedEvidence?.evidenceType ?? field?.evidence_type ?? null,
-      sourceTextQuality: storedEvidence?.sourceTextQuality ?? field?.source_text_quality ?? null,
-      sourceFieldKeys: storedEvidence?.sourceFieldKeys ?? field?.source_field_keys ?? null,
-      derivationTrace: storedEvidence?.derivationTrace ?? field?.derivation_trace ?? null,
+      sourceText: storedEvidence?.sourceText ?? activeReview?.source_text ?? activeReview?.exact_source_text ?? field?.source_text ?? field?.exact_source_text ?? field?.sourceText ?? null,
+      sourcePage: storedEvidence?.sourcePage ?? activeReview?.source_page ?? activeReview?.page_number ?? field?.source_page ?? field?.page_number ?? field?.sourcePage ?? null,
+      rawValue: storedEvidence?.rawValue ?? activeReview?.raw_value ?? activeReview?.rawValue ?? field?.raw_value ?? field?.rawValue ?? value,
+      extractionStatus: storedEvidence?.extractionStatus ?? activeReview?.extraction_status ?? field?.extraction_status ?? field?.status ?? null,
+      evidenceType: storedEvidence?.evidenceType ?? activeReview?.evidence_type ?? field?.evidence_type ?? null,
+      sourceTextQuality: storedEvidence?.sourceTextQuality ?? activeReview?.source_text_quality ?? field?.source_text_quality ?? null,
+      sourceFieldKeys: storedEvidence?.sourceFieldKeys ?? activeReview?.source_field_keys ?? field?.source_field_keys ?? null,
+      derivationTrace: storedEvidence?.derivationTrace ?? activeReview?.derivation_trace ?? field?.derivation_trace ?? null,
     };
     const hasEvidence = hasValidSourceEvidence(evidence);
 
@@ -1692,8 +1761,66 @@ export default function LeaseReview() {
       toast.error("Cannot accept a calculated value as extracted. Edit/confirm it with source evidence, or mark Manual Required.");
       return;
     }
+
+    const storedValue = readFieldValue(freshLease, key);
+    if (!isMeaningfulValue(storedValue) && isMeaningfulValue(value)) {
+      setFieldSaving(true);
+      try {
+        const sourceText = evidence.sourceText ?? null;
+        const sourcePage = evidence.sourcePage ?? null;
+        const fieldPatch = {
+          ...(fieldRecord || {}),
+          value,
+          raw_value: evidence.rawValue ?? value,
+          manually_edited: true,
+          edited_at: new Date().toISOString(),
+          source: "review_accept",
+          extraction_status: isManualOverride ? extractionStatus : "manual_resolved",
+          ...(sourcePage != null ? { source_page: sourcePage, page: sourcePage, page_number: sourcePage } : {}),
+          ...(sourceText
+            ? {
+                source_text: sourceText,
+                exact_source_text: sourceText,
+                source_clause: sourceText,
+                snippet: sourceText,
+              }
+            : {}),
+        };
+        const evidencePatch = {
+          ...(freshLease?.extraction_data?.field_evidence?.[key] || {}),
+          raw_value: evidence.rawValue ?? value,
+          value,
+          extraction_status: fieldPatch.extraction_status,
+          ...(sourcePage != null ? { source_page: sourcePage, page_number: sourcePage } : {}),
+          ...(sourceText ? { source_text: sourceText, exact_source_text: sourceText, source_clause: sourceText } : {}),
+        };
+        await updateLeaseExtractionField({
+          leaseId: lease.id,
+          fieldArea: "field_value",
+          action: "field_accept_backfill",
+          fieldKey: key,
+          patch: {
+            field: fieldPatch,
+            field_evidence: evidencePatch,
+          },
+        });
+        const nextExtraction = {
+          ...(freshLease.extraction_data || {}),
+          fields: { ...(freshLease.extraction_data?.fields || {}), [key]: fieldPatch },
+          field_evidence: { ...(freshLease.extraction_data?.field_evidence || {}), [key]: evidencePatch },
+        };
+        updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
+      } catch (err) {
+        console.error("[LeaseReview] accept backfill failed:", err);
+        toast.error(err?.message || `Could not save ${field?.label || key}`);
+        return;
+      } finally {
+        setFieldSaving(false);
+      }
+    }
+
     return persistFieldAction({
-      field: { ...field, key },
+      field: { ...field, key, value, normalized_value: value },
       status: REVIEW_STATUSES.ACCEPTED,
       value,
       evidence,
@@ -3396,12 +3523,16 @@ export default function LeaseReview() {
                 </p>
                 <ul className="mt-2 space-y-1 text-xs">
                   {requiredFieldKeys.map((key) => {
-                    const field = LEASE_REVIEW_FIELDS.find((f) => f.key === key) || standardRowByKey.get(key) || { label: getFieldPolicyLabel(key) };
+                    const field = LEASE_REVIEW_FIELDS.find((f) => f.key === key) || standardRowByKey.get(key) || { key, label: getFieldPolicyLabel(key) };
                     const { review } = getReviewForFieldKey(key);
                     const resolved = isResolvedReview(review);
+                    const tabLabel = approvalFieldTabLabel(field);
                     return (
                       <li key={key} className="flex items-center justify-between gap-2 rounded border border-slate-200 bg-slate-50 px-2 py-1">
-                        <span className="text-slate-600">{field?.label || key}</span>
+                        <span className="min-w-0 text-slate-600">
+                          <span className="truncate">{field?.label || key}</span>
+                          <span className="ml-1 text-slate-400">[{tabLabel}]</span>
+                        </span>
                         <Badge className={resolved ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}>
                           {resolved ? REVIEW_STATUS_LABELS[review?.status] : "Pending"}
                         </Badge>
