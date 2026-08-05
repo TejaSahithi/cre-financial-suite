@@ -703,6 +703,32 @@ function sectionDeadlineReserveMs(): number {
   return envBoundedInt("LEASE_WHOLE_DOCUMENT_LLM_SECTION_DEADLINE_RESERVE_MS", 20_000, 5_000, 60_000);
 }
 
+/**
+ * Fraction of section calls that may fail (truncated, mass-omission, invalid
+ * structured response, context limit) before the whole sectioned run is
+ * rejected as unusable.
+ *
+ * A failed section is not model sloppiness -- `runWholeDocumentLlmOnCompact`
+ * already tolerates up to `maxOmittedFieldRatio()` missing fields per call
+ * before it reports `method: "fallback"`. By the time a section reaches that
+ * state, its slice of the document produced no usable answer at all. Without
+ * this guard, `mergeSectionedWholeDocumentResults` only counted the failure in
+ * `section_failure_count` diagnostics and still returned the run as a success,
+ * silently reporting every field that only appeared in that slice as
+ * "not_stated_or_not_found_in_sections" -- the exact same silent-data-loss
+ * shape the per-call guards above were added to close, one layer up.
+ *
+ * Default 0 is deliberately strict (unlike `maxOmittedFieldRatio`'s 0.5):
+ * there is no legitimate reason for an entire section call to fail, so any
+ * failure is worth surfacing rather than absorbing.
+ */
+function maxSectionFailureRatio(): number {
+  const raw = (Deno.env.get("LEASE_WHOLE_DOCUMENT_LLM_MAX_SECTION_FAILURE_RATIO") ?? "").trim();
+  if (raw === "") return 0;
+  const configured = Number(raw);
+  return Number.isFinite(configured) && configured >= 0 && configured <= 1 ? configured : 0;
+}
+
 function isMeaningfulValue(value: unknown): boolean {
   if (value == null) return false;
   if (typeof value === "string") return value.trim().length > 0;
@@ -1221,6 +1247,7 @@ function mergeSectionedWholeDocumentResults(args: {
   const validationErrors: ValidationError[] = [];
   const dynamicItems: any[] = [];
   const expenseRuleCandidates: any[] = [];
+  const failedSections: Array<Record<string, unknown>> = [];
   let llmCallCount = 0;
   let inputTokens = 0;
   let outputTokens = 0;
@@ -1244,6 +1271,12 @@ function mergeSectionedWholeDocumentResults(args: {
     outputTokens += Number(debug.output_tokens ?? 0) || 0;
     if (result.method === "fallback" || !Array.isArray(result.rows) || result.rows.length === 0) {
       sectionFailureCount++;
+      failedSections.push({
+        section_index: sectionIndex + 1,
+        failure_classification: debug.failure_classification ?? null,
+        finish_reason: debug.finish_reason ?? null,
+        message: result.warnings?.[0] ?? null,
+      });
     }
     if (Array.isArray(debug.dynamic_items)) dynamicItems.push(...debug.dynamic_items);
     if (Array.isArray(debug.expense_rule_candidates)) {
@@ -1276,6 +1309,37 @@ function mergeSectionedWholeDocumentResults(args: {
       existing.push(candidate);
       candidatesByField.set(fieldKey, existing);
     }
+  }
+
+  // Aggregate section-failure guard. Each section call already absorbed its
+  // own tolerable sloppiness (see maxOmittedFieldRatio); a section reaching
+  // `method: "fallback"` means that slice of the document was never actually
+  // answered. Publishing the merge anyway would silently report every field
+  // that only appears in a failed section as "not stated", indistinguishable
+  // from the lease genuinely being silent about it.
+  const sectionFailureRatio = args.sectionCount > 0 ? sectionFailureCount / args.sectionCount : 0;
+  if (sectionFailureCount > 0 && sectionFailureRatio > maxSectionFailureRatio()) {
+    return failureResult(
+      args.startedAt,
+      `Sectioned whole-document LLM failed ${sectionFailureCount} of ${args.sectionCount} section calls ` +
+      `(${(sectionFailureRatio * 100).toFixed(1)}%), above the ${(maxSectionFailureRatio() * 100).toFixed(1)}% ` +
+      `limit. Each failed section means its slice of the document produced no usable answer, so fields that ` +
+      `only appear there would otherwise be silently reported as not stated. The response is incomplete and ` +
+      `must not be published as an extraction.`,
+      {
+        failure_classification: "SECTIONED_RESPONSE_SECTION_FAILURES",
+        architecture: "llm_sectioned_reduce",
+        section_count: args.sectionCount,
+        section_failure_count: sectionFailureCount,
+        section_failure_ratio: Number(sectionFailureRatio.toFixed(4)),
+        max_section_failure_ratio: maxSectionFailureRatio(),
+        section_deadline_exhausted: Boolean(args.deadlineExhausted),
+        failed_sections: failedSections,
+        original_prompt_chars: args.originalPromptChars,
+        max_input_chars: args.maxInputChars,
+        compact_document: args.parentCompact.diagnostics,
+      },
+    );
   }
 
   const mergedRecord: ExtractedRecord = { rowIndex: 0, fields: {} };
@@ -1441,6 +1505,9 @@ function mergeSectionedWholeDocumentResults(args: {
           conflict_fields: conflictFields,
           section_count: args.sectionCount,
           section_failure_count: sectionFailureCount,
+          section_failure_ratio: Number(sectionFailureRatio.toFixed(4)),
+          max_section_failure_ratio: maxSectionFailureRatio(),
+          failed_sections: failedSections,
           section_deadline_exhausted: Boolean(args.deadlineExhausted),
           section_document_budget_chars: args.sectionDocumentBudget,
           original_prompt_chars: args.originalPromptChars,
@@ -1608,6 +1675,7 @@ export const __test__ = {
   maxWholeDocumentOutputTokens,
   isTruncatedFinishReason,
   maxOmittedFieldRatio,
+  maxSectionFailureRatio,
   normalizeDynamicFieldKey,
   validateDynamicValue,
   buildDynamicItems,

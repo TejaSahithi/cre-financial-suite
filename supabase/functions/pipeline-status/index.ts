@@ -354,6 +354,15 @@ function formatFileRecord(record: Record<string, any>, extras: Record<string, an
         failure_classification: openaiFactLedgerDebug.failure_classification ?? null,
         failure_http_status: openaiFactLedgerDebug.failure_http_status ?? null,
         document_index_source: openaiFactLedgerDebug.document_index_source ?? null,
+        // Sectioned/large-document architecture only: a failed section means
+        // that slice of the lease produced no usable answer at all (see
+        // failure_classification "SECTIONED_RESPONSE_SECTION_FAILURES").
+        section_count: openaiFactLedgerDebug.section_count ?? null,
+        section_failure_count: openaiFactLedgerDebug.section_failure_count ?? null,
+        section_failure_ratio: openaiFactLedgerDebug.section_failure_ratio ?? null,
+        max_section_failure_ratio: openaiFactLedgerDebug.max_section_failure_ratio ?? null,
+        section_deadline_exhausted: openaiFactLedgerDebug.section_deadline_exhausted ?? null,
+        failed_sections: openaiFactLedgerDebug.failed_sections ?? null,
       }
       : null,
     ui_review_payload: record.ui_review_payload ?? null,
