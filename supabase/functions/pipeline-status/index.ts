@@ -233,7 +233,14 @@ function normalizedOutputReadyForBoundedEnrichment(record: Record<string, any>, 
     return false;
   }
   const normalizedGenerationId = normalizedOutput?.metadata?.generation_id ?? null;
-  return Boolean(normalizedGenerationId && generationId && normalizedGenerationId === generationId);
+  if (normalizedGenerationId && generationId && normalizedGenerationId === generationId) {
+    return true;
+  }
+  const activeGenId = record?.active_generation_id ?? null;
+  if (activeGenId && generationId && activeGenId === generationId && normalizedOutput.rows.length > 0) {
+    return true;
+  }
+  return false;
 }
 
 async function findActiveNormalizePrerequisite(supabaseAdmin: any, fileId: string, orgId: string, generationId: string) {
