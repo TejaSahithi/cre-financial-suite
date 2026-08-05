@@ -38,6 +38,38 @@ export default function SuperAdmin() {
   const [selectedOrgs, setSelectedOrgs] = useState(new Set());
   const authChecked = !!user || true;
 
+  const [userRoleFilter, setUserRoleFilter] = useState("all");
+  const [userSearch, setUserSearch] = useState("");
+
+  const { data: allUsers = [], isLoading: isLoadingAllUsers } = useQuery({
+    queryKey: ['all-platform-users'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("memberships")
+        .select(`
+          id,
+          user_id,
+          role,
+          created_at,
+          organizations (id, name, status),
+          profiles!user_id (id, email, full_name)
+        `)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return (data || []).map(m => ({
+        membership_id: m.id,
+        user_id: m.user_id,
+        email: m.profiles?.email || "—",
+        full_name: m.profiles?.full_name || "—",
+        role: m.role || "member",
+        org_id: m.organizations?.id || null,
+        org_name: m.organizations?.name || "Global / Unassigned",
+        created_at: m.created_at
+      }));
+    },
+    enabled: authChecked,
+  });
+
   const { data: platformAdmins = [], isLoading: isLoadingAdmins } = useQuery({
     queryKey: ['platform-admins'],
     queryFn: async () => {
@@ -818,51 +850,124 @@ export default function SuperAdmin() {
           )}
         </TabsContent>
 
-        <TabsContent value="users" className="mt-4">
+        <TabsContent value="users" className="mt-4 space-y-4">
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardHeader className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-3">
               <div>
-                <CardTitle className="text-base">Platform Administrators</CardTitle>
-                <p className="text-xs text-slate-400">Manage users with full administrative access to the platform.</p>
+                <CardTitle className="text-base">User &amp; Role Management</CardTitle>
+                <p className="text-xs text-slate-400">All registered platform administrators, organization admins, and team members across all organizations.</p>
               </div>
-              <Button onClick={() => setShowPlatformInviteModal(true)} size="sm" className="bg-blue-600 hover:bg-blue-700 h-8 text-xs">
-                <Shield className="w-3 h-3 mr-2" /> Invite Admin
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                  <Input
+                    placeholder="Search name, email, org..."
+                    value={userSearch}
+                    onChange={(e) => setUserSearch(e.target.value)}
+                    className="pl-8 h-8 w-48 text-xs"
+                  />
+                </div>
+                <Button onClick={() => setShowPlatformInviteModal(true)} size="sm" className="bg-purple-600 hover:bg-purple-700 h-8 text-xs">
+                  <Shield className="w-3.5 h-3.5 mr-1.5" /> Invite SuperAdmin
+                </Button>
+                <Button onClick={() => { setShowInviteModal(true); setInviteEmail(""); setInviteSuccess(false); }} size="sm" className="bg-blue-600 hover:bg-blue-700 h-8 text-xs">
+                  <Users className="w-3.5 h-3.5 mr-1.5" /> Invite Org Admin
+                </Button>
+                <a href="/user-management" className="text-xs text-blue-600 hover:underline flex items-center font-medium ml-1">
+                  Full Console →
+                </a>
+              </div>
             </CardHeader>
             <CardContent className="p-0">
+              <div className="flex items-center gap-2 px-4 py-2 border-b border-slate-100 bg-slate-50/50">
+                <span className="text-xs font-semibold text-slate-500 uppercase mr-1">Role Filter:</span>
+                {[
+                  { key: "all", label: `All Users (${allUsers.length})` },
+                  { key: "org_admin", label: `Org Admins (${allUsers.filter(u => u.role === "org_admin").length})` },
+                  { key: "super_admin", label: `Platform Admins (${allUsers.filter(u => u.role === "super_admin").length})` },
+                  { key: "manager", label: `Managers (${allUsers.filter(u => u.role === "manager").length})` },
+                ].map(tab => (
+                  <Button
+                    key={tab.key}
+                    variant={userRoleFilter === tab.key ? "default" : "ghost"}
+                    size="sm"
+                    className={`h-7 text-xs ${userRoleFilter === tab.key ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-200/60"}`}
+                    onClick={() => setUserRoleFilter(tab.key)}
+                  >
+                    {tab.label}
+                  </Button>
+                ))}
+              </div>
+
               <Table>
                 <TableHeader>
                   <TableRow className="bg-slate-50">
                     <TableHead className="text-[11px]">NAME</TableHead>
                     <TableHead className="text-[11px]">EMAIL</TableHead>
+                    <TableHead className="text-[11px]">ORGANIZATION</TableHead>
                     <TableHead className="text-[11px]">ROLE</TableHead>
-                    <TableHead className="text-[11px]">ACTIONS</TableHead>
+                    <TableHead className="text-[11px]">JOINED</TableHead>
+                    <TableHead className="text-[11px] text-right">ACTIONS</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {isLoadingAdmins ? (
-                    <TableRow><TableCell colSpan={4} className="text-center py-8"><Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" /></TableCell></TableRow>
-                  ) : platformAdmins.length === 0 ? (
-                    <TableRow><TableCell colSpan={4} className="text-center py-8 text-sm text-slate-400">No platform admins found</TableCell></TableRow>
-                  ) : platformAdmins.map(admin => (
-                    <TableRow key={admin.membership_id}>
-                      <TableCell className="font-medium text-sm">{admin.full_name}</TableCell>
-                      <TableCell className="text-sm text-slate-500">{admin.email}</TableCell>
+                  {isLoadingAllUsers ? (
+                    <TableRow><TableCell colSpan={6} className="text-center py-8"><Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" /></TableCell></TableRow>
+                  ) : allUsers.filter(u => {
+                    const matchFilter = userRoleFilter === "all" || u.role === userRoleFilter;
+                    const q = userSearch.toLowerCase().trim();
+                    const matchSearch = !q || u.full_name?.toLowerCase().includes(q) || u.email?.toLowerCase().includes(q) || u.org_name?.toLowerCase().includes(q);
+                    return matchFilter && matchSearch;
+                  }).length === 0 ? (
+                    <TableRow><TableCell colSpan={6} className="text-center py-8 text-sm text-slate-400">No users found matching your filters</TableCell></TableRow>
+                  ) : allUsers.filter(u => {
+                    const matchFilter = userRoleFilter === "all" || u.role === userRoleFilter;
+                    const q = userSearch.toLowerCase().trim();
+                    const matchSearch = !q || u.full_name?.toLowerCase().includes(q) || u.email?.toLowerCase().includes(q) || u.org_name?.toLowerCase().includes(q);
+                    return matchFilter && matchSearch;
+                  }).map(u => (
+                    <TableRow key={u.membership_id}>
                       <TableCell>
-                        <Badge className="bg-purple-100 text-purple-700 hover:bg-purple-100 border-none text-[10px]">Super Admin</Badge>
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold">
+                            {u.full_name?.substring(0, 2).toUpperCase() || "U"}
+                          </div>
+                          <span className="font-medium text-sm text-slate-900">{u.full_name}</span>
+                        </div>
                       </TableCell>
+                      <TableCell className="text-sm text-slate-600 font-mono text-xs">{u.email}</TableCell>
+                      <TableCell className="text-sm font-medium text-slate-800">{u.org_name}</TableCell>
                       <TableCell>
-                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-red-500 hover:text-red-600 hover:bg-red-50" disabled={admin.user_id === user.id} onClick={async () => {
-                          if (!window.confirm(`Remove ${admin.email} from platform admins?`)) return;
-                          try {
-                            await supabase.from("memberships").delete().eq("id", admin.membership_id);
-                            queryClient.invalidateQueries({ queryKey: ['platform-admins'] });
-                            const { toast } = await import("sonner");
-                            toast.success("Admin removed");
-                          } catch (e) { console.error(e); }
-                        }}>
-                          <X className="w-4 h-4" />
-                        </Button>
+                        <Badge className={`text-[10px] uppercase font-semibold ${
+                          u.role === "super_admin" ? "bg-purple-100 text-purple-700" :
+                          u.role === "org_admin" ? "bg-emerald-100 text-emerald-700" :
+                          "bg-blue-100 text-blue-700"
+                        }`}>
+                          {u.role === "super_admin" ? "SuperAdmin" : u.role === "org_admin" ? "Org Admin" : u.role}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs text-slate-400">
+                        {u.created_at ? new Date(u.created_at).toLocaleDateString() : "—"}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {u.role === "super_admin" && u.user_id !== user.id && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0 text-red-500 hover:text-red-600 hover:bg-red-50"
+                            onClick={async () => {
+                              if (!window.confirm(`Remove ${u.email} from platform admins?`)) return;
+                              try {
+                                await supabase.from("memberships").delete().eq("id", u.membership_id);
+                                queryClient.invalidateQueries({ queryKey: ['all-platform-users'] });
+                                const { toast } = await import("sonner");
+                                toast.success("Admin removed");
+                              } catch (e) { console.error(e); }
+                            }}
+                          >
+                            <X className="w-4 h-4" />
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
