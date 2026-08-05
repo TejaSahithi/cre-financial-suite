@@ -103,6 +103,117 @@ function isParagraphLikeReviewValue(value) {
   if ((text.match(/[.!?]\s+/g) || []).length >= 2) return true;
   return text.length > 120 && /\b(?:this lease|tenant shall|landlord shall|hereby|provided however|notwithstanding|subject to|pursuant to)\b/i.test(text);
 }
+function isVerboseNormalizedValue(value) {
+  const text = compactText(value);
+  if (!text) return false;
+  if (isParagraphLikeReviewValue(text)) return true;
+  return text.length > 95 && /\b(?:tenant|landlord|lease|premises|rent|source|whereas|notwithstanding|shall|will|must|agrees?)\b/i.test(text);
+}
+
+function clausePercentValue(text) {
+  const numeric = text.match(/(\d{1,3}(?:\.\d+)?)\s*%/);
+  if (numeric) return `${Number(numeric[1])}%`;
+  const parenthetical = text.match(/\((\d{1,3}(?:\.\d+)?)\s*%\)/);
+  if (parenthetical) return `${Number(parenthetical[1])}%`;
+  const written = [
+    [/one\s+hundred\s+fifty\s+percent/i, "150%"],
+    [/fifty\s+percent/i, "50%"],
+    [/five\s+percent/i, "5%"],
+  ].find(([pattern]) => pattern.test(text));
+  return written?.[1] || null;
+}
+
+function clauseDayValue(text) {
+  const numeric = text.match(/\b(\d{1,3})\s+(business\s+)?days?\b/i);
+  if (numeric) return `${Number(numeric[1])} ${numeric[2] ? "business " : ""}days`;
+  const parenthetical = text.match(/\((\d{1,3})\)\s+(business\s+)?days?\b/i);
+  if (parenthetical) return `${Number(parenthetical[1])} ${parenthetical[2] ? "business " : ""}days`;
+  const written = [
+    [/thirty\s+\(30\)\s+days/i, "30 days"],
+    [/ten\s+\(10\)\s+business\s+days/i, "10 business days"],
+    [/five\s+\(5\)\s+days/i, "5 days"],
+  ].find(([pattern]) => pattern.test(text));
+  return written?.[1] || null;
+}
+
+function conciseReviewValueFromText({ fieldKey, label, value, sourceText } = {}) {
+  const key = normalizeDynamicReviewKey(fieldKey || label);
+  const title = String(label || "").toLowerCase();
+  const context = `${key} ${title}`;
+  const text = compactText([sourceText, value].filter(Boolean).join(" ")) || "";
+  const lower = text.toLowerCase();
+  if (!text) return null;
+
+  if (/\bn\/?a\b|no separate charge|included in rent|gross lease|full[-\s]?service/.test(lower)) {
+    if (/(cam|expense|base_year|expense_stop|gross_up|admin_fee|management_fee|cap)/.test(context)) return "N/A";
+    if (/(lease_type|expense structure)/.test(context)) return "gross";
+  }
+
+  if (/(monthly_rent|base_rent|security_deposit|amount|fee|allowance)/.test(key)) {
+    const amount = text.match(/\$\s*[\d,]+(?:\.\d{2})?/);
+    if (amount) return amount[0].replace(/\s+/g, "");
+  }
+
+  if (/(percent|pct|rate|multiplier|share)/.test(key) || /percent|multiplier|share|rate/.test(title)) {
+    const percent = clausePercentValue(text);
+    if (percent) return percent;
+  }
+
+  if (/(period|deadline|notice|days|cure|certificate)/.test(key) || /period|deadline|notice|days|cure|certificate/.test(title)) {
+    const days = clauseDayValue(text);
+    if (days) return days;
+  }
+
+  if (/additional_insured|waiver_of_subrogation|tenant_insurance_required/.test(key)) {
+    if (/\bshall\b|\brequired\b|\bwaiv|maintain|carry|obtain|provide/i.test(text)) return "Yes";
+  }
+  if (/rent_payment_timing|payment timing/.test(context) && /\bin advance\b/.test(lower)) return "in advance";
+  if (/billing_frequency/.test(key) && /\bmonthly\b/.test(lower)) return "monthly";
+  if (/renewal/.test(context) && /\bincrease\b/.test(lower)) {
+    const percent = clausePercentValue(text);
+    return percent ? `${percent} renewal increase` : "renewal increase";
+  }
+  if (/late/.test(context)) {
+    const parts = [clauseDayValue(text), clausePercentValue(text)].filter(Boolean);
+    if (parts.length) return parts.join("; ");
+  }
+  if (/holdover/.test(context)) {
+    const percent = clausePercentValue(text);
+    return percent ? `${percent} of base rent` : "holdover rent increase";
+  }
+  if (/abatement/.test(context)) return "abates during casualty";
+  if (/tax.*pass|pass.*tax/.test(context)) return "tax increases pass through";
+  if (/separately_meter|meter_utilit/.test(context)) return "tenant may separately meter utilities";
+
+  if (/(responsibility|utilities|electric|water|sewer|maintenance|repair|hvac|insurance|tax)/.test(context)) {
+    if (/\btenant\s+(?:shall|must|will|does|is responsible|pays?|reimburses?|maintain|carry|obtain|provide)/i.test(text)) return "tenant";
+    if (/\blandlord\s+(?:shall|must|will|is responsible|pays?|reimburses?|maintain|repair|keep|provide)/i.test(text)) return "landlord";
+  }
+
+  if (/additional_insured|waiver_of_subrogation|tenant_insurance_required/.test(key)) {
+    if (/\bshall\b|\brequired\b|\bwaiv/i.test(text)) return "Yes";
+  }
+
+  if (/(assignment|subletting|transfer|consent)/.test(context)) {
+    if (/\bprior\s+(?:written\s+)?consent\b|\bwithout\s+the\s+prior\s+consent\b/i.test(text)) {
+      return /unreasonably\s+withhold|unreasonably\s+withheld|delay/i.test(text)
+        ? "landlord consent required; not unreasonably withheld"
+        : "landlord consent required";
+    }
+  }
+
+  if (/reimburse/.test(context) || /\btenant\s+shall\s+promptly\s+reimburse\b/i.test(text)) return "tenant reimburses landlord";
+  if (/alteration/.test(context) && /\bshall\s+not\b|\bmay\s+not\b/i.test(text)) return "prohibited";
+  if (/subordination|attornment/.test(context)) return "subordinate to mortgages";
+  if (/surrender/.test(context)) return /broom-clean/i.test(text) ? "broom-clean; ordinary wear excepted" : "surrender required";
+  if (/premium.*definition/.test(context)) return "transfer premium definition";
+  if (/premium.*share/.test(context)) {
+    const percent = clausePercentValue(text);
+    return percent || "transfer premium share";
+  }
+
+  return null;
+}
 
 function clauseValueLabel(row) {
   const text = compactText(row?.summary || row?.sourceText);
@@ -642,7 +753,7 @@ function grossLeaseNoSeparateChargeField(lease, canonicalKey, value) {
     || `Lease type is ${leaseTypeValue}; no separate ${titleize(canonicalKey)} was extracted.`;
   return {
     value: null,
-    displayValue: "N/A - included in rent / no separate charge extracted",
+    displayValue: "N/A",
     status: "not_applicable",
     confidence: Math.max(readFieldConfidence(lease, "lease_type") ?? 0.7, 0.7),
     reviewReason: "Gross/full-service lease: no separate numeric charge was extracted for this rule row.",
@@ -1049,16 +1160,26 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
         reviewReason: evidenceOverrideReason,
       };
     }
-    if (!evidenceOverrideReason && isParagraphLikeReviewValue(value)) {
+    if (!evidenceOverrideReason && isVerboseNormalizedValue(value)) {
       const preservedSourceText = evidence?.sourceText || value;
-      evidenceOverrideReason =
-        "Extracted value looked like a source paragraph instead of a normalized field answer. The paragraph is preserved as evidence and the field needs review.";
-      value = null;
+      const conciseValue = conciseReviewValueFromText({
+        fieldKey: canonicalKey,
+        label: contract.displayLabel || contract.label,
+        value,
+        sourceText: preservedSourceText,
+      });
+      evidenceOverrideReason = conciseValue
+        ? "Suggested normalized value was derived from a longer source clause. Review the source text before approval."
+        : "Extracted value looked like a source paragraph instead of a normalized field answer. The paragraph is preserved as evidence and the field needs review.";
+      value = conciseValue || null;
+      if (conciseValue) statusOverride = "needs_review";
       evidence = {
         ...(evidence || {}),
         sourceText: preservedSourceText,
+        source_text: preservedSourceText,
         requiresReview: true,
         reviewReason: evidenceOverrideReason,
+        review_reason: evidenceOverrideReason,
       };
     }
     const validationErrors = [
@@ -1210,7 +1331,7 @@ export function normalizeDynamicFindings(lease) {
     const candidateKey = item.field_key || item.item_type || item.key;
     const canonicalCandidate = resolveCanonicalFieldKey(candidateKey);
     if (getFieldContract(canonicalCandidate)) continue;
-    const sourceText = cleanDocumentItemSource(item.source_text ?? item.exact_source_text ?? item.source_clause ?? null);
+    let sourceText = cleanDocumentItemSource(item.source_text ?? item.exact_source_text ?? item.source_clause ?? null);
     const dedupeKey = `${item.item_type || item.field_key || ""}|${String(sourceText || item.value || "").toLowerCase().slice(0, 140)}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
@@ -1220,10 +1341,24 @@ export function normalizeDynamicFindings(lease) {
     const label = item.label || titleize(item.item_type || item.field_key || "Finding");
     const rawDynamicValue = item.normalized_value ?? item.value ?? null;
     const labelOnlyValue = isLabelOnlyDynamicValue(label, rawDynamicValue, candidateKey);
-    const dynamicValue = labelOnlyValue ? null : rawDynamicValue;
-    const dynamicReviewReason = labelOnlyValue
+    let dynamicValue = labelOnlyValue ? null : rawDynamicValue;
+    let dynamicReviewReason = labelOnlyValue
       ? "Extracted value repeated the row label, not a lease value. Review the cited source text."
       : (item.review_reason ?? item.reviewReason ?? item.requires_review_reason ?? item.requiresReviewReason ?? null);
+    if (!labelOnlyValue && isVerboseNormalizedValue(dynamicValue)) {
+      const preservedSourceText = sourceText || cleanDocumentItemSource(dynamicValue);
+      const conciseValue = conciseReviewValueFromText({
+        fieldKey: candidateKey,
+        label,
+        value: dynamicValue,
+        sourceText: preservedSourceText,
+      });
+      sourceText = preservedSourceText || sourceText;
+      dynamicValue = conciseValue || null;
+      dynamicReviewReason = conciseValue
+        ? "Suggested normalized value was derived from a longer source clause. Review the source text before approval."
+        : "Extracted value looked like source text instead of a normalized answer. The source text is preserved for review.";
+    }
     const declaredValueType = String(item.value_type ?? item.valueType ?? item.data_type ?? item.dataType ?? "").trim().toLowerCase();
     const valueType = /(schedule|table|matrix|ledger)/i.test(declaredValueType)
       ? "schedule"
@@ -2089,10 +2224,21 @@ function materialTermDedupeKey(row, sourceKind) {
 }
 
 function makeMaterialTermRow(row, sourceKind, index) {
-  const value = materialTermValue(row);
-  const sourceText = materialTermSourceText(row);
-  const page = materialTermPage(row);
+  const rawValue = materialTermValue(row);
+  const rawSourceText = materialTermSourceText(row);
   const label = row?.label || row?.title || row?.clauseType || row?.category || row?.fieldKey || row?.canonicalKey || "Lease term";
+  const verboseValue = isVerboseNormalizedValue(rawValue);
+  const conciseValue = verboseValue
+    ? conciseReviewValueFromText({
+      fieldKey: row?.fieldKey || row?.field_key || row?.canonicalKey || row?.category,
+      label,
+      value: rawValue,
+      sourceText: rawSourceText || rawValue,
+    })
+    : null;
+  const value = conciseValue || (verboseValue ? null : rawValue);
+  const sourceText = rawSourceText || (verboseValue ? rawValue : null);
+  const page = materialTermPage(row);
   return {
     ...row,
     rowType: "material_term",

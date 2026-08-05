@@ -955,9 +955,14 @@ Deno.test("enrich-bounded-stages: review values never surface bare section numbe
   });
   const remedies = payload.records[0].standard_fields.find((field: any) => field.field_key === "assignment_provisions");
   assert(remedies, "assignment_provisions field must be present");
-  assertNotEquals(remedies.value, "2.");
-  assert(String(remedies.value).includes("Permitted Transfer"));
+  assertEquals(remedies.value, null);
+  assertEquals(remedies.source_text, clauseText);
   assertEquals(remedies.status, "needs_review");
+  assert(
+    (remedies.validation_errors || []).some((message: string) =>
+      message.includes("supporting clause is preserved as source text")
+    ),
+  );
 });
 Deno.test("enrich-bounded-stages: a DOWNSTREAM_FUNCTION_FAILED (546-shaped) outcome is a plain terminal failure -- no soft/warning path exists in the bounded chain", async () => {
   const supabaseAdmin = makeMockSupabase({

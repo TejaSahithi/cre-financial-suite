@@ -22,6 +22,13 @@ describe("LeaseReviewTabTable contract", () => {
     expect(source).not.toContain('title="Reject"');
   });
 
+
+  it("renders reviewer guidance in Source Text instead of the Value cell", () => {
+    expect(source).toContain("const sourceNotes = [");
+    expect(source).toContain("Suggested: ${row.validationMessage}");
+    expect(source).toContain("{sourceNotes.map((note) => (");
+    expect(source).not.toContain("<span className=\"leading-snug\">{row.validationMessage}</span>");
+  });
   it("Phase 40: renders an Extraction Mode column", () => {
     expect(source).toContain(">Extraction Mode</TableHead>");
     expect(source).toContain("row.extractionMode");
@@ -54,11 +61,11 @@ describe("LeaseReviewTabTable contract", () => {
 
   it("separates filled rows from missing/source-only rows and cleans source previews", () => {
     expect(source).toContain("completenessFilter");
-    expect(source).toContain('useState("filled")');
+    expect(source).toContain('useState("all")');
     expect(source).toContain("Filled");
     expect(source).toContain("Missing");
     expect(source).toContain("rowMatchesCompletenessFilter(row, completenessFilter)");
     expect(source).toContain("cleanSourceEvidenceText(text, { truncate: false })");
-    expect(source).toContain("valuePreview(rawRowValue)");
+    expect(source).toContain("valuePreview(displayRowValue, row)");
   });
 });

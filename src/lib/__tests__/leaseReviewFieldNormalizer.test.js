@@ -299,7 +299,7 @@ describe("leaseReviewFieldNormalizer smoke test", () => {
 
     const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "cam_amount");
     expect(row.value).toBeNull();
-    expect(row.displayValue).toMatch(/N\/A/i);
+    expect(row.displayValue).toBe("N/A");
     expect(row.status).toBe("not_applicable");
     expect(row.sourceText).toBe("This is a Gross Lease.");
   });

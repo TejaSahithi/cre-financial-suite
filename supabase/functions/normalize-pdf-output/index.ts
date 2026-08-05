@@ -736,13 +736,6 @@ function shouldPromoteBareReferenceField(fieldKey: string, fieldType?: string, d
   return /(?:clause|provision|responsibil|rights?|scope|description|maintenance|repair|default|remed|renewal|termination|notice|assignment|sublett|consent|parking|hazardous|casualty|damage|condemnation|force\s*majeure|guaranty|waiver|indemnif|surrender|estoppel|signage|utilities|tax|insurance|cam|expense|legal|option)/i.test(haystack);
 }
 
-function promoteBareReferenceFromSource(sourceText: unknown) {
-  const text = capSourceText(String(sourceText ?? ""), 520);
-  if (!text) return null;
-  return text
-    .replace(/^(?:(?:section|article|paragraph|para\.?|sec\.?)\s*)?\d{1,3}(?:\.\d{1,3}){0,2}\s*[.)]?\s*/i, "")
-    .trim() || text;
-}
 function expandEvidenceSnippet(text: string, matchStart: number, matchLength: number) {
   const snippet = boundedSourceSnippet(text, matchStart, matchLength);
   if (snippet) return { snippet, quality: "exact" as const };
@@ -1462,9 +1455,9 @@ function buildStandardFieldsForEntries(args: {
       const validationErrors = Array.isArray(workflowField?.validation_errors) ? [...workflowField.validation_errors] : [];
       if (isBareClauseReferenceValue(effectiveValue)) {
         if (shouldPromoteBareReferenceField(fieldKey, fieldType, def.description) && effectiveSourceText) {
-          effectiveValue = promoteBareReferenceFromSource(effectiveSourceText);
-          effectiveStatus = effectiveStatus === "extracted" ? "needs_review" : effectiveStatus;
-          validationErrors.push("Value was a section reference only; promoted display value from the supporting clause text for reviewer verification.");
+          effectiveValue = null;
+          effectiveStatus = "needs_review";
+          validationErrors.push("Extracted value was only a section reference; supporting clause is preserved as source text for reviewer normalization.");
         } else if (!sourceTextSupportsValue(effectiveSourceText, effectiveValue, fieldKey, fieldType)) {
           effectiveValue = null;
           effectiveStatus = "missing";
@@ -1886,6 +1879,9 @@ function buildReviewField(opts: {
   const validationErrors = hasMarkup
     ? [...baseValidationErrors, "Rejected: extracted value contained HTML/markup fragments"]
     : baseValidationErrors;
+  const evidence = hasMarkup ? null : (opts.evidence ?? null);
+  const evidenceSourceText = evidence?.source_text ?? evidence?.source_clause ?? null;
+  const evidenceSourcePage = evidence?.source_page ?? evidence?.page_number ?? null;
   return {
     id: `${opts.recordIndex}:${opts.isStandard ? "standard" : "custom"}:${opts.fieldKey}`,
     field_key: opts.fieldKey,
@@ -1900,7 +1896,10 @@ function buildReviewField(opts: {
     is_standard: opts.isStandard,
     confidence: hasMarkup ? 0 : opts.confidence,
     source: blank ? "system" : opts.source,
-    evidence: hasMarkup ? null : (opts.evidence ?? null),
+    source_text: evidenceSourceText,
+    exact_source_text: evidenceSourceText,
+    source_page: evidenceSourcePage,
+    evidence,
     editable: opts.editable ?? true,
     extraction_status: status ?? (blank ? "not_found" : "extracted"),
     status: status ?? (blank ? "missing" : "pending"),

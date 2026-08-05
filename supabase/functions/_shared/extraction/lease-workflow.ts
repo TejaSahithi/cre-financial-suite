@@ -666,18 +666,9 @@ function isBareClauseReferenceValue(value: unknown) {
   return /^(?:(?:section|article|paragraph|para\.?|sec\.?)\s*)?\d{1,3}(?:\.\d{1,3}){0,2}\s*[.)]?$/i.test(text);
 }
 
-function sourceTextAsDisplayValue(sourceText: unknown) {
-  const text = cleanSourceText(sourceText);
-  if (!text) return null;
-  return text
-    .replace(/^(?:(?:section|article|paragraph|para\.?|sec\.?)\s*)?\d{1,3}(?:\.\d{1,3}){0,2}\s*[.)]?\s*/i, "")
-    .trim()
-    .slice(0, 520) || text.slice(0, 520);
-}
-
-function normalizeDisplayValueAgainstSource(value: unknown, sourceText: unknown) {
+function normalizeDisplayValueAgainstSource(value: unknown, _sourceText: unknown) {
   if (!isBareClauseReferenceValue(value)) return value ?? null;
-  return sourceTextAsDisplayValue(sourceText) ?? null;
+  return null;
 }
 function extractFirstMoneyValue(value: unknown): number | null {
   const text = String(value ?? "");
@@ -2623,6 +2614,7 @@ function buildLeaseFieldMap(
       raw_value: value,
       normalized_value: normalizedValue,
       source_page: sourcePage,
+      source_text: relevantSourceClause,
       source_clause: relevantSourceClause,
       exact_source_text: relevantSourceClause,
       confidence_score: extractionStatus === "not_found" || extractionStatus === "manual_required" ? null : round2(confidenceScore),

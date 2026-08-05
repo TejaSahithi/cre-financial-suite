@@ -273,6 +273,10 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
                 ["approved", "accepted", "edited", "reviewed"].includes(String(row.status || "").toLowerCase())
               );
               const isMismatch = reviewField && fullRowValue !== "Not extracted" && reviewValue !== "Not extracted" && fullRowValue.trim().toLowerCase() !== reviewValue.trim().toLowerCase();
+              const sourceNotes = [
+                isMismatch ? `Suggested: Canonical projection ${reviewValue}` : null,
+                !isMismatch && row.validationMessage ? `Suggested: ${row.validationMessage}` : null,
+              ].filter(Boolean);
 
               return (
                 <TableRow key={row.key || row.fieldKey || `${row.rowType}-${index}`} className="align-top hover:bg-slate-50/70">
@@ -282,18 +286,6 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
                   </TableCell>
                   <TableCell className="max-w-[220px] text-xs text-slate-700" title={fullRowValue !== "Not extracted" ? fullRowValue : undefined}>
                     <span className="block whitespace-pre-wrap break-words leading-relaxed">{rowValue}</span>
-                    {isMismatch && (
-                      <div className="mt-1 flex items-center gap-1 text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5" title={`Canonical projection: ${reviewValue}`}>
-                        <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
-                        <span>Canonical: {reviewValue}</span>
-                      </div>
-                    )}
-                    {!isMismatch && row.validationMessage && (
-                      <div className="mt-1 flex items-start gap-1 text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5" title={row.validationMessage}>
-                        <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0 mt-px" />
-                        <span className="leading-snug">{row.validationMessage}</span>
-                      </div>
-                    )}
                   </TableCell>
                   <TableCell className="text-xs">
                     <span className="inline-flex items-center gap-1.5">
@@ -304,7 +296,15 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
                   <TableCell className="text-center text-xs text-slate-600">{confidence == null ? "-" : `${confidence}%`}</TableCell>
                   <TableCell className="text-xs"><Badge variant="outline" className={extractionModeMeta.className}>{extractionModeMeta.label}</Badge></TableCell>
                   <TableCell className="text-center text-xs text-slate-600">{row.sourcePage ?? row.source_page ?? row.page_number ?? "-"}</TableCell>
-                  <TableCell className="text-xs text-slate-600"><span title={sourcePreview(row.sourceText ?? row.source_text)}>{sourcePreview(row.sourceText ?? row.source_text)}</span></TableCell>
+                  <TableCell className="text-xs text-slate-600">
+                    <span title={sourcePreview(row.sourceText ?? row.source_text)}>{sourcePreview(row.sourceText ?? row.source_text)}</span>
+                    {sourceNotes.map((note) => (
+                      <div key={note} className="mt-1 flex items-start gap-1 text-[10px] leading-snug text-amber-700" title={note}>
+                        <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-600" />
+                        <span>{note}</span>
+                      </div>
+                    ))}
+                  </TableCell>
                   <TableCell className="text-right">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>

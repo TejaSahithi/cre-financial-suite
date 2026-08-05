@@ -758,6 +758,25 @@ export default function LeaseUpload() {
     reviewReadyForAction &&
     fileRecord?.ui_review_payload != null &&
     fileRecord?.status !== "failed";
+  const reviewReadinessState = String(fileRecord?.review_readiness || "").toLowerCase();
+  const enrichmentState = String(fileRecord?.enrichment_status || fileRecord?.enrichment_state || "").toLowerCase();
+  const extractionReviewFullyReady =
+    hasValidReviewPayload &&
+    ["ready", "approval_ready", "complete", "completed"].includes(reviewReadinessState) &&
+    !["pending", "queued", "running", "started"].includes(enrichmentState);
+  const reviewPayloadNotice = extractionReviewFullyReady
+    ? {
+      title: "Extraction ready",
+      message: "Your lease fields are ready for review.",
+      className: "border-emerald-200 bg-emerald-50 text-emerald-900",
+      detailClassName: "text-emerald-700",
+    }
+    : {
+      title: "Review draft available",
+      message: "Extraction produced review fields, but enrichment/readiness checks are still pending. Review can start, but approval may remain blocked until those checks finish.",
+      className: "border-amber-200 bg-amber-50 text-amber-900",
+      detailClassName: "text-amber-700",
+    };
   const currentGenerationFailureNotice = useMemo(
     () => getCurrentGenerationFailureNotice(fileRecord),
     [fileRecord],
@@ -876,9 +895,9 @@ export default function LeaseUpload() {
             </div>
 
             {hasValidReviewPayload && !hasActiveExtractionJob && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                <p className="text-sm font-medium text-amber-900">Extraction ready</p>
-                <p className="text-xs text-amber-700">Your lease fields are ready for review.</p>
+              <div className={`rounded-lg border p-3 ${reviewPayloadNotice.className}`}>
+                <p className="text-sm font-medium">{reviewPayloadNotice.title}</p>
+                <p className={`text-xs ${reviewPayloadNotice.detailClassName}`}>{reviewPayloadNotice.message}</p>
               </div>
             )}
 

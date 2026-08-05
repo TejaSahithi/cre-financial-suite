@@ -47,6 +47,36 @@ describe("normalizeDynamicFindings", () => {
     expect(rows[0].value).toBe("Something unusual");
   });
 
+
+  it("keeps source clauses out of dynamic normalized values", () => {
+    const source = "If Landlord consents to a Transfer, Tenant shall pay to Landlord fifty percent (50%) of any Transfer Premium received by Tenant.";
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          extracted_document_items: [
+            {
+              item_id: "transfer-premium",
+              item_type: "transfer_premium_share",
+              label: "Transfer premium share",
+              business_area: "legal_options",
+              value: source,
+              source_text: source,
+              source_page: 7,
+              confidence: 0.98,
+              maps_to_existing_field: false,
+              creates_dynamic_row: true,
+            },
+          ],
+        },
+      },
+    };
+
+    const rows = normalizeDynamicFindings(lease);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].value).toBe("50%");
+    expect(rows[0].sourceText).toBe(source);
+    expect(rows[0].reviewReason).toMatch(/Suggested normalized value/i);
+  });
   it("returns an empty array, not a throw, when there is nothing to find", () => {
     expect(normalizeDynamicFindings({})).toEqual([]);
     expect(normalizeDynamicFindings(null)).toEqual([]);
