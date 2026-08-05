@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateFieldValue, computeSourceQuality } from "../fieldValidator";
+import { validateFieldValue, validateFieldEvidenceSupport, computeSourceQuality } from "../fieldValidator";
 
 // ── validateFieldValue ────────────────────────────────────────────────────────
 
@@ -276,5 +276,34 @@ describe("computeSourceQuality", () => {
   it("returns 'partial' for a mid-sentence fragment", () => {
     const text = "4,200 rentable square feet located";
     expect(computeSourceQuality(4200, text, "extracted")).toBe("partial");
+  });
+});
+
+describe("validateFieldEvidenceSupport - field-aware source/value alignment", () => {
+  it("rejects an escalation rate when the source number belongs to control-language boilerplate", () => {
+    const result = validateFieldEvidenceSupport("escalation_rate", 5, {
+      sourceText: '"Control" shall mean ownership of at least fifty-one percent (51%) of voting securities.',
+      sourcePage: 2,
+      extractionStatus: "extracted",
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/expected escalation rate context|support/i);
+  });
+
+  it("accepts an escalation rate when the source says rent increases by that percent", () => {
+    const result = validateFieldEvidenceSupport("escalation_rate", 5, {
+      sourceText: "The Rent will increase 5% each year of renewal.",
+      sourcePage: 1,
+      extractionStatus: "extracted",
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it("rejects extracted values without source text so they do not look filled", () => {
+    const result = validateFieldEvidenceSupport("assignee_name", "NARENDRA PYDI", {
+      extractionStatus: "extracted",
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/no source text/i);
   });
 });

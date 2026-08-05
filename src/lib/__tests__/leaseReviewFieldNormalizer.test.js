@@ -8,12 +8,55 @@ import {
   resolveLeaseReviewExtractionMode,
   normalizeClauseRecords,
   normalizeDynamicFindings,
+  buildReadinessSummary,
 } from "@/lib/leaseReviewFieldNormalizer";
 import { isMarkupArtifactValue, EXTRACTION_MODES, REVIEW_STATUSES } from "@/lib/leaseReviewSchema";
 
 describe("leaseReviewFieldNormalizer smoke test", () => {
   it("does not throw on an empty lease", () => {
     expect(() => normalizeLeaseReviewData({})).not.toThrow();
+  });
+
+
+  it("does not treat optional needs-review rows as approval blockers", () => {
+    const standardFields = [
+      { canonicalKey: "tenant_name", rowType: "standard", value: "Mindful Tech Solutions, Inc.", status: "auto_populated", evidenceVerified: true, tabKey: "summary" },
+      { canonicalKey: "broker_name", rowType: "standard", value: "Brownlee Realty, LLC", status: "needs_review", evidenceVerified: true, tabKey: "summary" },
+    ];
+    const summary = buildReadinessSummary({
+      standardFields,
+      dynamicFindings: [],
+      expenseRules: [],
+      camRules: [],
+      clauseRecords: [],
+      criticalDates: [],
+      approvalBlockers: { budgetBlockers: [], camBlockers: [] },
+      tabs: { summary: standardFields },
+      currentReviewPolicy: { requiredFieldKeys: ["tenant_name"] },
+    });
+
+    expect(summary.approvalReadiness).toBe("ready");
+    expect(summary.needsReviewFields).toEqual([]);
+    expect(summary.tabSummaries.find((tab) => tab.key === "summary").needsReview).toBe(0);
+  });
+
+  it("lets alternate canonical fields satisfy required readiness inputs", () => {
+    const standardFields = [
+      { canonicalKey: "commencement_date", rowType: "standard", value: "2024-02-01", status: "auto_populated", evidenceVerified: true, tabKey: "dates_term" },
+    ];
+    const summary = buildReadinessSummary({
+      standardFields,
+      dynamicFindings: [],
+      expenseRules: [],
+      camRules: [],
+      clauseRecords: [],
+      criticalDates: [],
+      approvalBlockers: { budgetBlockers: [], camBlockers: [] },
+      tabs: { dates_term: standardFields },
+      currentReviewPolicy: { requiredFieldKeys: ["start_date"] },
+    });
+
+    expect(summary.missingRequiredFields).not.toContain("start_date");
   });
 
   it("does not throw on a bare lease with no extraction_data", () => {
@@ -573,7 +616,7 @@ describe("Phase 40: extraction mode resolver", () => {
   it("does not claim explicit for a value with no source evidence at all", () => {
     const lease = { extraction_data: { fields: { assignee_name: "NARENDRA PYDI" }, field_evidence: {} } };
     const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "assignee_name");
-    expect(row.value).toBe("NARENDRA PYDI");
+    expect(row.value).toBeNull();
     expect(row.extractionMode).not.toBe(EXTRACTION_MODES.EXPLICIT);
     expect(row.extractionMode).toBe(EXTRACTION_MODES.UNKNOWN);
   });

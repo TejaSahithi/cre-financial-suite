@@ -173,6 +173,251 @@ function isAllowedSelectValue(fieldKey, value) {
   });
 }
 
+function normalizeEvidenceText(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[()]/g, " ")
+    .replace(/[$,%]/g, " ")
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function evidenceNumericTokens(value) {
+  const tokens = new Set();
+  for (const match of String(value ?? "").matchAll(/\d[\d,]*(?:\.\d+)?/g)) {
+    const raw = match[0];
+    const numeric = Number(raw.replace(/,/g, ""));
+    tokens.add(raw.replace(/,/g, ""));
+    if (Number.isFinite(numeric)) {
+      tokens.add(String(numeric));
+      if (Number.isInteger(numeric)) tokens.add(String(Math.trunc(numeric)));
+    }
+  }
+  return tokens;
+}
+
+function sourceContainsNumber(value, sourceText) {
+  const valueNumbers = evidenceNumericTokens(value);
+  if (valueNumbers.size === 0) return false;
+  const sourceNumbers = evidenceNumericTokens(sourceText);
+  return [...valueNumbers].some((token) => sourceNumbers.has(token));
+}
+
+function sourceContainsIsoDate(value, sourceText) {
+  const raw = String(value ?? "").trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+  const [, year, month, day] = match;
+  const source = normalizeEvidenceText(sourceText);
+  const monthNames = [
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+  ];
+  const monthName = monthNames[Number(month) - 1];
+  return source.includes(year) && source.includes(String(Number(day))) &&
+    (source.includes(monthName) || source.includes(String(Number(month))));
+}
+
+function genericEvidenceSupportsValue(value, sourceText) {
+  const source = normalizeEvidenceText(sourceText);
+  const valueText = normalizeEvidenceText(value);
+  if (!source || !valueText) return false;
+  if (source.includes(valueText)) return true;
+  if (sourceContainsIsoDate(value, sourceText)) return true;
+  if (sourceContainsNumber(value, sourceText)) return true;
+  const tokens = valueText.split(" ").filter((token) => token.length >= 3 && !/^\d+$/.test(token));
+  if (tokens.length >= 2 && tokens.every((token) => source.includes(token))) return true;
+  return tokens.length === 1 && source.includes(tokens[0]);
+}
+
+function fieldCuePattern(fieldKey) {
+  const cues = {
+    lease_type: /\b(?:gross|full\s*service|triple\s*net|nnn|double\s*net|single\s*net|modified\s*gross|net\s+lease|rent\s+includes)\b/i,
+    monthly_rent: /\b(?:monthly\s+rent|base\s+rent|rent\s*:|per\s+month|\/mo|monthly)\b/i,
+    annual_rent: /\b(?:annual\s+rent|yearly\s+rent|per\s+year|per\s+annum|annual)\b/i,
+    security_deposit: /\bsecurity\s+deposit\b/i,
+    late_fee_amount: /\b(?:late\s+fee|late\s+charge)\b/i,
+    late_fee_percent: /\b(?:late\s+fee|late\s+charge)\b/i,
+    escalation_rate: /\b(?:increase|escalat|renewal|anniversary|cpi)\b/i,
+    escalation_type: /\b(?:increase|escalat|renewal|anniversary|cpi|fair\s+market|fixed)\b/i,
+    escalation_timing: /\b(?:anniversary|calendar\s+year|fiscal\s+year|renewal|increase|escalat)\b/i,
+    renewal_escalation_percent: /\b(?:increase|escalat|renewal|anniversary)\b/i,
+    billing_frequency: /\b(?:monthly|quarterly|annual|annually|per\s+month|per\s+year|installments?)\b/i,
+    square_footage: /\b(?:rentable|usable|square\s+feet|sq\.?\s*ft|\bsf\b|\brsf\b|premises)\b/i,
+    building_rsf: /\b(?:building|rentable|square\s+feet|\bsf\b|\brsf\b)\b/i,
+    lease_term: /\b(?:lease\s+term|term|months?|years?|commencement|expiration)\b/i,
+    lease_term_months: /\b(?:lease\s+term|term|months?|years?|commencement|expiration)\b/i,
+    renewal_notice_months: /\b(?:renewal|extend|extension|anniversary).{0,80}\b(?:notice|days?|months?|before)\b|\b(?:notice|days?|months?|before).{0,80}\b(?:renewal|extend|extension|anniversary)\b/i,
+    termination_notice_months: /\b(?:termination|terminate|cancel).{0,80}\b(?:notice|days?|months?|before)\b|\b(?:notice|days?|months?|before).{0,80}\b(?:termination|terminate|cancel)\b/i,
+    commencement_date: /\b(?:commencement\s+date|start\s+date|commence|term\s+commences)\b/i,
+    start_date: /\b(?:commencement\s+date|start\s+date|commence|term\s+commences)\b/i,
+    expiration_date: /\b(?:expiration\s+date|expiry|end\s+date|expire|term\s+ends)\b/i,
+    end_date: /\b(?:expiration\s+date|expiry|end\s+date|expire|term\s+ends)\b/i,
+    rent_commencement_date: /\b(?:rent\s+commencement|rent\s+start|rent\s+begins)\b/i,
+    lease_date: /\b(?:lease\s+date|date\s*:|made|entered\s+into|executed)\b/i,
+    landlord_consent: /\b(?:landlord).{0,80}\bconsent\w*\b|\bconsent\w*.{0,80}\blandlord\b/i,
+    landlord_consent_for_transfer: /\b(?:landlord).{0,80}\bconsent\w*\b|\bconsent\w*.{0,80}\blandlord\b/i,
+    tenant_signature_date: /\b(?:tenant|signature|signed|by:|date)\b/i,
+    landlord_signature_date: /\b(?:landlord|signature|signed|by:|date)\b/i,
+    tenant_insurance_required: /\b(?:tenant|lessee).{0,80}\b(?:insurance|coverage|certificate|liability)\b|\b(?:insurance|coverage|certificate|liability).{0,80}\b(?:tenant|lessee)\b/i,
+    general_liability_min: /\b(?:general\s+liability|liability|coverage|insurance|per\s+occurrence|aggregate)\b/i,
+    additional_insureds_required: /\badditional\s+insured/i,
+    waiver_of_subrogation: /\bwaiv\w*.{0,40}\bsubrogation\b|\bsubrogation\b.{0,40}\bwaiv\w*/i,
+    cam_amount: /\b(?:cam|common\s+area|operating\s+expense|full\s+service|included\s+in\s+rent|no\s+separate)\b/i,
+    cam_cap_type: /\b(?:cam|common\s+area|cap|cumulative|non\s*cumulative|compounding)\b/i,
+    cam_cap_pct: /\b(?:cam|common\s+area|cap|percent|%)\b/i,
+    admin_fee_pct: /\b(?:admin(?:istrative)?\s+fee|management\s+fee|cam|operating\s+expense|%)\b/i,
+    management_fee_basis: /\b(?:management\s+fee|admin(?:istrative)?\s+fee|cam|operating\s+expense)\b/i,
+    gross_up_enabled: /\b(?:gross\s*up|occupancy|cam|operating\s+expense)\b/i,
+    gross_up_threshold: /\b(?:gross\s*up|occupancy|cam|operating\s+expense|%)\b/i,
+    base_year: /\bbase\s+year\b/i,
+    expense_stop: /\b(?:expense\s+stop|stop\s+amount|base\s+amount|operating\s+expense)\b/i,
+  };
+  return cues[fieldKey] || null;
+}
+
+function normalizedEnumEvidenceSupportsValue(fieldKey, value, sourceText) {
+  const source = normalizeEvidenceText(sourceText);
+  const valueText = normalizeEnumText(value);
+  if (fieldKey === "lease_type") {
+    const patterns = {
+      gross: /\bgross\b|\bfull\s+service\b|\brent\s+includes\b|\bincluded\s+in\s+rent\b/,
+      full_service: /\bfull\s+service\b|\brent\s+includes\b|\bincluded\s+in\s+rent\b/,
+      triple_net: /\btriple\s+net\b|\bnnn\b/,
+      nnn: /\btriple\s+net\b|\bnnn\b/,
+      modified_gross: /\bmodified\s+gross\b/,
+      double_net: /\bdouble\s+net\b|\bnn\b/,
+      single_net: /\bsingle\s+net\b/,
+    };
+    return Boolean(patterns[valueText]?.test(source));
+  }
+  if (fieldKey === "escalation_type") {
+    const patterns = {
+      fixed_pct: /\b(?:increase|escalat).{0,80}(?:%|percent)\b|\b(?:%|percent).{0,80}\b(?:increase|escalat)\b/,
+      cpi: /\bcpi\b|consumer\s+price\s+index/,
+      stepped: /\bstep(?:ped)?\b|schedule/,
+      fmv: /fair\s+market\s+value|\bfmv\b/,
+      none: /\bno\s+(?:increase|escalation)\b|\bnone\b/,
+    };
+    return Boolean(patterns[valueText]?.test(source));
+  }
+  if (fieldKey === "escalation_timing") {
+    const patterns = {
+      lease_anniversary: /anniversary/,
+      calendar_year: /calendar\s+year|january\s+1|jan\.?\s+1/,
+      fiscal_year: /fiscal\s+year/,
+    };
+    return Boolean(patterns[valueText]?.test(source));
+  }
+  if (fieldKey === "billing_frequency") {
+    const patterns = {
+      monthly: /monthly|per\s+month|each\s+month|installments?\s+due.{0,40}first\s+day/i,
+      quarterly: /quarterly|per\s+quarter/,
+      annual: /annual|annually|per\s+year|yearly/,
+      one_time: /one\s*time|one\s+time|single\s+payment/,
+    };
+    return Boolean(patterns[valueText]?.test(source));
+  }
+  return false;
+}
+
+function noticeMonthEvidenceSupportsValue(value, sourceText) {
+  if (sourceContainsNumber(value, sourceText)) return true;
+  const n = parseAccountingNumber(value);
+  if (!Number.isFinite(n)) return false;
+  const source = normalizeEvidenceText(sourceText);
+  if (n === 1 && /\b(?:30|thirty)\s+days?\b/.test(source)) return true;
+  if (n === 2 && /\b(?:60|sixty)\s+days?\b/.test(source)) return true;
+  if (n === 3 && /\b(?:90|ninety)\s+days?\b/.test(source)) return true;
+  return false;
+}
+
+function responsibilityEvidenceSupportsValue(value, sourceText) {
+  const source = normalizeEvidenceText(sourceText);
+  const valueText = normalizeEvidenceText(value).replace(/_/g, " ");
+  if (!/\b(?:rent\s+includes|included\s+in\s+rent|full\s+service|shall\s+pay|shall\s+reimburse|responsible\s+for|at\s+(?:tenant|landlord|lessor|lessee)\s+(?:sole\s+)?(?:cost|expense)|shall\s+maintain|shall\s+provide|separately\s+metered)\b/.test(source)) {
+    return false;
+  }
+  if (/\b(?:tenant|landlord|lessor|lessee)\b/.test(valueText)) {
+    return /\bincluded\s+in\s+rent\b|\bfull\s+service\b|\brent\s+includes\b/.test(source) ||
+      valueText.split(" ").some((token) => ["tenant", "landlord", "lessor", "lessee"].includes(token) && source.includes(token));
+  }
+  return genericEvidenceSupportsValue(value, sourceText) || /\bshared\b|\bboth\b|\bpro\s+rata\b|\breimburse\b|\bseparately\s+metered\b/.test(source);
+}
+
+export function validateFieldEvidenceSupport(fieldKey, value, evidence = {}) {
+  if (value === null || value === undefined || value === "") return { valid: true };
+  const typeValidation = validateFieldValue(fieldKey, value);
+  if (!typeValidation.valid) return typeValidation;
+
+  const extractionStatus = String(evidence.extractionStatus ?? evidence.extraction_status ?? "").toLowerCase();
+  const evidenceType = String(evidence.evidenceType ?? evidence.evidence_type ?? "").toLowerCase();
+  if (/^(calculated|derived|computed)$/.test(extractionStatus) || /^(derived|calculated)$/.test(evidenceType)) return { valid: true };
+  if (evidence.derivationTrace || evidence.derivation_trace) return { valid: true };
+  const sourceFieldKeys = evidence.sourceFieldKeys ?? evidence.source_field_keys;
+  if (Array.isArray(sourceFieldKeys) && sourceFieldKeys.length > 0) return { valid: true };
+
+  const sourceText = evidence.sourceText ?? evidence.source_text ?? evidence.sourceClause ?? evidence.source_clause ?? "";
+  if (!String(sourceText || "").trim()) {
+    return { valid: false, reason: "Extracted value has no source text, so it cannot be trusted as a filled value." };
+  }
+
+  const normalizedKey = String(fieldKey || "").trim().toLowerCase();
+  const cue = fieldCuePattern(normalizedKey);
+  if (cue && !cue.test(String(sourceText))) {
+    return { valid: false, reason: `Source text does not contain the expected ${normalizedKey.replace(/_/g, " ")} context.` };
+  }
+
+  if (normalizedKey === "landlord_consent" || normalizedKey === "landlord_consent_for_transfer") {
+    const source = normalizeEvidenceText(sourceText);
+    const supportsConsent = /\blandlord\b/.test(source) && /\bconsent\w*\b/.test(source) &&
+      /\b(?:assign\w*|transfer\w*|sublet\w*|sublease\w*|assumption)\b/.test(source);
+    return supportsConsent
+      ? { valid: true }
+      : { valid: false, reason: "Source text does not support landlord consent for transfer." };
+  }
+  if (["lease_type", "escalation_type", "escalation_timing", "billing_frequency"].includes(normalizedKey)) {
+    if (!normalizedEnumEvidenceSupportsValue(normalizedKey, value, sourceText)) {
+      return { valid: false, reason: `Source text does not support the normalized ${normalizedKey.replace(/_/g, " ")} value.` };
+    }
+    return { valid: true };
+  }
+
+  if (RESPONSIBILITY_KEYS.has(normalizedKey)) {
+    if (!responsibilityEvidenceSupportsValue(value, sourceText)) {
+      return { valid: false, reason: `Source text does not support the normalized ${normalizedKey.replace(/_/g, " ")} responsibility.` };
+    }
+    return { valid: true };
+  }
+
+  if (normalizedKey === "renewal_notice_months" || normalizedKey === "termination_notice_months") {
+    if (!noticeMonthEvidenceSupportsValue(value, sourceText)) {
+      return { valid: false, reason: `Source text does not support the normalized ${normalizedKey.replace(/_/g, " ")} value.` };
+    }
+    return { valid: true };
+  }
+
+  if (DATE_KEYS.has(normalizedKey) || normalizedKey.endsWith("_date")) {
+    if (!sourceContainsIsoDate(value, sourceText)) {
+      return { valid: false, reason: `Source text does not support the normalized ${normalizedKey.replace(/_/g, " ")} date.` };
+    }
+    return { valid: true };
+  }
+
+  if (NUMERIC_KEYS.has(normalizedKey) || CURRENCY_KEYS.has(normalizedKey) || PERCENT_KEYS.has(normalizedKey)) {
+    if (!sourceContainsNumber(value, sourceText)) {
+      return { valid: false, reason: `Source text does not support the normalized ${normalizedKey.replace(/_/g, " ")} number.` };
+    }
+    return { valid: true };
+  }
+
+  if (!genericEvidenceSupportsValue(value, sourceText)) {
+    return { valid: false, reason: `Source text does not support the normalized ${normalizedKey.replace(/_/g, " ")} value.` };
+  }
+  return { valid: true };
+}
 /**
  * Validate a single extracted field value.
  *

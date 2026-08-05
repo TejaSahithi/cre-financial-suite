@@ -500,6 +500,20 @@ describe("Lease Review evidence contract", () => {
     expect(row.source_text).toContain("Additional Rent shall include");
   });
 
+
+  it("blanks unsupported optional normalized values and synchronizes row.value", () => {
+    const row = buildCanonicalLeaseReviewField({}, {
+      key: "escalation_rate",
+      label: "Escalation Rate",
+      normalized_value: 5,
+      source_page: 2,
+      source_text: '"Control" shall mean ownership of at least fifty-one percent (51%) of voting securities.',
+    }, "rent_charges");
+
+    expect(row.normalized_value).toBeNull();
+    expect(row.value).toBeNull();
+    expect(row.validation_errors).toContain("escalation_rate_failed_validation");
+  });
   it("does not carry stale no-source validation onto traced derived annual rent", () => {
     const lease = {
       extraction_data: {

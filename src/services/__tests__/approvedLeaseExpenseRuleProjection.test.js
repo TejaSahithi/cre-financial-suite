@@ -144,10 +144,36 @@ describe("approved lease expense-rule projection", () => {
       included_in_base_rent: true,
       recoverable_from_tenant: "no",
       payment_treatment: "included_in_base_rent",
-      review_status: "needs_review",
-      approval_status: "draft",
+      row_status: "mapped",
+      review_status: "approved",
+      approval_status: "approved",
+      published_to_cam: false,
     });
   });
+
+  it("auto-approves and publishes source-backed recoverable CAM rules after lease approval", () => {
+    const reimbursablePrepared = __test__.prepareRulePayload(
+      { id: "11111111-1111-4111-8111-111111111111" },
+      "22222222-2222-4222-8222-222222222222",
+      {
+        expense_category: "common_area_maintenance",
+        exact_source_text: "Tenant shall reimburse Landlord for Tenant's pro rata share of common area maintenance expenses as Additional Rent.",
+        source_page: 4,
+        recoverable_from_tenant: "yes",
+        cam_eligible: "yes",
+        payment_treatment: "reimbursable",
+        recovery_method: "pro_rata_share",
+      },
+    );
+    expect(reimbursablePrepared.rule).toMatchObject({
+      expense_category: "common_area_maintenance",
+      row_status: "mapped",
+      review_status: "approved",
+      approval_status: "approved",
+      published_to_cam: true,
+    });
+  });
+
   it("resolves the required database category id without changing LLM semantics", async () => {
     const query = {
       select: vi.fn(() => query),
