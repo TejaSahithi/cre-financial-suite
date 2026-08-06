@@ -1345,6 +1345,15 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
               fallbackReviewReason = rescueDerived.reviewReason;
               invalidValueRejected = false;
               evidenceOverrideReason = null;
+              // The rejection above already pushed `${canonicalKey}_failed_validation`
+              // into validationErrors, which readiness/approval-blocker logic
+              // reads independently of `value`. Now that the field resolved
+              // to a real (calculated) value, leaving that entry in place
+              // would keep blocking approval on a field the table shows as
+              // filled - the exact "still says failed validation even though
+              // a value is shown" symptom this rescue is meant to fix.
+              const staleErrorIndex = validationErrors.indexOf(`${canonicalKey}_failed_validation`);
+              if (staleErrorIndex !== -1) validationErrors.splice(staleErrorIndex, 1);
             }
           }
         }

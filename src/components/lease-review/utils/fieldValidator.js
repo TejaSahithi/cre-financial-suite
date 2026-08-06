@@ -280,7 +280,9 @@ function fieldCuePattern(fieldKey) {
     lease_type: /\b(?:gross|full\s*service|triple\s*net|nnn|double\s*net|single\s*net|modified\s*gross|net\s+lease|rent\s+includes)\b/i,
     monthly_rent: /\b(?:monthly\s+rent|base\s+rent|rent\s*:|per\s+month|\/mo|monthly)\b/i,
     annual_rent: /\b(?:annual\s+rent|yearly\s+rent|per\s+year|per\s+annum|annual)\b/i,
-    security_deposit: /\bsecurity\s+deposit\b/i,
+    // Leases often state this as "Tenant has deposited ... the sum of $X"
+    // rather than the literal phrase "security deposit".
+    security_deposit: /\bsecurity\s+deposit\b|\bdeposit(?:ed)?\b[\s\S]{0,40}\b(?:sum|amount)\b|\b(?:sum|amount)\b[\s\S]{0,40}\bdeposit(?:ed)?\b/i,
     late_fee_amount: /\b(?:late\s+fee|late\s+charge)\b/i,
     late_fee_percent: /\b(?:late\s+fee|late\s+charge)\b/i,
     escalation_rate: /\b(?:increase|escalat|renewal|anniversary|cpi)\b/i,
@@ -324,6 +326,14 @@ function fieldCuePattern(fieldKey) {
 function normalizedEnumEvidenceSupportsValue(fieldKey, value, sourceText) {
   const source = normalizeEvidenceText(sourceText);
   const valueText = normalizeEnumText(value);
+  // Generic last-resort fallback for a normalized value this function has no
+  // dedicated pattern for (e.g. an enum variant the LEASE_FIELD_OPTIONS list
+  // was extended with after these dictionaries were written). Without this,
+  // `patterns[valueText]` is `undefined` and the field is unconditionally
+  // rejected no matter how well the source text actually supports it - the
+  // same "well-supported value auto-fails" bug as the other field checks in
+  // this file, just for enum fields specifically.
+  const fallback = () => genericEvidenceSupportsValue(value, sourceText);
   if (fieldKey === "lease_type") {
     const patterns = {
       gross: /\bgross\b|\bfull\s+service\b|\brent\s+includes\b|\bincluded\s+in\s+rent\b/,
@@ -334,7 +344,7 @@ function normalizedEnumEvidenceSupportsValue(fieldKey, value, sourceText) {
       double_net: /\bdouble\s+net\b|\bnn\b/,
       single_net: /\bsingle\s+net\b/,
     };
-    return Boolean(patterns[valueText]?.test(source));
+    return patterns[valueText] ? patterns[valueText].test(source) : fallback();
   }
   if (fieldKey === "escalation_type") {
     const patterns = {
@@ -344,7 +354,7 @@ function normalizedEnumEvidenceSupportsValue(fieldKey, value, sourceText) {
       fmv: /fair\s+market\s+value|\bfmv\b/,
       none: /\bno\s+(?:increase|escalation)\b|\bnone\b/,
     };
-    return Boolean(patterns[valueText]?.test(source));
+    return patterns[valueText] ? patterns[valueText].test(source) : fallback();
   }
   if (fieldKey === "escalation_timing") {
     const patterns = {
@@ -352,7 +362,7 @@ function normalizedEnumEvidenceSupportsValue(fieldKey, value, sourceText) {
       calendar_year: /calendar\s+year|january\s+1|jan\.?\s+1/,
       fiscal_year: /fiscal\s+year/,
     };
-    return Boolean(patterns[valueText]?.test(source));
+    return patterns[valueText] ? patterns[valueText].test(source) : fallback();
   }
   if (fieldKey === "billing_frequency") {
     const patterns = {
@@ -361,7 +371,7 @@ function normalizedEnumEvidenceSupportsValue(fieldKey, value, sourceText) {
       annual: /annual|annually|per\s+year|yearly/,
       one_time: /one\s*time|one\s+time|single\s+payment/,
     };
-    return Boolean(patterns[valueText]?.test(source));
+    return patterns[valueText] ? patterns[valueText].test(source) : fallback();
   }
   return false;
 }

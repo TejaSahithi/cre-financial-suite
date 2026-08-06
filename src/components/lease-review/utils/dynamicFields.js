@@ -554,11 +554,150 @@ function currentEvidenceIsUnsupported(evidence, value) {
   });
 }
 
+function toIsoDate(value) {
+  if (!isMeaningfulValue(value)) return null;
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const iso = text.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (iso) return iso[1];
+  const us = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  if (us) {
+    const [, month, day, year] = us;
+    const yyyy = year.length === 2 ? (Number(year) > 50 ? `19${year}` : `20${year}`) : year;
+    return `${yyyy}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Date(Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate())).toISOString().slice(0, 10);
+}
+
+// Lease terms are routinely spelled out ("an initial five-year period")
+// rather than given as a digit - kept in sync with the equivalent lexicon in
+// leaseReviewFieldNormalizer.js / fieldValidator.js.
+const WORD_NUMBER_YEARS = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
+  nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14,
+  fifteen: 15, twenty: 20, thirty: 30,
+};
+
+function parseLeaseTermMonths(value) {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.round(value);
+  const text = String(value ?? "").toLowerCase();
+  if (!text) return null;
+  const numeric = parseNumber(text);
+  if (numeric && /^\s*\d{1,3}\s*$/.test(text)) return Math.round(numeric);
+  const years = text.match(/(\d+(?:\.\d+)?)\s*(?:years?|yrs?)\b/);
+  if (years) return Math.round(Number(years[1]) * 12);
+  const months = text.match(/(\d+(?:\.\d+)?)\s*(?:months?|mos?)\b/);
+  if (months) return Math.round(Number(months[1]));
+  const writtenMonths = text.match(/\b(?:initial\s+|base\s+)?(?:term|period)[\s\S]{0,80}?\((\d{1,3})\)\s*months?\b/);
+  if (writtenMonths) return Number(writtenMonths[1]);
+  const wordYears = text.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|twenty|thirty)[\s-]+years?\b/);
+  if (wordYears) return WORD_NUMBER_YEARS[wordYears[1]] * 12;
+  if (/\byear\s*to\s*year\b|\bannual(?:ly)?\b|\bone\s+year\b/.test(text)) return 12;
+  return null;
+}
+
+function addMonthsInclusiveEnd(startIso, months) {
+  if (!startIso || !Number.isFinite(months) || months <= 0) return null;
+  const start = new Date(`${startIso}T00:00:00Z`);
+  if (Number.isNaN(start.getTime())) return null;
+  const targetIndex = start.getUTCMonth() + Math.round(months);
+  const targetYear = start.getUTCFullYear() + Math.floor(targetIndex / 12);
+  const targetMonth = ((targetIndex % 12) + 12) % 12;
+  const targetDay = Math.min(
+    start.getUTCDate(),
+    new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate(),
+  );
+  const end = new Date(Date.UTC(targetYear, targetMonth, targetDay));
+  end.setUTCDate(end.getUTCDate() - 1);
+  return Number.isNaN(end.getTime()) ? null : end.toISOString().slice(0, 10);
+}
+
+function deriveTermMonthsFromDates(startIso, endIso) {
+  if (!startIso || !endIso) return null;
+  const start = new Date(`${startIso}T00:00:00Z`);
+  const end = new Date(`${endIso}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return null;
+  const inclusiveEnd = new Date(end);
+  inclusiveEnd.setUTCDate(inclusiveEnd.getUTCDate() + 1);
+  const months =
+    (inclusiveEnd.getUTCFullYear() - start.getUTCFullYear()) * 12 +
+    (inclusiveEnd.getUTCMonth() - start.getUTCMonth());
+  return months > 0 ? Math.round(months) : null;
+}
+
+// expiration_date/end_date/lease_term_months rescue: a lease commonly states
+// its end date or term length in a form the source-text-support heuristic
+// (fieldValidator.js) doesn't recognize verbatim - an abbreviated month name
+// ("Dec 31, 2023") for a date, or a spelled-out duration ("five-year period")
+// for a term. Rather than leaving the field blank (and blocking approval on
+// it) when the row's own direct value fails that heuristic, fall back to
+// computing it from the other, independently-sourced half of the pair. Only
+// offered when the direct value is genuinely unsupported - a directly
+// extracted value that already passes validation is left untouched.
+function deriveDateTermRescue(lease, key, currentValue, currentEvidence) {
+  const directlySupported = isMeaningfulValue(currentValue)
+    && validateFieldEvidenceSupport(key, currentValue, currentEvidence || {}).valid;
+  if (directlySupported) return null;
+
+  const commencement = toIsoDate(readFieldValue(lease, "commencement_date")) || toIsoDate(readFieldValue(lease, "start_date"));
+  const termValue = readFieldValue(lease, "lease_term_months") ?? readFieldValue(lease, "lease_term");
+  const termMonthsEvidence = readFieldEvidence(lease, "lease_term_months");
+  const termTextEvidence = readFieldEvidence(lease, "lease_term");
+  const termText = [
+    termValue,
+    termMonthsEvidence?.sourceText, termMonthsEvidence?.sourceClause,
+    termTextEvidence?.sourceText, termTextEvidence?.sourceClause,
+  ].filter(Boolean).join(" ");
+  const termMonths = parseLeaseTermMonths(termValue) || parseLeaseTermMonths(termText);
+  const termEvidence = termMonthsEvidence?.sourceText || termMonthsEvidence?.sourceClause ? termMonthsEvidence : termTextEvidence;
+
+  if ((key === "expiration_date" || key === "end_date") && commencement && termMonths) {
+    const value = addMonthsInclusiveEnd(commencement, termMonths);
+    if (!value) return null;
+    return {
+      value,
+      sourceText: termEvidence?.sourceText ?? null,
+      sourcePage: termEvidence?.sourcePage ?? null,
+      evidenceType: "derived",
+      sourceTextQuality: "derived",
+      sourceFieldKeys: ["commencement_date", "lease_term_months"],
+      derivationTrace: `${key} = commencement_date ${commencement} + lease_term_months ${termMonths} - 1 day`,
+      extractionStatus: "calculated",
+    };
+  }
+
+  if (key === "lease_term_months" && commencement) {
+    const expirationRaw = toIsoDate(readFieldValue(lease, "expiration_date")) || toIsoDate(readFieldValue(lease, "end_date"));
+    const derivedMonths = deriveTermMonthsFromDates(commencement, expirationRaw);
+    if (!derivedMonths) return null;
+    const expirationEvidence = readFieldEvidence(lease, "expiration_date");
+    const endDateEvidence = readFieldEvidence(lease, "end_date");
+    const dateEvidence = expirationEvidence?.sourceText || expirationEvidence?.sourceClause ? expirationEvidence : endDateEvidence;
+    return {
+      value: derivedMonths,
+      sourceText: dateEvidence?.sourceText ?? null,
+      sourcePage: dateEvidence?.sourcePage ?? null,
+      evidenceType: "derived",
+      sourceTextQuality: "derived",
+      sourceFieldKeys: ["commencement_date", "expiration_date"],
+      derivationTrace: `lease_term_months = months between ${commencement} and ${expirationRaw}`,
+      extractionStatus: "calculated",
+    };
+  }
+
+  return null;
+}
+
 // Exported (in addition to internal use by buildCanonicalLeaseReviewField)
 // solely so field-provenance.test.js can assert on the annual_rent
 // selectionProvenance shape directly -- no behavior change, this is a
 // visibility-only edit.
 export function buildDerivedFieldEvidence(lease, key, currentValue, currentEvidence = {}) {
+  if (["expiration_date", "end_date", "lease_term_months"].includes(key)) {
+    return deriveDateTermRescue(lease, key, currentValue, currentEvidence);
+  }
   const monthlyEvidence = readFieldEvidence(lease, "monthly_rent");
   const baseMonthlyEvidence = readFieldEvidence(lease, "base_rent_monthly");
   const effectiveMonthlyEvidence = hasValidSourceEvidence(monthlyEvidence) ? monthlyEvidence : baseMonthlyEvidence;

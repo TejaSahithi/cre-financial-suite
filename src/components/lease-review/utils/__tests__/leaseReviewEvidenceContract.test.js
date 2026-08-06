@@ -127,6 +127,56 @@ describe("Lease Review evidence contract", () => {
     expect(row.source_text_quality).toBe("derived");
   });
 
+  it("rescues expiration_date via commencement_date + lease term when the direct extraction fails source validation, and clears the validation error that would otherwise block approval", () => {
+    // Reproduces the reported case: a five-year term stated in words and an
+    // end date stated only via an abbreviated-month "through Dec 31, 2023"
+    // range. The direct LLM value for expiration_date fails the source-text
+    // heuristic (no "expir*"/"end date" keyword), and this row-building
+    // pipeline is the one LeaseReview.jsx's approval-blocker check actually
+    // reads - so a value shown as "Calculated" in the review table but still
+    // carrying a stale validation_errors entry here would keep blocking
+    // Approve Lease Abstract even though the field is filled.
+    const termSourceText = "The lease term shall be from an initial five-year period from 1st March 2019 through Dec 31, 2023.";
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          lease_fields: {
+            commencement_date: {
+              value: "2019-03-01",
+              source_page: 1,
+              source_clause: "The rental shall commence on the 1st day of March 2019.",
+              extraction_status: "extracted",
+            },
+            expiration_date: {
+              value: "2023-12-31",
+              source_page: 1,
+              source_clause: termSourceText,
+              extraction_status: "extracted",
+            },
+            lease_term_months: {
+              value: 60,
+              source_page: 1,
+              source_clause: termSourceText,
+              extraction_status: "extracted",
+            },
+          },
+        },
+      },
+    };
+
+    const row = buildCanonicalLeaseReviewField(lease, {
+      key: "expiration_date",
+      label: "Expiration Date",
+      required: true,
+    }, "dates_term");
+
+    expect(row.normalized_value).toBe("2024-02-29"); // commencement 2019-03-01 + 60 months - 1 day
+    expect(row.evidence_type).toBe("derived");
+    expect(row.extraction_status).toBe("calculated");
+    expect(row.validation_errors).not.toContain("expiration_date_failed_validation");
+    expect(row.requires_review).toBe(false);
+  });
+
   it("keeps required missing fields as blockers but out of extracted-only view", () => {
     const row = buildCanonicalLeaseReviewField({}, {
       key: "commencement_date",

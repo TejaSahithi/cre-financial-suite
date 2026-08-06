@@ -306,6 +306,37 @@ describe("validateFieldEvidenceSupport - field-aware source/value alignment", ()
     expect(result.valid).toBe(false);
     expect(result.reason).toMatch(/no source text/i);
   });
+
+  it("accepts a security deposit stated as 'has deposited ... the sum of' rather than the literal phrase 'security deposit'", () => {
+    const result = validateFieldEvidenceSupport("security_deposit", 0, {
+      sourceText: "Tenant has deposited with Landlord the sum of 0 Dollars.",
+      sourcePage: 2,
+      extractionStatus: "extracted",
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it("falls back to generic word-overlap support for a lease_type value with no dedicated enum pattern", () => {
+    // "absolute_net" is a real, allowed lease_type option (leaseFieldOptions.js)
+    // but normalizedEnumEvidenceSupportsValue's pattern dictionary only
+    // covers 7 of the 9 real options - it used to unconditionally fail here
+    // even though the source text plainly supports it.
+    const result = validateFieldEvidenceSupport("lease_type", "absolute_net", {
+      sourceText: "This is an absolute net lease.",
+      sourcePage: 1,
+      extractionStatus: "extracted",
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it("accepts a lease_term_months value supported by a spelled-out term length ('five-year period')", () => {
+    const result = validateFieldEvidenceSupport("lease_term_months", 60, {
+      sourceText: "The lease term shall be from an initial five-year period from 1st March 2019 through Dec 31, 2023.",
+      sourcePage: 1,
+      extractionStatus: "extracted",
+    });
+    expect(result.valid).toBe(true);
+  });
 });
 
 describe("validateFieldEvidenceSupport - rent schedule and billing frequency evidence", () => {
