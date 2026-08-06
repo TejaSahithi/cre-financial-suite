@@ -396,12 +396,7 @@ export default function Leases() {
 
   const bulkDeleteMutation = useMutation({
     mutationFn: async (ids) => {
-      await Promise.all(
-        ids.map(async (id) => {
-          const ok = await leaseService.delete(id);
-          if (!ok) throw new Error("Delete failed");
-        })
-      );
+      await leaseService.deleteMany(ids);
       return ids.length;
     },
     onSuccess: (count) => {

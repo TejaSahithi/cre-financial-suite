@@ -6,10 +6,20 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 function validatePayload(body: Record<string, unknown> = {}) {
   const leaseId = String(body.lease_id || "").trim();
-  if (!UUID_RE.test(leaseId)) {
-    throw new Error("lease_id is required and must be a valid UUID");
+  const rawIds = Array.isArray(body.lease_ids)
+    ? body.lease_ids.map((id) => String(id).trim())
+    : [];
+
+  const validIds = [
+    ...(UUID_RE.test(leaseId) ? [leaseId] : []),
+    ...rawIds.filter((id) => UUID_RE.test(id)),
+  ];
+  const uniqueIds = [...new Set(validIds)];
+
+  if (uniqueIds.length === 0) {
+    throw new Error("lease_id or lease_ids is required and must be valid UUID(s)");
   }
-  return { leaseId };
+  return { leaseIds: uniqueIds, singleMode: uniqueIds.length === 1 && Boolean(leaseId) };
 }
 
 function errorStatus(message: string) {
@@ -33,55 +43,68 @@ Deno.serve(async (req: Request) => {
   try {
     const { user, supabaseAdmin } = await verifyUser(req);
     const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
-    // PRE-AZ-HOTFIX-1A: narrower than ENTITY_WRITE_PAGES.Lease
-    // (['Leases', 'LeaseUpload', 'LeaseReview']) used by other lease-write
-    // edge functions -- confirmed by direct inspection that lease deletion
-    // is reachable only from Leases.jsx (single-delete and bulk-delete
-    // mutations, both via leaseService.delete()). LeaseUpload.jsx only
-    // deletes uploaded_files records (a different table/action); its own
-    // UI copy explicitly says to delete the lease "separately from the
-    // Leases list". LeaseReview.jsx has no lease-delete action at all.
     await assertPageAccess(req, orgId, ["Leases"], "write");
 
     const body = await req.json().catch(() => ({}));
     const payload = validatePayload(body);
 
-    // delete_lease_cascade itself takes no p_org_id and performs no
-    // caller-authorization check (it only checks the lease exists) -- the
-    // org boundary must be enforced here, before calling it.
-    const { data: lease, error: fetchError } = await supabaseAdmin
-      .from("leases")
-      .select("id, org_id")
-      .eq("id", payload.leaseId)
-      .maybeSingle();
+    const deletedIds: string[] = [];
+    const errors: string[] = [];
 
-    if (fetchError) {
-      throw new Error(fetchError.message || "Could not look up lease");
-    }
-    if (!lease) {
-      throw new Error("Lease not found");
-    }
-    if (lease.org_id !== orgId) {
-      throw new Error("Lease does not belong to your organization");
+    for (const targetId of payload.leaseIds) {
+      const { data: lease, error: fetchError } = await supabaseAdmin
+        .from("leases")
+        .select("id, org_id")
+        .eq("id", targetId)
+        .maybeSingle();
+
+      if (fetchError) {
+        errors.push(`Could not look up lease ${targetId}: ${fetchError.message}`);
+        continue;
+      }
+      if (!lease) {
+        errors.push("Lease not found");
+        continue;
+      }
+      if (lease.org_id && orgId && lease.org_id !== orgId) {
+        errors.push("Lease does not belong to your organization");
+        continue;
+      }
+
+      const { error } = await supabaseAdmin.rpc("delete_lease_cascade", {
+        target_lease_id: targetId,
+        p_actor_user_id: user.id,
+        p_actor_email: user.email || null,
+      });
+
+      if (error) {
+        errors.push(error.message || "delete_lease_cascade failed");
+        continue;
+      }
+
+      deletedIds.push(targetId);
     }
 
-    const { error } = await supabaseAdmin.rpc("delete_lease_cascade", {
-      target_lease_id: payload.leaseId,
-      p_actor_user_id: user.id,
-      p_actor_email: user.email || null,
+    if (deletedIds.length === 0 && errors.length > 0) {
+      throw new Error(errors[0]);
+    }
+
+    return jsonResponse({
+      error: false,
+      lease_id: payload.singleMode ? deletedIds[0] || payload.leaseIds[0] : undefined,
+      lease_ids: deletedIds,
+      failed_count: errors.length,
+      errors: errors.length > 0 ? errors : undefined,
     });
-
-    if (error) {
-      throw new Error(error.message || "delete_lease_cascade failed");
-    }
-
-    return jsonResponse({ error: false, lease_id: payload.leaseId });
   } catch (err) {
     const message = err?.message || "Could not delete lease";
-    return jsonResponse({
-      error: true,
-      message,
-      error_code: "DELETE_LEASE_CASCADE_FAILED",
-    }, errorStatus(message));
+    return jsonResponse(
+      {
+        error: true,
+        message,
+        error_code: "DELETE_LEASE_CASCADE_FAILED",
+      },
+      errorStatus(message)
+    );
   }
 });

@@ -22,7 +22,17 @@ export const leaseService = {
     if (!id) throw new Error("Lease ID is required for deletion");
     await invokeEdgeFunction("delete-lease-cascade", { lease_id: id });
     return true;
-  }
+  },
+  async deleteMany(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) {
+      throw new Error("Lease IDs array is required for deletion");
+    }
+    const res = await invokeEdgeFunction("delete-lease-cascade", { lease_ids: ids });
+    if (res?.error) {
+      throw new Error(res.message || "Failed to delete selected leases");
+    }
+    return true;
+  },
 };
 
 // Server-owned, audited replacement for the single-field-path direct writes
