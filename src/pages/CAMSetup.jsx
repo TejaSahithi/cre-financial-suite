@@ -789,73 +789,6 @@ export default function CAMSetup() {
           </DialogContent>
         </Dialog>
 
-        <Dialog open={Boolean(prepareCamResult)} onOpenChange={(open) => { if (!open) setPrepareCamResult(null); }}>
-          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-            <DialogHeader><DialogTitle>Prepare CAM Automatically — Results</DialogTitle></DialogHeader>
-            {prepareCamResult && (
-              <div className="space-y-4 text-sm">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="border rounded p-2"><p className="text-xs text-slate-500">Policies materialized</p><p className="text-lg font-semibold">{prepareCamResult.created?.policies_materialized ?? 0}</p></div>
-                  <div className="border rounded p-2"><p className="text-xs text-slate-500">Suggested pools</p><p className="text-lg font-semibold">{prepareCamResult.suggested?.pools?.length ?? 0}</p></div>
-                  <div className="border rounded p-2"><p className="text-xs text-slate-500">Suggested expense assignments</p><p className="text-lg font-semibold">{prepareCamResult.suggested?.expense_assignments?.length ?? 0}</p></div>
-                  <div className="border rounded p-2"><p className="text-xs text-slate-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3 text-red-600" /> Blocking exceptions</p><p className="text-lg font-semibold">{prepareCamResult.blocking?.length ?? 0}</p></div>
-                </div>
-
-                {prepareCamResult.conflicting?.duplicate_lease_groups?.length > 0 && (
-                  <div className="border border-amber-300 bg-amber-50 rounded p-3">
-                    <p className="font-semibold text-amber-900 mb-1.5">Possible duplicate leases found ({prepareCamResult.conflicting.duplicate_lease_groups.length})</p>
-                    <p className="text-xs text-amber-800 mb-2">These were excluded from suggestions until resolved. Nothing was merged or deleted automatically.</p>
-                    <ul className="space-y-1.5">
-                      {prepareCamResult.conflicting.duplicate_lease_groups.map((g, i) => (
-                        <li key={i} className="text-xs text-amber-900">
-                          <span className="font-medium">{g.tenant_name}</span> — {g.lease_count} lease records{g.likely_duplicate ? " (likely duplicate)" : " (possible multi-premises)"}
-                          <br /><span className="text-amber-700">{g.reason}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {prepareCamResult.conflicting?.materialization_blocked?.length > 0 && (
-                  <div className="border border-red-300 bg-red-50 rounded p-3">
-                    <p className="font-semibold text-red-900 mb-1.5">Rules that could not be materialized ({prepareCamResult.conflicting.materialization_blocked.length})</p>
-                    <ul className="space-y-1 text-xs text-red-800">
-                      {prepareCamResult.conflicting.materialization_blocked.map((m, i) => <li key={i}>{m.reason}</li>)}
-                    </ul>
-                  </div>
-                )}
-
-                {prepareCamResult.suggested?.pools?.length > 0 && (
-                  <div>
-                    <p className="font-semibold mb-1.5">Suggested pools</p>
-                    <ul className="space-y-1 text-xs">
-                      {prepareCamResult.suggested.pools.map((p, i) => (
-                        <li key={i} className="flex justify-between border-b py-1">
-                          <span>{p.category_name || p.expense_category_id}</span>
-                          <span className="text-slate-500">{p.expense_count} expenses · {fmtCurrency(p.expense_total)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                    <p className="text-xs text-slate-500 mt-1.5">Go to Step 2 (Pools) to confirm these suggestions.</p>
-                  </div>
-                )}
-
-                {prepareCamResult.missing?.leases_without_any_policy?.length > 0 && (
-                  <div className="border border-slate-200 rounded p-3">
-                    <p className="font-semibold mb-1.5">Leases still missing any recovery policy ({prepareCamResult.missing.leases_without_any_policy.length})</p>
-                    <ul className="text-xs text-slate-600 space-y-0.5">
-                      {prepareCamResult.missing.leases_without_any_policy.map((l, i) => <li key={i}>{l.tenant_name}</li>)}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setPrepareCamResult(null)}>Close</Button>
-              <Button id="btn-prepare-cam-goto-pools" onClick={() => { setPrepareCamResult(null); setStep(2); }}>Review Pools →</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
       </div>
     );
   }
@@ -1775,7 +1708,15 @@ export default function CAMSetup() {
                 {blocking.length} blocking issue{blocking.length === 1 ? "" : "s"}{warnings.length > 0 ? `, ${warnings.length} warning${warnings.length === 1 ? "" : "s"}` : ""} must be resolved before calculation is fully authoritative.
               </span>
             )}
-            <Button size="sm" variant="ghost" className="ml-auto text-xs" id="btn-open-advanced-readiness" onClick={() => setAdvancedReadinessOpen(true)}>
+            <Button
+              size="sm" variant="outline" className="ml-auto text-xs" id="btn-wb-prepare-cam-automatically"
+              onClick={() => prepareCamMutation.mutate()} disabled={prepareCamMutation.isPending}
+              title="Re-derive pools, policies, and expense assignments from approved lease documents and the expense modules. Additive and safe to run repeatedly — nothing existing is deleted."
+            >
+              {prepareCamMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1" />}
+              Prepare CAM Automatically
+            </Button>
+            <Button size="sm" variant="ghost" className="text-xs" id="btn-open-advanced-readiness" onClick={() => setAdvancedReadinessOpen(true)}>
               <SlidersHorizontal className="w-3.5 h-3.5 mr-1" /> Advanced Readiness
             </Button>
           </div>
@@ -1799,6 +1740,90 @@ export default function CAMSetup() {
           )}
         </CardContent>
       </Card>
+    );
+  }
+
+  // Hoisted out of Step1 (was previously only reachable/renderable there) so
+  // "Prepare CAM Automatically" can also be triggered from the Workbench --
+  // prepareCamMutation/prepareCamResult are already page-level state, only
+  // the dialog markup needed to move. Behavior/content unchanged.
+  function PrepareCamResultDialog() {
+    return (
+      <Dialog open={Boolean(prepareCamResult)} onOpenChange={(open) => { if (!open) setPrepareCamResult(null); }}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Prepare CAM Automatically — Results</DialogTitle></DialogHeader>
+          {prepareCamResult && (
+            <div className="space-y-4 text-sm">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="border rounded p-2"><p className="text-xs text-slate-500">Policies materialized</p><p className="text-lg font-semibold">{prepareCamResult.created?.policies_materialized ?? 0}</p></div>
+                <div className="border rounded p-2"><p className="text-xs text-slate-500">Suggested pools</p><p className="text-lg font-semibold">{prepareCamResult.suggested?.pools?.length ?? 0}</p></div>
+                <div className="border rounded p-2"><p className="text-xs text-slate-500">Suggested expense assignments</p><p className="text-lg font-semibold">{prepareCamResult.suggested?.expense_assignments?.length ?? 0}</p></div>
+                <div className="border rounded p-2"><p className="text-xs text-slate-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3 text-red-600" /> Blocking exceptions</p><p className="text-lg font-semibold">{prepareCamResult.blocking?.length ?? 0}</p></div>
+              </div>
+
+              {prepareCamResult.conflicting?.duplicate_lease_groups?.length > 0 && (
+                <div className="border border-amber-300 bg-amber-50 rounded p-3">
+                  <p className="font-semibold text-amber-900 mb-1.5">Possible duplicate leases found ({prepareCamResult.conflicting.duplicate_lease_groups.length})</p>
+                  <p className="text-xs text-amber-800 mb-2">These were excluded from suggestions until resolved. Nothing was merged or deleted automatically.</p>
+                  <ul className="space-y-1.5">
+                    {prepareCamResult.conflicting.duplicate_lease_groups.map((g, i) => (
+                      <li key={i} className="text-xs text-amber-900">
+                        <span className="font-medium">{g.tenant_name}</span> — {g.lease_count} lease records{g.likely_duplicate ? " (likely duplicate)" : " (possible multi-premises)"}
+                        <br /><span className="text-amber-700">{g.reason}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {prepareCamResult.conflicting?.materialization_blocked?.length > 0 && (
+                <div className="border border-red-300 bg-red-50 rounded p-3">
+                  <p className="font-semibold text-red-900 mb-1.5">Rules that could not be materialized ({prepareCamResult.conflicting.materialization_blocked.length})</p>
+                  <ul className="space-y-1 text-xs text-red-800">
+                    {prepareCamResult.conflicting.materialization_blocked.map((m, i) => <li key={i}>{m.reason}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              {prepareCamResult.suggested?.pools?.length > 0 && (
+                <div>
+                  <p className="font-semibold mb-1.5">Suggested pools</p>
+                  <ul className="space-y-1 text-xs">
+                    {prepareCamResult.suggested.pools.map((p, i) => (
+                      <li key={i} className="flex justify-between border-b py-1">
+                        <span>{p.category_name || p.expense_category_id}</span>
+                        <span className="text-slate-500">{p.expense_count} expenses · {fmtCurrency(p.expense_total)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-xs text-slate-500 mt-1.5">Review pool suggestions to confirm them.</p>
+                </div>
+              )}
+
+              {prepareCamResult.missing?.leases_without_any_policy?.length > 0 && (
+                <div className="border border-slate-200 rounded p-3">
+                  <p className="font-semibold mb-1.5">Leases still missing any recovery policy ({prepareCamResult.missing.leases_without_any_policy.length})</p>
+                  <ul className="text-xs text-slate-600 space-y-0.5">
+                    {prepareCamResult.missing.leases_without_any_policy.map((l, i) => <li key={i}>{l.tenant_name}</li>)}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPrepareCamResult(null)}>Close</Button>
+            <Button
+              id="btn-prepare-cam-goto-pools"
+              onClick={() => {
+                setPrepareCamResult(null);
+                if (workbenchView) setWorkbenchTab("pools"); else setStep(2);
+              }}
+            >
+              Review Pools →
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     );
   }
 
@@ -2510,6 +2535,8 @@ export default function CAMSetup() {
           </div>
         </CardContent>
       </Card>
+
+      <PrepareCamResultDialog />
 
       {workbenchView ? (
         <>
