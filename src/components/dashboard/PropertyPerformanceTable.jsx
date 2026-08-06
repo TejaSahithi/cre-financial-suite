@@ -4,12 +4,6 @@ import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { ChevronRight, Building2 } from "lucide-react";
 
-const statusBadge = {
-  active: "bg-emerald-100 text-emerald-700",
-  draft: "bg-slate-100 text-slate-600",
-  archived: "bg-red-100 text-red-700",
-};
-
 function fmt(v) {
   if (!v) return "—";
   if (v >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
@@ -17,16 +11,68 @@ function fmt(v) {
   return `$${v.toLocaleString()}`;
 }
 
-export default function PropertyPerformanceTable({ properties = [], leases = [], expenses = [], camCalcs = [] }) {
-  const rows = properties.map(p => {
-    const pLeases = leases.filter(l => l.property_id === p.id && l.status !== 'expired');
-    const pExpenses = expenses.filter(e => e.property_id === p.id);
-    const pCAM = camCalcs.filter(c => c.property_id === p.id);
-    const revenue = pLeases.reduce((s, l) => s + (l.annual_rent || (l.base_rent || 0) * 12), 0) + pCAM.reduce((s, c) => s + (c.annual_cam || 0), 0);
-    const exp = pExpenses.reduce((s, e) => s + (e.amount || 0), 0);
-    const occ = p.total_sf > 0 ? ((p.leased_sf || 0) / p.total_sf * 100) : 0;
-    return { ...p, revenue, exp, noi: revenue - exp, occ, leaseCount: pLeases.length };
-  }).sort((a, b) => b.revenue - a.revenue);
+export default function PropertyPerformanceTable({
+  properties = [],
+  leases = [],
+  expenses = [],
+  camCalcs = [],
+  buildings = [],
+  units = [],
+}) {
+  const rows = properties
+    .map((p) => {
+      const pLeases = leases.filter(
+        (l) =>
+          (l.property_id === p.id || l.property?.id === p.id) &&
+          String(l.status || "").toLowerCase() !== "expired"
+      );
+      const pExpenses = expenses.filter((e) => e.property_id === p.id || e.property?.id === p.id);
+      const pCAM = camCalcs.filter((c) => c.property_id === p.id || c.property?.id === p.id);
+
+      const revenue =
+        pLeases.reduce(
+          (s, l) => s + (Number(l.annual_rent) || (Number(l.base_rent || l.monthly_rent) || 0) * 12),
+          0
+        ) + pCAM.reduce((s, c) => s + (Number(c.annual_cam) || 0), 0);
+      const exp = pExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+
+      let totalSF = Number(p.total_sf) || 0;
+      if (totalSF === 0 && Array.isArray(buildings)) {
+        totalSF = buildings
+          .filter((b) => b.property_id === p.id)
+          .reduce((s, b) => s + (Number(b.total_sf || b.square_feet || b.sqft || b.rentable_sf) || 0), 0);
+      }
+      if (totalSF === 0 && Array.isArray(units)) {
+        totalSF = units
+          .filter((u) => u.property_id === p.id)
+          .reduce((s, u) => s + (Number(u.square_feet || u.sqft || u.rentable_sf || u.usable_sf || u.sf) || 0), 0);
+      }
+
+      let leasedSF = Number(p.leased_sf) || 0;
+      if (leasedSF === 0 && pLeases.length > 0) {
+        leasedSF = pLeases.reduce(
+          (s, l) => s + (Number(l.leased_sf || l.square_footage || l.rentable_sf || l.sqft || l.sf) || 0),
+          0
+        );
+      }
+
+      if (totalSF === 0 && leasedSF > 0) {
+        totalSF = leasedSF;
+      }
+
+      const occ = totalSF > 0 ? (leasedSF / totalSF) * 100 : pLeases.length > 0 ? 100 : 0;
+      return {
+        ...p,
+        total_sf: totalSF,
+        leased_sf: leasedSF,
+        revenue,
+        exp,
+        noi: revenue - exp,
+        occ,
+        leaseCount: pLeases.length,
+      };
+    })
+    .sort((a, b) => b.revenue - a.revenue);
 
   return (
     <Card className="border-0 shadow-sm">
@@ -55,7 +101,7 @@ export default function PropertyPerformanceTable({ properties = [], leases = [],
                 </tr>
               </thead>
               <tbody>
-                {rows.slice(0, 8).map(r => (
+                {rows.slice(0, 8).map((r) => (
                   <tr key={r.id} className="border-b border-slate-50 hover:bg-blue-50/30 transition-colors">
                     <td className="px-4 py-2">
                       <div className="flex items-center gap-2">
@@ -64,17 +110,25 @@ export default function PropertyPerformanceTable({ properties = [], leases = [],
                         </div>
                         <div className="min-w-0">
                           <p className="font-semibold text-slate-800 truncate max-w-[140px]">{r.name}</p>
-                          <p className="text-xs text-slate-400">{r.city}{r.state ? `, ${r.state}` : ''} · {((r.total_sf || 0) / 1000).toFixed(0)}K SF</p>
+                          <p className="text-xs text-slate-400">
+                            {r.city}
+                            {r.state ? `, ${r.state}` : ""} · {((r.total_sf || 0) / 1000).toFixed(0)}K SF
+                          </p>
                         </div>
                       </div>
                     </td>
                     <td className="text-right px-3 py-2 font-bold tabular-nums text-slate-800">{fmt(r.revenue)}</td>
                     <td className="text-right px-3 py-2 tabular-nums text-slate-600">{fmt(r.exp)}</td>
-                    <td className={`text-right px-3 py-2 font-bold tabular-nums ${r.noi >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{fmt(r.noi)}</td>
+                    <td className={`text-right px-3 py-2 font-bold tabular-nums ${r.noi >= 0 ? "text-emerald-700" : "text-red-600"}`}>
+                      {fmt(r.noi)}
+                    </td>
                     <td className="text-right px-3 py-2">
                       <div className="flex items-center justify-end gap-1.5">
                         <div className="w-10 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div className={`h-full rounded-full ${r.occ >= 90 ? 'bg-emerald-500' : r.occ >= 70 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${Math.min(r.occ, 100)}%` }} />
+                          <div
+                            className={`h-full rounded-full ${r.occ >= 90 ? "bg-emerald-500" : r.occ >= 70 ? "bg-amber-500" : "bg-red-500"}`}
+                            style={{ width: `${Math.min(r.occ, 100)}%` }}
+                          />
                         </div>
                         <span className="tabular-nums font-semibold text-slate-700">{r.occ.toFixed(0)}%</span>
                       </div>

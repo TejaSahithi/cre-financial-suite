@@ -168,7 +168,7 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [showAdvanced, setShowAdvanced] = useState(true);
-  const [completenessFilter, setCompletenessFilter] = useState("all");
+  const [completenessFilter, setCompletenessFilter] = useState("filled");
 
   const typeOptions = useMemo(() => {
     return Array.from(new Set(rows.map((row) => row.rowType).filter(Boolean))).sort();

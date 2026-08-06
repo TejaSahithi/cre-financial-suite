@@ -24,6 +24,7 @@ const GENERIC_NAME_LABELS = new Set([
   "tenant", "landlord", "lessor", "lessee", "owner",
   "assignee", "assignor", "guarantor", "manager", "agent",
   "landlord_name", "tenant_name", "property_name",
+  "title", "ceo", "president", "secretary", "treasurer", "officer", "by", "date", "name",
 ]);
 
 /** Field keys whose values must be plain numbers (no currency symbols). */

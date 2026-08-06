@@ -597,7 +597,11 @@ const SENTINEL_NOT_FOUND_VALUES = new Set([
   "not applicable", "see lease", "as set forth", "per lease",
   "not found", "not available", "not stated", "not provided",
   "not mentioned", "not included", "not applicable.",
+  "title", "ceo", "president", "secretary", "treasurer", "officer",
 ]);
+
+const BARE_SECTION_NUMBER_PATTERN = /^(?:section\s+)?(?:\d+|[a-zA-Z]|\d+\.\d+)[.:)]?$/i;
+const LEGAL_ENTITY_DESCRIPTOR_PATTERN = /^a\s+(?:[a-z]+\s+)?(?:limited\s+liability\s+company|corporation|llc|inc|partnership|limited\s+partnership|sole\s+proprietorship)$/i;
 
 export function isMeaningfulValue(value) {
   if (value === null || value === undefined) return false;
@@ -606,7 +610,11 @@ export function isMeaningfulValue(value) {
   if (typeof value !== "string") return true;
   const trimmed = value.trim();
   if (!trimmed) return false;
-  return !SENTINEL_NOT_FOUND_VALUES.has(trimmed.toLowerCase());
+  const lower = trimmed.toLowerCase();
+  if (SENTINEL_NOT_FOUND_VALUES.has(lower)) return false;
+  if (BARE_SECTION_NUMBER_PATTERN.test(trimmed)) return false;
+  if (LEGAL_ENTITY_DESCRIPTOR_PATTERN.test(trimmed)) return false;
+  return true;
 }
 
 // Phase 39: a value that is entirely one bare HTML/XML tag (e.g. "<figure>",
