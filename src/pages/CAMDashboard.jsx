@@ -331,8 +331,14 @@ export default function CAMDashboard() {
               <CardContent className="p-4 flex items-center justify-between">
                 <div>
                   <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Active Recovery Policies</p>
-                  <p className="text-2xl font-bold text-slate-900 mt-1">{leaseList.filter((l) => l.cam_calculation_method || l.cam_cap_type).length || leaseList.length}</p>
-                  <p className="text-xs text-purple-700 mt-1 font-medium">Materialized rules ready</p>
+                  <p className="text-2xl font-bold text-slate-900 mt-1">
+                    {leaseList.filter((l) => l.cam_calculation_method || l.cam_cap_type || l.has_cam_rules).length}
+                  </p>
+                  <p className="text-xs text-purple-700 mt-1 font-medium">
+                    {leaseList.filter((l) => l.cam_calculation_method || l.cam_cap_type || l.has_cam_rules).length > 0
+                      ? "Materialized rules ready"
+                      : "No active rules"}
+                  </p>
                 </div>
                 <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-600">
                   <ClipboardCheck className="w-5 h-5" />

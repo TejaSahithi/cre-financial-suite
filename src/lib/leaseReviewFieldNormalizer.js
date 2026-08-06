@@ -263,6 +263,33 @@ function routeClauseRecordToDomainTab(row) {
   return matched?.tabKey || null;
 }
 
+const BARE_SECTION_OR_LIST_PREFIX_RE = /^(?:section\s+)?(?:\d+|[a-zA-Z]|\d+\.\d+)[.:)]?\s*$/i;
+const LEADING_SECTION_OR_LIST_PREFIX_RE = /^(?:section\s+)?(?:\d+|[a-zA-Z]|\d+\.\d+)[.:)]\s+/i;
+const ENTITY_QUALIFIER_ONLY_RE = /^a\s+(?:[a-z]+\s+)?(?:limited\s+liability\s+company|corporation|llc|inc|partnership|limited\s+partnership|sole\s+proprietorship)$/i;
+const ENTITY_QUALIFIER_SUFFIX_RE = /,\s*a\s+(?:[a-z]+\s+)?(?:limited\s+liability\s+company|corporation|llc|inc|partnership|limited\s+partnership|sole\s+proprietorship).*$/i;
+
+export function sanitizeExtractedFieldValue(canonicalKey, value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") return value;
+  let str = value.trim();
+  if (!str) return null;
+
+  if (BARE_SECTION_OR_LIST_PREFIX_RE.test(str)) {
+    return null;
+  }
+
+  str = str.replace(LEADING_SECTION_OR_LIST_PREFIX_RE, "").trim();
+
+  if (canonicalKey.endsWith("_name")) {
+    if (ENTITY_QUALIFIER_ONLY_RE.test(str)) {
+      return null;
+    }
+    str = str.replace(ENTITY_QUALIFIER_SUFFIX_RE, "").trim();
+  }
+
+  return str || null;
+}
+
 function normalizeComparableText(value) {
   return String(value ?? "")
     .toLowerCase()
@@ -1139,6 +1166,9 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
       : typedColumnValue !== undefined
         ? typedColumnValue
         : readFieldValue(lease, canonicalKey);
+    if (reviewedValue === undefined) {
+      value = sanitizeExtractedFieldValue(canonicalKey, value);
+    }
     let evidence = readFieldEvidence(lease, canonicalKey);
     let confidence = readFieldConfidence(lease, canonicalKey);
     if (reviewedValue !== undefined) {
