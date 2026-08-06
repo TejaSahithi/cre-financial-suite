@@ -215,7 +215,14 @@ export default function CAMSetup() {
   // key that never changes again, and silently never refetch once leases
   // actually loads -- propertyLeaseIds exists specifically so every
   // dependent query below can put it in its key instead.
-  const propertyLeaseIds = useMemo(() => leases.filter((l) => l.property_id === propertyId).map((l) => l.id), [leases, propertyId]);
+  // Building-scoped: when a building is selected, only that building's
+  // leases participate -- previously this stayed property-wide regardless
+  // of the building selector, silently showing every building's data no
+  // matter which one was picked.
+  const propertyLeaseIds = useMemo(
+    () => leases.filter((l) => l.property_id === propertyId && (!buildingId || l.building_id === buildingId)).map((l) => l.id),
+    [leases, propertyId, buildingId],
+  );
   const { data: categories = [] } = useOrgQuery("ExpenseCategory");
   const categoryNamesById = useMemo(() => new Map((categories || []).map((c) => [c.id, c.category_name])), [categories]);
 
@@ -253,10 +260,16 @@ export default function CAMSetup() {
   const selectedPeriod = useMemo(() => periods.find((p) => p.id === periodId) || null, [periods, periodId]);
 
   const { data: pools = [], refetch: refetchPools } = useQuery({
-    queryKey: ["recovery_pools", propertyId, periodId],
+    // Building-scoped: a property-wide pool still applies inside any of its
+    // buildings, so a building selection narrows to "property-wide OR this
+    // building's own" pools -- never an exact-match building_id filter,
+    // which would wrongly hide property-wide pools while viewing a building.
+    queryKey: ["recovery_pools", propertyId, periodId, buildingId],
     enabled: Boolean(propertyId) && Boolean(periodId),
     queryFn: async () => {
-      const { data, error } = await supabase.from("recovery_pools").select("*, recovery_pool_categories(*)").eq("property_id", propertyId).eq("period_id", periodId).order("name");
+      let query = supabase.from("recovery_pools").select("*, recovery_pool_categories(*)").eq("property_id", propertyId).eq("period_id", periodId);
+      if (buildingId) query = query.or(`scope_type.eq.property,and(scope_type.eq.building,scope_id.eq.${buildingId})`);
+      const { data, error } = await query.order("name");
       if (error) return [];
       return data || [];
     },
@@ -276,6 +289,23 @@ export default function CAMSetup() {
       const { data, error } = await supabase.from("recovery_pool_lease_participants").select("*, leases(tenant_name)").eq("pool_id", selectedPoolId).order("created_at");
       if (error) return [];
       return data || [];
+    },
+  });
+
+  // Active participant count per pool for ALL pools in scope at once (Step3's
+  // own `participants` query above is intentionally scoped to one selected
+  // pool only) -- needed for the Pool Calculation tab's "Participants"
+  // column (spec section C) without re-querying per row.
+  const { data: participantCountsByPoolId = new Map() } = useQuery({
+    queryKey: ["pool_participant_counts", pools.map((p) => p.id).join(",")],
+    enabled: pools.length > 0,
+    queryFn: async () => {
+      const poolIds = pools.map((p) => p.id);
+      const { data, error } = await supabase.from("recovery_pool_lease_participants").select("pool_id").in("pool_id", poolIds).eq("status", "active");
+      if (error) return new Map();
+      const counts = new Map();
+      for (const row of data || []) counts.set(row.pool_id, (counts.get(row.pool_id) || 0) + 1);
+      return counts;
     },
   });
 
@@ -347,10 +377,13 @@ export default function CAMSetup() {
   }, [policies]);
 
   const { data: priorAdjustments = [], refetch: refetchPriorAdj } = useQuery({
-    queryKey: ["cam_prior_period_adjustments", periodId],
+    // Building-scoped, same reasoning as estimateSchedules below.
+    queryKey: ["cam_prior_period_adjustments", periodId, buildingId ? propertyLeaseIds.join(",") : null],
     enabled: Boolean(periodId),
     queryFn: async () => {
-      const { data, error } = await supabase.from("cam_prior_period_adjustments").select("*, leases(tenant_name)").eq("recovery_period_id", periodId);
+      let query = supabase.from("cam_prior_period_adjustments").select("*, leases(tenant_name)").eq("recovery_period_id", periodId);
+      if (buildingId) query = query.in("lease_id", propertyLeaseIds.length > 0 ? propertyLeaseIds : ["00000000-0000-0000-0000-000000000000"]);
+      const { data, error } = await query;
       if (error) return [];
       return data || [];
     },
@@ -363,15 +396,20 @@ export default function CAMSetup() {
     // "prior-year published amounts appearing in this year" bug this fixes
     // was caused by this query filtering on property_id only, with no
     // period or fiscal_year predicate at all.
-    queryKey: ["cam_expense_inputs_published", propertyId, periodId, selectedPeriod?.start_date, selectedPeriod?.end_date],
+    // Building-scoped: an expense with building_id=null is property-wide
+    // (applies inside any building), so a building selection narrows to
+    // "property-wide OR this building's own" -- an exact-match filter would
+    // wrongly hide legitimate property-wide expenses while viewing a building.
+    queryKey: ["cam_expense_inputs_published", propertyId, periodId, buildingId, selectedPeriod?.start_date, selectedPeriod?.end_date],
     enabled: Boolean(propertyId) && Boolean(periodId) && Boolean(selectedPeriod),
     queryFn: async () => {
-      const { data, error } = await supabase
+      let query = supabase
         .from("cam_expense_inputs")
         .select("*, cam_input_pool_assignments(*, recovery_pools(name))")
         .eq("property_id", propertyId)
-        .eq("publication_status", "published")
-        .order("created_at");
+        .eq("publication_status", "published");
+      if (buildingId) query = query.or(`building_id.is.null,building_id.eq.${buildingId}`);
+      const { data, error } = await query.order("created_at");
       if (error) return [];
       const periodStart = selectedPeriod.start_date;
       const periodEnd = selectedPeriod.end_date;
@@ -404,20 +442,63 @@ export default function CAMSetup() {
     },
   });
 
+  // Business rule: an expense only ever reaches cam_expense_inputs once its
+  // classification's cam_eligible = 'yes' (enforced by
+  // send_expense_classification_to_cam_workflow / publish_cam_expense_input
+  // RPCs) -- so publishedExpenses above can never legitimately contain a
+  // truly non-eligible row. The real "not eligible, stays in the Expense
+  // module" set lives one step upstream, in expense_classifications rows
+  // that were never sent to CAM at all. Queried separately, read-only, for
+  // the CAM Expenses tab's optional excluded-source audit drawer only.
+  const { data: excludedClassifications = [] } = useQuery({
+    queryKey: ["cam_excluded_classifications", propertyId],
+    enabled: Boolean(propertyId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("expense_classifications")
+        .select("id, expense_id, recovery_status, recoverability_result, cam_eligible, classification_status")
+        .eq("property_id", propertyId)
+        .neq("cam_eligible", "yes")
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (error) return [];
+      const expenseIds = [...new Set(data.map((c) => c.expense_id).filter(Boolean))];
+      const { data: expenses } = expenseIds.length
+        ? await supabase.from("expenses").select("id, vendor, vendor_name, description, amount").in("id", expenseIds)
+        : { data: [] };
+      const expenseById = new Map((expenses || []).map((e) => [e.id, e]));
+      return data.map((c) => ({ ...c, _sourceExpense: c.expense_id ? expenseById.get(c.expense_id) : null }));
+    },
+  });
+
   const { data: estimateSchedules = [], refetch: refetchEstimates } = useQuery({
-    queryKey: ["cam_estimate_schedules", periodId],
+    // Building-scoped via propertyLeaseIds (already building-aware above).
+    // recovery_period_id alone already can't leak cross-property (a period
+    // belongs to one calendar, which belongs to one property), but it says
+    // nothing about building -- without this, every building's estimates
+    // showed regardless of the building selector.
+    queryKey: ["cam_estimate_schedules", periodId, buildingId ? propertyLeaseIds.join(",") : null],
     enabled: Boolean(periodId),
     queryFn: async () => {
-      const { data, error } = await supabase.from("cam_estimate_schedules").select("*, leases(tenant_name)").eq("recovery_period_id", periodId).order("month_date");
+      let query = supabase.from("cam_estimate_schedules").select("*, leases(tenant_name)").eq("recovery_period_id", periodId);
+      if (buildingId) query = query.in("lease_id", propertyLeaseIds.length > 0 ? propertyLeaseIds : ["00000000-0000-0000-0000-000000000000"]);
+      const { data, error } = await query.order("month_date");
       if (error) return [];
       return data || [];
     },
   });
 
   const { data: readinessRaw, isLoading: readinessLoading, refetch: refetchReadiness } = useQuery({
-    queryKey: ["cam_readiness", propertyId, periodId],
+    // Building-scoped: get-cam-setup-readiness already accepts scope_type/
+    // scope_id (confirmed in its own contract) -- previously never passed,
+    // so readiness was always evaluated property-wide even while a building
+    // was selected.
+    queryKey: ["cam_readiness", propertyId, periodId, buildingId],
     enabled: Boolean(propertyId) && Boolean(periodId),
-    queryFn: () => invokeEdgeFunction("get-cam-setup-readiness", { property_id: propertyId, recovery_period_id: periodId }),
+    queryFn: () => invokeEdgeFunction("get-cam-setup-readiness", {
+      property_id: propertyId, recovery_period_id: periodId,
+      scope_type: buildingId ? "building" : "property", scope_id: buildingId || propertyId,
+    }),
   });
   const readiness = useMemo(() => {
     if (!readinessRaw) return { ready: false, blockingCount: 0, warningCount: 0, items: [] };
@@ -433,10 +514,10 @@ export default function CAMSetup() {
   // live on this page without touching CAMRun.jsx, which remains the
   // separate, deeper operational page (submit/approve/post/statements).
   const { data: workbenchRuns = [], refetch: refetchWorkbenchRuns } = useQuery({
-    queryKey: ["cam-workbench-run-list", propertyId, periodId],
+    queryKey: ["cam-workbench-run-list", propertyId, periodId, buildingId],
     enabled: Boolean(propertyId) && Boolean(periodId),
     queryFn: async () => {
-      const { data, error } = await supabase.from("cam_runs").select("*").eq("scope_id", propertyId).eq("recovery_period_id", periodId).order("created_at", { ascending: false });
+      const { data, error } = await supabase.from("cam_runs").select("*").eq("scope_id", buildingId || propertyId).eq("recovery_period_id", periodId).order("created_at", { ascending: false });
       if (error) return [];
       return data || [];
     },
@@ -481,7 +562,8 @@ export default function CAMSetup() {
   const calculateMutation = useMutation({
     mutationFn: () =>
       invokeEdgeFunction("run-cam-calculation-v2", {
-        property_id: propertyId, recovery_period_id: periodId, scope_type: "property", scope_id: propertyId,
+        property_id: propertyId, recovery_period_id: periodId,
+        scope_type: buildingId ? "building" : "property", scope_id: buildingId || propertyId,
         run_type: "standard", run_mode: "posting_eligible",
       }),
     onSuccess: (result) => {
@@ -524,9 +606,52 @@ export default function CAMSetup() {
         ["recovery_pools", propertyId, periodId],
         ["cam_readiness", propertyId, periodId],
       ].forEach((k) => queryClient.invalidateQueries({ queryKey: k }));
-      toast.success("Prepare CAM Automatically finished — review suggestions below");
+      toast.success("Re-Sync Source Data finished — review suggestions below");
     },
-    onError: (err) => toast.error(err.message || "Prepare CAM Automatically failed"),
+    onError: (err) => toast.error(err.message || "Re-Sync Source Data failed"),
+  });
+
+  const resetAndReimportMutation = useMutation({
+    mutationFn: async () => {
+      if (!propertyId || !periodId) throw new Error("Select a property and recovery period first.");
+
+      // 1. Clear existing pools and child assignments for this property/period
+      const { data: poolsToDelete } = await supabase
+        .from("recovery_pools")
+        .select("id")
+        .eq("property_id", propertyId)
+        .eq("period_id", periodId);
+
+      const poolIds = (poolsToDelete || []).map((p) => p.id);
+
+      if (poolIds.length > 0) {
+        await supabase.from("cam_expense_pool_assignments").delete().in("pool_id", poolIds);
+        await supabase.from("recovery_pool_lease_participants").delete().in("pool_id", poolIds);
+        await supabase.from("recovery_pool_scope_members").delete().in("pool_id", poolIds);
+        await supabase.from("recovery_pool_categories").delete().in("pool_id", poolIds);
+        await supabase.from("recovery_pools").delete().in("id", poolIds);
+      }
+
+      // 2. Invoke prepare-cam-automatically-v2 to re-import fresh source data from upstream modules
+      const result = await invokeEdgeFunction("prepare-cam-automatically-v2", {
+        property_id: propertyId,
+        recovery_period_id: periodId,
+      });
+
+      return result;
+    },
+    onSuccess: (result) => {
+      setPrepareCamResult(result);
+      [
+        ["lease_recovery_policies", propertyLeaseIds.join(",")],
+        ["cam-setup-lease-premises", propertyLeaseIds.join(",")],
+        ["cam_expense_inputs_published", propertyId, periodId, selectedPeriod?.start_date, selectedPeriod?.end_date],
+        ["recovery_pools", propertyId, periodId],
+        ["cam_readiness", propertyId, periodId],
+      ].forEach((k) => queryClient.invalidateQueries({ queryKey: k }));
+      toast.success("CAM data reset & fresh source data re-imported successfully!");
+    },
+    onError: (err) => toast.error(err.message || "Reset & Re-Import failed"),
   });
 
   // Item G: controlled, versioned override for a POLICY_CONFLICT readiness
@@ -1838,19 +1963,22 @@ export default function CAMSetup() {
     );
   }
 
-  // ---- A. CAM Expenses ---------------------------------------------------------
-  // CAM-specific status, derived purely from fields already on each published
-  // expense row (no new query): a general-ledger "recoverable/non_recoverable"
-  // classification and a CAM pool assignment are two different questions --
-  // this collapses them into the one status the reviewer actually needs.
-  //   excluded   -- classification says non_recoverable/excluded: not CAM's
-  //                 concern at all, stays in the Expense module.
-  //   conditional-- recoverable but not yet calculation-ready (no category,
-  //                 no service period, or not yet assigned to a pool).
-  //   eligible   -- recoverable, categorized, dated, and pool-assigned.
+  // ---- A. CAM Inputs -----------------------------------------------------------
+  // A published cam_expense_inputs row can only exist once its classification
+  // already passed the cam_eligible='yes' gate (enforced server-side by
+  // send_expense_classification_to_cam_workflow / the publish RPC) -- so a
+  // row reaching this tab is never "not eligible" by construction. The only
+  // real distinction left to make here is calculation-readiness:
+  //   conditional -- eligible, but missing a piece calculation needs (no
+  //                  canonical category, no service period, or not yet
+  //                  assigned to a pool) -- a genuine readiness blocker.
+  //   eligible    -- categorized, dated, and pool-assigned; calculation-ready.
+  // The true "not eligible" set (rule 5: stays in the Expense module) is a
+  // different, upstream population -- expense_classifications rows that were
+  // never sent to CAM at all -- queried separately as excludedClassifications
+  // and shown only in the audit drawer below, never mixed into this table.
   function camExpenseStatus(exp) {
     const recov = String(exp._classification?.recoverability_result || exp._classification?.recovery_status || "").toLowerCase();
-    if (recov === "non_recoverable" || recov === "excluded") return "excluded";
     const hasGap = !exp.category || !exp.service_period_start || !exp.service_period_end;
     const unassigned = (exp.cam_input_pool_assignments || []).length === 0;
     if (hasGap || unassigned || recov === "conditional" || recov === "needs_review") return "conditional";
@@ -1862,9 +1990,7 @@ export default function CAMSetup() {
     const [splitRows, setSplitRows] = useState([{ recovery_pool_id: "", amount: "" }]);
     const [excludedOpen, setExcludedOpen] = useState(false);
 
-    const withStatus = publishedExpenses.map((exp) => ({ exp, status: camExpenseStatus(exp) }));
-    const visible = withStatus.filter((r) => r.status !== "excluded");
-    const excluded = withStatus.filter((r) => r.status === "excluded");
+    const visible = publishedExpenses.map((exp) => ({ exp, status: camExpenseStatus(exp) }));
 
     return (
       <div className="space-y-4">
@@ -1874,9 +2000,9 @@ export default function CAMSetup() {
               <CardTitle className="text-base">Published Expense Inputs</CardTitle>
               <p className="text-xs text-slate-500 font-normal mt-0.5">Eligible and conditional expenses only. Only finalized, published expense inputs appear here — use the Expenses module to create source expenses.</p>
             </div>
-            {excluded.length > 0 && (
+            {excludedClassifications.length > 0 && (
               <Button size="sm" variant="outline" id="btn-view-excluded-expenses" onClick={() => setExcludedOpen(true)}>
-                Excluded Source Expenses ({excluded.length})
+                Excluded Source Expenses ({excludedClassifications.length})
               </Button>
             )}
           </CardHeader>
@@ -1981,18 +2107,18 @@ export default function CAMSetup() {
 
         <Sheet open={excludedOpen} onOpenChange={setExcludedOpen}>
           <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
-            <SheetHeader><SheetTitle>Excluded Source Expenses ({excluded.length})</SheetTitle></SheetHeader>
-            <p className="text-xs text-slate-500 mt-2">Not recoverable under any lease or CAM policy — excluded from CAM entirely. Manage these in the Expense module.</p>
+            <SheetHeader><SheetTitle>Excluded Source Expenses ({excludedClassifications.length})</SheetTitle></SheetHeader>
+            <p className="text-xs text-slate-500 mt-2">Never sent to CAM — not CAM-eligible per Expense Classification. These stay in the Expense module; resolve or reclassify them there, not here.</p>
             <div className="mt-4 space-y-2">
-              {excluded.map(({ exp }) => (
-                <div key={exp.id} className="flex items-center justify-between border rounded p-2 text-sm">
+              {excludedClassifications.map((c) => (
+                <div key={c.id} className="flex items-center justify-between border rounded p-2 text-sm">
                   <div>
-                    <div className="font-medium">{exp._sourceExpense?.vendor || exp._sourceExpense?.vendor_name || "—"}</div>
-                    <div className="text-xs text-slate-500">{exp._sourceExpense?.description || "—"}</div>
+                    <div className="font-medium">{c._sourceExpense?.vendor || c._sourceExpense?.vendor_name || "—"}</div>
+                    <div className="text-xs text-slate-500">{c._sourceExpense?.description || "—"}</div>
                   </div>
                   <div className="text-right">
-                    <div className="font-medium">{fmtCurrency(exp.amount)}</div>
-                    <Badge className="text-[10px] bg-red-100 text-red-700">{recoverabilityLabel(exp._classification?.recoverability_result || exp._classification?.recovery_status)}</Badge>
+                    <div className="font-medium">{fmtCurrency(c._sourceExpense?.amount)}</div>
+                    <Badge className="text-[10px] bg-red-100 text-red-700">{recoverabilityLabel(c.recoverability_result || c.recovery_status)}</Badge>
                   </div>
                 </div>
               ))}
@@ -2020,7 +2146,7 @@ export default function CAMSetup() {
                       <TableHead>Pool</TableHead><TableHead className="text-right">Source Total</TableHead>
                       <TableHead className="text-right">Excluded</TableHead><TableHead className="text-right">Included</TableHead>
                       <TableHead className="text-right">Gross-Up Adj.</TableHead><TableHead className="text-right">Adjusted Pool</TableHead>
-                      <TableHead>Denominator</TableHead><TableHead />
+                      <TableHead>Participants</TableHead><TableHead>Denominator</TableHead><TableHead />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -2032,6 +2158,7 @@ export default function CAMSetup() {
                         <TableCell className="text-right">{fmtCurrency(Number(pr.actual_amount || 0) - Number(pr.excluded_amount || 0))}</TableCell>
                         <TableCell className="text-right">{fmtCurrency(pr.gross_up_adjustment)}</TableCell>
                         <TableCell className="text-right font-semibold">{fmtCurrency(pr.adjusted_pool)}</TableCell>
+                        <TableCell className="text-sm">{participantCountsByPoolId.get(pr.pool_id) ?? 0}</TableCell>
                         <TableCell className="text-xs">{pr.denominator_metrics?.denominator_area ? `${Number(pr.denominator_metrics.denominator_area).toLocaleString()} sqft` : "—"}</TableCell>
                         <TableCell><Link to={`${createPageUrl("CAMPoolDetail")}?cam_run_id=${activeRun?.id}&pool_result_id=${pr.id}`} className="text-xs text-blue-600 underline">Detail</Link></TableCell>
                       </TableRow>
@@ -2270,6 +2397,35 @@ export default function CAMSetup() {
       }).filter((r) => r.annualEstimate > 0 || r.annualCalculated != null);
     }, [propLeases, estimateSchedules, leaseResults]);
 
+    // Monthly figures are a reporting ALLOCATION of the engine's real annual
+    // final_recovery, spread across months in proportion to what was
+    // actually billed that month -- not a re-run of the calculation. The
+    // engine's own authoritative number (and its rounding policy) is
+    // annualCalculated above; this table never overrides it, only slices it
+    // for month-by-month reporting per the annual-vs-monthly display rule.
+    const monthlyRows = useMemo(() => {
+      const rows = [];
+      for (const l of propLeases) {
+        const leaseEstimates = estimateSchedules.filter((es) => es.lease_id === l.id).sort((a, b) => a.month_date.localeCompare(b.month_date));
+        if (leaseEstimates.length === 0) continue;
+        const annualEstimate = leaseEstimates.reduce((s, es) => s + Number(es.amount || 0), 0);
+        const leaseResult = leaseResults.find((lr) => lr.lease_id === l.id);
+        const annualCalculated = leaseResult ? Number(leaseResult.final_recovery || 0) : null;
+        let cumulative = 0;
+        for (const es of leaseEstimates) {
+          const monthlyEstimate = Number(es.amount || 0);
+          const allocated = annualCalculated != null && annualEstimate > 0 ? annualCalculated * (monthlyEstimate / annualEstimate) : null;
+          const variance = allocated != null ? allocated - monthlyEstimate : null;
+          if (variance != null) cumulative += variance;
+          rows.push({
+            key: es.id, tenantName: l.tenant_name || l.id.slice(0, 8), month: es.month_date,
+            monthlyEstimate, allocated, variance, cumulative: variance != null ? cumulative : null,
+          });
+        }
+      }
+      return rows;
+    }, [propLeases, estimateSchedules, leaseResults]);
+
     return (
       <div className="space-y-6">
         <Step6 />
@@ -2295,6 +2451,34 @@ export default function CAMSetup() {
                   ))}
                 </TableBody>
               </Table>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Monthly Allocated CAM &amp; Variance</CardTitle>
+            <p className="text-xs text-slate-500 font-normal">Each month's calculated CAM is the annual calculated recovery allocated in proportion to that month's billed estimate — a reporting view, not a separate calculation.</p>
+          </CardHeader>
+          <CardContent>
+            {monthlyRows.length === 0 ? <p className="text-sm text-slate-400 py-4 text-center">No monthly estimate schedule yet for this period.</p> : (
+              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                <Table>
+                  <TableHeader><TableRow><TableHead>Tenant</TableHead><TableHead>Month</TableHead><TableHead className="text-right">Monthly Estimate</TableHead><TableHead className="text-right">Monthly Allocated CAM</TableHead><TableHead className="text-right">Monthly Variance</TableHead><TableHead className="text-right">Cumulative Variance</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {monthlyRows.map((r) => (
+                      <TableRow key={r.key}>
+                        <TableCell className="text-sm">{r.tenantName}</TableCell>
+                        <TableCell className="text-sm">{r.month}</TableCell>
+                        <TableCell className="text-right text-sm">{fmtCurrency(r.monthlyEstimate)}</TableCell>
+                        <TableCell className="text-right text-sm">{r.allocated != null ? fmtCurrency(r.allocated) : "—"}</TableCell>
+                        <TableCell className={`text-right text-sm ${r.variance == null ? "" : r.variance > 0 ? "text-amber-700" : "text-emerald-700"}`}>{r.variance != null ? fmtCurrency(r.variance) : "—"}</TableCell>
+                        <TableCell className={`text-right text-sm font-medium ${r.cumulative == null ? "" : r.cumulative > 0 ? "text-amber-700" : "text-emerald-700"}`}>{r.cumulative != null ? fmtCurrency(r.cumulative) : "—"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -2526,8 +2710,42 @@ export default function CAMSetup() {
             <Button
               size="sm"
               variant="outline"
+              className="border-amber-300 bg-amber-50/50 text-amber-800 hover:bg-amber-100 text-xs font-semibold"
+              disabled={!propertyId || !periodId || resetAndReimportMutation.isPending}
+              onClick={() => {
+                if (window.confirm("Are you sure you want to clear existing CAM pools, participants, and pool assignments for this property/period and re-import fresh from Leases and Expenses?")) {
+                  resetAndReimportMutation.mutate();
+                }
+              }}
+              title="Clear pools and pool assignments for this property/period and re-import fresh source data"
+            >
+              {resetAndReimportMutation.isPending ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin text-amber-600" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5 mr-1 text-amber-600" />
+              )}
+              Reset & Re-Import
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-blue-300 bg-blue-50/50 text-blue-800 hover:bg-blue-100 text-xs font-semibold"
+              disabled={!propertyId || !periodId || prepareCamMutation.isPending}
+              onClick={() => prepareCamMutation.mutate()}
+              title="Run automatic CAM preparation to bring in latest leases, approved rules, and finalized expenses"
+            >
+              {prepareCamMutation.isPending ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin text-blue-600" />
+              ) : (
+                <Sparkles className="w-3.5 h-3.5 mr-1 text-blue-600" />
+              )}
+              Re-Sync Source Data
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
               id="btn-toggle-advanced-setup"
-              onClick={() => setWorkbenchView(workbenchView)}
+              onClick={() => setWorkbenchView(!workbenchView)}
               title={workbenchView ? "Open the detailed 7-step technical configuration" : "Return to the Reconciliation Workbench"}
             >
               {workbenchView ? <><Settings2 className="w-3.5 h-3.5 mr-1" /> Advanced Setup</> : <><LayoutGrid className="w-3.5 h-3.5 mr-1" /> Back to Workbench</>}

@@ -25,6 +25,19 @@ export async function reviewExpenseClassification({ classificationId, action, re
   });
 }
 
+// The one reachable way to close out a conditional classification -- see
+// resolve_expense_classification_condition (20269900000047 migration):
+// nothing else in the app can ever flip condition_resolved, so a
+// conditional row was previously stuck forever, unable to reach CAM.
+export async function resolveExpenseClassificationCondition({ classificationId, resolution, reason, evidence = null }) {
+  return invokeEdgeFunction("resolve-expense-classification-condition", {
+    classification_id: classificationId,
+    resolution,
+    reason,
+    evidence,
+  });
+}
+
 // CAM publication boundary (withdraw_cam_expense_input,
 // 20260905000000_cam_publication_rpcs.sql): pulls back an actively
 // published cam_expense_inputs row without deleting it (marked

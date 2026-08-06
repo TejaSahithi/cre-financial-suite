@@ -22,6 +22,7 @@ import useOrgQuery from "@/hooks/useOrgQuery";
 import useOrgId from "@/hooks/useOrgId";
 import { buildHierarchyScope, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { expenseService } from "@/services/expenseService";
+import { resolveExpenseClassificationCondition } from "@/services/expenseClassificationWorkflowService";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { useAuth } from "@/lib/AuthContext";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
@@ -503,6 +504,30 @@ export default function LeaseExpenseClassification() {
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
     },
     onError: (error) => toast.error(error?.message || "Could not withdraw from CAM"),
+  });
+
+  // The only reachable way to close out a conditional row -- previously
+  // nothing in the app could ever flip condition_resolved, so a genuinely
+  // conditional expense was permanently stuck and could never reach CAM
+  // (Send to CAM's server-side gate rejects it forever otherwise).
+  const resolveConditionMutation = useMutation({
+    mutationFn: async (row) => {
+      const wantsRecoverable = window.confirm(
+        `Resolve the condition on "${row.vendor || row.ruleLabel || "this expense"}".\n\nOK = Recoverable (becomes CAM-eligible)\nCancel = Not Recoverable (stays out of CAM)`,
+      );
+      const resolution = wantsRecoverable ? "recoverable" : "non_recoverable";
+      const reason = window.prompt(`Reason for marking this expense ${resolution.replace("_", " ")}:`);
+      if (!reason || !reason.trim()) {
+        throw new Error("A reason is required to resolve a conditional expense.");
+      }
+      return resolveExpenseClassificationCondition({ classificationId: row.classificationRecord.id, resolution, reason: reason.trim() });
+    },
+    onSuccess: () => {
+      toast.success("Condition resolved");
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
+    },
+    onError: (error) => toast.error(error?.message || "Could not resolve condition"),
   });
 
   const amountMutation = useMutation({
@@ -1193,6 +1218,12 @@ export default function LeaseExpenseClassification() {
                                     <DropdownMenuItem onClick={() => withdrawFromCamMutation.mutate(row)}>
                                       <RefreshCw className="mr-2 h-4 w-4 text-amber-600" />
                                       Withdraw from CAM
+                                    </DropdownMenuItem>
+                                  )}
+                                  {row.recoverabilityResult === "conditional" && row.classificationRecord?.id && !row.classificationRecord?.condition_resolved && (
+                                    <DropdownMenuItem onClick={() => resolveConditionMutation.mutate(row)}>
+                                      <AlertTriangle className="mr-2 h-4 w-4 text-amber-600" />
+                                      Resolve Condition
                                     </DropdownMenuItem>
                                   )}
                                   {canPublishContractRuleForCam && (

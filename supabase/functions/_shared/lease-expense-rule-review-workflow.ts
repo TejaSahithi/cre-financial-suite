@@ -81,7 +81,35 @@ export async function handleRuleReviewRequest(req: Request, action: "approve" | 
       throw new Error(error.message || "review_lease_expense_rule_workflow failed");
     }
 
-    return jsonResponse({ error: false, ...data });
+    // Approving a rule is the contract-terms half of the CAM flow
+    // ("Lease Expense Rules -> Lease Recovery Policies"); previously nothing
+    // called materialize_lease_recovery_policy at this point, so an approved
+    // rule could sit with zero materialized policy indefinitely until a
+    // human happened to run "Sync Approved Rules" or "Prepare CAM
+    // Automatically" (this exact gap already caused a real production
+    // incident -- see prepare-cam-automatically.ts's own header comment).
+    // Best-effort and non-blocking: materialization needs premises/area data
+    // that may not exist yet, and a rule approval must still succeed on its
+    // own even if materialization can't complete right now -- the same
+    // idempotent RPC will safely re-run and catch up later regardless.
+    let materialization = null;
+    if (payload.action === "approve") {
+      try {
+        const { data: matData, error: matError } = await supabaseAdmin.rpc("materialize_lease_recovery_policy", {
+          p_org_id: orgId,
+          p_rule_id: payload.ruleId,
+          p_actor_user_id: user.id,
+          p_actor_email: user.email || null,
+        });
+        materialization = matError
+          ? { materialized: false, reason: matError.message }
+          : { materialized: true, ...matData };
+      } catch (matErr) {
+        materialization = { materialized: false, reason: matErr?.message || "materialization failed" };
+      }
+    }
+
+    return jsonResponse({ error: false, ...data, materialization });
   } catch (err) {
     const message = err?.message || "Lease expense rule review workflow failed";
     return jsonResponse({
