@@ -11,7 +11,7 @@ import {
   DollarSign, Calculator, TrendingUp, ClipboardCheck, BarChart3,
   Bell, Shield, ChevronRight, LogOut, Menu, X,
   Users, Receipt, GitBranch, FolderOpen, Plug,
-  Search, User, Layers, ArrowLeftRight
+  Search, User, Layers, ArrowLeftRight, Sun, Moon
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
@@ -133,24 +133,25 @@ function NavItem({ item, currentPageName, collapsed, onNavigate }) {
       <div>
         <button
           onClick={() => setOpen(!open)}
-          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${isActive ? 'text-white bg-white/10' : 'text-white/60 hover:text-white hover:bg-white/5'}`}
+          className={`cre-nav-item cre-nav-trigger text-sm font-medium ${isActive ? 'cre-nav-item-active' : ''}`}
+          aria-expanded={open}
         >
-          <item.icon className="w-[18px] h-[18px] flex-shrink-0" />
+          <item.icon className="w-5 h-5 flex-shrink-0" />
           {!collapsed && (
             <>
-              <span className="flex-1 text-left">{item.label}</span>
-              <ChevronRight className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-90' : ''}`} />
+              <span className="cre-nav-label flex-1 text-left">{item.label}</span>
+              <ChevronRight className={`cre-nav-chevron w-3.5 h-3.5 transition-transform ${open ? 'rotate-90' : ''}`} />
             </>
           )}
         </button>
         {open && !collapsed && (
-          <div className="ml-8 mt-1 space-y-0.5">
+          <div className="cre-nav-children ml-8 mt-1 space-y-0.5">
             {item.children.map(child => (
               <Link
                 key={child.page}
                 to={createPageUrl(child.page)}
                 onClick={onNavigate}
-                className={`block px-3 py-1.5 rounded-md text-[13px] transition-colors ${child.page === currentPageName ? 'text-white bg-white/10' : 'text-white/50 hover:text-white hover:bg-white/5'}`}
+                className={`block rounded-md px-3 py-1.5 text-[13px] transition-colors ${child.page === currentPageName ? 'bg-white/10 text-white' : 'text-white/55 hover:bg-white/5 hover:text-white'}`}
               >
                 {child.label}
               </Link>
@@ -165,10 +166,10 @@ function NavItem({ item, currentPageName, collapsed, onNavigate }) {
     <Link
       to={createPageUrl(item.page)}
       onClick={onNavigate}
-      className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${isActive ? 'text-white bg-white/10' : 'text-white/60 hover:text-white hover:bg-white/5'}`}
+      className={`cre-nav-item cre-nav-trigger text-sm font-medium ${isActive ? 'cre-nav-item-active' : ''}`}
     >
-      <item.icon className="w-[18px] h-[18px] flex-shrink-0" />
-      {!collapsed && <span>{item.label}</span>}
+      <item.icon className="w-5 h-5 flex-shrink-0" />
+      {!collapsed && <span className="cre-nav-label">{item.label}</span>}
     </Link>
   );
 }
@@ -176,6 +177,10 @@ function NavItem({ item, currentPageName, collapsed, onNavigate }) {
 export default function Layout({ children, currentPageName }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [theme, setTheme] = useState(() => {
+    if (typeof window === "undefined") return "light";
+    return window.localStorage.getItem("cre-theme") || "light";
+  });
   const { user, logout: authContextLogout } = useAuth();
   const { enabledModules, pageAccess } = useModuleAccess();
   const allowedPageNames = Object.keys(pageAccess || {}).filter(Boolean);
@@ -194,30 +199,38 @@ export default function Layout({ children, currentPageName }) {
     }
   }, [user, currentPageName]);
 
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.body.dataset.theme = theme;
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    try {
+      window.localStorage.setItem("cre-theme", theme);
+    } catch {
+      /* Preference persistence is best-effort only. */
+    }
+  }, [theme]);
+
   if (LAYOUT_EXEMPT_PAGES.includes(currentPageName)) {
     return <>{children}</>;
   }
 
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden">
+    <div className={`cre-shell ${sidebarOpen ? '' : 'cre-shell-collapsed'}`}>
       {/* Sidebar */}
-      <aside className={`hidden lg:flex flex-col bg-[#1a2744] transition-all duration-300 ${sidebarOpen ? 'w-[250px]' : 'w-[68px]'} flex-shrink-0`}>
-        <div className="h-14 flex items-center gap-2.5 px-4 border-b border-white/10">
-          <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-blue-600 rounded-lg flex items-center justify-center flex-shrink-0 shadow-md">
-            <Building2 className="w-4.5 h-4.5 text-white" />
+      <aside className="cre-sidebar hidden lg:flex">
+        <div className="cre-brand">
+          <div className="cre-brand-mark">
+            <Building2 className="w-5 h-5" />
           </div>
           {sidebarOpen && (
-            <div className="min-w-0">
-              <div className="text-white font-bold text-sm leading-tight truncate">CRE PLATFORM</div>
-              <div className="text-blue-300/50 text-[9px] font-semibold tracking-[0.1em]">BUDGETING & CAM</div>
+            <div className="cre-brand-copy min-w-0">
+              <strong className="truncate">CRE PLATFORM</strong>
+              <span>BUDGETING & CAM</span>
             </div>
           )}
-          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="ml-auto text-white/40 hover:text-white transition-colors">
-            {sidebarOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
-          </button>
         </div>
 
-        <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
+        <nav className="cre-nav space-y-0.5">
           {visibleNav.length > 0 ? (
             visibleNav.map((item, i) => (
               <NavItem key={i} item={item} currentPageName={currentPageName} collapsed={!sidebarOpen} />
@@ -231,35 +244,48 @@ export default function Layout({ children, currentPageName }) {
           )}
         </nav>
 
-        {sidebarOpen && (
-          <div className="p-3 border-t border-white/10">
-            <div className="flex items-center gap-3 px-2">
-              <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
-                <User className="w-4 h-4" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-white text-sm font-medium truncate">{user?.full_name || "User"}</p>
-                <p className="text-white/40 text-xs truncate capitalize">{isSuperAdmin(user) ? "SuperAdmin" : (user?.role || "User").replace("_", " ")}</p>
-              </div>
-              <button onClick={() => authContextLogout(true)} className="text-white/30 hover:text-white" title="Logout">
-                <LogOut className="w-4 h-4" />
-              </button>
+        <div className="cre-sidebar-footer">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="cre-collapse-button mb-3"
+            aria-label={sidebarOpen ? "Collapse navigation" : "Expand navigation"}
+          >
+            {sidebarOpen ? "‹ Collapse" : <Menu className="mx-auto h-4 w-4" />}
+          </button>
+          <div className={`flex items-center gap-3 px-2 ${sidebarOpen ? '' : 'justify-center px-0'}`}>
+            <div className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-full bg-[var(--accent)] text-xs font-bold text-white">
+              <User className="h-4 w-4" />
             </div>
+            {sidebarOpen && (
+              <>
+                <div className="cre-user-copy min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-white">{user?.full_name || "User"}</p>
+                  <p className="truncate text-xs capitalize text-white/45">{isSuperAdmin(user) ? "SuperAdmin" : (user?.role || "User").replace("_", " ")}</p>
+                </div>
+                <button onClick={() => authContextLogout(true)} className="text-white/40 hover:text-white" title="Logout" aria-label="Logout">
+                  <LogOut className="h-4 w-4" />
+                </button>
+              </>
+            )}
           </div>
-        )}
+        </div>
       </aside>
 
       {/* Mobile sidebar */}
       {mobileOpen && (
         <div className="lg:hidden fixed inset-0 z-50">
           <div className="absolute inset-0 bg-black/50" onClick={() => setMobileOpen(false)} />
-          <aside className="relative w-[250px] h-full bg-[#1a2744] flex flex-col">
-            <div className="h-14 flex items-center gap-2.5 px-4 border-b border-white/10">
-              <Building2 className="w-5 h-5 text-white" />
-              <span className="text-white font-bold text-sm">CRE PLATFORM</span>
-              <button onClick={() => setMobileOpen(false)} className="ml-auto text-white/40"><X className="w-5 h-5" /></button>
+          <aside className="cre-sidebar relative flex translate-x-0">
+            <div className="cre-brand">
+              <div className="cre-brand-mark"><Building2 className="h-5 w-5" /></div>
+              <div className="cre-brand-copy min-w-0">
+                <strong>CRE PLATFORM</strong>
+                <span>BUDGETING & CAM</span>
+              </div>
+              <button onClick={() => setMobileOpen(false)} className="ml-auto text-white/60 hover:text-white" aria-label="Close navigation"><X className="w-5 h-5" /></button>
             </div>
-            <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
+            <nav className="cre-nav space-y-0.5">
               {visibleNav.map((item, i) => (
                 <NavItem key={i} item={item} currentPageName={currentPageName} collapsed={false} onNavigate={() => setMobileOpen(false)} />
               ))}
@@ -269,29 +295,47 @@ export default function Layout({ children, currentPageName }) {
       )}
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6 flex-shrink-0">
-          <div className="flex items-center gap-4">
-            <button onClick={() => setMobileOpen(true)} className="lg:hidden text-slate-600"><Menu className="w-5 h-5" /></button>
-            <div className="text-sm text-slate-500">
-              <span className="font-semibold text-slate-700">{currentPageLabel}</span>
+      <div className="cre-content flex flex-col">
+        <header className="cre-topbar flex-shrink-0">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <button onClick={() => setMobileOpen(true)} className="cre-top-action grid h-[38px] w-[38px] place-items-center lg:hidden" aria-label="Open navigation"><Menu className="w-5 h-5" /></button>
+            <label className="cre-search-wrap hidden sm:block">
+              <Search className="cre-search-icon" />
+              <Input placeholder="Search..." className="cre-search-input shadow-none" />
+              <span className="cre-search-shortcut">⌘ K</span>
+            </label>
+            <div className="text-sm text-[var(--muted)] sm:hidden">
+              <span className="font-semibold text-[var(--ink)]">{currentPageLabel}</span>
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <div className="relative hidden md:block">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-              <Input placeholder="Search..." className="pl-9 w-56 h-9 bg-slate-50 border-slate-200 text-sm" />
-            </div>
-            <Link to={createPageUrl("Notifications")} className="relative p-2 hover:bg-slate-100 rounded-lg">
-              <Bell className="w-5 h-5 text-slate-500" />
-              <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white" />
+            <Link to={createPageUrl("Notifications")} className="cre-top-action relative grid h-[38px] w-[38px] place-items-center" aria-label="Notifications">
+              <Bell className="w-5 h-5" />
+              <span className="absolute right-1 top-1 h-2.5 w-2.5 rounded-full border-2 border-[var(--surface)] bg-[var(--danger)]" />
             </Link>
-            <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
-              <User className="w-4 h-4" />
+            <button
+              type="button"
+              className="cre-top-action cre-theme-toggle hidden md:inline-flex"
+              onClick={() => setTheme((value) => value === "dark" ? "light" : "dark")}
+              aria-label="Toggle theme"
+              aria-pressed={theme === "dark"}
+            >
+              <Sun className="h-3.5 w-3.5" />
+              <span className="cre-theme-track"><span className="cre-theme-thumb" /></span>
+              <Moon className="h-3.5 w-3.5" />
+            </button>
+            <div className="cre-top-action flex items-center gap-2 px-2">
+              <div className="grid h-8 w-8 place-items-center rounded-full bg-[var(--sidebar)] text-xs font-bold text-white">
+                <User className="w-4 h-4" />
+              </div>
+              <div className="hidden min-w-0 lg:block">
+                <p className="max-w-[150px] truncate text-xs font-semibold text-[var(--ink)]">{user?.full_name || "User"}</p>
+                <p className="max-w-[150px] truncate text-[10px] capitalize text-[var(--muted)]">{isSuperAdmin(user) ? "SuperAdmin" : (user?.role || "User").replace("_", " ")}</p>
+              </div>
             </div>
           </div>
         </header>
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        <main className="cre-main flex-1">{children}</main>
       </div>
     </div>
   );
