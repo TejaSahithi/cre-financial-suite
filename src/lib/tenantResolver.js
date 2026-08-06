@@ -150,22 +150,29 @@ function resolveTenantForExpense(expense, options = {}) {
     }
   }
   // Walk all leases for the unit if nothing yet — pick the one whose dates
-  // overlap. Mirrors resolveDisplayLeaseForExpense in Expenses.jsx.
+  // overlap. If none overlap, fall back to any lease matching the unit.
   if (!matchedLease && expense.unit_id) {
     const unitLeases = leases.filter((lease) =>
       lease?.unit_id === expense.unit_id && leaseOverlapsDate(lease, expenseDate)
     );
-    matchedLease = unitLeases[0] || null;
+    matchedLease = unitLeases[0] || leases.find((lease) => lease?.unit_id === expense.unit_id) || null;
   }
 
   if (matchedLease) {
-    if (!matchedLease.tenant_id && !matchedLease.tenant_name) {
+    const approvedTenantName =
+      matchedLease.approved_fields?.tenant_name?.value ||
+      matchedLease.approved_fields?.tenant?.value ||
+      matchedLease.approved_fields?.tenant_legal_name?.value ||
+      null;
+    const directName = matchedLease.tenant_name || matchedLease.tenant?.name || approvedTenantName || null;
+
+    if (!matchedLease.tenant_id && !directName) {
       // Lease exists but has no tenant attached — keep walking.
     } else {
       const tenant = matchedLease.tenant_id
         ? makeTenantRecord(tenantById.get(matchedLease.tenant_id))
         : null;
-      const name = tenant?.name || matchedLease.tenant_name || null;
+      const name = tenant?.name || directName;
       if (name) {
         return {
           tenant: { id: matchedLease.tenant_id || tenant?.id || null, name },

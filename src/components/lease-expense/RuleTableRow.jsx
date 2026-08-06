@@ -87,6 +87,13 @@ export default function RuleTableRow({
     formatConfidence(rule.confidence_score),
   ].filter(Boolean).join(" · ");
 
+  const tenantDisplayName =
+    lease?.tenant_name ||
+    lease?.tenant?.name ||
+    lease?.approved_fields?.tenant_name?.value ||
+    lease?.tenant_legal_name ||
+    (lease?.id ? `Lease #${lease.id.slice(0, 8)}` : "-");
+
   return (
     <TableRow className="align-top hover:bg-slate-50">
       <TableCell className="text-center align-middle">
@@ -103,9 +110,9 @@ export default function RuleTableRow({
         {lease ? (
           <Link
             to={createPageUrl("LeaseReview", { id: lease.id })}
-            className="text-blue-600 hover:text-blue-700"
+            className="text-blue-600 hover:text-blue-700 font-semibold"
           >
-            {lease.tenant_name || lease.id.slice(0, 8)}
+            {tenantDisplayName}
           </Link>
         ) : (
           "-"

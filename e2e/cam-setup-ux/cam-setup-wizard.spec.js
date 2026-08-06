@@ -149,7 +149,12 @@ test.describe.serial("CAM Setup automation and business usability", () => {
   test("1: scope (property + period) persists across steps, a page reload, and direct step navigation", async ({ page }) => {
     test.setTimeout(90000);
     await login(page);
-    await page.goto("/CAMSetup");
+    // CAM Reconciliation Workbench redesign: a bare /CAMSetup now lands on
+    // the business-facing Workbench by default. This suite specifically
+    // drives the detailed 7-step Advanced Setup wizard (unchanged), so it
+    // opts in explicitly; every later step=N URL in this file already
+    // carries that intent implicitly (see workbenchView in CAMSetup.jsx).
+    await page.goto("/CAMSetup?view=advanced");
     await expect(page.getByRole("heading", { name: "CAM Setup" })).toBeVisible({ timeout: 15000 });
 
     await page.locator("#scope-property").click();

@@ -199,3 +199,22 @@ export function suggestedPoolNameForCategory(categoryName) {
   const hint = CATEGORY_POOL_NAME_HINTS.find((h) => h.match.test(categoryName || ""));
   return hint ? hint.name : (categoryName || "Uncategorized");
 }
+
+/**
+ * Business wording for a cam_run_lease_results.amount_due_credit value —
+ * the Reconciliation Workbench's "who pays" language. Positive = tenant
+ * owes the landlord; negative = landlord owes the tenant a credit; zero =
+ * nothing due. Display-only — never used to decide or alter the amount
+ * itself.
+ */
+export function paymentDirectionLabel(amountDueCredit) {
+  const n = Number(amountDueCredit);
+  if (!Number.isFinite(n) || n === 0) return "No payment or credit required";
+  return n > 0 ? "Tenant owes landlord" : "Landlord owes tenant a credit";
+}
+
+export function paymentDirectionTone(amountDueCredit) {
+  const n = Number(amountDueCredit);
+  if (!Number.isFinite(n) || n === 0) return "bg-slate-100 text-slate-600";
+  return n > 0 ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-700";
+}

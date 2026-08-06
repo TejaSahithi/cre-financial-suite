@@ -6,6 +6,9 @@ import {
   ArrowRightCircle,
   Check,
   CheckCircle,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
   FileText,
   Loader2,
   MoreHorizontal,
@@ -223,10 +226,10 @@ export default function LeaseExpenseClassification() {
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
       if (activeTab === "matched") return row.rowType === "matched_classification";
-      if (activeTab === "recoverable") return row.rowType === "matched_classification" && row.recoverabilityResult === "recoverable";
-      if (activeTab === "non_recoverable") return row.rowType === "matched_classification" && row.recoverabilityResult === "non_recoverable";
-      if (activeTab === "conditional") return row.rowType === "matched_classification" && row.recoverabilityResult === "conditional";
-      if (activeTab === "excluded") return row.rowType === "matched_classification" && row.recoverabilityResult === "excluded";
+      if (activeTab === "recoverable") return row.recoverabilityResult === "recoverable";
+      if (activeTab === "non_recoverable") return row.recoverabilityResult === "non_recoverable";
+      if (activeTab === "conditional") return row.recoverabilityResult === "conditional";
+      if (activeTab === "excluded") return row.recoverabilityResult === "excluded";
       if (activeTab === "actuals_missing_rules") return row.rowType === "actual_missing_rule";
       if (activeTab === "rules_missing_actuals") return row.rowType === "rule_missing_actual";
       if (activeTab === "needs_review") {
@@ -235,8 +238,8 @@ export default function LeaseExpenseClassification() {
           ["unmatched", "exception", "conditional"].includes(row.classificationStatus) ||
           (row.exceptionType && row.exceptionType !== "none");
       }
-      if (activeTab === "finalized") return row.rowType === "matched_classification" && row.classificationStatus === "finalized";
-      if (activeTab === "sent_to_cam") return row.rowType === "matched_classification" && row.sentToCam;
+      if (activeTab === "finalized") return row.classificationStatus === "finalized";
+      if (activeTab === "sent_to_cam") return row.sentToCam || row.camStatus === "cam_ready";
       return true;
     }).filter((row) => {
       if (!search) return true;
@@ -259,10 +262,10 @@ export default function LeaseExpenseClassification() {
   const counts = useMemo(() => ({
     all: rows.length,
     matched: rows.filter((row) => row.rowType === "matched_classification").length,
-    recoverable: rows.filter((row) => row.rowType === "matched_classification" && row.recoverabilityResult === "recoverable").length,
-    non_recoverable: rows.filter((row) => row.rowType === "matched_classification" && row.recoverabilityResult === "non_recoverable").length,
-    conditional: rows.filter((row) => row.rowType === "matched_classification" && row.recoverabilityResult === "conditional").length,
-    excluded: rows.filter((row) => row.rowType === "matched_classification" && row.recoverabilityResult === "excluded").length,
+    recoverable: rows.filter((row) => row.recoverabilityResult === "recoverable").length,
+    non_recoverable: rows.filter((row) => row.recoverabilityResult === "non_recoverable").length,
+    conditional: rows.filter((row) => row.recoverabilityResult === "conditional").length,
+    excluded: rows.filter((row) => row.recoverabilityResult === "excluded").length,
     actuals_missing_rules: rows.filter((row) => row.rowType === "actual_missing_rule").length,
     rules_missing_actuals: rows.filter((row) => row.rowType === "rule_missing_actual").length,
     needs_review: rows.filter((row) =>
@@ -271,9 +274,22 @@ export default function LeaseExpenseClassification() {
       ["unmatched", "exception", "conditional"].includes(row.classificationStatus) ||
       (row.exceptionType && row.exceptionType !== "none")
     ).length,
-    finalized: rows.filter((row) => row.rowType === "matched_classification" && row.classificationStatus === "finalized").length,
-    sent_to_cam: rows.filter((row) => row.rowType === "matched_classification" && row.sentToCam).length,
+    finalized: rows.filter((row) => row.classificationStatus === "finalized").length,
+    sent_to_cam: rows.filter((row) => row.sentToCam || row.camStatus === "cam_ready").length,
   }), [rows]);
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 15;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeTab, search, scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeTenant, scopeYear]);
+
+  const totalPages = Math.ceil(filteredRows.length / pageSize) || 1;
+  const paginatedRows = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredRows.slice(start, start + pageSize);
+  }, [filteredRows, currentPage]);
 
   const totals = useMemo(() => {
     return rows.reduce((summary, row) => {
@@ -1004,6 +1020,20 @@ export default function LeaseExpenseClassification() {
             </div>
 
             <TabsContent value={activeTab} className="m-0">
+              {activeTab === "sent_to_cam" && (
+                <div className="m-4 flex items-center justify-between rounded-xl border border-blue-200 bg-blue-50/80 p-4 text-blue-900 shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <ArrowRightCircle className="h-5 w-5 text-blue-600" />
+                    <div>
+                      <p className="text-sm font-semibold">Published CAM Inputs</p>
+                      <p className="text-xs text-blue-700">All expenses and contractual rules published here actively feed into the CAM calculation module.</p>
+                    </div>
+                  </div>
+                  <Button size="sm" className="bg-blue-600 text-xs text-white hover:bg-blue-700" onClick={() => navigate(createPageUrl("CAMSetup"))}>
+                    Open CAM Module <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              )}
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader className="sticky top-0 bg-slate-50">
@@ -1044,7 +1074,7 @@ export default function LeaseExpenseClassification() {
                         </TableCell>
                       </TableRow>
                     ) : (
-                      filteredRows.map((row) => {
+                      paginatedRows.map((row) => {
                         const isSelected = selectedIds.has(row.id);
                         const hasActualExpense = Boolean(row.actualExpenseId);
                         const propertyLabel = row.property?.property_name || row.property?.name || "-";
@@ -1113,7 +1143,21 @@ export default function LeaseExpenseClassification() {
                               )}
                             </TableCell>
                             <TableCell className="text-right text-sm font-medium text-slate-700">
-                              {row.actualExpenseId ? fmt(row.amount) : <span className="text-slate-300">-</span>}
+                              {row.actualExpenseId ? (
+                                fmt(row.amount)
+                              ) : row.amount != null && row.amount > 0 ? (
+                                fmt(row.amount)
+                              ) : (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-6 border-blue-200 bg-blue-50/50 px-2 text-[10px] font-semibold text-blue-700 hover:bg-blue-100"
+                                  onClick={() => promptForAmount(row)}
+                                >
+                                  + Set Amount
+                                </Button>
+                              )}
                             </TableCell>
                             <TableCell className="max-w-[220px] text-xs text-slate-600">
                               <div className="font-medium text-slate-800">{row.ruleLabel}</div>
@@ -1131,14 +1175,6 @@ export default function LeaseExpenseClassification() {
                                 {humanize(row.camEligible)}
                               </Badge>
                               <p className="mt-1 text-[11px] text-slate-500">{row.camDecision}</p>
-                              {/* Only show red blockers for matched rows — rule_missing_actual (coverage gaps)
-                                  are expected gaps, not errors, so blockers are suppressed to reduce noise. */}
-                              {row.rowType !== "rule_missing_actual" && !readiness.alreadyPublished && readiness.blockers.length > 0 && (
-                                <p className="mt-0.5 text-[10px] text-rose-500">{readiness.blockers.length} blocker{readiness.blockers.length === 1 ? '' : 's'} — hover for detail</p>
-                              )}
-                              {row.rowType === "rule_missing_actual" && (
-                                <p className="mt-0.5 text-[10px] text-slate-400">Provide CAM rule amount</p>
-                              )}
                             </TableCell>
                             <TableCell className="max-w-[200px]" title={row.message}>
                               <Badge variant="outline" className={`border text-[10px] uppercase ${statusBadge(row.classificationStatus)}`}>
@@ -1195,7 +1231,7 @@ export default function LeaseExpenseClassification() {
                                       Add / Import Expense
                                     </DropdownMenuItem>
                                   )}
-                                  {(row.actualExpenseId || canPublishContractRuleForCam) && (
+                                  {(row.actualExpenseId || canPublishContractRuleForCam || row.rowType === "rule_missing_actual") && (
                                     <DropdownMenuItem onClick={() => promptForAmount(row)}>
                                       <FileText className="mr-2 h-4 w-4 text-emerald-600" />
                                       {row.rowType === "rule_missing_actual" ? "Enter CAM Rule Amount" : row.amount ? "Edit Amount" : "Set Amount"}
@@ -1209,10 +1245,10 @@ export default function LeaseExpenseClassification() {
                                   )}
                                   {row.actualExpenseId && (
                                     <DropdownMenuItem onClick={() => navigate(createPageUrl("Expenses", {
-  property: lease?.property_id,
-  building: lease?.building_id,
-  unit: lease?.unit_id,
-  lease_id: lease?.id,
+  property: row.property?.id,
+  building: row.building?.id,
+  unit: row.unit?.id,
+  lease_id: row.lease?.id,
 }))}>
                                       <FileText className="mr-2 h-4 w-4 text-slate-500" />
                                       View Actual Expense
@@ -1234,6 +1270,41 @@ export default function LeaseExpenseClassification() {
                   </TableBody>
                 </Table>
               </div>
+
+              {filteredRows.length > 0 && (
+                <div className="flex items-center justify-between border-t bg-slate-50 px-4 py-3 text-xs text-slate-600">
+                  <div>
+                    Showing <span className="font-semibold text-slate-900">{Math.min((currentPage - 1) * pageSize + 1, filteredRows.length)}</span> to{" "}
+                    <span className="font-semibold text-slate-900">{Math.min(currentPage * pageSize, filteredRows.length)}</span> of{" "}
+                    <span className="font-semibold text-slate-900">{filteredRows.length}</span> expenses
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2.5 text-xs"
+                      disabled={currentPage === 1}
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    >
+                      <ChevronLeft className="mr-1 h-3.5 w-3.5" /> Previous
+                    </Button>
+                    <span className="px-2 font-medium text-slate-700">
+                      Page {currentPage} of {totalPages}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2.5 text-xs"
+                      disabled={currentPage >= totalPages}
+                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    >
+                      Next <ChevronRight className="ml-1 h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              )}
             </TabsContent>
           </Tabs>
         </Card>

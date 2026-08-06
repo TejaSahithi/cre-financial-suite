@@ -368,7 +368,7 @@ export function buildClassificationRows({
     row.canFinalize =
       row.classificationStatus !== "finalized" &&
       (
-        (row.rowType === "matched_classification" && Boolean(row.actualExpenseId)) ||
+        Boolean(row.actualExpenseId) ||
         (row.rowType === "rule_missing_actual" && row.amount != null && Number(row.amount) > 0)
       );
     row.canSendToReview =

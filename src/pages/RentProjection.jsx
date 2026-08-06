@@ -83,6 +83,7 @@ const APPROVED_FIELD_ALIASES = {
   renewal_escalation_percent: ["renewal_escalation_percent", "renewal_escalation_pct", "escalation_rate"],
   ground_rent: ["ground_rent", "ground_rent_monthly"],
   percentage_rent: ["percentage_rent", "percentage_rent_monthly"],
+  tenant_name: ["tenant_name", "tenant", "tenant_legal_name", "tenant_name_raw", "lessee", "tenant_entity_name"],
   lease_type: ["lease_type", "expense_structure", "lease_structure", "cam_structure"],
 };
 
@@ -294,11 +295,11 @@ export default function RentProjection() {
       const annualizedRent = approvedLeaseAnnualRent(lease);
       const monthlyRent = approvedLeaseMonthlyRent(lease);
       const rsf = approvedLeaseRsf(lease);
-      const tenantName = approvedFieldValue(lease, ["tenant_name"]);
+      const tenantName = approvedFieldValue(lease, ["tenant_name"]) || lease.tenant_name || lease.tenant?.name;
       const leaseType = approvedFieldValue(lease, ["lease_type"]);
       return {
         lease_id: lease.id,
-        tenant_name: tenantName || (hasApprovalSnapshot(lease) ? "Unknown" : lease.tenant_name) || "Unknown",
+        tenant_name: tenantName || "Unknown",
         property_id: lease.property_id ?? null,
         building_id: lease.building_id ?? null,
         unit_id: lease.unit_id ?? null,

@@ -24,7 +24,8 @@ import { toast } from "sonner";
 import {
   AlertTriangle, CheckCircle2, XCircle, ChevronRight, ChevronLeft,
   Plus, Trash2, Settings2, Users, FileText, DollarSign, ClipboardCheck, Loader2,
-  Sparkles, ExternalLink, Combine, RefreshCw,
+  Sparkles, ExternalLink, Combine, RefreshCw, Calculator, SlidersHorizontal,
+  LayoutGrid, ClipboardList, Boxes, TrendingUp, HandCoins,
 } from "lucide-react";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
@@ -46,13 +47,18 @@ import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Sheet, SheetContent, SheetHeader, SheetTitle,
+} from "@/components/ui/sheet";
+import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 import {
   calendarTypeLabel, poolTypeLabel, scopeTypeLabel,
   policyStatusLabel, adjustmentTypeLabel, adjustmentStateLabel,
   participantStatusLabel, recoverabilityLabel,
+  paymentDirectionLabel, paymentDirectionTone,
 } from "@/lib/camLabels";
 import { summarizePolicy } from "@/lib/camPolicySummary";
 import { suggestPools, suggestParticipants } from "@/lib/camSuggestions";
@@ -70,6 +76,24 @@ function StatusBadge({ ready }) {
   return ready
     ? <Badge className="text-[11px] font-semibold bg-emerald-100 text-emerald-700">READY</Badge>
     : <Badge className="text-[11px] font-semibold bg-red-100 text-red-700">NOT READY</Badge>;
+}
+
+function fmtDateTime(value) {
+  if (!value) return "—";
+  return new Date(value).toLocaleString();
+}
+
+// Same tone mapping as CAMRun.jsx's StatusBadge, kept local since this file
+// already owns a differently-shaped StatusBadge({ready}) for readiness.
+function RunStatusBadge({ status }) {
+  const tone =
+    status === "posted" ? "bg-emerald-100 text-emerald-700"
+    : status === "approved" ? "bg-emerald-100 text-emerald-700"
+    : status === "submitted" || status === "under_review" ? "bg-amber-100 text-amber-800"
+    : status === "calculated" ? "bg-indigo-100 text-indigo-700"
+    : status === "readiness_failed" ? "bg-red-100 text-red-700"
+    : "bg-slate-100 text-slate-600";
+  return <Badge className={`text-[10px] uppercase font-semibold ${tone}`}>{status}</Badge>;
 }
 
 /** Every write in this wizard goes through cam-setup-actions-v2 (service-role,
@@ -105,6 +129,17 @@ export default function CAMSetup() {
   const periodId = searchParams.get("period_id") || "";
   const selectedPoolId = searchParams.get("pool_id") || "";
   const step = Math.min(7, Math.max(1, Number(searchParams.get("step") || "1")));
+  // Reconciliation Workbench is the default landing experience (business
+  // users); the original 7-step wizard is preserved byte-for-byte behind
+  // view=advanced for administrators. Both read/write the SAME scope/step
+  // state above, so switching views never loses a selection. A URL that
+  // already names an explicit step (every pre-redesign deep link/bookmark,
+  // e.g. "?...&step=5") is meaningful only to the step wizard -- honor it
+  // as an implicit request for Advanced Setup even without view=advanced,
+  // so existing saved links keep landing on the content they always did.
+  const explicitView = searchParams.get("view");
+  const workbenchView = explicitView === "advanced" ? false : explicitView === "workbench" ? true : !searchParams.has("step");
+  const workbenchTab = searchParams.get("wtab") || "expenses";
 
   function updateParams(patch) {
     const next = new URLSearchParams(searchParams);
@@ -119,6 +154,17 @@ export default function CAMSetup() {
   const setPeriodId = (v) => updateParams({ period_id: v });
   const setStep = (s) => updateParams({ step: s });
   const setSelectedPoolId = (v) => updateParams({ pool_id: v });
+  // Always writes an explicit value (never clears to null): if the current
+  // advanced view was reached implicitly via a lingering step= param (see
+  // workbenchView above), clearing view alone would leave step= in place
+  // and the heuristic would re-derive advanced again on the very next
+  // render -- explicit view=workbench is the only way to reliably override it.
+  const setWorkbenchView = (goAdvanced) => updateParams({ view: goAdvanced ? "advanced" : "workbench" });
+  const setWorkbenchTab = (t) => updateParams({ wtab: t });
+
+  // Advanced Readiness drawer (transient UI only, not persisted) — reuses
+  // Step7's exact content, see READINESS PRESENTATION below.
+  const [advancedReadinessOpen, setAdvancedReadinessOpen] = useState(false);
 
   // Dialog state (transient UI only, not persisted)
   const [calendarDialog, setCalendarDialog] = useState(false);
@@ -354,6 +400,79 @@ export default function CAMSetup() {
     const supplementary = computeExpenseGapExceptions(publishedExpenses);
     return mergeReadiness(engine, supplementary);
   }, [readinessRaw, publishedExpenses]);
+
+  // ---- Workbench sections E/F/G/H: the SAME cam_runs / cam_run_pool_results /
+  // cam_run_lease_results tables and the SAME run-cam-calculation-v2 edge
+  // function CAMRun.jsx already uses — read/queried again here (distinct
+  // query keys, same shapes) so "Calculate CAM Preview" and its results can
+  // live on this page without touching CAMRun.jsx, which remains the
+  // separate, deeper operational page (submit/approve/post/statements).
+  const { data: workbenchRuns = [], refetch: refetchWorkbenchRuns } = useQuery({
+    queryKey: ["cam-workbench-run-list", propertyId, periodId],
+    enabled: Boolean(propertyId) && Boolean(periodId),
+    queryFn: async () => {
+      const { data, error } = await supabase.from("cam_runs").select("*").eq("scope_id", propertyId).eq("recovery_period_id", periodId).order("created_at", { ascending: false });
+      if (error) return [];
+      return data || [];
+    },
+  });
+  const activeRun = workbenchRuns.find((r) => r.status !== "voided" && r.status !== "superseded") || workbenchRuns[0] || null;
+
+  const { data: poolResults = [] } = useQuery({
+    queryKey: ["cam-workbench-pool-results", activeRun?.id],
+    enabled: Boolean(activeRun?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase.from("cam_run_pool_results").select("*, recovery_pools(name)").eq("cam_run_id", activeRun.id);
+      if (error) return [];
+      return data || [];
+    },
+  });
+
+  const { data: leaseResults = [] } = useQuery({
+    queryKey: ["cam-workbench-lease-results", activeRun?.id],
+    enabled: Boolean(activeRun?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase.from("cam_run_lease_results").select("*, leases(tenant_name)").eq("cam_run_id", activeRun.id);
+      if (error) return [];
+      return data || [];
+    },
+  });
+
+  const { data: runExceptions = [] } = useQuery({
+    queryKey: ["cam-workbench-exceptions", activeRun?.id],
+    enabled: Boolean(activeRun?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase.from("cam_run_exceptions").select("*").eq("cam_run_id", activeRun.id);
+      if (error) return [];
+      return data || [];
+    },
+  });
+
+  // Identical call shape to CAMRun.jsx's calculateMutation — same edge
+  // function, same payload, same persisted cam_runs record. Always runs in
+  // posting_eligible mode here (full validation) since the Workbench's
+  // "Calculate CAM Preview" button is meant to show the real, authoritative
+  // preview a reviewer would act on, not a relaxed draft simulation.
+  const calculateMutation = useMutation({
+    mutationFn: () =>
+      invokeEdgeFunction("run-cam-calculation-v2", {
+        property_id: propertyId, recovery_period_id: periodId, scope_type: "property", scope_id: propertyId,
+        run_type: "standard", run_mode: "posting_eligible",
+      }),
+    onSuccess: (result) => {
+      if (result?.status === "readiness_failed") {
+        toast.warning("Readiness check failed — see Advanced Readiness for details.");
+      } else {
+        toast.success(result?.idempotent_rerun ? "Up to date — no changes since last calculation." : "CAM preview calculated.");
+      }
+      refetchWorkbenchRuns();
+      queryClient.invalidateQueries({ queryKey: ["cam-workbench-pool-results"] });
+      queryClient.invalidateQueries({ queryKey: ["cam-workbench-lease-results"] });
+      queryClient.invalidateQueries({ queryKey: ["cam-workbench-exceptions"] });
+      setWorkbenchTab("results");
+    },
+    onError: (err) => toast.error(err?.message || "Calculation failed"),
+  });
 
   // ---- Mutation dispatcher ----------------------------------------------------
   const mutation = useMutation({
@@ -1598,15 +1717,488 @@ export default function CAMSetup() {
     );
   }
 
+  // ============================================================================
+  // RECONCILIATION WORKBENCH — the default, business-facing view. Every tab
+  // below reads data already queried above (same tables, same shapes as the
+  // 7-step wizard and CAMRun.jsx) and reuses the same step components where
+  // the step's existing content already IS the target section. Nothing here
+  // performs a calculation — Calculate CAM Preview calls the same
+  // run-cam-calculation-v2 edge function CAMRun.jsx uses, and every number
+  // shown is read back from cam_run_pool_results / cam_run_lease_results.
+  // ============================================================================
+
+  // ---- Readiness banner: summary + inline resolvable issues ------------------
+  function WorkbenchReadinessBanner() {
+    if (!propertyId || !periodId) return null;
+    const blocking = readiness.items.filter((i) => i.severity === "blocking");
+    const warnings = readiness.items.filter((i) => i.severity === "warning");
+    const jumpTab = {
+      POLICY_MISSING: "policies", POLICY_CONFLICT: "policies", PREMISES_MISSING: "policies", AREA_MISSING: "policies",
+      POOL_CATEGORY_MISSING: "pools", POOL_ASSIGNMENT_MISSING: "expenses", ALLOCATION_UNBALANCED: "expenses",
+      BASE_YEAR_MISSING: "policies", CAP_HISTORY_MISSING: "policies", PRIOR_ADJUSTMENT_UNKNOWN: "policies",
+      EXPENSE_CATEGORY_MISSING: "expenses", EXPENSE_SERVICE_PERIOD_MISSING: "expenses", OCCUPANCY_UNKNOWN: "pools",
+    };
+    return (
+      <Card className={readiness.ready ? "border-emerald-200 bg-emerald-50/40" : blocking.length > 0 ? "border-red-200 bg-red-50/40" : "border-amber-200 bg-amber-50/40"}>
+        <CardContent className="p-3 space-y-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <StatusBadge ready={readiness.ready} />
+            {readiness.ready ? (
+              <span className="text-sm text-emerald-700 font-medium">Ready to calculate CAM for this property and period.</span>
+            ) : (
+              <span className="text-sm text-slate-700">
+                {blocking.length} blocking issue{blocking.length === 1 ? "" : "s"}{warnings.length > 0 ? `, ${warnings.length} warning${warnings.length === 1 ? "" : "s"}` : ""} must be resolved before calculation is fully authoritative.
+              </span>
+            )}
+            <Button size="sm" variant="ghost" className="ml-auto text-xs" id="btn-open-advanced-readiness" onClick={() => setAdvancedReadinessOpen(true)}>
+              <SlidersHorizontal className="w-3.5 h-3.5 mr-1" /> Advanced Readiness
+            </Button>
+          </div>
+          {blocking.length > 0 && (
+            <div className="space-y-1">
+              {blocking.slice(0, 4).map((item, i) => {
+                const isPolicyConflict = item.code === "POLICY_CONFLICT" && policyConflictsByLeaseId.has(item.entityId);
+                return (
+                  <div key={i} className="flex items-start justify-between gap-2 rounded bg-white/70 p-2 text-xs">
+                    <div className="flex items-start gap-1.5"><XCircle className="w-3.5 h-3.5 text-red-500 mt-0.5 flex-shrink-0" /><span>{item.message}</span></div>
+                    {isPolicyConflict ? (
+                      <Button size="sm" variant="outline" className="h-6 text-[11px]" onClick={() => { setPolicyConflictLeaseId(item.entityId); setAdvancedReadinessOpen(true); }}>Resolve Conflict →</Button>
+                    ) : jumpTab[item.code] ? (
+                      <Button size="sm" variant="outline" className="h-6 text-[11px]" onClick={() => setWorkbenchTab(jumpTab[item.code])}>Resolve →</Button>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {blocking.length > 4 && <p className="text-xs text-slate-500">+{blocking.length - 4} more — see Advanced Readiness.</p>}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  function WorkbenchAdvancedReadinessDrawer() {
+    return (
+      <Sheet open={advancedReadinessOpen} onOpenChange={setAdvancedReadinessOpen}>
+        <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-2xl">
+          <SheetHeader><SheetTitle>Advanced Readiness</SheetTitle></SheetHeader>
+          <div className="mt-4"><Step7 /></div>
+        </SheetContent>
+      </Sheet>
+    );
+  }
+
+  // ---- C. Pool Calculation ----------------------------------------------------
+  function WorkbenchPoolCalculationTab() {
+    return (
+      <div className="space-y-6">
+        <Step2 />
+        <Step3 />
+        {poolResults.length > 0 && (
+          <Card>
+            <CardHeader><CardTitle className="text-base">Calculated Pool Results (latest run)</CardTitle></CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Pool</TableHead><TableHead className="text-right">Source Total</TableHead>
+                      <TableHead className="text-right">Excluded</TableHead><TableHead className="text-right">Included</TableHead>
+                      <TableHead className="text-right">Gross-Up Adj.</TableHead><TableHead className="text-right">Adjusted Pool</TableHead>
+                      <TableHead>Denominator</TableHead><TableHead />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {poolResults.map((pr) => (
+                      <TableRow key={pr.id}>
+                        <TableCell className="font-medium">{pr.recovery_pools?.name || pr.pool_id.slice(0, 8)}</TableCell>
+                        <TableCell className="text-right">{fmtCurrency(pr.actual_amount)}</TableCell>
+                        <TableCell className="text-right">{fmtCurrency(pr.excluded_amount)}</TableCell>
+                        <TableCell className="text-right">{fmtCurrency(Number(pr.actual_amount || 0) - Number(pr.excluded_amount || 0))}</TableCell>
+                        <TableCell className="text-right">{fmtCurrency(pr.gross_up_adjustment)}</TableCell>
+                        <TableCell className="text-right font-semibold">{fmtCurrency(pr.adjusted_pool)}</TableCell>
+                        <TableCell className="text-xs">{pr.denominator_metrics?.denominator_area ? `${Number(pr.denominator_metrics.denominator_area).toLocaleString()} sqft` : "—"}</TableCell>
+                        <TableCell><Link to={`${createPageUrl("CAMPoolDetail")}?cam_run_id=${activeRun?.id}&pool_result_id=${pr.id}`} className="text-xs text-blue-600 underline">Detail</Link></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    );
+  }
+
+  // ---- D. Calculation Parameters -----------------------------------------------
+  function WorkbenchCalcParamsTab() {
+    const propLeases = leases.filter((l) => l.property_id === propertyId);
+    const [leaseId, setLeaseId] = useState("");
+    React.useEffect(() => {
+      if (!leaseId && propLeases.length > 0) setLeaseId(propLeases[0].id);
+    }, [propLeases]);
+
+    const leasePolicies = policies.filter((p) => p.lease_id === leaseId && p.status !== "superseded");
+    const approvedForLease = leasePolicies.filter((p) => p.status === "approved");
+    const hasConflict = policyConflictsByLeaseId.has(leaseId);
+    // Auto-select the single applicable policy; never an open pick-any list.
+    const applicablePolicy = approvedForLease.length === 1 && !hasConflict ? approvedForLease[0] : null;
+    const summ = applicablePolicy ? summarizePolicy(applicablePolicy, applicablePolicy.lease_recovery_policy_steps, categoryNamesById) : null;
+
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardHeader><CardTitle className="text-base">Select Tenant</CardTitle></CardHeader>
+          <CardContent>
+            <Select value={leaseId} onValueChange={setLeaseId}>
+              <SelectTrigger id="calc-params-lease" className="w-full max-w-md"><SelectValue placeholder="Choose tenant..." /></SelectTrigger>
+              <SelectContent>{propLeases.map((l) => <SelectItem key={l.id} value={l.id}>{l.tenant_name ?? l.id.slice(0, 8)}</SelectItem>)}</SelectContent>
+            </Select>
+          </CardContent>
+        </Card>
+
+        {leaseId && approvedForLease.length === 0 && (
+          <Card className="border-amber-300 bg-amber-50">
+            <CardContent className="p-4 flex items-center justify-between gap-4">
+              <p className="text-sm text-amber-900">No approved recovery policy exists for this lease yet — nothing to populate.</p>
+              <Link to={createPageUrl("LeaseExpenseRules") + `?lease_id=${leaseId}`} className="text-xs text-blue-600 underline flex items-center gap-1 flex-shrink-0">
+                Resolve in Lease Expense Rules <ExternalLink className="w-3 h-3" />
+              </Link>
+            </CardContent>
+          </Card>
+        )}
+
+        {leaseId && hasConflict && (
+          <Card className="border-red-300 bg-red-50">
+            <CardContent className="p-4 flex items-center justify-between gap-4">
+              <p className="text-sm text-red-900">This lease has more than one active, conflicting recovery policy — resolve the conflict before parameters can be shown.</p>
+              <Button size="sm" variant="outline" onClick={() => { setPolicyConflictLeaseId(leaseId); setAdvancedReadinessOpen(true); }}>Resolve Conflict →</Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {applicablePolicy && summ && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle className="text-base">Applicable Calculation Parameters</CardTitle>
+              <div className="flex items-center gap-2">
+                <Badge className={`text-[10px] ${applicablePolicy.status === "approved" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}`}>{policyStatusLabel(applicablePolicy.status)}</Badge>
+                <Link to={createPageUrl("LeaseExpenseRules") + `?lease_id=${leaseId}`}>
+                  <Button size="sm" variant="outline" id="btn-edit-calc-params"><ExternalLink className="w-3 h-3 mr-1" /> Edit</Button>
+                </Link>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-slate-500 mb-3">Read-only — populated directly from the approved lease recovery policy. To change a value, edit and re-approve the source lease rule; it will re-materialize here automatically.</p>
+              <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-3">
+                <div><span className="text-slate-400 text-xs">Category</span><div>{summ.hasCategory ? summ.categoryName : "—"}</div></div>
+                <div><span className="text-slate-400 text-xs">Allocation Method / Share</span><div>{summ.shareDescription}</div></div>
+                <div><span className="text-slate-400 text-xs">Numerator / Denominator</span><div className="text-xs">{summ.numeratorDenominatorSource}</div></div>
+                <div><span className="text-slate-400 text-xs">Gross-Up Target</span><div>{summ.grossUpTarget}</div></div>
+                <div><span className="text-slate-400 text-xs">Base Year</span><div>{summ.baseYear}</div></div>
+                <div><span className="text-slate-400 text-xs">Expense Stop</span><div>{summ.expenseStop}</div></div>
+                <div><span className="text-slate-400 text-xs">Cap</span><div>{summ.cap}</div></div>
+                <div><span className="text-slate-400 text-xs">Floor</span><div>{summ.floor}</div></div>
+                <div><span className="text-slate-400 text-xs">Deductible</span><div>{summ.deductible}</div></div>
+                <div><span className="text-slate-400 text-xs">Admin / Management Fee</span><div>{summ.adminFee}</div></div>
+                <div><span className="text-slate-400 text-xs">Effective Dates</span><div>{summ.effectiveFrom} → {summ.effectiveTo || "open"}</div></div>
+                <div><span className="text-slate-400 text-xs">Proration</span><div className="text-xs">Daily, per policy step (see Lease Recovery Rules)</div></div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    );
+  }
+
+  // ---- E. Calculate CAM --------------------------------------------------------
+  function WorkbenchCalculateTab() {
+    const openExceptions = runExceptions.filter((e) => e.resolution_status === "open");
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base">Calculate CAM Preview</CardTitle>
+            {activeRun && <RunStatusBadge status={activeRun.status} />}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-slate-600">
+              Runs the authoritative CAM Engine (same engine and edge function used by CAM Runs) against the confirmed pools, participants, policies, expense assignments, and estimates for this property and period. This creates a real, persisted CAM run — nothing is calculated in the browser.
+            </p>
+            {activeRun && (
+              <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm md:grid-cols-4 border-t pt-3">
+                <div><span className="text-slate-400 text-xs">Run Type</span><div className="font-medium">{activeRun.run_type}</div></div>
+                <div><span className="text-slate-400 text-xs">Engine Version</span><div className="font-mono text-xs">{activeRun.engine_version || "—"}</div></div>
+                <div><span className="text-slate-400 text-xs">Created</span><div className="text-xs">{fmtDateTime(activeRun.created_at)}</div></div>
+                <div><span className="text-slate-400 text-xs">Last Recalculated</span><div className="text-xs">{fmtDateTime(activeRun.updated_at)}</div></div>
+              </div>
+            )}
+            <Button size="lg" id="btn-calculate-cam-preview" onClick={() => calculateMutation.mutate()} disabled={calculateMutation.isPending || !propertyId || !periodId}>
+              {calculateMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Calculator className="w-4 h-4 mr-2" />}
+              {activeRun?.status === "calculated" ? "Recalculate CAM Preview" : "Calculate CAM Preview"}
+            </Button>
+            {openExceptions.length > 0 && (
+              <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 p-2.5 rounded border border-amber-200">
+                <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                <span>{openExceptions.length} unresolved exception(s) on this run.</span>
+                {activeRun && <Link to={`${createPageUrl("CAMExceptionReview")}?cam_run_id=${activeRun.id}`} className="underline text-xs ml-1">Review →</Link>}
+              </div>
+            )}
+            <p className="text-xs text-slate-400">
+              Need to submit for review, approve, or post this run? Continue in{" "}
+              <Link to={`${createPageUrl("CAMRun")}?property_id=${propertyId}&recovery_period_id=${periodId}`} className="text-blue-600 underline">CAM Runs →</Link>
+            </p>
+          </CardContent>
+        </Card>
+
+        {workbenchRuns.length > 1 && (
+          <Card>
+            <CardHeader><CardTitle className="text-base">Run History ({workbenchRuns.length})</CardTitle></CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader><TableRow><TableHead>Status</TableHead><TableHead>Type</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {workbenchRuns.map((r) => (
+                    <TableRow key={r.id} className={r.id === activeRun?.id ? "bg-blue-50" : ""}>
+                      <TableCell><RunStatusBadge status={r.status} /></TableCell>
+                      <TableCell className="text-sm">{r.run_type}</TableCell>
+                      <TableCell className="text-sm">{fmtDateTime(r.created_at)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    );
+  }
+
+  // ---- F. Tenant Results -------------------------------------------------------
+  function WorkbenchResultsTab() {
+    if (!activeRun) {
+      return <p className="text-sm text-slate-500 py-8 text-center">No CAM run yet for this property and period. Use Calculate CAM to produce results.</p>;
+    }
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardHeader><CardTitle className="text-base">Recovery by Pool ({poolResults.length})</CardTitle></CardHeader>
+          <CardContent>
+            {poolResults.length === 0 ? <p className="text-sm text-slate-400 py-4 text-center">No pool results.</p> : (
+              <Table>
+                <TableHeader><TableRow><TableHead>Pool</TableHead><TableHead className="text-right">Adjusted Pool</TableHead><TableHead className="text-right">Gross-Up Adj.</TableHead><TableHead /></TableRow></TableHeader>
+                <TableBody>
+                  {poolResults.map((pr) => (
+                    <TableRow key={pr.id}>
+                      <TableCell className="font-medium text-sm">{pr.recovery_pools?.name || pr.pool_id.slice(0, 8)}</TableCell>
+                      <TableCell className="text-right text-sm font-semibold">{fmtCurrency(pr.adjusted_pool)}</TableCell>
+                      <TableCell className="text-right text-sm">{fmtCurrency(pr.gross_up_adjustment)}</TableCell>
+                      <TableCell className="text-right"><Link to={`${createPageUrl("CAMPoolDetail")}?cam_run_id=${activeRun.id}&pool_result_id=${pr.id}`} className="text-xs text-blue-600 underline">Explanation →</Link></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle className="text-base">Recovery by Tenant ({leaseResults.length})</CardTitle></CardHeader>
+          <CardContent>
+            {leaseResults.length === 0 ? <p className="text-sm text-slate-400 py-4 text-center">No lease results.</p> : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Tenant</TableHead><TableHead className="text-right">Gross Recovery (Final)</TableHead>
+                      <TableHead className="text-right">Estimates Charged</TableHead><TableHead className="text-right">Due / (Credit)</TableHead>
+                      <TableHead>Status</TableHead><TableHead />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {leaseResults.map((lr) => (
+                      <TableRow key={lr.id}>
+                        <TableCell className="font-medium text-sm">{lr.leases?.tenant_name || lr.lease_id.slice(0, 8)}</TableCell>
+                        <TableCell className="text-right text-sm">{fmtCurrency(lr.final_recovery)}</TableCell>
+                        <TableCell className="text-right text-sm">{fmtCurrency(lr.estimates_billed)}</TableCell>
+                        <TableCell className={`text-right text-sm font-semibold ${Number(lr.amount_due_credit) < 0 ? "text-emerald-700" : Number(lr.amount_due_credit) > 0 ? "text-amber-700" : ""}`}>{fmtCurrency(lr.amount_due_credit)}</TableCell>
+                        <TableCell><Badge className="text-[10px]">{lr.status}</Badge></TableCell>
+                        <TableCell><Link to={`${createPageUrl("CAMLeaseDetail")}?cam_run_id=${activeRun.id}&lease_result_id=${lr.id}`} className="text-xs text-blue-600 underline">Explanation →</Link></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // ---- G. Monthly Estimates & Variance ------------------------------------------
+  function WorkbenchVarianceTab() {
+    const propLeases = leases.filter((l) => l.property_id === propertyId);
+    const varianceRows = useMemo(() => {
+      return propLeases.map((l) => {
+        const annualEstimate = estimateSchedules.filter((es) => es.lease_id === l.id).reduce((s, es) => s + Number(es.amount || 0), 0);
+        const leaseResult = leaseResults.find((lr) => lr.lease_id === l.id);
+        const annualCalculated = leaseResult ? Number(leaseResult.final_recovery || 0) : null;
+        return {
+          leaseId: l.id,
+          tenantName: l.tenant_name || l.id.slice(0, 8),
+          annualEstimate,
+          annualCalculated,
+          variance: annualCalculated != null ? annualCalculated - annualEstimate : null,
+        };
+      }).filter((r) => r.annualEstimate > 0 || r.annualCalculated != null);
+    }, [propLeases, estimateSchedules, leaseResults]);
+
+    return (
+      <div className="space-y-6">
+        <Step6 />
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Annual Estimate vs. Calculated Recovery</CardTitle>
+            <p className="text-xs text-slate-500 font-normal">
+              Compares the sum of monthly estimates charged against the engine's authoritative annual calculated recovery for this run. The engine computes and rounds annually (per this run's rounding policy) — monthly figures above are the estimate schedule as billed, not a recalculated monthly split.
+            </p>
+          </CardHeader>
+          <CardContent>
+            {varianceRows.length === 0 ? <p className="text-sm text-slate-400 py-4 text-center">No estimates or calculated results yet for this period.</p> : (
+              <Table>
+                <TableHeader><TableRow><TableHead>Tenant</TableHead><TableHead className="text-right">Annual Estimate Total</TableHead><TableHead className="text-right">Annual Calculated Recovery</TableHead><TableHead className="text-right">Annual Variance</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {varianceRows.map((r) => (
+                    <TableRow key={r.leaseId}>
+                      <TableCell className="font-medium text-sm">{r.tenantName}</TableCell>
+                      <TableCell className="text-right text-sm">{fmtCurrency(r.annualEstimate)}</TableCell>
+                      <TableCell className="text-right text-sm">{r.annualCalculated != null ? fmtCurrency(r.annualCalculated) : "Not yet calculated"}</TableCell>
+                      <TableCell className={`text-right text-sm font-semibold ${r.variance == null ? "" : r.variance > 0 ? "text-amber-700" : r.variance < 0 ? "text-emerald-700" : ""}`}>{r.variance != null ? fmtCurrency(r.variance) : "—"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // ---- H. Reconciliation — Who Pays --------------------------------------------
+  function WorkbenchReconciliationTab() {
+    if (!activeRun || leaseResults.length === 0) {
+      return <p className="text-sm text-slate-500 py-8 text-center">No calculated results yet — use Calculate CAM to produce a reconciliation.</p>;
+    }
+    return (
+      <Card>
+        <CardHeader><CardTitle className="text-base">Reconciliation — Who Pays</CardTitle></CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Tenant</TableHead><TableHead className="text-right">Calculated Recovery</TableHead>
+                  <TableHead className="text-right">Estimates Charged</TableHead><TableHead className="text-right">Prior Adjustments</TableHead>
+                  <TableHead className="text-right">Final Amount</TableHead><TableHead>Payment Direction</TableHead>
+                  <TableHead>Status</TableHead><TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {leaseResults.map((lr) => {
+                  const priorAdj = priorAdjustments.filter((a) => a.lease_id === lr.lease_id && a.state === "KNOWN_AMOUNT").reduce((s, a) => s + Number(a.amount || 0), 0);
+                  return (
+                    <TableRow key={lr.id}>
+                      <TableCell className="font-medium text-sm">{lr.leases?.tenant_name || lr.lease_id.slice(0, 8)}</TableCell>
+                      <TableCell className="text-right text-sm">{fmtCurrency(lr.final_recovery)}</TableCell>
+                      <TableCell className="text-right text-sm">{fmtCurrency(lr.estimates_billed)}</TableCell>
+                      <TableCell className="text-right text-sm">{priorAdj !== 0 ? fmtCurrency(priorAdj) : "—"}</TableCell>
+                      <TableCell className="text-right text-sm font-bold">{fmtCurrency(lr.amount_due_credit)}</TableCell>
+                      <TableCell><Badge className={`text-[10px] font-medium ${paymentDirectionTone(lr.amount_due_credit)}`}>{paymentDirectionLabel(lr.amount_due_credit)}</Badge></TableCell>
+                      <TableCell><Badge className="text-[10px]">{lr.status}</Badge></TableCell>
+                      <TableCell>
+                        <Link to={`${createPageUrl("CAMRun")}?property_id=${propertyId}&recovery_period_id=${periodId}&cam_run_id=${activeRun.id}`} className="text-xs text-blue-600 underline">
+                          Statement / Export →
+                        </Link>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+          <p className="text-xs text-slate-400 mt-3">
+            A charge is only considered billed once confirmed through the CAM Runs statement/export workflow (posted run required) — this table shows the calculated reconciliation, not billing confirmation.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const WORKBENCH_TABS = [
+    { value: "expenses", label: "CAM Expenses", icon: DollarSign },
+    { value: "policies", label: "Lease Recovery Rules", icon: ClipboardList },
+    { value: "pools", label: "Pool Calculation", icon: Boxes },
+    { value: "parameters", label: "Calculation Parameters", icon: Settings2 },
+    { value: "calculate", label: "Calculate CAM", icon: Calculator },
+    { value: "results", label: "Tenant Results", icon: LayoutGrid },
+    { value: "variance", label: "Monthly Estimates & Variance", icon: TrendingUp },
+    { value: "reconciliation", label: "Reconciliation", icon: HandCoins },
+  ];
+
+  function ReconciliationWorkbench() {
+    if (!propertyId) {
+      return <Card><CardContent className="py-12 text-center text-sm text-slate-400">Select a property above to begin.</CardContent></Card>;
+    }
+    if (!periodId) {
+      return (
+        <div className="space-y-4">
+          <Card><CardContent className="py-8 text-center text-sm text-slate-400">Select or create a recovery period to begin.</CardContent></Card>
+          <Step1 />
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-4">
+        <WorkbenchReadinessBanner />
+        <Tabs value={workbenchTab} onValueChange={setWorkbenchTab} className="space-y-4">
+          <TabsList id="workbench-tabs" className="flex-wrap h-auto">
+            {WORKBENCH_TABS.map((t) => (
+              <TabsTrigger key={t.value} value={t.value} className="gap-1.5"><t.icon className="w-3.5 h-3.5" />{t.label}</TabsTrigger>
+            ))}
+          </TabsList>
+          <TabsContent value="expenses"><Step5 /></TabsContent>
+          <TabsContent value="policies"><Step4 /></TabsContent>
+          <TabsContent value="pools"><WorkbenchPoolCalculationTab /></TabsContent>
+          <TabsContent value="parameters"><WorkbenchCalcParamsTab /></TabsContent>
+          <TabsContent value="calculate"><WorkbenchCalculateTab /></TabsContent>
+          <TabsContent value="results"><WorkbenchResultsTab /></TabsContent>
+          <TabsContent value="variance"><WorkbenchVarianceTab /></TabsContent>
+          <TabsContent value="reconciliation"><WorkbenchReconciliationTab /></TabsContent>
+        </Tabs>
+      </div>
+    );
+  }
+
   // ---- Step renderer --------------------------------------------------------
   const stepComponents = [null, Step1, Step2, Step3, Step4, Step5, Step6, Step7];
   const StepComponent = stepComponents[step];
 
   return (
     <div className="space-y-4 p-4 lg:p-6">
-      <PageHeader title="CAM Setup" subtitle="Guided, automated setup for a CAM recovery run" />
+      {workbenchView ? (
+        <PageHeader
+          icon={Calculator}
+          title="CAM Reconciliation Workbench"
+          subtitle="Select scope and period, review expenses and recovery rules, calculate CAM, and see who owes what"
+        />
+      ) : (
+        <PageHeader title="CAM Setup — Advanced" subtitle="Guided, step-by-step technical configuration" />
+      )}
 
-      {/* Requirement 1: persistent scope bar */}
+      {/* Requirement 1: persistent scope bar — shared by both views */}
       <Card className="sticky top-0 z-10 border-slate-300 shadow-sm">
         <CardContent className="p-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -1631,44 +2223,62 @@ export default function CAMSetup() {
               <SelectContent>{periods.map((p) => <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>)}</SelectContent>
             </Select>
             {propertyId && periodId && (
-              <div id="scope-readiness-badge" className="ml-auto">
+              <div id="scope-readiness-badge" className="ml-auto flex items-center gap-2">
                 <StatusBadge ready={readiness.ready} />
-                {!readiness.ready && readiness.blockingCount > 0 && <span className="ml-2 text-xs text-red-600">{readiness.blockingCount} blocking</span>}
+                {!readiness.ready && readiness.blockingCount > 0 && <span className="text-xs text-red-600">{readiness.blockingCount} blocking</span>}
               </div>
             )}
+            <Button
+              size="sm"
+              variant="outline"
+              id="btn-toggle-advanced-setup"
+              onClick={() => setWorkbenchView(workbenchView)}
+              title={workbenchView ? "Open the detailed 7-step technical configuration" : "Return to the Reconciliation Workbench"}
+            >
+              {workbenchView ? <><Settings2 className="w-3.5 h-3.5 mr-1" /> Advanced Setup</> : <><LayoutGrid className="w-3.5 h-3.5 mr-1" /> Back to Workbench</>}
+            </Button>
           </div>
         </CardContent>
       </Card>
 
-      {/* Step progress bar */}
-      <div className="flex items-center gap-1 overflow-x-auto pb-2">
-        {STEPS.map((s, idx) => {
-          const Icon = s.icon;
-          const isActive = s.id === step;
-          const isDone = s.id < step;
-          return (
-            <React.Fragment key={s.id}>
-              <button id={`step-tab-${s.id}`} onClick={() => setStep(s.id)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors
-                  ${isActive ? "bg-blue-600 text-white" : isDone ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>
-                <Icon className="w-3.5 h-3.5" /> {s.label}
-              </button>
-              {idx < STEPS.length - 1 && <ChevronRight className="w-4 h-4 text-slate-300 flex-shrink-0" />}
-            </React.Fragment>
-          );
-        })}
-      </div>
+      {workbenchView ? (
+        <>
+          <ReconciliationWorkbench />
+          <WorkbenchAdvancedReadinessDrawer />
+        </>
+      ) : (
+        <>
+          {/* Step progress bar — unchanged from the original 7-step wizard */}
+          <div className="flex items-center gap-1 overflow-x-auto pb-2">
+            {STEPS.map((s, idx) => {
+              const Icon = s.icon;
+              const isActive = s.id === step;
+              const isDone = s.id < step;
+              return (
+                <React.Fragment key={s.id}>
+                  <button id={`step-tab-${s.id}`} onClick={() => setStep(s.id)}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors
+                      ${isActive ? "bg-blue-600 text-white" : isDone ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>
+                    <Icon className="w-3.5 h-3.5" /> {s.label}
+                  </button>
+                  {idx < STEPS.length - 1 && <ChevronRight className="w-4 h-4 text-slate-300 flex-shrink-0" />}
+                </React.Fragment>
+              );
+            })}
+          </div>
 
-      <div className="min-h-[300px]">{StepComponent && <StepComponent />}</div>
+          <div className="min-h-[300px]">{StepComponent && <StepComponent />}</div>
 
-      <div className="flex justify-between pt-2 border-t">
-        <Button variant="outline" onClick={() => setStep(step - 1)} disabled={!canGoBack} id="btn-step-back">
-          <ChevronLeft className="w-4 h-4 mr-1" /> Back
-        </Button>
-        <Button onClick={() => setStep(step + 1)} disabled={!canProceed} id="btn-step-next">
-          Next <ChevronRight className="w-4 h-4 ml-1" />
-        </Button>
-      </div>
+          <div className="flex justify-between pt-2 border-t">
+            <Button variant="outline" onClick={() => setStep(step - 1)} disabled={!canGoBack} id="btn-step-back">
+              <ChevronLeft className="w-4 h-4 mr-1" /> Back
+            </Button>
+            <Button onClick={() => setStep(step + 1)} disabled={!canProceed} id="btn-step-next">
+              Next <ChevronRight className="w-4 h-4 ml-1" />
+            </Button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
