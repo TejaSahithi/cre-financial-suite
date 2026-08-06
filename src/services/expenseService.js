@@ -1228,13 +1228,9 @@ async function fetchApprovedClassificationRules(scope = {}) {
   const accessiblePropertyIds = new Set((leases || []).map((lease) => lease.property_id).filter(Boolean));
   const accessibleTenantIds = new Set((leases || []).map((lease) => lease.tenant_id).filter(Boolean));
 
-  // Only rules extracted directly from the lease document are eligible for
-  // classification matching. Coverage-gap / checklist rules (those that do
-  // NOT pass isLeaseDerivedRule) must never be used to match actual expenses
-  // — they are reviewed on the LeaseExpenseRules "Coverage Gaps" tab, not
-  // consumed by the classification engine.
+  // Surfacing all approved rules for expense recoverability matching
   const allApprovedRules = (data || [])
-    .filter((rule) => isStrictlyApprovedLeaseRule(rule) && isLeaseDerivedRule(rule))
+    .filter((rule) => isApprovedLeaseRule(rule) || isStrictlyApprovedLeaseRule(rule))
     .map((rule) => hydrateClassificationRule(rule, { leaseById, unitById, ruleSetById }));
 
   const accessibleApprovedRules = allApprovedRules.filter((rule) => {

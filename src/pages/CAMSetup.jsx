@@ -1813,6 +1813,171 @@ export default function CAMSetup() {
     );
   }
 
+  // ---- A. CAM Expenses ---------------------------------------------------------
+  // CAM-specific status, derived purely from fields already on each published
+  // expense row (no new query): a general-ledger "recoverable/non_recoverable"
+  // classification and a CAM pool assignment are two different questions --
+  // this collapses them into the one status the reviewer actually needs.
+  //   excluded   -- classification says non_recoverable/excluded: not CAM's
+  //                 concern at all, stays in the Expense module.
+  //   conditional-- recoverable but not yet calculation-ready (no category,
+  //                 no service period, or not yet assigned to a pool).
+  //   eligible   -- recoverable, categorized, dated, and pool-assigned.
+  function camExpenseStatus(exp) {
+    const recov = String(exp._classification?.recoverability_result || exp._classification?.recovery_status || "").toLowerCase();
+    if (recov === "non_recoverable" || recov === "excluded") return "excluded";
+    const hasGap = !exp.category || !exp.service_period_start || !exp.service_period_end;
+    const unassigned = (exp.cam_input_pool_assignments || []).length === 0;
+    if (hasGap || unassigned || recov === "conditional" || recov === "needs_review") return "conditional";
+    return "eligible";
+  }
+
+  function WorkbenchExpensesTab() {
+    const [expenseDialog, setExpenseDialog] = useState(null);
+    const [splitRows, setSplitRows] = useState([{ recovery_pool_id: "", amount: "" }]);
+    const [excludedOpen, setExcludedOpen] = useState(false);
+
+    const withStatus = publishedExpenses.map((exp) => ({ exp, status: camExpenseStatus(exp) }));
+    const visible = withStatus.filter((r) => r.status !== "excluded");
+    const excluded = withStatus.filter((r) => r.status === "excluded");
+
+    return (
+      <div className="space-y-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <div>
+              <CardTitle className="text-base">Published Expense Inputs</CardTitle>
+              <p className="text-xs text-slate-500 font-normal mt-0.5">Eligible and conditional expenses only. Only finalized, published expense inputs appear here — use the Expenses module to create source expenses.</p>
+            </div>
+            {excluded.length > 0 && (
+              <Button size="sm" variant="outline" id="btn-view-excluded-expenses" onClick={() => setExcludedOpen(true)}>
+                Excluded Source Expenses ({excluded.length})
+              </Button>
+            )}
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Vendor / Description</TableHead><TableHead>Category</TableHead><TableHead>Scope</TableHead>
+                    <TableHead>Service Period</TableHead><TableHead>Amount</TableHead><TableHead>CAM Status</TableHead>
+                    <TableHead>Pool Assignment</TableHead><TableHead /><TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {visible.length === 0 && <TableRow><TableCell colSpan={9} className="text-sm text-slate-500 text-center py-4">No eligible or conditional published expenses for this property.</TableCell></TableRow>}
+                  {visible.map(({ exp, status }) => {
+                    const assigned = (exp.cam_input_pool_assignments || []).reduce((s, a) => s + Number(a.amount || 0), 0);
+                    const unassignedBalance = Number(exp.amount || 0) - assigned;
+                    const vendor = exp._sourceExpense?.vendor || exp._sourceExpense?.vendor_name || "—";
+                    const description = exp._sourceExpense?.description || "—";
+                    return (
+                      <TableRow key={exp.id} className={status === "conditional" ? "bg-amber-50" : ""}>
+                        <TableCell>
+                          <div className="text-sm font-medium">{vendor}</div>
+                          <div className="text-xs text-slate-500">{description}</div>
+                        </TableCell>
+                        <TableCell>{exp.category ? (categoryNamesById.get(exp.category) || exp.category.slice(0, 8)) : <Badge className="text-[10px] bg-red-100 text-red-700">Missing</Badge>}</TableCell>
+                        <TableCell className="text-xs">{exp.building_id ? "Building" : "Property-Wide"}</TableCell>
+                        <TableCell className="text-xs">
+                          {exp.service_period_start && exp.service_period_end
+                            ? `${exp.service_period_start} → ${exp.service_period_end}`
+                            : <Badge className="text-[10px] bg-amber-100 text-amber-800">Missing</Badge>}
+                        </TableCell>
+                        <TableCell className="font-medium">{fmtCurrency(exp.amount)}</TableCell>
+                        <TableCell>
+                          <Badge className={`text-[10px] ${status === "eligible" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}`}>
+                            {status === "eligible" ? "Eligible" : "Conditional"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {(exp.cam_input_pool_assignments ?? []).length === 0
+                            ? <Badge className="text-[10px] bg-amber-100 text-amber-800">Unassigned</Badge>
+                            : (
+                              <div className="text-xs">
+                                {exp.cam_input_pool_assignments.map((a, i) => <div key={i}>{a.recovery_pools?.name}: {fmtCurrency(a.amount)}</div>)}
+                                {unassignedBalance > 0.005 && <div className="text-amber-700">Unassigned balance: {fmtCurrency(unassignedBalance)}</div>}
+                              </div>
+                            )}
+                        </TableCell>
+                        <TableCell>
+                          <Button size="sm" variant="outline" id={`btn-wb-assign-expense-${exp.id}`} onClick={() => { setExpenseDialog(exp); setSplitRows([{ recovery_pool_id: "", amount: String(unassignedBalance || exp.amount) }]); }}>
+                            {(exp.cam_input_pool_assignments ?? []).length === 0 ? "Assign / Split" : "Adjust Split"}
+                          </Button>
+                        </TableCell>
+                        <TableCell>
+                          <Link to={createPageUrl("Expenses") + (exp.actual_expense_id ? `?expense_id=${exp.actual_expense_id}` : "")} className="text-xs text-blue-600 underline flex items-center gap-1">
+                            Expense Module <ExternalLink className="w-3 h-3" />
+                          </Link>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Dialog open={Boolean(expenseDialog)} onOpenChange={() => setExpenseDialog(null)}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Assign / Split Expense</DialogTitle></DialogHeader>
+            <p className="text-sm text-slate-600">Total amount: <strong>{fmtCurrency(expenseDialog?.amount)}</strong></p>
+            <div className="space-y-2 mt-2">
+              {splitRows.map((row, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Select value={row.recovery_pool_id} onValueChange={(v) => setSplitRows((r) => r.map((x, j) => j === i ? { ...x, recovery_pool_id: v } : x))}>
+                    <SelectTrigger id={`wb-split-pool-${i}`} className="flex-1"><SelectValue placeholder="Pool..." /></SelectTrigger>
+                    <SelectContent>{pools.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <Input id={`wb-split-amount-${i}`} type="number" min={0.01} className="w-32" value={row.amount} onChange={(e) => setSplitRows((r) => r.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))} />
+                  {splitRows.length > 1 && <Button size="sm" variant="ghost" onClick={() => setSplitRows((r) => r.filter((_, j) => j !== i))}><Trash2 className="w-3 h-3 text-red-500" /></Button>}
+                </div>
+              ))}
+              <Button size="sm" variant="outline" id="btn-wb-add-split-row" onClick={() => setSplitRows((r) => [...r, { recovery_pool_id: "", amount: "" }])}>
+                <Plus className="w-3 h-3 mr-1" /> Split Across Another Pool
+              </Button>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setExpenseDialog(null)}>Cancel</Button>
+              <Button id="btn-wb-save-assign-expense" onClick={async () => {
+                for (const row of splitRows) {
+                  if (!row.recovery_pool_id || !row.amount) continue;
+                  await doAction("assign_expense_to_pool", { cam_expense_input_id: expenseDialog.id, recovery_pool_id: row.recovery_pool_id, amount: Number(row.amount) }, [], null);
+                }
+                queryClient.invalidateQueries({ queryKey: ["cam_expense_inputs_published", propertyId] });
+                setExpenseDialog(null);
+                toast.success("Expense assignment saved");
+              }}>Save</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Sheet open={excludedOpen} onOpenChange={setExcludedOpen}>
+          <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
+            <SheetHeader><SheetTitle>Excluded Source Expenses ({excluded.length})</SheetTitle></SheetHeader>
+            <p className="text-xs text-slate-500 mt-2">Not recoverable under any lease or CAM policy — excluded from CAM entirely. Manage these in the Expense module.</p>
+            <div className="mt-4 space-y-2">
+              {excluded.map(({ exp }) => (
+                <div key={exp.id} className="flex items-center justify-between border rounded p-2 text-sm">
+                  <div>
+                    <div className="font-medium">{exp._sourceExpense?.vendor || exp._sourceExpense?.vendor_name || "—"}</div>
+                    <div className="text-xs text-slate-500">{exp._sourceExpense?.description || "—"}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="font-medium">{fmtCurrency(exp.amount)}</div>
+                    <Badge className="text-[10px] bg-red-100 text-red-700">{recoverabilityLabel(exp._classification?.recoverability_result || exp._classification?.recovery_status)}</Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </SheetContent>
+        </Sheet>
+      </div>
+    );
+  }
+
   // ---- C. Pool Calculation ----------------------------------------------------
   function WorkbenchPoolCalculationTab() {
     return (
@@ -2274,7 +2439,7 @@ export default function CAMSetup() {
               <TabsTrigger key={t.value} value={t.value} className="gap-1.5"><t.icon className="w-3.5 h-3.5" />{t.label}</TabsTrigger>
             ))}
           </TabsList>
-          <TabsContent value="expenses" className="space-y-4"><ExpensesStatRow /><Step5 /></TabsContent>
+          <TabsContent value="expenses" className="space-y-4"><ExpensesStatRow /><WorkbenchExpensesTab /></TabsContent>
           <TabsContent value="policies"><Step4 /></TabsContent>
           <TabsContent value="pools" className="space-y-4"><PoolStatRow /><WorkbenchPoolCalculationTab /></TabsContent>
           <TabsContent value="parameters"><WorkbenchCalcParamsTab /></TabsContent>
