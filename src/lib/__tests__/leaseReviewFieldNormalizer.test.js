@@ -1623,4 +1623,83 @@ describe("Phase 5F reviewer projection authority", () => {
     expect(row.value).toBe(32500);
     expect(row.normalized_value).toBe(32500);
   });
+
+  it("keeps a reviewer-accepted value even when the automated source-text-support heuristic would reject it", () => {
+    const sourceText = "Rent shall increase by three and a half percent each year.";
+    const lease = {
+      extraction_data: {
+        fields: { escalation_rate: { value: 3.5, source_text: sourceText } },
+        field_evidence: { escalation_rate: { source_text: sourceText, source_page: 1 } },
+      },
+    };
+
+    // Sanity check reproducing the bug report: without a reviewer decision,
+    // the automated heuristic rejects this value because the source text
+    // spells the number out in words instead of digits, and the field goes
+    // blank even though a real value and citation exist.
+    const unreviewedRow = normalizeStandardFields(lease).find((r) => r.canonicalKey === "escalation_rate");
+    expect(unreviewedRow.value).toBeNull();
+    expect(unreviewedRow.validationMessage).toMatch(/does not support/);
+
+    // Once a reviewer has edited/accepted the field, re-running the same
+    // (still textually "unsupported") source text through the heuristic on
+    // the next render must not wipe the reviewer's value back out.
+    const reviewedLease = {
+      ...lease,
+      extraction_data: {
+        ...lease.extraction_data,
+        field_reviews: {
+          escalation_rate: { status: REVIEW_STATUSES.EDITED, value: 3.5, source_text: sourceText },
+        },
+      },
+    };
+    const reviewedRow = normalizeStandardFields(reviewedLease).find((r) => r.canonicalKey === "escalation_rate");
+    expect(reviewedRow.value).toBe(3.5);
+  });
+
+  it("recognizes a spelled-out lease term ('five-year period') as supporting its normalized lease_term_months value", () => {
+    // Reproduces the reported case directly: the extractor correctly
+    // normalized "an initial five-year period" to 60 months, but the old
+    // heuristic only looked for a literal "60" digit in the source text and
+    // rejected the value outright.
+    const sourceText = "The lease term shall be from an initial five-year period from 1st March 2019 through Dec 31, 2023.";
+    const lease = {
+      extraction_data: {
+        fields: { lease_term_months: { value: 60, source_text: sourceText } },
+        field_evidence: { lease_term_months: { source_text: sourceText, source_page: 1 } },
+      },
+    };
+    const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "lease_term_months");
+    expect(row.value).toBe(60);
+    expect(row.status).not.toBe("not_found");
+  });
+
+  it("calculates expiration_date from the commencement date + stated lease term when the direct end-date extraction fails source validation", () => {
+    // Reproduces the reported case: an end date stated only via an
+    // abbreviated-month "through Dec 31, 2023" range, which never contains
+    // the word "expir*"/"end date" the automated heuristic looks for and
+    // gets rejected. Rather than leaving the field blank, it should fall
+    // back to commencement_date + the independently-validated lease term.
+    const termSourceText = "The lease term shall be from an initial five-year period from 1st March 2019 through Dec 31, 2023.";
+    const lease = {
+      extraction_data: {
+        fields: {
+          commencement_date: { value: "2019-03-01", source_text: "The rental shall commence on the 1st day of March 2019." },
+          expiration_date: { value: "2023-12-31", source_text: termSourceText },
+          lease_term_months: { value: 60, source_text: termSourceText },
+        },
+        field_evidence: {
+          commencement_date: { source_text: "The rental shall commence on the 1st day of March 2019.", source_page: 1 },
+          expiration_date: { source_text: termSourceText, source_page: 1 },
+          lease_term_months: { source_text: termSourceText, source_page: 1 },
+        },
+      },
+    };
+
+    const expirationRow = normalizeStandardFields(lease).find((r) => r.canonicalKey === "expiration_date");
+
+    expect(expirationRow.value).toBe("2024-02-29"); // commencement 2019-03-01 + 60 months - 1 day
+    expect(expirationRow.extractionMode).toBe(EXTRACTION_MODES.CALCULATED);
+    expect(expirationRow.validationMessage).toMatch(/calculated/i);
+  });
 });

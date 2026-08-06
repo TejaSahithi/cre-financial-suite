@@ -205,6 +205,26 @@ function sourceContainsNumber(value, sourceText) {
   return [...valueNumbers].some((token) => sourceNumbers.has(token));
 }
 
+// Lease term lengths are routinely spelled out ("an initial five-year
+// period") rather than given as a digit. Without this, a correctly
+// normalized lease_term_months value (e.g. 60) never matches any digit
+// token in the source text and gets rejected even though the words plainly
+// support it.
+const WORD_NUMBER_YEARS = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
+  nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14,
+  fifteen: 15, twenty: 20, thirty: 30,
+};
+
+function sourceSpelledOutYearsSupportMonths(value, sourceText) {
+  const n = parseAccountingNumber(value);
+  if (!Number.isFinite(n)) return false;
+  const source = normalizeEvidenceText(sourceText);
+  const match = source.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|twenty|thirty)[\s-]*years?\b/);
+  if (!match) return false;
+  return WORD_NUMBER_YEARS[match[1]] * 12 === Math.round(n);
+}
+
 function sourceContainsIsoDate(value, sourceText) {
   const raw = String(value ?? "").trim();
   const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -452,7 +472,9 @@ export function validateFieldEvidenceSupport(fieldKey, value, evidence = {}) {
   }
 
   if (NUMERIC_KEYS.has(normalizedKey) || CURRENCY_KEYS.has(normalizedKey) || PERCENT_KEYS.has(normalizedKey)) {
-    if (!sourceContainsNumber(value, sourceText)) {
+    const numberSupported = sourceContainsNumber(value, sourceText)
+      || (normalizedKey === "lease_term_months" && sourceSpelledOutYearsSupportMonths(value, sourceText));
+    if (!numberSupported) {
       return { valid: false, reason: `Source text does not support the normalized ${normalizedKey.replace(/_/g, " ")} number.` };
     }
     return { valid: true };

@@ -311,6 +311,17 @@ function toIsoDate(value) {
   return new Date(Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate())).toISOString().slice(0, 10);
 }
 
+// Leases routinely spell out the term length ("an initial five-year period",
+// "a ten (10) year term") instead of using a digit. Without this, a term
+// stated only in words never resolves to a month count, which in turn blocks
+// the expiration_date/lease_term_months derivation below even when the
+// commencement date and the words are both right there in the source text.
+const WORD_NUMBER_YEARS = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
+  nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14,
+  fifteen: 15, twenty: 20, thirty: 30,
+};
+
 function parseLeaseTermMonths(value) {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.round(value);
   const text = String(value ?? "").toLowerCase();
@@ -323,6 +334,8 @@ function parseLeaseTermMonths(value) {
   if (months) return Math.round(Number(months[1]));
   const writtenMonths = text.match(/\b(?:initial\s+|base\s+)?(?:term|period)[\s\S]{0,80}?\((\d{1,3})\)\s*months?\b/);
   if (writtenMonths) return Number(writtenMonths[1]);
+  const wordYears = text.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|twenty|thirty)[\s-]+years?\b/);
+  if (wordYears) return WORD_NUMBER_YEARS[wordYears[1]] * 12;
   if (/\byear\s*to\s*year\b|\bannual(?:ly)?\b|\bone\s+year\b/.test(text)) return 12;
   return null;
 }
@@ -651,13 +664,20 @@ function deriveLeaseTermContext(lease) {
     leaseTermTextEvidence?.rawValue,
   ].filter(Boolean).join(" ");
   const existingTermMonths = parseLeaseTermMonths(termValue) || parseLeaseTermMonths(termText);
-  // A recurring month/day is an anniversary label, not the final lease
-  // expiration. The final year can only be established from an explicit
-  // expiration date or an independently sourced initial-term length.
-  const derivedExpiration = !existingExpiration && commencement && existingTermMonths
+  // Deliberately computed even when existingExpiration/existingTermMonths is
+  // already present: "present" here only means the resolver found SOME raw
+  // value, not that it will survive that field's own row validation (e.g. an
+  // end date stated via "...through Dec 31, 2023" fails the expiration_date
+  // source-text check because it never says the word "expir*"). Whether to
+  // prefer the raw value over this calculated one is decided once, at the
+  // single call site in derivedStandardField (only used when the row's own
+  // value is null) - duplicating that gate here would just make the
+  // commencement+term calculation unavailable as a rescue fallback for a
+  // rejected raw value, which is exactly the case this needs to cover.
+  const derivedExpiration = commencement && existingTermMonths
     ? addMonthsInclusiveEnd(commencement, existingTermMonths)
     : null;
-  const derivedTermMonths = !existingTermMonths && commencement && existingExpiration
+  const derivedTermMonths = commencement && existingExpiration
     ? deriveTermMonthsFromDates(commencement, existingExpiration)
     : null;
 
@@ -670,6 +690,13 @@ function deriveLeaseTermContext(lease) {
     derivedTermMonths,
   };
 }
+
+// Fields eligible for the "rescue" derivation retry when their own direct
+// extraction fails source-text validation (see the retry call site in
+// normalizeStandardFields). Deliberately narrow to the three fields
+// deriveLeaseTermContext/derivedStandardField actually know how to compute
+// from the other two — not a general "guess something" fallback.
+const DATE_TERM_DERIVATION_RESCUE_KEYS = new Set(["expiration_date", "end_date", "lease_term_months"]);
 
 function derivedStandardField(lease, canonicalKey, value, termContext) {
   if (isMeaningfulValue(value)) return null;
@@ -1101,6 +1128,11 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
     const canonicalKey = contract.canonicalKey;
     const review = effectiveFieldReviews?.[canonicalKey];
     const reviewedValue = readResolvedReviewValue(review);
+    // A reviewer has already accepted or manually edited this field's value
+    // (see RESOLVED_REVIEW_STATUSES). That's an authoritative human decision,
+    // not an automated guess, so it must never be re-run through the
+    // source-text-support heuristic below and silently nulled back out.
+    const isReviewerConfirmedValue = reviewedValue !== undefined;
     const typedColumnValue = readTypedLeaseColumnValue(lease, canonicalKey);
     let value = reviewedValue !== undefined
       ? reviewedValue
@@ -1268,7 +1300,7 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
       && Object.is(value, typedColumnValue);
     if (!evidenceOverrideReason && isMeaningfulValue(value)) {
       const validationResult = validateFieldValue(canonicalKey, value);
-      const supportValidation = validationResult.valid && !valueFromTypedLeaseColumn
+      const supportValidation = validationResult.valid && !valueFromTypedLeaseColumn && !isReviewerConfirmedValue
         ? validateFieldEvidenceSupport(canonicalKey, value, evidence)
         : validationResult;
       if (!supportValidation.valid) {
@@ -1297,6 +1329,24 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
             reviewReason: evidenceOverrideReason,
             validationErrors,
           };
+          // The direct extraction for this field failed source-text
+          // validation (e.g. an abbreviated month name, or an end date
+          // stated only via a "from X through Y" term range rather than the
+          // word "expir*"). Rather than leaving a blank the reviewer has to
+          // fill in by hand, fall back to computing it from the
+          // independently-validated commencement date + lease term, the
+          // same path used when the field was never extracted at all.
+          if (DATE_TERM_DERIVATION_RESCUE_KEYS.has(canonicalKey)) {
+            const rescueDerived = derivedStandardField(lease, canonicalKey, value, termContext);
+            if (rescueDerived) {
+              value = rescueDerived.value;
+              evidence = rescueDerived.evidence;
+              confidence = rescueDerived.confidence;
+              fallbackReviewReason = rescueDerived.reviewReason;
+              invalidValueRejected = false;
+              evidenceOverrideReason = null;
+            }
+          }
         }
       }
     }
