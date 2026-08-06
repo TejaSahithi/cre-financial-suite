@@ -71,6 +71,18 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
+      // Pre-clean foreign key RESTRICT tables (CAM pool participation) to guarantee safe cascade deletion
+      try {
+        await supabaseAdmin.from("recovery_pool_lease_participants").delete().eq("lease_id", targetId);
+      } catch (_) {
+        // Table might not exist in all environments; proceed to RPC
+      }
+      try {
+        await supabaseAdmin.from("cam_pool_lease_shares").delete().eq("lease_id", targetId);
+      } catch (_) {
+        // Ignore if table unpopulated
+      }
+
       const { error } = await supabaseAdmin.rpc("delete_lease_cascade", {
         target_lease_id: targetId,
         p_actor_user_id: user.id,
