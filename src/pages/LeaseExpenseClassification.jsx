@@ -747,7 +747,7 @@ export default function LeaseExpenseClassification() {
   return (
     <div className="flex min-h-screen flex-col bg-slate-50/50 pb-20">
       <div className="border-b border-slate-800 bg-slate-900 text-white shadow-sm">
-        <div className="mx-auto max-w-screen-xl px-6 py-4">
+        <div className="w-full px-6 py-4 md:px-8">
           <div className="mb-4 flex flex-col items-start justify-between gap-3 md:flex-row md:items-center">
             <div className="flex items-center gap-3">
               <h1 className="text-lg font-bold tracking-tight">Expense Recoverability</h1>
@@ -841,7 +841,7 @@ export default function LeaseExpenseClassification() {
         </div>
       </div>
 
-      <div className="mx-auto mt-6 w-full max-w-screen-xl space-y-6 px-6">
+      <div className="mt-6 w-full space-y-6 px-6 md:px-8">
         {!isLoading && approvedActuals.length === 0 && actualEmptyState && (
           <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-900">
             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
