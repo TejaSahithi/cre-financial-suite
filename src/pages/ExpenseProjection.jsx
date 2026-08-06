@@ -1,13 +1,29 @@
 import React, { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "react-router-dom";
-import { AlertCircle, Loader2 } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import {
+  AlertCircle,
+  ArrowUpRight,
+  BarChart3,
+  Building2,
+  Calendar,
+  CheckCircle2,
+  DollarSign,
+  FileText,
+  Filter,
+  Layers,
+  Loader2,
+  PieChart,
+  ShieldCheck,
+  TrendingUp,
+  Wallet
+} from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, Cell } from "recharts";
 
 import { budgetService } from "@/services/budgetService";
 import { expenseService } from "@/services/expenseService";
 import { propertyService } from "@/services/propertyService";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -48,6 +64,26 @@ function normalizedClassificationAmount(row) {
 
   return 0;
 }
+
+const CustomTooltip = ({ active, payload, label }) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="rounded-xl border border-slate-700 bg-slate-900/95 p-3 text-white shadow-2xl backdrop-blur-md">
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">{label}</p>
+        {payload.map((entry, index) => (
+          <div key={`item-${index}`} className="flex items-center justify-between gap-4 text-xs py-0.5">
+            <span className="flex items-center gap-1.5 font-medium" style={{ color: entry.color || entry.fill }}>
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: entry.color || entry.fill }} />
+              {entry.name}:
+            </span>
+            <span className="font-mono font-bold text-white">${Number(entry.value).toLocaleString()}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return null;
+};
 
 export default function ExpenseProjection() {
   const location = useLocation();
@@ -255,10 +291,10 @@ export default function ExpenseProjection() {
       else buckets.non_recoverable += expense.amount || 0;
     });
     return [
-      { type: "Recoverable", amount: Math.round(buckets.recoverable) },
-      { type: "Non-Recoverable", amount: Math.round(buckets.non_recoverable) },
-      { type: "Conditional", amount: Math.round(buckets.conditional) },
-      { type: "Excluded", amount: Math.round(buckets.excluded) },
+      { type: "Recoverable", amount: Math.round(buckets.recoverable), color: "#10b981" },
+      { type: "Non-Recoverable", amount: Math.round(buckets.non_recoverable), color: "#f43f5e" },
+      { type: "Conditional", amount: Math.round(buckets.conditional), color: "#f59e0b" },
+      { type: "Excluded", amount: Math.round(buckets.excluded), color: "#64748b" },
     ];
   }, [expensesForProjection]);
 
@@ -282,41 +318,91 @@ export default function ExpenseProjection() {
     [currentExpenses, prevExpenses, totalBudgeted]
   );
 
+  const selectedPropertyName = properties.find((p) => p.id === selectedProperty)?.name || "All Properties";
+
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">Expense Projection</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            Final expense step: compare current year actuals against prior year actuals, budget, and the forward projection.
-          </p>
+    <div className="p-4 lg:p-8 space-y-6 bg-slate-50/50 min-h-screen">
+      {/* ── Eye-Catching Glassmorphic Hero Banner ────────────────── */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 p-6 lg:p-8 text-white shadow-xl border border-indigo-900/40">
+        <div className="absolute right-0 top-0 -mr-16 -mt-16 h-64 w-64 rounded-full bg-indigo-500/10 blur-3xl" />
+        <div className="absolute left-1/3 bottom-0 -ml-16 -mb-16 h-64 w-64 rounded-full bg-blue-500/10 blur-3xl" />
+
+        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <Badge className="bg-indigo-500/20 text-indigo-200 border-indigo-500/30 px-3 py-1 text-xs font-semibold backdrop-blur-md">
+                <TrendingUp className="w-3.5 h-3.5 mr-1.5 text-indigo-400" />
+                Financial Forecasting Hub
+              </Badge>
+              <Badge variant="outline" className="border-white/10 text-slate-300 text-xs">
+                Scope: {selectedPropertyName}
+              </Badge>
+            </div>
+            <h1 className="text-2xl lg:text-3xl font-extrabold tracking-tight text-white">Expense Projection</h1>
+            <p className="mt-1 max-w-2xl text-xs lg:text-sm text-slate-300">
+              Interactive financial dashboard driven by finalized expense classifications. Compare actuals, prior baselines, and budgets to forecast CAM recoveries.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-1.5 backdrop-blur-md">
+              <Building2 className="w-4 h-4 text-slate-400 ml-2" />
+              <Select value={selectedProperty} onValueChange={setSelectedProperty}>
+                <SelectTrigger className="w-56 h-9 border-none bg-transparent text-xs text-white focus:ring-0">
+                  <SelectValue placeholder="Select Property" />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-900 text-white border-slate-800">
+                  <SelectItem value={ALL_PROPERTIES}>All Properties</SelectItem>
+                  {properties.map((property) => (
+                    <SelectItem key={property.id} value={property.id}>
+                      {property.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         </div>
-        <Select value={selectedProperty} onValueChange={setSelectedProperty}>
-          <SelectTrigger className="w-64">
-            <SelectValue placeholder="All Properties" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL_PROPERTIES}>All Properties</SelectItem>
-            {properties.map((property) => (
-              <SelectItem key={property.id} value={property.id}>
-                {property.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+
+        {/* Hero Quick Stats Row */}
+        {hasFinalizedData && (
+          <div className="mt-6 pt-6 border-t border-white/10 grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="rounded-xl bg-white/5 p-3.5 border border-white/5 backdrop-blur-sm">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Finalized Spend</p>
+              <p className="mt-1 text-xl font-bold font-mono text-white">${totalFinalized.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">{expensesForProjection.length} approved classifications</p>
+            </div>
+            <div className="rounded-xl bg-emerald-500/10 p-3.5 border border-emerald-500/20 backdrop-blur-sm">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-300">Tenant Recoverable</p>
+              <p className="mt-1 text-xl font-bold font-mono text-emerald-400">${Math.round(recoveryTotals.recoverable).toLocaleString("en-US")}</p>
+              <p className="text-[10px] text-emerald-300/80 mt-0.5">Estimated tenant recovery</p>
+            </div>
+            <div className="rounded-xl bg-blue-500/10 p-3.5 border border-blue-500/20 backdrop-blur-sm">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-blue-300">CAM-Eligible Allocation</p>
+              <p className="mt-1 text-xl font-bold font-mono text-blue-400">${camEligibleFinalized.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="text-[10px] text-blue-300/80 mt-0.5">Ready for CAM engine</p>
+            </div>
+            <div className="rounded-xl bg-amber-500/10 p-3.5 border border-amber-500/20 backdrop-blur-sm">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-amber-300">Forward Projection</p>
+              <p className="mt-1 text-xl font-bold font-mono text-amber-400">${Math.round(totalProjected).toLocaleString("en-US")}</p>
+              <p className="text-[10px] text-amber-300/80 mt-0.5">Trend + Budget forecast</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {!hasFinalizedData && !isLoadingClassifications && (
-        <Card className="border-amber-200 bg-amber-50/70">
-          <CardContent className="flex items-start gap-3 p-4 text-sm text-amber-900">
-            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+        <Card className="border-amber-200 bg-amber-50/70 shadow-sm">
+          <CardContent className="flex items-start gap-4 p-5 text-sm text-amber-900">
+            <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
             <div className="flex-1">
-              <p className="font-medium">
-                No finalized expense classifications yet. Complete Expense Classification to generate projection.
+              <h3 className="font-semibold text-amber-900">No finalized expense classifications yet</h3>
+              <p className="text-xs text-amber-800 mt-0.5">
+                Complete Expense Classification to generate projection benchmarks and forward forecasts for this scope.
               </p>
             </div>
             <Link to={createPageUrl("LeaseExpenseClassification")}>
-              <Button size="sm" className="bg-amber-700 text-white hover:bg-amber-800">
+              <Button size="sm" className="bg-amber-700 text-white hover:bg-amber-800 shadow-sm">
                 Open Classification
               </Button>
             </Link>
@@ -324,151 +410,126 @@ export default function ExpenseProjection() {
         </Card>
       )}
 
-      {hasFinalizedData && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <Card className="border-l-4 border-l-slate-700">
-            <CardContent className="p-4">
-              <p className="text-[10px] font-semibold uppercase text-slate-500">Finalized Expense Total</p>
-              <p className="text-2xl font-bold text-slate-900">${totalFinalized.toLocaleString()}</p>
-              <p className="text-[10px] text-slate-500">all finalized rows in scope</p>
-            </CardContent>
-          </Card>
-          <Card className="border-l-4 border-l-indigo-500">
-            <CardContent className="p-4">
-              <p className="text-[10px] font-semibold uppercase text-slate-500">Finalized Rows</p>
-              <p className="text-2xl font-bold text-indigo-900">{expensesForProjection.length}</p>
-              <p className="text-[10px] text-slate-500">approved classifications</p>
-            </CardContent>
-          </Card>
-          <Card className="border-l-4 border-l-blue-500">
-            <CardContent className="p-4">
-              <p className="text-[10px] font-semibold uppercase text-slate-500">CAM-Eligible Finalized</p>
-              <p className="text-2xl font-bold text-blue-900">${camEligibleFinalized.toLocaleString()}</p>
-              <p className="text-[10px] text-slate-500">ready for CAM workflow</p>
-            </CardContent>
-          </Card>
-          <Card className="border-l-4 border-l-emerald-500">
-            <CardContent className="p-4">
-              <p className="text-[10px] font-semibold uppercase text-slate-500">Sent to CAM</p>
-              <p className="text-2xl font-bold text-emerald-900">${sentToCamTotal.toLocaleString()}</p>
-              <p className="text-[10px] text-slate-500">posted to CAM input</p>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {hasFinalizedData && (
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-          <Card className="border-l-4 border-l-emerald-500">
-            <CardContent className="p-4">
-              <p className="text-[10px] font-semibold uppercase text-emerald-700">Recoverable from tenant</p>
-              <p className="text-2xl font-bold text-emerald-900">${Math.round(recoveryTotals.recoverable).toLocaleString()}</p>
-              <p className="text-[10px] text-emerald-700/70">finalized {currentYear} classifications</p>
-            </CardContent>
-          </Card>
-          <Card className="border-l-4 border-l-amber-500">
-            <CardContent className="p-4">
-              <p className="text-[10px] font-semibold uppercase text-amber-700">Conditional</p>
-              <p className="text-2xl font-bold text-amber-900">${Math.round(recoveryTotals.conditional).toLocaleString()}</p>
-              <p className="text-[10px] text-amber-700/70">depends on caps / triggers</p>
-            </CardContent>
-          </Card>
-          <Card className="border-l-4 border-l-rose-500">
-            <CardContent className="p-4">
-              <p className="text-[10px] font-semibold uppercase text-rose-700">Non-recoverable</p>
-              <p className="text-2xl font-bold text-rose-900">${Math.round(recoveryTotals.nonRecoverable).toLocaleString()}</p>
-              <p className="text-[10px] text-rose-700/70">landlord absorbs</p>
-            </CardContent>
-          </Card>
-          <Card className="border-l-4 border-l-slate-500">
-            <CardContent className="p-4">
-              <p className="text-[10px] font-semibold uppercase text-slate-700">Excluded</p>
-              <p className="text-2xl font-bold text-slate-900">${Math.round(recoveryTotals.excluded).toLocaleString()}</p>
-              <p className="text-[10px] text-slate-700/70">finalized excluded rows</p>
-            </CardContent>
-          </Card>
-          <Card className="border-l-4 border-l-blue-500">
-            <CardContent className="p-4">
-              <p className="text-[10px] font-semibold uppercase text-blue-700">CAM-eligible</p>
-              <p className="text-2xl font-bold text-blue-900">${Math.round(recoveryTotals.camEligible).toLocaleString()}</p>
-              <p className="text-[10px] text-blue-700/70">eligible finalized rows</p>
-            </CardContent>
-          </Card>
-          <Card className="border-l-4 border-l-amber-500">
-            <CardContent className="p-4">
-              <p className="text-[10px] font-semibold uppercase text-amber-700">Tenant recovery estimate</p>
-              <p className="text-2xl font-bold text-amber-900">${Math.round(recoveryTotals.tenantRecoveryEstimate).toLocaleString()}</p>
-              <p className="text-[10px] text-amber-700/70">recoverable finalized rows</p>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="border-l-4 border-l-blue-500">
+      {/* ── Executive Performance KPI Cards ────────────────────── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card className="border-slate-200/80 bg-white shadow-sm hover:shadow-md transition-all border-t-4 border-t-indigo-600">
           <CardContent className="p-4">
-            <p className="text-[10px] font-semibold text-slate-500 uppercase">Current Year Actual ({currentYear})</p>
-            <p className="text-2xl font-bold text-slate-900">${totalCurrent.toLocaleString()}</p>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Current Year ({currentYear})</span>
+              <div className="rounded-lg bg-indigo-50 p-2 text-indigo-600">
+                <Wallet className="h-4 w-4" />
+              </div>
+            </div>
+            <p className="mt-2 text-2xl font-bold font-mono text-slate-900">${totalCurrent.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
             {totalPrev > 0 && (
-              <p className="text-[10px] text-slate-400">
-                {((totalCurrent - totalPrev) / totalPrev * 100).toFixed(1)}% vs prior
+              <p className="mt-1 flex items-center text-xs font-semibold text-emerald-600">
+                <ArrowUpRight className="mr-0.5 h-3.5 w-3.5" />
+                {((totalCurrent - totalPrev) / totalPrev * 100).toFixed(1)}% vs prior baseline
               </p>
             )}
           </CardContent>
         </Card>
-        <Card className="border-l-4 border-l-slate-400">
+
+        <Card className="border-slate-200/80 bg-white shadow-sm hover:shadow-md transition-all border-t-4 border-t-slate-400">
           <CardContent className="p-4">
-            <p className="text-[10px] font-semibold text-slate-500 uppercase">Prior Year Actual ({prevYear})</p>
-            <p className="text-2xl font-bold text-slate-500">${totalPrev.toLocaleString()}</p>
-            <p className="text-[10px] text-slate-400">Historical baseline</p>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Prior Year ({prevYear})</span>
+              <div className="rounded-lg bg-slate-100 p-2 text-slate-600">
+                <Calendar className="h-4 w-4" />
+              </div>
+            </div>
+            <p className="mt-2 text-2xl font-bold font-mono text-slate-700">${totalPrev.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+            <p className="mt-1 text-xs text-slate-400">Historical comparison baseline</p>
           </CardContent>
         </Card>
-        <Card className="border-l-4 border-l-emerald-500">
+
+        <Card className="border-slate-200/80 bg-white shadow-sm hover:shadow-md transition-all border-t-4 border-t-blue-500">
           <CardContent className="p-4">
-            <p className="text-[10px] font-semibold text-slate-500 uppercase">Budgeted ({currentYear})</p>
-            <p className="text-2xl font-bold text-blue-600">${totalBudgeted.toLocaleString()}</p>
-            <p className="text-[10px] text-slate-400">From approved budget</p>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Approved Budget ({currentYear})</span>
+              <div className="rounded-lg bg-blue-50 p-2 text-blue-600">
+                <DollarSign className="h-4 w-4" />
+              </div>
+            </div>
+            <p className="mt-2 text-2xl font-bold font-mono text-blue-900">${totalBudgeted.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+            <p className="mt-1 text-xs text-blue-600/80">Approved operating target</p>
           </CardContent>
         </Card>
-        <Card className="border-l-4 border-l-amber-500">
+
+        <Card className="border-slate-200/80 bg-white shadow-sm hover:shadow-md transition-all border-t-4 border-t-amber-500">
           <CardContent className="p-4">
-            <p className="text-[10px] font-semibold text-slate-500 uppercase">Forward Projection</p>
-            <p className="text-2xl font-bold text-amber-600">${Math.round(totalProjected).toLocaleString()}</p>
-            <p className="text-[10px] text-slate-400">Based on trend + budget</p>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Forward Projection</span>
+              <div className="rounded-lg bg-amber-50 p-2 text-amber-600">
+                <TrendingUp className="h-4 w-4" />
+              </div>
+            </div>
+            <p className="mt-2 text-2xl font-bold font-mono text-amber-700">${Math.round(totalProjected).toLocaleString("en-US")}</p>
+            <p className="mt-1 text-xs text-amber-600/80">Modeled trend forecast</p>
           </CardContent>
         </Card>
       </div>
 
+      {/* ── High-Impact Visual Analytics Hub ────────────────────── */}
       {hasFinalizedData && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Finalized Expenses by Year</CardTitle>
+        <div className="grid gap-6 lg:grid-cols-2">
+          {/* Chart 1: Finalized Expenses & Recoverability Trend */}
+          <Card className="border-slate-200/80 shadow-sm bg-white overflow-hidden">
+            <CardHeader className="border-b border-slate-100 bg-slate-50/50 pb-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base font-bold text-slate-800 flex items-center gap-2">
+                    <BarChart3 className="h-4 w-4 text-emerald-600" />
+                    Finalized Expenses & Recoverability by Year
+                  </CardTitle>
+                  <CardDescription className="text-xs text-slate-500">
+                    Annual comparison of recoverable tenant charges vs. landlord non-recoverable spend
+                  </CardDescription>
+                </div>
+              </div>
             </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={yearlyChart}>
-                  <XAxis dataKey="year" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`} />
-                  <Tooltip formatter={(value) => `$${Number(value).toLocaleString()}`} />
-                  <Legend />
-                  <Bar dataKey="recoverable" name="Recoverable" fill="#10b981" radius={[2, 2, 0, 0]} barSize={24} />
-                  <Bar dataKey="nonRecoverable" name="Non-Recoverable / Excluded" fill="#f43f5e" radius={[2, 2, 0, 0]} barSize={24} />
+            <CardContent className="pt-6">
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={yearlyChart} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="year" tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={(val) => `$${(val / 1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Legend wrapperStyle={{ paddingTop: 15, fontSize: 12 }} />
+                  <Bar dataKey="recoverable" name="Recoverable" fill="#10b981" radius={[6, 6, 0, 0]} barSize={32} />
+                  <Bar dataKey="nonRecoverable" name="Non-Recoverable / Excluded" fill="#f43f5e" radius={[6, 6, 0, 0]} barSize={32} />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Recoverability Mix - All Finalized Rows</CardTitle>
+
+          {/* Chart 2: Recoverability Mix */}
+          <Card className="border-slate-200/80 shadow-sm bg-white overflow-hidden">
+            <CardHeader className="border-b border-slate-100 bg-slate-50/50 pb-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base font-bold text-slate-800 flex items-center gap-2">
+                    <PieChart className="h-4 w-4 text-indigo-600" />
+                    Recoverability Mix Breakdown
+                  </CardTitle>
+                  <CardDescription className="text-xs text-slate-500">
+                    Distribution of finalized costs across recovery classifications
+                  </CardDescription>
+                </div>
+              </div>
             </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={recoveryChart}>
-                  <XAxis dataKey="type" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`} />
-                  <Tooltip formatter={(value) => `$${Number(value).toLocaleString()}`} />
-                  <Bar dataKey="amount" name="Amount" fill="#2563eb" radius={[2, 2, 0, 0]} barSize={34} />
+            <CardContent className="pt-6">
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={recoveryChart} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="type" tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={(val) => `$${(val / 1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Bar dataKey="amount" name="Amount" radius={[6, 6, 0, 0]} barSize={40}>
+                    {recoveryChart.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
@@ -476,47 +537,69 @@ export default function ExpenseProjection() {
         </div>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Monthly Comparison - Current Year vs Prior Year vs Budget</CardTitle>
+      {/* Chart 3: Monthly Financial Pace (12-Month Bar Chart) */}
+      <Card className="border-slate-200/80 shadow-sm bg-white overflow-hidden">
+        <CardHeader className="border-b border-slate-100 bg-slate-50/50 pb-4">
+          <div>
+            <CardTitle className="text-base font-bold text-slate-800 flex items-center gap-2">
+              <Layers className="h-4 w-4 text-blue-600" />
+              Monthly Comparison — Current Year vs. Prior Year vs. Budget
+            </CardTitle>
+            <CardDescription className="text-xs text-slate-500">
+              12-month cadence tracking financial burn rate and seasonal variances
+            </CardDescription>
+          </div>
         </CardHeader>
-        <CardContent>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={monthlyChart}>
-              <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`} />
-              <Tooltip formatter={(value) => `$${value.toLocaleString()}`} />
-              <Legend />
-              <Bar dataKey="current" name={`Actual ${currentYear}`} fill="#1a2744" radius={[2, 2, 0, 0]} barSize={20} />
-              <Bar dataKey="previous" name={`Actual ${prevYear}`} fill="#94a3b8" radius={[2, 2, 0, 0]} barSize={20} />
-              <Bar dataKey="budget" name={`Budget ${currentYear}`} fill="#3b82f6" radius={[2, 2, 0, 0]} barSize={20} />
+        <CardContent className="pt-6">
+          <ResponsiveContainer width="100%" height={320}>
+            <BarChart data={monthlyChart} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+              <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={(val) => `$${(val / 1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
+              <Tooltip content={<CustomTooltip />} />
+              <Legend wrapperStyle={{ paddingTop: 15, fontSize: 12 }} />
+              <Bar dataKey="current" name={`Actual ${currentYear}`} fill="#1e1b4b" radius={[4, 4, 0, 0]} barSize={16} />
+              <Bar dataKey="previous" name={`Actual ${prevYear}`} fill="#94a3b8" radius={[4, 4, 0, 0]} barSize={16} />
+              <Bar dataKey="budget" name={`Budget ${currentYear}`} fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={16} />
             </BarChart>
           </ResponsiveContainer>
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Category Comparison - Current Year, Prior Year, Budget, and Projection</CardTitle>
+      {/* ── Category Financial Breakdown Matrix ────────────────────── */}
+      <Card className="border-slate-200/80 shadow-sm bg-white overflow-hidden">
+        <CardHeader className="border-b border-slate-100 bg-slate-50/50 pb-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-base font-bold text-slate-800 flex items-center gap-2">
+                <FileText className="h-4 w-4 text-indigo-600" />
+                Category Comparison & Forward Projection Matrix
+              </CardTitle>
+              <CardDescription className="text-xs text-slate-500">
+                Detailed category-level forecast comparing all finalized expenses, current actuals, prior actuals, budget, and YoY variance
+              </CardDescription>
+            </div>
+          </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           {isLoadingClassifications ? (
-            <div className="py-12 flex justify-center">
-              <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+            <div className="py-16 flex flex-col items-center justify-center text-slate-400">
+              <Loader2 className="w-8 h-8 animate-spin mb-2 text-indigo-600" />
+              <p className="text-xs">Loading projection matrix...</p>
             </div>
           ) : (
             <Table>
               <TableHeader>
-                <TableRow className="bg-slate-50">
-                  <TableHead className="text-[11px]">CATEGORY</TableHead>
-                  <TableHead className="text-[11px]">RECOVERY</TableHead>
-                  <TableHead className="text-[11px] text-right">ALL FINALIZED</TableHead>
-                  <TableHead className="text-[11px] text-right">ACTUAL {currentYear}</TableHead>
-                  <TableHead className="text-[11px] text-right">ACTUAL {prevYear}</TableHead>
-                  <TableHead className="text-[11px] text-right">BUDGET {currentYear}</TableHead>
-                  <TableHead className="text-[11px] text-right">PROJECTED</TableHead>
-                  <TableHead className="text-[11px] text-right">YOY CHANGE</TableHead>
-                  <TableHead className="text-[11px] text-right">BUDGET VAR.</TableHead>
+                <TableRow className="bg-slate-100/70 border-b border-slate-200">
+                  <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Category</TableHead>
+                  <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Recovery</TableHead>
+                  <TableHead className="text-[10px] font-bold uppercase tracking-wider text-right text-slate-600">All Finalized</TableHead>
+                  <TableHead className="text-[10px] font-bold uppercase tracking-wider text-right text-slate-600">Actual {currentYear}</TableHead>
+                  <TableHead className="text-[10px] font-bold uppercase tracking-wider text-right text-slate-600">Actual {prevYear}</TableHead>
+                  <TableHead className="text-[10px] font-bold uppercase tracking-wider text-right text-slate-600">Budget {currentYear}</TableHead>
+                  <TableHead className="text-[10px] font-bold uppercase tracking-wider text-right text-slate-600">Projected</TableHead>
+                  <TableHead className="text-[10px] font-bold uppercase tracking-wider text-right text-slate-600">YoY Var</TableHead>
+                  <TableHead className="text-[10px] font-bold uppercase tracking-wider text-right text-slate-600">Budget Var</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -531,36 +614,40 @@ export default function ExpenseProjection() {
                       : null;
                   const recoveryTone =
                     category.recoverability === "recoverable"
-                      ? "bg-emerald-100 text-emerald-800"
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                       : category.recoverability === "conditional"
-                        ? "bg-amber-100 text-amber-800"
+                        ? "bg-amber-50 text-amber-700 border-amber-200"
                         : category.recoverability === "non_recoverable" || category.recoverability === "excluded"
-                          ? "bg-rose-100 text-rose-800"
-                          : "bg-slate-100 text-slate-500";
+                          ? "bg-rose-50 text-rose-700 border-rose-200"
+                          : "bg-slate-100 text-slate-600 border-slate-200";
 
                   return (
-                    <TableRow key={category.category}>
-                      <TableCell className="text-sm capitalize">{category.category.replace(/_/g, " ")}</TableCell>
+                    <TableRow key={category.category} className="hover:bg-slate-50/80 transition-colors border-b border-slate-100">
+                      <TableCell className="text-xs font-semibold capitalize text-slate-800">{category.category.replace(/_/g, " ")}</TableCell>
                       <TableCell>
-                        <Badge className={`${recoveryTone} text-[10px] uppercase`}>
-                          {category.recoverability ? category.recoverability.replace(/_/g, " ") : "-"}
+                        <Badge variant="outline" className={`${recoveryTone} text-[9px] uppercase border font-semibold`}>
+                          {category.recoverability ? category.recoverability.replace(/_/g, " ") : "Needs Review"}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-sm font-mono text-right text-slate-900">${category.all.toLocaleString()}</TableCell>
-                      <TableCell className="text-sm font-mono text-right">${category.current.toLocaleString()}</TableCell>
-                      <TableCell className="text-sm font-mono text-right text-slate-400">${category.prev.toLocaleString()}</TableCell>
-                      <TableCell className="text-sm font-mono text-right text-blue-600">${category.budgeted.toLocaleString()}</TableCell>
-                      <TableCell className="text-sm font-mono text-right text-amber-600">${Math.round(category.projected).toLocaleString()}</TableCell>
+                      <TableCell className="text-xs font-mono font-semibold text-right text-slate-900">${category.all.toLocaleString()}</TableCell>
+                      <TableCell className="text-xs font-mono text-right text-slate-800">${category.current.toLocaleString()}</TableCell>
+                      <TableCell className="text-xs font-mono text-right text-slate-400">${category.prev.toLocaleString()}</TableCell>
+                      <TableCell className="text-xs font-mono text-right text-blue-600">${category.budgeted.toLocaleString()}</TableCell>
+                      <TableCell className="text-xs font-mono font-bold text-right text-amber-600">${Math.round(category.projected).toLocaleString()}</TableCell>
                       <TableCell className="text-right">
                         {yoy !== null ? (
-                          <span className={`text-xs ${parseFloat(yoy) > 0 ? "text-red-500" : "text-emerald-600"}`}>{yoy}%</span>
+                          <Badge variant="outline" className={`text-[10px] font-mono border ${parseFloat(yoy) > 0 ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"}`}>
+                            {parseFloat(yoy) > 0 ? `+${yoy}%` : `${yoy}%`}
+                          </Badge>
                         ) : (
                           <span className="text-xs text-slate-300">-</span>
                         )}
                       </TableCell>
                       <TableCell className="text-right">
                         {budgetVariance !== null ? (
-                          <span className={`text-xs ${parseFloat(budgetVariance) > 0 ? "text-red-500" : "text-emerald-600"}`}>{budgetVariance}%</span>
+                          <Badge variant="outline" className={`text-[10px] font-mono border ${parseFloat(budgetVariance) > 0 ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"}`}>
+                            {parseFloat(budgetVariance) > 0 ? `+${budgetVariance}%` : `${budgetVariance}%`}
+                          </Badge>
                         ) : (
                           <span className="text-xs text-slate-300">-</span>
                         )}
@@ -570,32 +657,32 @@ export default function ExpenseProjection() {
                 })}
                 {categoryData.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center py-8 text-sm text-slate-400">
-                      No expense data
+                    <TableCell colSpan={9} className="text-center py-12 text-xs text-slate-400">
+                      No finalized category data available for this scope.
                     </TableCell>
                   </TableRow>
                 )}
                 {categoryData.length > 0 && (
-                  <TableRow className="bg-slate-50 font-bold">
-                    <TableCell className="text-sm">TOTAL</TableCell>
-                    <TableCell className="text-sm text-slate-400">-</TableCell>
-                    <TableCell className="text-sm font-mono text-right text-slate-900">${totalFinalized.toLocaleString()}</TableCell>
-                    <TableCell className="text-sm font-mono text-right">${totalCurrent.toLocaleString()}</TableCell>
-                    <TableCell className="text-sm font-mono text-right text-slate-400">${totalPrev.toLocaleString()}</TableCell>
-                    <TableCell className="text-sm font-mono text-right text-blue-600">${totalBudgeted.toLocaleString()}</TableCell>
-                    <TableCell className="text-sm font-mono text-right text-amber-600">${Math.round(totalProjected).toLocaleString()}</TableCell>
+                  <TableRow className="bg-slate-100/90 font-bold border-t-2 border-slate-300">
+                    <TableCell className="text-xs uppercase font-extrabold text-slate-900">Total Projection</TableCell>
+                    <TableCell className="text-xs text-slate-400">-</TableCell>
+                    <TableCell className="text-xs font-mono font-extrabold text-right text-slate-900">${totalFinalized.toLocaleString()}</TableCell>
+                    <TableCell className="text-xs font-mono font-bold text-right text-slate-900">${totalCurrent.toLocaleString()}</TableCell>
+                    <TableCell className="text-xs font-mono text-right text-slate-500">${totalPrev.toLocaleString()}</TableCell>
+                    <TableCell className="text-xs font-mono font-bold text-right text-blue-700">${totalBudgeted.toLocaleString()}</TableCell>
+                    <TableCell className="text-xs font-mono font-extrabold text-right text-amber-700">${Math.round(totalProjected).toLocaleString()}</TableCell>
                     <TableCell className="text-right">
                       {totalPrev > 0 && (
-                        <span className={`text-xs ${totalCurrent > totalPrev ? "text-red-500" : "text-emerald-600"}`}>
+                        <Badge variant="outline" className={`text-[10px] font-mono border ${totalCurrent > totalPrev ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"}`}>
                           {((totalCurrent - totalPrev) / totalPrev * 100).toFixed(1)}%
-                        </span>
+                        </Badge>
                       )}
                     </TableCell>
                     <TableCell className="text-right">
                       {totalBudgeted > 0 && (
-                        <span className={`text-xs ${totalCurrent > totalBudgeted ? "text-red-500" : "text-emerald-600"}`}>
+                        <Badge variant="outline" className={`text-[10px] font-mono border ${totalCurrent > totalBudgeted ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"}`}>
                           {((totalCurrent - totalBudgeted) / totalBudgeted * 100).toFixed(1)}%
-                        </span>
+                        </Badge>
                       )}
                     </TableCell>
                   </TableRow>
