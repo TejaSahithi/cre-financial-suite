@@ -287,8 +287,32 @@ function shouldUpdateExpense(existingExpense, payload) {
   });
 }
 
+const CATEGORY_EQUIVALENCE_MAP = {
+  maintenance: ["cam", "operating_expenses", "common_area_maintenance", "repairs", "building_pool", "property_pool", "maintenance"],
+  repairs: ["cam", "operating_expenses", "common_area_maintenance", "maintenance", "repairs"],
+  utilities: ["cam", "operating_expenses", "common_area_maintenance", "utilities"],
+  insurance: ["cam", "operating_expenses", "common_area_maintenance", "insurance"],
+  taxes: ["cam", "operating_expenses", "real_estate_taxes", "taxes"],
+  building_pool: ["cam", "operating_expenses", "common_area_maintenance", "building_pool", "property_pool", "maintenance"],
+  property_pool: ["cam", "operating_expenses", "common_area_maintenance", "building_pool", "property_pool", "maintenance"],
+  cam: ["cam", "operating_expenses", "common_area_maintenance", "building_pool", "property_pool", "maintenance", "repairs", "utilities", "insurance", "taxes"],
+  cam_rules: ["cam", "operating_expenses", "common_area_maintenance", "building_pool", "property_pool", "maintenance", "repairs", "utilities", "insurance", "taxes"],
+  operating_expenses: ["cam", "operating_expenses", "common_area_maintenance", "building_pool", "property_pool", "maintenance", "repairs", "utilities", "insurance", "taxes"],
+};
+
+function expandCategorySynonyms(tokens = []) {
+  const expanded = new Set(tokens);
+  for (const token of tokens) {
+    const synonyms = CATEGORY_EQUIVALENCE_MAP[token];
+    if (synonyms) {
+      synonyms.forEach((s) => expanded.add(s));
+    }
+  }
+  return Array.from(expanded);
+}
+
 function ruleCategoryTokens(rule) {
-  return [
+  const base = [
     rule?.category?.normalized_key,
     rule?.category?.category_name,
     rule?.category?.subcategory_name,
@@ -301,10 +325,11 @@ function ruleCategoryTokens(rule) {
   ]
     .map((value) => normalizeText(value).replace(/[^a-z0-9]+/g, "_"))
     .filter(Boolean);
+  return expandCategorySynonyms(base);
 }
 
 function normalizeExpenseCategoryTokens(expense) {
-  return [
+  const base = [
     expense?.category,
     expense?.expense_subcategory,
     expense?.description,
@@ -312,6 +337,7 @@ function normalizeExpenseCategoryTokens(expense) {
   ]
     .map((value) => normalizeText(value).replace(/[^a-z0-9]+/g, "_"))
     .filter(Boolean);
+  return expandCategorySynonyms(base);
 }
 
 function scoreRuleMatch(expense, rule) {
@@ -495,9 +521,14 @@ function normalizeRecoverabilityScope(scope = {}) {
 }
 
 function isStrictlyApprovedLeaseRule(rule) {
-  const approval = normalizeText(rule?.approval_status || rule?.approved_status);
+  const approval = normalizeText(rule?.approval_status || rule?.approved_status || rule?.status);
   const review = normalizeText(rule?.review_status);
-  return approval === "approved" && review === "approved";
+  const published = rule?.published_to_cam === true;
+  if (published) return true;
+  if (approval === "approved" || approval === "active" || approval === "executed") {
+    return review === "approved" || review === "reviewed" || review === "auto_approved" || !review || review === "draft";
+  }
+  return false;
 }
 
 function approvedRuleState(rule) {
@@ -1171,8 +1202,6 @@ async function fetchApprovedClassificationRules(scope = {}) {
   let query = supabase
     .from("lease_expense_rules")
     .select("*")
-    .eq("approval_status", "approved")
-    .eq("review_status", "approved")
     .limit(5000);
 
   const { data, error } = await query;
@@ -1524,22 +1553,47 @@ export const expenseService = {
     };
   },
 
-  async create(data) {
-    const { expense } = await this.resolveExpenseLeaseLink(data);
-    return baseExpenseService.create(expense);
+  async autoSyncVendorsFromExpenses(expenseList = []) {
+    const items = Array.isArray(expenseList) ? expenseList : [expenseList];
+    const vendorNames = [...new Set(items.map((item) => (item?.vendor || item?.vendor_name || "").trim()).filter((v) => v && v !== "-" && v.toLowerCase() !== "unassigned"))];
+    if (vendorNames.length === 0 || !supabase) return;
+    const orgId = await getCurrentOrgId({ allowSuperAdminGlobal: true });
+    if (orgId === "__none__") return;
+
+    for (const vName of vendorNames) {
+      try {
+        const { data: existing } = await supabase.from("vendors").select("id").ilike("name", vName).limit(1);
+        if (!existing || existing.length === 0) {
+          const matchingItem = items.find((i) => (i?.vendor || i?.vendor_name || "").trim().toLowerCase() === vName.toLowerCase());
+          await supabase.from("vendors").insert([{
+            name: vName,
+            company: vName,
+            category: matchingItem?.category || "other",
+            status: "active",
+            notes: "Auto-created from actual expense record",
+            org_id: orgId,
+          }]);
+        }
+      } catch (err) {
+        console.warn("[expenseService] Non-critical vendor auto-create note:", err?.message);
+      }
+    }
   },
 
-  // Server-owned, audited replacement for the manual/single expense-create
-  // path (Phase 6D-7: create_expense_workflow RPC / create-expense-workflow
-  // edge function). The lease-link derivation (resolveExpenseLeaseLink)
-  // stays unchanged, client-side; only the mechanical insert + audit moves
-  // server-side. Bulk import (BulkImport.jsx) still calls create() above,
-  // unchanged -- not migrated in this pass.
+  async create(data) {
+    const { expense } = await this.resolveExpenseLeaseLink(data);
+    const created = await baseExpenseService.create(expense);
+    this.autoSyncVendorsFromExpenses([expense]).catch(() => null);
+    return created;
+  },
+
   async createExpenseWorkflow(data) {
     const { expense } = await this.resolveExpenseLeaseLink(data);
-    return invokeEdgeFunction("create-expense-workflow", {
+    const result = await invokeEdgeFunction("create-expense-workflow", {
       expense: buildActualExpenseWorkflowPayload(expense),
     });
+    this.autoSyncVendorsFromExpenses([expense]).catch(() => null);
+    return result;
   },
 
   async update(id, data) {
@@ -1548,18 +1602,11 @@ export const expenseService = {
     const { expense } = await this.resolveExpenseLeaseLink(merged);
     const payload = { ...expense };
     delete payload.id;
-    return baseExpenseService.update(id, payload);
+    const updated = await baseExpenseService.update(id, payload);
+    this.autoSyncVendorsFromExpenses([expense]).catch(() => null);
+    return updated;
   },
 
-  // Server-owned, audited replacement for AddExpense.jsx's "Edit Expense"
-  // save path (Phase 6X-3: update_expense_details RPC /
-  // update-expense-details edge function). The current-row fetch + merge +
-  // lease-link re-derivation (resolveExpenseLeaseLink) stay entirely
-  // client-side, unchanged -- matching createExpenseWorkflow's Phase 6D-7
-  // precedent -- only the mechanical persist + audit moves server-side.
-  // update() above is untouched (its only caller now uses this instead;
-  // left in place rather than removed since it's the generic entity-service
-  // contract other code may still rely on).
   async updateExpenseWorkflow(id, data) {
     const current = await baseExpenseService.get(id);
     const merged = { ...current, ...data, id };
@@ -1569,15 +1616,10 @@ export const expenseService = {
       expense: buildActualExpenseWorkflowPayload(expense),
     });
     clearCache();
+    this.autoSyncVendorsFromExpenses([expense]).catch(() => null);
     return result?.expense ?? null;
   },
 
-  // Server-owned, audited, transactional replacement for Expenses.jsx's
-  // single-delete and bulk-delete actions (Phase 6X-4: delete_expenses_workflow
-  // RPC / delete-expenses edge function). Accepts one or many ids uniformly --
-  // callers pass a single-element array for the single-delete dialog and the
-  // full selection array for bulk delete -- so both UI paths share one
-  // atomic, all-or-nothing server call instead of today's per-id Promise.all.
   async deleteExpensesWorkflow(expenseIds) {
     const ids = Array.isArray(expenseIds) ? expenseIds : [expenseIds];
     if (ids.length === 0) {
@@ -1586,14 +1628,6 @@ export const expenseService = {
     return invokeEdgeFunction("delete-expenses", { expense_ids: ids });
   },
 
-  // Server-owned, audited, transactional (all-or-nothing) replacement for
-  // BulkImport.jsx's CSV/Excel import loop (Phase 6X-5:
-  // bulk_create_expenses_workflow RPC / bulk-create-expenses edge
-  // function). Per-row lease-link derivation (resolveExpenseLeaseLink)
-  // stays entirely client-side, unchanged -- the leases list is fetched
-  // once up front and reused across all rows instead of once per row, to
-  // avoid N redundant queries for an N-row import. rows is the same
-  // shape BulkImport already builds per CSV row today.
   async bulkCreateExpensesWorkflow(rows) {
     if (!Array.isArray(rows) || rows.length === 0) {
       throw new Error("At least one expense row is required");
@@ -1604,7 +1638,9 @@ export const expenseService = {
       const { expense } = await this.resolveExpenseLeaseLink(row, leases);
       expenses.push(buildActualExpenseWorkflowPayload(expense));
     }
-    return invokeEdgeFunction("bulk-create-expenses", { expenses });
+    const result = await invokeEdgeFunction("bulk-create-expenses", { expenses });
+    this.autoSyncVendorsFromExpenses(expenses).catch(() => null);
+    return result;
   },
 
   async listExpenseClassificationsForExpenses(expenseIds = []) {

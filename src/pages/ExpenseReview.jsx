@@ -370,10 +370,10 @@ export default function ExpenseReview() {
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <MetricCard label="Finalized Total" value={`$${(finalizedSummary.total / 1000).toFixed(1)}K`} sub={`${finalizedSummary.count} finalized rows`} />
-        <MetricCard label="Recoverable Finalized" value={`$${(finalizedSummary.byBucket.recoverable / 1000).toFixed(1)}K`} sub="tenant recoverable" />
-        <MetricCard label="Non-Recoverable / Excluded" value={`$${((finalizedSummary.byBucket.non_recoverable + finalizedSummary.byBucket.excluded) / 1000).toFixed(1)}K`} sub="landlord or excluded" />
-        <MetricCard label="CAM Eligible" value={`$${(finalizedSummary.camEligible / 1000).toFixed(1)}K`} sub="ready for CAM workflow" />
+        <MetricCard label="Finalized Total" value={`$${finalizedSummary.total.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub={`${finalizedSummary.count} finalized rows`} />
+        <MetricCard label="Recoverable Finalized" value={`$${finalizedSummary.byBucket.recoverable.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub="tenant recoverable" />
+        <MetricCard label="Non-Recoverable / Excluded" value={`$${(finalizedSummary.byBucket.non_recoverable + finalizedSummary.byBucket.excluded).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub="landlord or excluded" />
+        <MetricCard label="CAM Eligible" value={`$${finalizedSummary.camEligible.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub="ready for CAM workflow" />
         <MetricCard label="Exceptions" value={`${exceptionCounts.total}`} sub="need human decision" />
       </div>
 

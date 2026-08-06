@@ -28,6 +28,8 @@ import {
   LayoutGrid, ClipboardList, Boxes, TrendingUp, HandCoins,
 } from "lucide-react";
 
+import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
+import StatCard from "@/components/lease-expense/StatCard";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
@@ -76,6 +78,29 @@ function StatusBadge({ ready }) {
   return ready
     ? <Badge className="text-[11px] font-semibold bg-emerald-100 text-emerald-700">READY</Badge>
     : <Badge className="text-[11px] font-semibold bg-red-100 text-red-700">NOT READY</Badge>;
+}
+
+// Same donut recipe as src/components/dashboard/OccupancyChart.jsx (PieChart
+// + centered label overlay) -- reused here directly rather than importing
+// that component, since its data shape (properties) doesn't fit.
+function Donut({ segments, centerValue, centerLabel }) {
+  const data = segments.filter((s) => s.value > 0);
+  if (data.length === 0) return <p className="text-xs text-slate-400 flex items-center justify-center h-28">No data</p>;
+  return (
+    <div className="relative w-28 h-28 mx-auto">
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie data={data} cx="50%" cy="50%" innerRadius={34} outerRadius={50} dataKey="value" startAngle={90} endAngle={-270} stroke="none">
+            {data.map((s, i) => <Cell key={i} fill={s.color} />)}
+          </Pie>
+        </PieChart>
+      </ResponsiveContainer>
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-2">
+        <span className="text-sm font-extrabold text-slate-900 leading-tight">{centerValue}</span>
+        <span className="text-[9px] text-slate-400">{centerLabel}</span>
+      </div>
+    </div>
+  );
 }
 
 function fmtDateTime(value) {
@@ -2137,6 +2162,86 @@ export default function CAMSetup() {
     );
   }
 
+  // ---- KPI stat rows: pure aggregation over data already queried above for
+  // this same tab's table (no new queries, nothing computed that isn't
+  // already on screen below it) -- purely a summary strip, matching the
+  // reference dashboard's stat-card layout.
+  function ExpensesStatRow() {
+    const total = publishedExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+    const assigned = publishedExpenses.reduce((s, e) => s + (e.cam_input_pool_assignments || []).reduce((a, x) => a + Number(x.amount || 0), 0), 0);
+    const unassigned = Math.max(0, total - assigned);
+    return (
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatCard label="Total Published Expenses" value={fmtCurrency(total)} />
+        <StatCard label="Assigned to Pools" value={fmtCurrency(assigned)} accent="border-emerald-400" />
+        <StatCard label="Unassigned / Needs Review" value={fmtCurrency(unassigned)} accent={unassigned > 0 ? "border-amber-400" : undefined} />
+        <StatCard label="Line Items" value={publishedExpenses.length} />
+      </div>
+    );
+  }
+
+  function PoolStatRow() {
+    const assigned = poolResults.reduce((s, p) => s + Number(p.actual_amount || 0), 0);
+    const excluded = poolResults.reduce((s, p) => s + Number(p.excluded_amount || 0), 0);
+    const adjusted = poolResults.reduce((s, p) => s + Number(p.adjusted_pool || 0), 0);
+    return (
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatCard label="Recovery Pools" value={pools.length} />
+        <StatCard label="Assigned Amount" value={fmtCurrency(assigned)} />
+        <StatCard label="Excluded Amount" value={fmtCurrency(excluded)} accent={excluded > 0 ? "border-amber-400" : undefined} />
+        <StatCard label="Adjusted Pool Total" value={fmtCurrency(adjusted)} accent="border-emerald-400" />
+      </div>
+    );
+  }
+
+  function ResultsStatRow() {
+    const totalRecovery = leaseResults.reduce((s, l) => s + Number(l.final_recovery || 0), 0);
+    const totalDue = leaseResults.reduce((s, l) => s + Math.max(0, Number(l.amount_due_credit || 0)), 0);
+    const totalCredit = leaseResults.reduce((s, l) => s + Math.max(0, -Number(l.amount_due_credit || 0)), 0);
+    return (
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <StatCard label="Total CAM Recovery" value={fmtCurrency(totalRecovery)} />
+        <StatCard label="Total Due (from Tenants)" value={fmtCurrency(totalDue)} accent={totalDue > 0 ? "border-amber-400" : undefined} />
+        <StatCard label="Total Credits (to Tenants)" value={fmtCurrency(totalCredit)} accent={totalCredit > 0 ? "border-emerald-400" : undefined} />
+        <StatCard label="Tenants" value={leaseResults.length} />
+        <Card><CardContent className="p-3">
+          <Donut
+            centerValue={fmtCurrency(totalDue + totalCredit)}
+            centerLabel="Total Recovery"
+            segments={[{ value: totalDue, color: "#f59e0b" }, { value: totalCredit, color: "#10b981" }]}
+          />
+        </CardContent></Card>
+      </div>
+    );
+  }
+
+  function ReconciliationStatRow() {
+    const owed = leaseResults.reduce((s, l) => s + Math.max(0, Number(l.amount_due_credit || 0)), 0);
+    const credit = leaseResults.reduce((s, l) => s + Math.max(0, -Number(l.amount_due_credit || 0)), 0);
+    const tenantsOwe = leaseResults.filter((l) => Number(l.amount_due_credit || 0) > 0).length;
+    const tenantsCredited = leaseResults.filter((l) => Number(l.amount_due_credit || 0) < 0).length;
+    const noAction = leaseResults.length - tenantsOwe - tenantsCredited;
+    return (
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <StatCard label="Net Amount Due from Tenants" value={fmtCurrency(owed)} accent="border-amber-400" />
+        <StatCard label="Total Credits to Tenants" value={fmtCurrency(credit)} accent="border-emerald-400" />
+        <StatCard label="Tenants Owing" value={tenantsOwe} />
+        <StatCard label="Tenants to Credit" value={tenantsCredited} />
+        <Card><CardContent className="p-3">
+          <Donut
+            centerValue={leaseResults.length}
+            centerLabel="Tenants"
+            segments={[
+              { value: tenantsOwe, color: "#f59e0b" },
+              { value: tenantsCredited, color: "#10b981" },
+              { value: noAction, color: "#e2e8f0" },
+            ]}
+          />
+        </CardContent></Card>
+      </div>
+    );
+  }
+
   const WORKBENCH_TABS = [
     { value: "expenses", label: "CAM Expenses", icon: DollarSign },
     { value: "policies", label: "Lease Recovery Rules", icon: ClipboardList },
@@ -2169,14 +2274,14 @@ export default function CAMSetup() {
               <TabsTrigger key={t.value} value={t.value} className="gap-1.5"><t.icon className="w-3.5 h-3.5" />{t.label}</TabsTrigger>
             ))}
           </TabsList>
-          <TabsContent value="expenses"><Step5 /></TabsContent>
+          <TabsContent value="expenses" className="space-y-4"><ExpensesStatRow /><Step5 /></TabsContent>
           <TabsContent value="policies"><Step4 /></TabsContent>
-          <TabsContent value="pools"><WorkbenchPoolCalculationTab /></TabsContent>
+          <TabsContent value="pools" className="space-y-4"><PoolStatRow /><WorkbenchPoolCalculationTab /></TabsContent>
           <TabsContent value="parameters"><WorkbenchCalcParamsTab /></TabsContent>
           <TabsContent value="calculate"><WorkbenchCalculateTab /></TabsContent>
-          <TabsContent value="results"><WorkbenchResultsTab /></TabsContent>
+          <TabsContent value="results" className="space-y-4"><ResultsStatRow /><WorkbenchResultsTab /></TabsContent>
           <TabsContent value="variance"><WorkbenchVarianceTab /></TabsContent>
-          <TabsContent value="reconciliation"><WorkbenchReconciliationTab /></TabsContent>
+          <TabsContent value="reconciliation" className="space-y-4"><ReconciliationStatRow /><WorkbenchReconciliationTab /></TabsContent>
         </Tabs>
       </div>
     );

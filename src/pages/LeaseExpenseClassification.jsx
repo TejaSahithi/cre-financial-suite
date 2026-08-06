@@ -1092,15 +1092,6 @@ export default function LeaseExpenseClassification() {
                             </TableCell>
                             <TableCell className={`text-xs ${hasActualExpense ? "text-slate-500" : "text-slate-400"}`}>
                               {vendorLabel}
-                              {expenseApprovalStatus && (
-                                <Badge
-                                  variant="outline"
-                                  className={`ml-1.5 border text-[9px] uppercase ${expenseApprovalStatus === "approved" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}
-                                  title="Expense approval status — separate from classification/recoverability/CAM publication status."
-                                >
-                                  {expenseApprovalStatus === "approved" ? "Approved" : humanize(expenseApprovalStatus)}
-                                </Badge>
-                              )}
                             </TableCell>
                             <TableCell className="text-xs text-slate-500">
                               <div>{propertyLabel}</div>
