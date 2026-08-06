@@ -367,14 +367,7 @@ function getRuleClassificationExclusionReason(rule = {}, { scopeMatch = true } =
   );
   if (!isAcceptableApprovalState) return "not_approved";
 
-  if (isCoverageGapRule(rule)) {
-    return ruleTokens(rule).includes("original_lease_required") ? "original_lease_required" : "coverage_gap";
-  }
-  if (isWeakOrFallbackRule(rule) && !(isManualOverrideRule(rule) && manualOverrideNote(rule))) return "weak_fallback";
   if (!firstPresent(rule.expense_category, rule.category_name, rule.category, rule.normalized_key, rule.expense_subcategory)) return "missing_category";
-  if (deriveIncludedInBaseRent(rule)) return "included_in_base_rent";
-  if (derivePaymentTreatment(rule) === "tenant_direct_contract") return "tenant_direct";
-  if (deriveExclusionDecision(rule) !== "included") return "explicit_exclusion";
   return null;
 }
 

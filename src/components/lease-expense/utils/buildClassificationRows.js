@@ -134,10 +134,9 @@ export function hasExplicitCamExclusion(row) {
 
 export function canSendFinalizedActualToCam(row) {
   return Boolean(
-    row?.actualExpenseId &&
+    (row?.actualExpenseId || row?.leaseExpenseRuleId) &&
     Number(row?.amount) > 0 &&
-    !row?.sentToCam &&
-    !hasExplicitCamExclusion(row)
+    !row?.sentToCam
   );
 }
 
@@ -441,6 +440,7 @@ export function buildClassificationRows({
     };
 
     gapRow.canFinalize = gapRow.amount != null && Number(gapRow.amount) > 0 && gapRow.classificationStatus !== "finalized";
+    gapRow.canSendToCam = canSendFinalizedActualToCam(gapRow);
 
     const decisionObj = getCamDecision(gapRow);
     gapRow.camDecision = decisionObj.label;
