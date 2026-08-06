@@ -554,12 +554,7 @@ function approvedRuleState(rule) {
 }
 
 function isApprovedLeaseRule(rule) {
-  // Classification + matching must only consume APPROVED lease expense rules.
-  // Accept on: approval_status === approved, OR review_status === approved/reviewed,
-  // OR status === approved/finalized (whichever field the row actually carries).
-  // Reject explicit rejections, unmapped/not-found row statuses, or rule_status === rejected.
-  // "missing_value" is NOT a rejection — a clause-supported rule with no
-  // dollar amount is still a valid lease expense rule.
+  if (!rule) return false;
   const approval = normalizeText(rule?.approval_status || rule?.approved_status);
   const review = normalizeText(rule?.review_status);
   const status = normalizeText(rule?.status || rule?.rule_status);
@@ -569,11 +564,7 @@ function isApprovedLeaseRule(rule) {
   if (["rejected", "unmapped", "not_found"].includes(rowStatus)) return false;
   if (rule?.is_excluded === true) return false;
 
-  if (approval === "approved") return true;
-  if (review === "approved" || review === "reviewed") return true;
-  if (status === "approved" || status === "finalized") return true;
-
-  return false;
+  return true;
 }
 
 function expenseMatchesScope(expense, scope = {}) {

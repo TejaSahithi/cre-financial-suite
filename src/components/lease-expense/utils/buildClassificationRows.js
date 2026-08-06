@@ -135,10 +135,7 @@ export function hasExplicitCamExclusion(row) {
 export function canSendFinalizedActualToCam(row) {
   return Boolean(
     row?.actualExpenseId &&
-    row?.classificationStatus === "finalized" &&
-    (row?.recoverabilityResult === "recoverable" || row?.recoverabilityResult === "conditional") &&
-    (row?.camEligible === "yes" || row?.camEligible === "conditional") &&
-    row?.amount > 0 &&
+    Number(row?.amount) > 0 &&
     !row?.sentToCam &&
     !hasExplicitCamExclusion(row)
   );
@@ -256,16 +253,21 @@ export function buildClassificationRows({
     if (matchedRule?.id) usedRuleIds.add(matchedRule.id);
     if (persistedRuleId && hasMatchedRule) usedRuleIds.add(persistedRuleId);
 
-    const recoverabilityResult = hasMatchedRule
-      ? normalizeText(
-        classificationRecord?.recoverability_result ||
-        classificationRecord?.recovery_status ||
-        expense.recoverability_result ||
-        expense.recovery_status ||
-        match?.recoverability_result ||
-        "needs_review"
-      )
-      : "needs_review";
+    const rawRecoverability = normalizeText(
+      classificationRecord?.recoverability_result ||
+      classificationRecord?.recovery_status ||
+      (matchedRule ? leaseExpenseRuleService.getRecoverableDecision(matchedRule) : null) ||
+      expense.recoverability_result ||
+      expense.recovery_status ||
+      expense.recoverability ||
+      match?.recoverability_result
+    );
+
+    const recoverabilityResult =
+      ["recoverable", "non_recoverable", "conditional", "excluded"].includes(rawRecoverability)
+        ? rawRecoverability
+        : "recoverable";
+
     const classificationStatus = hasMatchedRule
       ? normalizeText(
         classificationRecord?.classification_status ||
@@ -276,16 +278,21 @@ export function buildClassificationRows({
             : "matched")
       )
       : "unmatched";
+
     const exceptionType = hasMatchedRule
       ? classificationRecord?.exception_type || null
       : "no_matching_rule";
-    const camEligible = hasMatchedRule
-      ? normalizeText(
-        classificationRecord?.cam_eligible ||
-        leaseExpenseRuleService.getCamEligibleDecision(matchedRule) ||
-        "needs_review"
-      )
-      : normalizeText(classificationRecord?.cam_eligible || expense.cam_eligible || "needs_review");
+
+    const rawCam = normalizeText(
+      classificationRecord?.cam_eligible ||
+      (matchedRule ? leaseExpenseRuleService.getCamEligibleDecision(matchedRule) : null) ||
+      expense.cam_eligible
+    );
+
+    const camEligible =
+      ["yes", "no", "conditional"].includes(rawCam)
+        ? rawCam
+        : (recoverabilityResult === "recoverable" ? "yes" : "no");
     const amountBuckets = hasMatchedRule
       ? {
         recoverable_amount: toNumber(classificationRecord?.recoverable_amount),
