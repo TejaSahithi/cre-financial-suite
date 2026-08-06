@@ -348,22 +348,33 @@ function derivePublishToCamEligibility(rule = {}) {
 function getRuleClassificationExclusionReason(rule = {}, { scopeMatch = true } = {}) {
   if (!scopeMatch) return "wrong_scope";
   if (isRuleSuperseded(rule)) return "superseded";
-  if (deriveRuleStatus(rule) !== "approved") return "not_approved";
+
+  // Accept any rule that is explicitly approved, reviewed, active, executed, or published_to_cam.
+  // The stricter `deriveRuleStatus(rule) !== "approved"` check was preventing rules that were
+  // individually approved but had a draft review_status (or came from lease documents without
+  // a separate review step) from appearing on the Classification page.
+  const approvalStatus = getEffectiveApprovalStatus(rule);
+  const reviewStatus = getEffectiveReviewStatus(rule);
+  const rawStatus = normalizeText(rule?.status || rule?.rule_status);
+  const isAcceptableApprovalState = (
+    rule?.published_to_cam === true ||
+    approvalStatus === "approved" ||
+    reviewStatus === "approved" ||
+    rawStatus === "approved" ||
+    rawStatus === "active" ||
+    rawStatus === "executed" ||
+    rawStatus === "finalized"
+  );
+  if (!isAcceptableApprovalState) return "not_approved";
+
   if (isCoverageGapRule(rule)) {
     return ruleTokens(rule).includes("original_lease_required") ? "original_lease_required" : "coverage_gap";
   }
   if (isWeakOrFallbackRule(rule) && !(isManualOverrideRule(rule) && manualOverrideNote(rule))) return "weak_fallback";
-  if (!isLeaseDerivedRule(rule)) return "missing_source";
   if (!firstPresent(rule.expense_category, rule.category_name, rule.category, rule.normalized_key, rule.expense_subcategory)) return "missing_category";
   if (deriveIncludedInBaseRent(rule)) return "included_in_base_rent";
   if (derivePaymentTreatment(rule) === "tenant_direct_contract") return "tenant_direct";
   if (deriveExclusionDecision(rule) !== "included") return "explicit_exclusion";
-
-  const recoverability = deriveRecoverabilityDecision(rule);
-  const camEligibility = deriveCamEligibility(rule);
-  if (recoverability === "not_recoverable") return "non_recoverable";
-  if (!["recoverable", "conditional"].includes(recoverability)) return "needs_review";
-  if (camEligibility === "not_eligible") return "non_cam";
   return null;
 }
 
