@@ -187,7 +187,7 @@
     flex-direction: column;
     overflow-y: auto;
     color: #f5f1e7;
-    background: linear-gradient(180deg, var(--sidebar), var(--sidebar-2));
+    background: linear-gradient(180deg, #0F2A44 0%, #081C2D 100%);
     border-right: 1px solid rgba(255,255,255,.08);
     box-shadow: 10px 0 30px rgba(0,0,0,.12);
     transition: transform .22s ease, width .22s ease;
@@ -258,7 +258,7 @@
 
   .cre-nav-item:hover {
     transform: translateX(3px);
-    background: var(--sidebar-hover);
+    background: #173B5C;
     color: #fff;
   }
 
@@ -266,6 +266,14 @@
     background: linear-gradient(135deg, #c09150, var(--sidebar-active));
     color: #fff;
     box-shadow: 0 8px 18px rgba(0,0,0,.16);
+  }
+
+  body[data-theme="dark"] .cre-sidebar {
+    background: linear-gradient(180deg, #081A2A 0%, #04111D 100%);
+  }
+
+  body[data-theme="dark"] .cre-nav-item:hover {
+    background: #102F4A;
   }
 
   .cre-nav-trigger {
