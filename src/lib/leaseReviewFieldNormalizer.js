@@ -535,9 +535,6 @@ function isFieldLabelPlaceholderValue(canonicalKey, value, contract) {
   return labelCandidates.has(normalizedValue);
 }
 
-const REVIEW_STREET_ADDRESS_PATTERN = /\b\d{1,6}\s+[A-Z0-9][A-Za-z0-9.'#\-]*(?:\s+[A-Z0-9][A-Za-z0-9.'#\-]*){0,8}\s+(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Drive|Dr\.?|Lane|Ln\.?|Way|Parkway|Pkwy\.?|Highway|Hwy\.?|Court|Ct\.?|Circle|Cir\.?|Trail|Terrace|Ter\.?|Place|Pl\.?|Center)\b(?:\s*,\s*[^.;\n]{2,80})?/i;
-const REVIEW_MONTH_DATE_PATTERN = /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?\s*,\s*\d{4}\b/i;
-
 function recoveryEvidenceText(evidence) {
   const uniqueParts = [];
   const seen = new Set();
@@ -577,11 +574,38 @@ function propertyAddressEvidenceIsWrongPartyAddress(evidence) {
   return /\b(?:tenant contact|tenant information|tenant address|landlord address|notice address|assignee address|assignor address|mailing address)\b/i.test(text);
 }
 
-function recoverDateFromSourceText(text) {
-  const explicitMonthDate = text.match(REVIEW_MONTH_DATE_PATTERN)?.[0];
-  if (explicitMonthDate) return toIsoDate(explicitMonthDate);
-  const numericDate = String(text ?? "").match(/\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/)?.[0];
-  return toIsoDate(numericDate || text);
+const REVIEW_STREET_ADDRESS_PATTERN = /\b\d{1,6}\s+[A-Z0-9][A-Za-z0-9.'#\-]*(?:\s+[A-Z0-9][A-Za-z0-9.'#\-]*){0,8}\s+(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Drive|Dr\.?|Lane|Ln\.?|Way|Parkway|Pkwy\.?|Highway|Hwy\.?|Court|Ct\.?|Circle|Cir\.?|Trail|Terrace|Ter\.?|Place|Pl\.?|Center)\b(?:\s*,\s*[^.;\n]{2,80})?/i;
+const REVIEW_MONTH_DATE_PATTERN = /\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?\s*,?\s*\d{4}\b/gi;
+const DAY_OF_MONTH_DATE_PATTERN = /\b\d{1,2}(?:st|nd|rd|th)?\s+(?:day\s+of\s+)?(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s*,?\s*\d{4}\b/gi;
+
+function findAllDatesInSourceText(text) {
+  const str = String(text || "");
+  const found = [];
+  const monthMatches = str.matchAll(REVIEW_MONTH_DATE_PATTERN);
+  for (const m of monthMatches) {
+    const iso = toIsoDate(m[0]);
+    if (iso && !found.includes(iso)) found.push(iso);
+  }
+  const dayMatches = str.matchAll(DAY_OF_MONTH_DATE_PATTERN);
+  for (const m of dayMatches) {
+    const iso = toIsoDate(m[0]);
+    if (iso && !found.includes(iso)) found.push(iso);
+  }
+  const numericMatches = str.matchAll(/\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b/g);
+  for (const m of numericMatches) {
+    const iso = toIsoDate(m[0]);
+    if (iso && !found.includes(iso)) found.push(iso);
+  }
+  return found;
+}
+
+function recoverDateFromSourceText(text, canonicalKey = "") {
+  const dates = findAllDatesInSourceText(text);
+  if (dates.length === 0) return toIsoDate(text);
+  if (canonicalKey === "expiration_date" || canonicalKey === "end_date") {
+    return dates[dates.length - 1];
+  }
+  return dates[0];
 }
 
 function isLabelOnlyDynamicValue(label, value, key = null) {
@@ -605,7 +629,7 @@ function recoverStandardValueFromEvidence(canonicalKey, evidence) {
   }
 
   if (canonicalKey === "expiration_date" || canonicalKey === "end_date" || canonicalKey.endsWith("_date")) {
-    return recoverDateFromSourceText(text);
+    return recoverDateFromSourceText(text, canonicalKey);
   }
 
   if (canonicalKey === "lease_term_months") {

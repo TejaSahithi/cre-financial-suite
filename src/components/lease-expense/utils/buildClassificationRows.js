@@ -135,10 +135,9 @@ export function hasExplicitCamExclusion(row) {
 export function canSendFinalizedActualToCam(row) {
   return Boolean(
     row?.actualExpenseId &&
-    row?.rowType === "matched_classification" &&
     row?.classificationStatus === "finalized" &&
-    row?.recoverabilityResult === "recoverable" &&
-    row?.camEligible === "yes" &&
+    (row?.recoverabilityResult === "recoverable" || row?.recoverabilityResult === "conditional") &&
+    (row?.camEligible === "yes" || row?.camEligible === "conditional") &&
     row?.amount > 0 &&
     !row?.sentToCam &&
     !hasExplicitCamExclusion(row)

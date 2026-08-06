@@ -376,12 +376,15 @@ export default function LeaseExpenseClassification() {
         .filter((row) => row?.canFinalize);
 
       await Promise.all(
-        targetRows.map((row) =>
-          expenseService.finalizeExpenseClassification(
+        targetRows.map((row) => {
+          const recoveryStatus = ["recoverable", "non_recoverable", "conditional", "excluded"].includes(row.recoverabilityResult)
+            ? row.recoverabilityResult
+            : "recoverable";
+          return expenseService.finalizeExpenseClassification(
             row.classificationRecord || row.actualExpenseId,
-            row.recoverabilityResult
-          )
-        )
+            recoveryStatus
+          );
+        })
       );
       return targetRows.length;
     },
@@ -869,31 +872,7 @@ export default function LeaseExpenseClassification() {
           />
         )}
 
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
-          {[
-            { label: "Approved Expenses", value: approvedActuals.length, color: "border-t-slate-400", tooltip: "Count of actual expenses with approval_status/approved_status = approved that are eligible to appear in this workspace at all." },
-            { label: "Total Expenses", value: fmt(totals.approvedActualTotal), color: "border-t-slate-500", tooltip: "Sum of the amount on every approved actual expense row shown below, regardless of classification or recoverability." },
-            { label: "Approved Lease Rules", value: approvedRules.length, color: "border-t-slate-400", tooltip: "Count of lease expense rules with approval_status = approved." },
-            { label: "Matched", value: counts.matched, color: "border-t-emerald-500", tooltip: "Count of approved actual expenses that have a matched lease expense rule (classified, any recoverability)." },
-            { label: "Actuals Missing Rules", value: counts.actuals_missing_rules, color: "border-t-rose-500", tooltip: "Count of approved actual expenses with no approved lease expense rule matched to them yet." },
-            { label: "Rules Without Actual Expenses", value: counts.rules_missing_actuals, color: "border-t-blue-500", tooltip: "Count of approved lease expense rules with no actual expense matched yet — a contractual rule only, not a missing dollar amount. Only rule_type=fixed_charge rules may ever receive a manually entered amount here; every other rule must be matched to a real actual expense." },
-            { label: "Recoverable Costs", value: fmt(totals.recoverable), color: "border-t-emerald-500", tooltip: "Formula: Σ amount of matched, classified rows where recoverability_result = recoverable." },
-            { label: "Non-Recoverable Costs", value: fmt(totals.nonRecoverable), color: "border-t-rose-500", tooltip: "Formula: Σ amount of matched, classified rows where recoverability_result = non_recoverable." },
-            { label: "Conditional Costs", value: fmt(totals.conditional), color: "border-t-amber-500", tooltip: "Formula: Σ amount of matched, classified rows where recoverability_result = conditional (blocked from CAM publication until the condition is resolved)." },
-            { label: "Excluded Costs", value: fmt(totals.excluded), color: "border-t-slate-500", tooltip: "Formula: Σ amount of matched, classified rows where recoverability_result = excluded." },
-            { label: "CAM Eligible Costs", value: fmt(totals.camEligible), color: "border-t-blue-500", tooltip: "Formula: Σ amount of matched rows where cam_eligible is yes or conditional. CAM-eligible is necessary but not sufficient for CAM publication — the classification must also be finalized, the expense and rule approved, and it must go through Send to CAM." },
-            { label: "Finalized Costs", value: fmt(totals.finalized), color: "border-t-indigo-500", tooltip: "Formula: Σ amount of rows where classification_status = finalized (human-reviewed and locked in), regardless of whether they've been published to CAM yet." },
-            { label: "CAM Ready Costs", value: fmt(totals.camReady), color: "border-t-sky-500", tooltip: "Formula: Σ amount of rows where cam_status = cam_ready. This is the classification's own readiness flag — it does not by itself mean the row is published; check the row's CAM publication status/badge for that." },
-            { label: "Published to CAM", value: fmt(totals.sentToCam), color: "border-t-blue-700", tooltip: "Formula: Σ amount of rows with an ACTIVE (non-withdrawn) published cam_expense_inputs row — this is what compute-cam actually consumes. A row can be Finalized or even CAM Ready without being Published yet; only Send to CAM moves it into this total, and Withdraw from CAM removes it again (the withdrawn version is kept, never deleted)." },
-          ].map((card) => (
-            <Card key={card.label} className={`border-t-4 shadow-sm ${card.color}`} title={card.tooltip}>
-              <CardContent className="p-4">
-                <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">{card.label}</p>
-                <p className="text-xl font-bold text-slate-800">{card.value}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+
 
         <Card className="border-slate-200 bg-white shadow-sm">
           <CardContent className="p-4">
@@ -1051,9 +1030,8 @@ export default function LeaseExpenseClassification() {
                       <TableHead className="text-[10px] font-bold uppercase text-slate-500">Property / Building / Unit</TableHead>
                       <TableHead className="text-[10px] font-bold uppercase text-slate-500">Lease / Tenant</TableHead>
                       <TableHead className="text-[10px] text-right font-bold uppercase text-slate-500">Actual Amount</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase text-slate-500">Category / Rule</TableHead>
+                      <TableHead className="text-[10px] font-bold uppercase text-slate-500">Category</TableHead>
                       <TableHead className="text-[10px] font-bold uppercase text-slate-500">Recoverability</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase text-slate-500">CAM / Decision</TableHead>
                       <TableHead className="text-[10px] font-bold uppercase text-slate-500">Status / Next Step</TableHead>
                       <TableHead className="w-10"></TableHead>
                     </TableRow>
@@ -1061,14 +1039,14 @@ export default function LeaseExpenseClassification() {
                   <TableBody>
                     {isLoading ? (
                       <TableRow>
-                        <TableCell colSpan={11} className="py-16 text-center">
+                        <TableCell colSpan={10} className="py-16 text-center">
                           <Loader2 className="mx-auto h-6 w-6 animate-spin text-slate-300" />
                           <p className="mt-2 text-sm text-slate-400">Loading approved actuals, approved rules, and classification rows...</p>
                         </TableCell>
                       </TableRow>
                     ) : filteredRows.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={11} className="py-16 text-center">
+                        <TableCell colSpan={10} className="py-16 text-center">
                           <FileText className="mx-auto mb-3 h-10 w-10 text-slate-200" />
                           <p className="text-sm text-slate-400">No rows in this view.</p>
                         </TableCell>
@@ -1090,6 +1068,13 @@ export default function LeaseExpenseClassification() {
                         const expenseApprovalStatus = hasActualExpense
                           ? normalizeText(row.expense?.approval_status || row.expense?.approved_status) || "pending"
                           : null;
+
+                        const categoryDisplayName =
+                          row.expense?.category ||
+                          row.ruleCategory ||
+                          row.expenseCategory ||
+                          (row.ruleLabel && row.ruleLabel !== "ACTUAL MISSING RULE" && row.ruleLabel !== "Actual Missing Rule" ? row.ruleLabel : null) ||
+                          "General Expense";
 
                         return (
                           <TableRow key={row.id} className="group border-b-slate-100 transition-colors hover:bg-indigo-50/30">
@@ -1160,32 +1145,32 @@ export default function LeaseExpenseClassification() {
                               )}
                             </TableCell>
                             <TableCell className="max-w-[220px] text-xs text-slate-600">
-                              <div className="font-medium text-slate-800">{row.ruleLabel}</div>
-                              <Badge variant="outline" className={`mt-1 border text-[10px] uppercase ${statusBadge(row.classificationStatus)}`}>
-                                {rowTypeLabel(row.rowType)}
-                              </Badge>
+                              <div className="font-semibold text-slate-800">{categoryDisplayName}</div>
                             </TableCell>
                             <TableCell>
                               <Badge variant="outline" className={`border text-[10px] uppercase ${recoverabilityBadge(row.recoverabilityResult)}`}>
                                 {humanize(row.recoverabilityResult)}
                               </Badge>
                             </TableCell>
-                            <TableCell title={readiness.alreadyPublished ? "Actively published to CAM." : (readiness.blockers.length > 0 ? `Blocking CAM publication:\n${readiness.blockers.join("\n")}` : row.camWhy)}>
-                              <Badge variant="outline" className={`border text-[10px] uppercase ${row.camEligible === "yes" ? "bg-blue-50 text-blue-700 border-blue-200" : row.camEligible === "conditional" ? "bg-sky-50 text-sky-700 border-sky-200" : "bg-slate-100 text-slate-500 border-slate-200"}`}>
-                                {humanize(row.camEligible)}
-                              </Badge>
-                              <p className="mt-1 text-[11px] text-slate-500">{row.camDecision}</p>
-                            </TableCell>
                             <TableCell className="max-w-[200px]" title={row.message}>
-                              <Badge variant="outline" className={`border text-[10px] uppercase ${statusBadge(row.classificationStatus)}`}>
-                                {humanize(row.classificationStatus)}
-                              </Badge>
-                              <p className="mt-1 text-[11px] text-slate-500">{row.nextStep}</p>
                               {row.sentToCam ? (
-                                <Badge variant="outline" className="mt-1 border border-blue-200 bg-blue-50 text-[9px] uppercase text-blue-700">
-                                  Published to CAM
+                                <Badge variant="outline" className="border border-blue-200 bg-blue-50 text-[10px] uppercase font-semibold text-blue-700">
+                                  CAM Published
                                 </Badge>
-                              ) : null}
+                              ) : row.classificationStatus === "finalized" ? (
+                                <Badge variant="outline" className="border border-indigo-200 bg-indigo-50 text-[10px] uppercase font-semibold text-indigo-700">
+                                  Finalized
+                                </Badge>
+                              ) : row.camStatus === "cam_ready" || row.canSendToCam ? (
+                                <Badge variant="outline" className="border border-emerald-200 bg-emerald-50 text-[10px] uppercase font-semibold text-emerald-700">
+                                  Send to CAM
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="border border-amber-200 bg-amber-50 text-[10px] uppercase font-semibold text-amber-700">
+                                  Needs Review
+                                </Badge>
+                              )}
+                              <p className="mt-1 text-[11px] text-slate-500">{row.nextStep}</p>
                             </TableCell>
                             <TableCell className="pr-4 text-right">
                               <DropdownMenu>
