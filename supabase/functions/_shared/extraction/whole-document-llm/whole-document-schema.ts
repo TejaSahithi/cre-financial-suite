@@ -382,13 +382,12 @@ Date taxonomy:
 
 Rent and revenue taxonomy:
 - monthly_rent is the recurring base/minimum rent per month for the first paid period of the
-  current term. Do not use security deposit components, annual totals, CAM estimates, utilities,
-  late fees, or TI allowance.
-- annual_rent is only an explicitly stated annual/base annual rent. If only monthly rent is
+  current term. If a sentence states both annual and monthly amounts (e.g., "annual amount of $25,200, payable in monthly installments of $2,100"), extract monthly_rent = 2100. Do not use security deposit components, annual totals, CAM estimates, utilities, late fees, or TI allowance.
+- annual_rent is an explicitly stated annual/base annual rent (e.g. "annual amount of $25,200"). If only monthly rent is
   stated, leave annual_rent unstated; downstream deterministic math may derive it for display.
 - If the lease contains a rent schedule, free-rent period, stepped rent, option rent, renewal rent,
   percentage rent, or amortized charge schedule, create a dynamicFindings schedule preserving
-  every row/period exactly as stated, even when a scalar monthly_rent is also found.
+  every row/period exactly as stated, ALSO extracting scalar monthly_rent and annual_rent for the initial term period.
 - Reconcile every amount against its unit and period before returning it: monthly versus annual,
   per-square-foot versus total dollars, base rent versus additional rent, and current-term versus
   option/renewal amounts. Preserve cents and signs exactly. If two controlling sources disagree,

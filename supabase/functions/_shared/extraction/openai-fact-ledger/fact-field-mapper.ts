@@ -246,9 +246,10 @@ function looksLikeFieldCompatibleFact(fact: Fact, fieldName: string, reasonsOut?
     const value = normalizeMoneyValue(fact.value);
     if (/\b(?:%|percent|increase|escalat|renewal)\b/i.test(sourceText) && !/\b(?:per\s+month|monthly|installments?)\b/i.test(sourceText)) return reject("monthly_rent: source text reads as a percentage/escalation/renewal clause with no monthly/installment qualifier");
     const monthlyInstallment = sourceMonthlyInstallmentAmount(sourceText);
+    if (monthlyInstallment !== null && value !== null && roughlyEqualMoney(value, monthlyInstallment)) return true;
     if (monthlyInstallment !== null && value !== null && !roughlyEqualMoney(value, monthlyInstallment)) return reject(`monthly_rent: source text names an explicit monthly-installment amount (${monthlyInstallment}) that does not match this candidate's value (${value})`);
     const annualAmount = sourceAnnualRentAmount(sourceText);
-    if (annualAmount !== null && value !== null && roughlyEqualMoney(value, annualAmount)) return reject("monthly_rent: this value equals the source text's stated ANNUAL amount, not a monthly amount");
+    if (annualAmount !== null && value !== null && roughlyEqualMoney(value, annualAmount) && monthlyInstallment === null) return reject("monthly_rent: this value equals the source text's stated ANNUAL amount, not a monthly amount");
     if (sourceIsHoldoverOrPenaltyRent(sourceText)) return reject("monthly_rent: source text is a holdover/penalty-rent clause, not a base-rent statement");
     if (value !== null && !sourceHasMoneyOrNumberNearValue(sourceText, value) && !roughlyEqualMoney(value, monthlyInstallment)) return reject("monthly_rent: value does not appear as a matching number/token in the source text");
   }
@@ -259,7 +260,7 @@ function looksLikeFieldCompatibleFact(fact: Fact, fieldName: string, reasonsOut?
     if (sourceIsHoldoverOrPenaltyRent(sourceText)) return reject("annual_rent: source text is a holdover/penalty-rent clause, not a base-rent statement");
     if (annualAmount !== null && value !== null && roughlyEqualMoney(value, annualAmount)) return true;
     const monthlyInstallment = sourceMonthlyInstallmentAmount(sourceText);
-    if (monthlyInstallment !== null && value !== null && roughlyEqualMoney(value, monthlyInstallment)) return reject("annual_rent: this value equals the source text's stated MONTHLY installment amount, not an annual amount");
+    if (monthlyInstallment !== null && value !== null && roughlyEqualMoney(value, monthlyInstallment) && annualAmount === null) return reject("annual_rent: this value equals the source text's stated MONTHLY installment amount, not an annual amount");
     if (value !== null && !sourceHasMoneyOrNumberNearValue(sourceText, value)) return reject("annual_rent: value does not appear as a matching number/token in the source text");
   }
 
