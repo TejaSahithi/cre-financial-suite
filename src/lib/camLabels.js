@@ -195,9 +195,15 @@ const CATEGORY_POOL_NAME_HINTS = [
   { match: /snow|ice/i, name: "Snow Removal" },
 ];
 
+const UUID_LIKE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function suggestedPoolNameForCategory(categoryName) {
+  if (!categoryName || UUID_LIKE_RE.test(categoryName)) {
+    return "General Operating Pool";
+  }
   const hint = CATEGORY_POOL_NAME_HINTS.find((h) => h.match.test(categoryName || ""));
-  return hint ? hint.name : (categoryName || "Uncategorized");
+  if (hint) return hint.name;
+  return categoryName.charAt(0).toUpperCase() + categoryName.slice(1).replace(/[_-]+/g, " ");
 }
 
 /**

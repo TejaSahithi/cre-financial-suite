@@ -247,8 +247,23 @@ export async function prepareCamAutomatically(supabaseAdmin: any, params: Prepar
   const publishedExpensesInPeriod = (allPublished || []).filter(overlapsPeriod);
   const publishedExpensesOutOfPeriod = (allPublished || []).filter((e: any) => !overlapsPeriod(e));
 
-  const { data: categories } = await supabaseAdmin.from("expense_categories").select("id, category_name").eq("org_id", orgId);
-  const categoryNamesById = new Map((categories || []).map((c: any) => [c.id, c.category_name]));
+  const { data: categories } = await supabaseAdmin.from("expense_categories").select("id, category_name, code").eq("org_id", orgId);
+  const categoryNamesById = new Map((categories || []).map((c: any) => [c.id, c.category_name || c.code]));
+
+  for (const step of approvedPolicySteps) {
+    if (step.expense_category_id && !categoryNamesById.has(step.expense_category_id)) {
+      if (step.category_name || step.expense_category) {
+        categoryNamesById.set(step.expense_category_id, step.category_name || step.expense_category);
+      }
+    }
+  }
+  for (const exp of publishedExpensesInPeriod) {
+    if (exp.expense_category_id && !categoryNamesById.has(exp.expense_category_id)) {
+      if (exp.category) {
+        categoryNamesById.set(exp.expense_category_id, exp.category);
+      }
+    }
+  }
 
   // ---- Existing pools/categories for this property+period (so suggestions never re-suggest an already-covered category) ----
   const { data: existingPools } = await supabaseAdmin

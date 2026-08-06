@@ -632,11 +632,66 @@ export default function CAMSetup() {
         await supabase.from("recovery_pools").delete().in("id", poolIds);
       }
 
-      // 2. Invoke prepare-cam-automatically-v2 to re-import fresh source data from upstream modules
+      // 2. Resolve duplicate lease policy conflicts for this property by marking older duplicate policy rows as superseded
+      const { data: propertyLeases } = await supabase
+        .from("leases")
+        .select("id")
+        .eq("property_id", propertyId);
+
+      const pLeaseIds = (propertyLeases || []).map((l) => l.id);
+      if (pLeaseIds.length > 0) {
+        const { data: duplicatePolicies } = await supabase
+          .from("lease_recovery_policies")
+          .select("id, lease_id, created_at")
+          .in("lease_id", pLeaseIds)
+          .neq("status", "superseded");
+
+        const polsByLease = new Map();
+        for (const pol of duplicatePolicies || []) {
+          if (!polsByLease.has(pol.lease_id)) polsByLease.set(pol.lease_id, []);
+          polsByLease.get(pol.lease_id).push(pol);
+        }
+        for (const [_, pols] of polsByLease.entries()) {
+          if (pols.length > 1) {
+            pols.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            const olderIds = pols.slice(1).map((p) => p.id);
+            if (olderIds.length > 0) {
+              await supabase.from("lease_recovery_policies").update({ status: "superseded" }).in("id", olderIds);
+            }
+          }
+        }
+      }
+
+      // 3. Invoke prepare-cam-automatically-v2 to re-import fresh source data from upstream modules
       const result = await invokeEdgeFunction("prepare-cam-automatically-v2", {
         property_id: propertyId,
         recovery_period_id: periodId,
       });
+
+      // 4. Auto-confirm suggested pools into recovery_pools so pools are created immediately
+      const suggestedPoolsList = result?.suggested?.pools || [];
+      for (const sugg of suggestedPoolsList) {
+        if (!sugg.expense_category_id) continue;
+        const poolName = sugg.category_name
+          ? suggestedPoolNameForCategory(sugg.category_name)
+          : suggestedPoolNameForCategory(sugg.expense_category_id);
+
+        const created = await camSetupAction("create_recovery_pool", {
+          property_id: propertyId,
+          period_id: periodId,
+          name: poolName,
+          pool_type: buildingId ? "building" : "property",
+          scope_type: buildingId ? "building" : "property",
+          scope_id: buildingId || propertyId,
+        });
+
+        if (created?.pool?.id) {
+          await camSetupAction("assign_pool_category", {
+            pool_id: created.pool.id,
+            expense_category_id: sugg.expense_category_id,
+          });
+        }
+      }
 
       return result;
     },
