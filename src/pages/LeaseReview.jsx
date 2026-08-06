@@ -277,14 +277,26 @@ function normalizeDateForColumn(value) {
 }
 
 function normalizeColumnValueForReviewField(fieldKey, value) {
+  if (value === null || value === undefined || value === "") return null;
   if (!isMeaningfulValue(value)) return null;
   if (DATE_COLUMN_FIELD_KEYS.has(fieldKey) || fieldKey.endsWith("_date")) {
     return normalizeDateForColumn(value);
   }
   const fieldConfig = LEASE_REVIEW_FIELDS.find((field) => field.key === fieldKey);
   if (NUMERIC_REVIEW_FIELDS.has(fieldKey) || fieldConfig?.type === "number" || fieldConfig?.type === "currency") {
-    const parsed = Number(String(value).replace(/[$,%\s,]/g, ""));
-    return Number.isFinite(parsed) ? parsed : value;
+    if (typeof value === "number") return Number.isFinite(value) ? value : null;
+    const str = String(value).trim();
+    const cleanStr = str.replace(/[$,%\s]/g, "");
+    if (/^-?\d+(?:\.\d+)?$/.test(cleanStr)) {
+      const parsed = Number(cleanStr);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    const match = str.match(/(?:^|\$\s*|\b)(-?\d[\d,]*(?:\.\d+)?)\b/);
+    if (match) {
+      const parsed = Number(match[1].replace(/,/g, ""));
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
   }
   return value;
 }

@@ -3127,7 +3127,9 @@ async function handleBoundedEnrichStage(args: {
     stage,
     generationId,
     status: "completed",
-    data: stage === "enrich_truth_assembly" ? { assembled: true } : stageData,
+    data: (isEnrichEvidenceDomainStage(stage) || isExpensesAndCamEvidenceSubstage(stage) || stage === "enrich_truth_assembly")
+      ? { count: Array.isArray(stageData) ? stageData.length : 1 }
+      : stageData,
   });
 
   const updates: Record<string, unknown> = { normalized_output: updatedNormalizedOutput, updated_at: new Date().toISOString() };
@@ -3137,7 +3139,20 @@ async function handleBoundedEnrichStage(args: {
     updates.error_message = null;
   }
 
-  const { error: persistError } = await supabaseAdmin.from("uploaded_files").update(updates).eq("id", fileId);
+  let { error: persistError } = await supabaseAdmin.from("uploaded_files").update(updates).eq("id", fileId);
+  if (persistError && updatedNormalizedOutput?.metadata?.extractionDebug) {
+    console.warn(`[normalize-pdf-output] bounded_stage_persist_retry stage=${stage} file_id=${fileId}: ${persistError.message}`);
+    // Fallback: trim bulky extractionDebug artifacts and retry persistence once
+    const compactDebug = {
+      bounded_stage_results: updatedNormalizedOutput.metadata.extractionDebug.bounded_stage_results,
+      merged_field_sources: updatedNormalizedOutput.metadata.extractionDebug.merged_field_sources,
+    };
+    updatedNormalizedOutput.metadata.extractionDebug = compactDebug;
+    const retryUpdates = { ...updates, normalized_output: updatedNormalizedOutput };
+    const { error: retryErr } = await supabaseAdmin.from("uploaded_files").update(retryUpdates).eq("id", fileId);
+    if (!retryErr) persistError = null;
+  }
+
   if (persistError) {
     console.error(`[normalize-pdf-output] bounded_stage_persist_failed stage=${stage} file_id=${fileId}: ${persistError.message}`);
     await logger.event(stage, "failed", { error_code: "BOUNDED_STAGE_PERSIST_FAILED", error_message: persistError.message, metadata: { job_id: pipelineJobId } });
