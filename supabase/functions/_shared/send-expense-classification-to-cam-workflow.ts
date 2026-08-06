@@ -43,54 +43,61 @@ export function deriveExpenseCamSendBlockers(
   const hasRule = Boolean(classification.lease_expense_rule_id || classification.linked_expense_rule_id || classification.recovery_rule_id);
   const alreadySent = classification.sent_to_cam === true || Boolean(classification.sent_to_cam_at);
   const hasReason = Boolean(String(reason || "").trim());
+  const isDirectTenantCharge =
+    Boolean(classification.lease_id || expense?.lease_id) ||
+    normalize(classification.cam_input_type) === "direct_tenant" ||
+    paymentTreatment === "direct_assign";
+
   const automatic =
     hasActual &&
-    hasRule &&
     recoverability === "recoverable" &&
     camEligible === "yes" &&
-    rule?.published_to_cam === true &&
     amount > 0 &&
     !alreadySent &&
-    paymentTreatment !== "included_in_base_rent" &&
-    paymentTreatment !== "tenant_direct_contract" &&
-    rule?.is_excluded !== true;
+    (!isDirectTenantCharge || (rule?.published_to_cam === true && paymentTreatment !== "included_in_base_rent" && paymentTreatment !== "tenant_direct_contract" && rule?.is_excluded !== true));
 
   if (alreadySent) return ["already_sent"];
-  if (!hasActual && !hasRule) blockers.push("missing_actual_or_rule");
-  if (amount <= 0) blockers.push("missing_amount");
+  if (isDirectTenantCharge && !classification.lease_id && !expense?.lease_id) {
+    blockers.push("MISSING_DIRECT_LEASE");
+  }
+  if (!hasActual && !hasRule && !isDirectTenantCharge) {
+    blockers.push("MISSING_DIRECT_LEASE");
+  }
+  if (amount <= 0) blockers.push("INVALID_AMOUNT");
   if (recoverability === "conditional" && !classification.condition_resolved) {
     blockers.push("unresolved_conditional");
   }
   if (camEligible !== "yes") blockers.push("not_cam_eligible");
-  if (rule && (paymentTreatment === "included_in_base_rent" || paymentTreatment === "tenant_direct_contract" || rule.is_excluded === true)) {
-    blockers.push("explicit_exclusion");
-  }
-  if (!automatic && !hasReason) blockers.push("manual_reason_required");
-  if (hasRule && rule && rule.published_to_cam !== true && !hasReason) blockers.push("rule_not_published_to_cam");
 
-  // CAM publication boundary hardening: these were previously enforced
-  // client-side only (buildClassificationRows.js's canSendFinalizedActualToCam)
-  // or not at all. send_expense_classification_to_cam_workflow now also
-  // re-checks all three server-side (20260905000000_cam_publication_rpcs.sql)
-  // — this is the earlier, friendlier layer that returns a named blocker
-  // instead of a raw RPC exception.
+  if (!classification.expense_category_id) blockers.push("not_categorized");
+  const scopePropertyId = classification.property_id ?? expense?.property_id ?? null;
+  if (!scopePropertyId) blockers.push("invalid_scope");
+  if (!classification.service_period_start || !classification.service_period_end) {
+    blockers.push("missing_service_period");
+  }
+
+  // Rule-related blockers apply ONLY when classification is explicitly dependent on one lease/rule
+  if (isDirectTenantCharge && rule) {
+    if (normalize(rule.approval_status) === "superseded") blockers.push("rule_superseded");
+    if (normalize(rule.approval_status) !== "approved") blockers.push("rule_not_approved");
+    if (rule.published_to_cam !== true && !hasReason) blockers.push("rule_not_published_to_cam");
+    if (paymentTreatment === "included_in_base_rent" || paymentTreatment === "tenant_direct_contract" || rule.is_excluded === true) {
+      blockers.push("explicit_exclusion");
+    }
+  }
+
   if (normalize(classification.classification_status) !== "finalized") {
     blockers.push("not_finalized");
   }
   if (hasActual) {
-    // approval_status and approved_status are two distinct, independently
-    // maintained columns on expenses (confirmed via schema trace) — each
-    // defaults to a non-null but non-"approved" value ('pending'/'draft'),
-    // so `a || b` or COALESCE(a, b) would let a genuinely-approved
-    // approved_status get masked by an unrelated default sitting in
-    // approval_status. Either column being "approved" is sufficient.
     const approvedByEither =
       normalize(expense?.approval_status) === "approved" ||
       normalize(expense?.approved_status) === "approved";
     if (!approvedByEither) blockers.push("expense_not_approved");
   }
-  if (hasRule && rule && normalize(rule.approval_status) !== "approved") {
-    blockers.push("rule_not_approved");
+
+  if (!automatic && !hasReason && isDirectTenantCharge) {
+    blockers.push("manual_reason_required");
   }
 
   return [...new Set(blockers)];
@@ -102,6 +109,19 @@ function errorStatus(message: string) {
   if (/required|idempotency|payload|eligible|amount|reason|cam|classification/i.test(message)) return 400;
   if (/not found/i.test(message)) return 404;
   return 500;
+}
+
+// Every business-rule RAISE EXCEPTION in send_expense_classification_to_cam_
+// workflow (20269900000049) is prefixed "CAM_SEND_BLOCKED:<CODE>: <message>"
+// so a specific error_code survives the round trip through PostgREST instead
+// of collapsing into the generic EXPENSE_CLASSIFICATION_CAM_SEND_WORKFLOW_
+// FAILED fallback below.
+const CAM_SEND_BLOCKED_RE = /^CAM_SEND_BLOCKED:([A-Z0-9_]+):\s*(.*)$/s;
+
+function parseCamSendBlockedError(message: string) {
+  const match = CAM_SEND_BLOCKED_RE.exec(message || "");
+  if (!match) return null;
+  return { error_code: match[1], message: match[2] };
 }
 
 export async function handleExpenseCamSendRequest(req: Request) {
@@ -226,11 +246,19 @@ export async function handleExpenseCamSendRequest(req: Request) {
 
     return jsonResponse({ error: false, ...data });
   } catch (err) {
-    const message = err?.message || "Expense classification CAM send workflow failed";
+    const rawMessage = err?.message || "Expense classification CAM send workflow failed";
+    const parsed = parseCamSendBlockedError(rawMessage);
+    if (parsed) {
+      return jsonResponse({
+        error: true,
+        message: parsed.message,
+        error_code: parsed.error_code,
+      }, 400);
+    }
     return jsonResponse({
       error: true,
-      message,
+      message: rawMessage,
       error_code: "EXPENSE_CLASSIFICATION_CAM_SEND_WORKFLOW_FAILED",
-    }, errorStatus(message));
+    }, errorStatus(rawMessage));
   }
 }

@@ -60,6 +60,39 @@ export async function handleRuleReviewRequest(req: Request, action: "approve" | 
 
     const body = await req.json().catch(() => ({}));
     const payload = validateRuleReviewPayload(body, action);
+
+    // Retrieve rule record to get canonical org_id and ensure linkage
+    const { data: targetRule } = await supabaseAdmin
+      .from("lease_expense_rules")
+      .select("id, org_id, rule_set_id, lease_id")
+      .eq("id", payload.ruleId)
+      .maybeSingle();
+
+    if (!targetRule) {
+      return jsonResponse({
+        error: true,
+        message: "Lease expense rule not found for this organization",
+        error_code: "RULE_NOT_FOUND",
+      }, 404);
+    }
+
+    let effectiveOrgId = targetRule.org_id || orgId;
+
+    if (!targetRule.org_id && targetRule.lease_id) {
+      const { data: leaseRecord } = await supabaseAdmin
+        .from("leases")
+        .select("org_id")
+        .eq("id", targetRule.lease_id)
+        .maybeSingle();
+      if (leaseRecord?.org_id) {
+        effectiveOrgId = leaseRecord.org_id;
+        await supabaseAdmin
+          .from("lease_expense_rules")
+          .update({ org_id: effectiveOrgId })
+          .eq("id", targetRule.id);
+      }
+    }
+
     const requestPayload = {
       rule_id: payload.ruleId,
       action: payload.action,
@@ -67,7 +100,7 @@ export async function handleRuleReviewRequest(req: Request, action: "approve" | 
     };
 
     const { data, error } = await supabaseAdmin.rpc("review_lease_expense_rule_workflow", {
-      p_org_id: orgId,
+      p_org_id: effectiveOrgId,
       p_rule_id: payload.ruleId,
       p_actor_user_id: user.id,
       p_actor_email: user.email || null,
@@ -96,7 +129,7 @@ export async function handleRuleReviewRequest(req: Request, action: "approve" | 
     if (payload.action === "approve") {
       try {
         const { data: matData, error: matError } = await supabaseAdmin.rpc("materialize_lease_recovery_policy", {
-          p_org_id: orgId,
+          p_org_id: effectiveOrgId,
           p_rule_id: payload.ruleId,
           p_actor_user_id: user.id,
           p_actor_email: user.email || null,

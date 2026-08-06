@@ -80,6 +80,7 @@ import {
   fromBooleanString,
   buildRuleEditForm,
   isApprovedRule,
+  resolveCamPolicyStatus,
   needsReviewRule,
   getRecoverableDecision,
   isLeaseDerivedRule,
@@ -246,6 +247,54 @@ export default function LeaseExpenseRules() {
     () => buildDisplayRows(ruleSetsByLease, leaseById, categoryById, scope.propertyById),
     [ruleSetsByLease, leaseById, categoryById, scope]
   );
+
+  // Read-only "CAM Policy" status per rule (Ready/Pending/Blocked/Superseded)
+  // -- purely a display of the EXISTING materialize_lease_recovery_policy
+  // outcome (auto-triggered on approve), never a second materializer and
+  // never a write. Two small, additive queries: which rules already have a
+  // materialized policy, and which of their leases have premises on file
+  // (materialization's own real precondition -- see
+  // prepare-cam-automatically.ts) so a genuinely-blocked rule reads
+  // differently from one that's merely still catching up.
+  const approvedRuleIds = useMemo(
+    () => [...new Set(allDisplayRows.map(({ rule }) => rule?.id).filter((id) => isUuid(id)))],
+    [allDisplayRows],
+  );
+  const { data: camPolicies = [] } = useQuery({
+    queryKey: ["lease-expense-rule-cam-policies", approvedRuleIds.join(",")],
+    enabled: approvedRuleIds.length > 0,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("lease_recovery_policies")
+        .select("id, source_rule_id, status, created_at")
+        .in("source_rule_id", approvedRuleIds)
+        .order("created_at", { ascending: false });
+      if (error) return [];
+      return data || [];
+    },
+  });
+  const policiesBySourceRuleId = useMemo(() => {
+    const map = new Map();
+    for (const policy of camPolicies) {
+      if (!map.has(policy.source_rule_id)) map.set(policy.source_rule_id, []);
+      map.get(policy.source_rule_id).push(policy);
+    }
+    return map;
+  }, [camPolicies]);
+
+  const { data: leasesWithPremises = new Set() } = useQuery({
+    queryKey: ["lease-expense-rule-premises-check", leaseIds.join(",")],
+    enabled: leaseIds.length > 0,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("lease_premises")
+        .select("lease_id")
+        .in("lease_id", leaseIds)
+        .neq("status", "superseded");
+      if (error) return new Set();
+      return new Set((data || []).map((p) => p.lease_id));
+    },
+  });
 
   const leaseDerivedRows = useMemo(
     () => dedupeDisplayRows(allDisplayRows.filter(({ rule }) => isLeaseDerivedRule(rule))),
@@ -921,6 +970,7 @@ export default function LeaseExpenseRules() {
                     isUpdating={updateRuleMutation.isPending || bulkApproveRulesMutation.isPending}
                     isSelected={selectedRuleIds.has(rule.id)}
                     canSelect={isUuid(rule?.id) && !isApprovedRule(rule)}
+                    camPolicyStatus={resolveCamPolicyStatus(rule, policiesBySourceRuleId.get(rule.id) || [], leasesWithPremises.has(lease?.id))}
                     onSelectChange={(checked) => toggleRuleSelection(rule.id, checked)}
                     onApprove={(r, l) => approveRule(r, l)}
                     onReject={(r, l) => rejectRule(r, l)}

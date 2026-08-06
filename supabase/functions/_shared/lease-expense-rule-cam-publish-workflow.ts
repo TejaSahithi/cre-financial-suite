@@ -112,7 +112,7 @@ export async function handleCamPublishRequest(req: Request) {
     };
 
     const { data, error } = await supabaseAdmin.rpc("publish_lease_expense_rule_to_cam_workflow", {
-      p_org_id: orgId,
+      p_org_id: rule.org_id || orgId,
       p_rule_id: payload.ruleId,
       p_actor_user_id: user.id,
       p_actor_email: user.email || null,

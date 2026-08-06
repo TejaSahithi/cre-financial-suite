@@ -671,7 +671,12 @@ export default function CAMSetup() {
 
   // ---- Requirement 2: source-data summary ------------------------------------
   const summary = useMemo(() => {
-    const propLeases = leases.filter((l) => l.property_id === propertyId);
+    // Reuses propertyLeaseIds (already building-aware, see its definition
+    // near the top of the component) rather than re-deriving property-only
+    // -- otherwise a lease correctly excluded from `policies`/`estimateSchedules`
+    // by the building filter still shows up here, e.g. as a false "missing
+    // policy" for a lease that simply belongs to a different building.
+    const propLeases = leases.filter((l) => propertyLeaseIds.includes(l.id));
     const approvedLeases = propLeases.filter((l) => policies.some((p) => p.lease_id === l.id && p.status === "approved"));
     const leasesWithApprovedRules = new Set(policies.filter((p) => p.status === "approved").map((p) => p.lease_id)).size;
     const materializedPolicies = policies.length;
@@ -1279,7 +1284,12 @@ export default function CAMSetup() {
     const [policyDialog, setPolicyDialog] = useState(null);
     const [priorAdjDialog, setPriorAdjDialog] = useState(null);
 
-    const propLeases = leases.filter((l) => l.property_id === propertyId);
+    // Reuses propertyLeaseIds (already building-aware, see its definition
+    // near the top of the component) rather than re-deriving property-only
+    // -- otherwise a lease correctly excluded from `policies`/`estimateSchedules`
+    // by the building filter still shows up here, e.g. as a false "missing
+    // policy" for a lease that simply belongs to a different building.
+    const propLeases = leases.filter((l) => propertyLeaseIds.includes(l.id));
     const leasesMissingPolicy = propLeases.filter((l) => !policies.some((p) => p.lease_id === l.id));
 
     return (
@@ -2175,7 +2185,12 @@ export default function CAMSetup() {
 
   // ---- D. Calculation Parameters -----------------------------------------------
   function WorkbenchCalcParamsTab() {
-    const propLeases = leases.filter((l) => l.property_id === propertyId);
+    // Reuses propertyLeaseIds (already building-aware, see its definition
+    // near the top of the component) rather than re-deriving property-only
+    // -- otherwise a lease correctly excluded from `policies`/`estimateSchedules`
+    // by the building filter still shows up here, e.g. as a false "missing
+    // policy" for a lease that simply belongs to a different building.
+    const propLeases = leases.filter((l) => propertyLeaseIds.includes(l.id));
     const [leaseId, setLeaseId] = useState("");
     React.useEffect(() => {
       if (!leaseId && propLeases.length > 0) setLeaseId(propLeases[0].id);
@@ -2381,7 +2396,12 @@ export default function CAMSetup() {
 
   // ---- G. Monthly Estimates & Variance ------------------------------------------
   function WorkbenchVarianceTab() {
-    const propLeases = leases.filter((l) => l.property_id === propertyId);
+    // Reuses propertyLeaseIds (already building-aware, see its definition
+    // near the top of the component) rather than re-deriving property-only
+    // -- otherwise a lease correctly excluded from `policies`/`estimateSchedules`
+    // by the building filter still shows up here, e.g. as a false "missing
+    // policy" for a lease that simply belongs to a different building.
+    const propLeases = leases.filter((l) => propertyLeaseIds.includes(l.id));
     const varianceRows = useMemo(() => {
       return propLeases.map((l) => {
         const annualEstimate = estimateSchedules.filter((es) => es.lease_id === l.id).reduce((s, es) => s + Number(es.amount || 0), 0);

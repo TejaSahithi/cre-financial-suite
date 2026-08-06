@@ -17,8 +17,8 @@ import { Badge } from "@/components/ui/badge";
  *   actualExclusions — { reason: count, ... } from loadApprovedActualExpenses
  *   summary         — { rawApprovedRulesCount, rawApprovedActualsCount,
  *                       rulesExcludedCount, actualsExcludedCount, ... }
- *   counts          — page-derived counts (matched, rule_missing_actual,
- *                     actual_missing_rule, needs_review, sent_to_cam)
+ *   counts          — page-derived counts (actual_expenses, coverage_gaps,
+ *                     needs_review, published_to_cam, excluded)
  *   existingClassifications — current rows (used to derive CAM-blocked reasons)
  */
 export default function ClassificationDebugPanel({
@@ -79,10 +79,10 @@ export default function ClassificationDebugPanel({
         />
 
         <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-          <Stat label="Matched" value={counts.matched ?? 0} />
-          <Stat label="Rule Missing Actual" value={counts.rules_missing_actuals ?? 0} />
-          <Stat label="Actual Missing Rule" value={counts.actuals_missing_rules ?? 0} />
+          <Stat label="Actual Expenses" value={counts.actual_expenses ?? 0} />
+          <Stat label="Coverage Gaps" value={counts.coverage_gaps ?? 0} />
           <Stat label="Needs Review" value={counts.needs_review ?? 0} />
+          <Stat label="Excluded" value={counts.excluded ?? 0} />
         </div>
 
         <div className="space-y-1">

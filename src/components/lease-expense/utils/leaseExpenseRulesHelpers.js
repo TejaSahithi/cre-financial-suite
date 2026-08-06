@@ -1,5 +1,6 @@
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { normalizeLeaseExpenseRule } from "@/services/utils/leaseExpenseRuleTaxonomy";
+import { deriveRuleDecision, isRuleSuperseded } from "@/services/utils/ruleDecisionEngine";
 
 export const ROW_STATUS_STYLE = {
   mapped: "bg-emerald-100 text-emerald-700",
@@ -428,6 +429,94 @@ export function getDisplayCamPublishStatus(rule, validation, displayMode) {
     return { label: "Not Published to CAM: Needs Review", tone: "amber" };
   }
   return status;
+}
+
+// Read-only display of the EXISTING materialize_lease_recovery_policy
+// outcome for this rule (auto-triggered on approve) -- never computed by
+// redoing the RPC's own hash/eligibility logic, only by reading what it
+// already wrote to lease_recovery_policies. `policies` must be pre-sorted
+// newest-first by the caller (created_at desc).
+//   Ready      -- current materialized policy is active (status='approved').
+//   Superseded -- the only/latest policy row(s) for this rule are all
+//                 superseded, with no active replacement.
+//   Blocked    -- no policy exists yet AND the lease has no premises on
+//                 file -- materialization's own real precondition, so this
+//                 will not resolve on its own without upstream data.
+//   Pending    -- no policy exists yet, but the lease does have premises --
+//                 materialization is expected to catch up (e.g. via Prepare
+//                 CAM Automatically), just hasn't run yet for this rule.
+// The rule's own approval-lifecycle status (distinct from resolveCamPolicyStatus,
+// which only describes whether an already-approved rule has a materialized CAM
+// recovery policy). Reuses the canonical deriveRuleDecision/isRuleSuperseded
+// engine (ruleDecisionEngine.js) instead of reading rule.approval_status
+// directly, so "not_applicable" (structurally excluded rules) and superseded
+// rules render as such rather than falling through to a generic Approved/Pending
+// badge.
+const RULE_APPROVAL_STATUS_DISPLAY = {
+  approved: { label: "Approved", tone: "emerald" },
+  rejected: { label: "Rejected", tone: "red" },
+  not_applicable: { label: "Not Applicable", tone: "slate" },
+  needs_review: { label: "Needs Review", tone: "amber" },
+};
+
+export function resolveRuleApprovalStatusDisplay(rule) {
+  // Two independent "superseded" signals exist in this codebase: isRuleSuperseded
+  // (row_status/status/extraction_status -- duplicate-clause/draft-version
+  // detection) and approval_status='superseded' (set directly by the
+  // supersede-duplicate-lease cascade, 20269900000036). Either means the same
+  // thing to a reviewer: this rule's terms are no longer the active ones.
+  if (isRuleSuperseded(rule) || normalizeRuleToken(rule?.approval_status) === "superseded") {
+    return { label: "Superseded", tone: "slate" };
+  }
+  const status = deriveRuleDecision(rule).status;
+  return RULE_APPROVAL_STATUS_DISPLAY[status] || { label: "Draft", tone: "slate" };
+}
+
+export function resolveCamPolicyStatus(rule, policies = [], leaseHasPremises = false) {
+  if (!isApprovedRule(rule)) return null;
+  if (policies.length === 0) {
+    return leaseHasPremises
+      ? { label: "CAM Policy Pending", tone: "amber" }
+      : { label: "CAM Policy Blocked", tone: "red" };
+  }
+  const current = policies[0];
+  if (current.status === "approved") return { label: "CAM Policy Ready", tone: "emerald" };
+  if (current.status === "superseded") return { label: "CAM Policy Superseded", tone: "slate" };
+  if (current.status === "rejected") return { label: "CAM Policy Blocked", tone: "red" };
+  return { label: "CAM Policy Pending", tone: "amber" };
+}
+
+// Read-only match status for an actual-expense classification row (matched_
+// classification / actual_missing_rule rowType only -- coverage-gap rows
+// have no expense to match against and return null). Describes the OUTCOME
+// of matching this ONE actual expense against approved lease rules/policies
+// -- it never creates a second row per lease or per matched rule; the
+// underlying buildClassificationRows() one-row-per-approved-actual-expense
+// invariant is unchanged, this only adds a display field to that same row.
+const MATCH_STATUS_DISPLAY = {
+  no_policy_required: { label: "No Policy Required", tone: "slate" },
+  needs_review: { label: "Needs Review", tone: "amber" },
+  no_policy_coverage: { label: "No Policy Coverage", tone: "red" },
+  multiple_policy_matches: { label: "Multiple Policy Matches", tone: "amber" },
+  direct_tenant_policy_found: { label: "Direct Tenant Policy Found", tone: "emerald" },
+  policy_coverage_found: { label: "Policy Coverage Found", tone: "emerald" },
+};
+
+export function resolveMatchStatus(row) {
+  if (row?.rowType !== "matched_classification" && row?.rowType !== "actual_missing_rule") return null;
+
+  if (!row.rule) {
+    if (row.camEligible === "no") return { state: "no_policy_required", ...MATCH_STATUS_DISPLAY.no_policy_required };
+    if (row.camEligible === "needs_review") return { state: "needs_review", ...MATCH_STATUS_DISPLAY.needs_review };
+    return { state: "no_policy_coverage", ...MATCH_STATUS_DISPLAY.no_policy_coverage };
+  }
+  if ((row.matchCandidateCount || 0) > 1) {
+    return { state: "multiple_policy_matches", ...MATCH_STATUS_DISPLAY.multiple_policy_matches };
+  }
+  if (leaseExpenseRuleService.getBillingTreatment(row.rule) === "direct_bill") {
+    return { state: "direct_tenant_policy_found", ...MATCH_STATUS_DISPLAY.direct_tenant_policy_found };
+  }
+  return { state: "policy_coverage_found", ...MATCH_STATUS_DISPLAY.policy_coverage_found };
 }
 
 export function buildRuleWorkflowPatch(rule, validation, overrides = {}) {

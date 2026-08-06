@@ -7,7 +7,9 @@ import {
   normalizeDisplayKey,
   isSupersededRule,
   displayDedupeKey,
-  dedupeDisplayRows
+  dedupeDisplayRows,
+  resolveMatchStatus,
+  resolveRuleApprovalStatusDisplay,
 } from './leaseExpenseRulesHelpers';
 
 describe('leaseExpenseRulesHelpers', () => {
@@ -85,5 +87,77 @@ describe('leaseExpenseRulesHelpers', () => {
     ];
 
     expect(dedupeDisplayRows(rows)).toHaveLength(2);
+  });
+
+  describe('resolveMatchStatus', () => {
+    it('returns null for coverage-gap rows (no actual expense to match)', () => {
+      expect(resolveMatchStatus({ rowType: 'rule_missing_actual' })).toBeNull();
+    });
+
+    it('flags No Policy Required when there is no rule and cam_eligible is no', () => {
+      expect(resolveMatchStatus({ rowType: 'actual_missing_rule', rule: null, camEligible: 'no' }).state)
+        .toBe('no_policy_required');
+    });
+
+    it('flags Needs Review when there is no rule and cam_eligible is needs_review', () => {
+      expect(resolveMatchStatus({ rowType: 'actual_missing_rule', rule: null, camEligible: 'needs_review' }).state)
+        .toBe('needs_review');
+    });
+
+    it('flags No Policy Coverage when there is no rule and cam_eligible is otherwise resolved', () => {
+      expect(resolveMatchStatus({ rowType: 'actual_missing_rule', rule: null, camEligible: 'yes' }).state)
+        .toBe('no_policy_coverage');
+    });
+
+    it('flags Multiple Policy Matches when more than one candidate qualified', () => {
+      const row = {
+        rowType: 'matched_classification',
+        rule: { payment_treatment: 'reimbursable', recovery_method: 'pro_rata_share' },
+        matchCandidateCount: 2,
+      };
+      expect(resolveMatchStatus(row).state).toBe('multiple_policy_matches');
+    });
+
+    it('flags Direct Tenant Policy Found for a direct_bill billing treatment', () => {
+      const row = {
+        rowType: 'matched_classification',
+        rule: { payment_treatment: 'reimbursable', recovery_method: 'direct_bill' },
+        matchCandidateCount: 1,
+      };
+      expect(resolveMatchStatus(row).state).toBe('direct_tenant_policy_found');
+    });
+
+    it('flags Policy Coverage Found for a normal single matched rule', () => {
+      const row = {
+        rowType: 'matched_classification',
+        rule: { payment_treatment: 'reimbursable', recovery_method: 'pro_rata_share' },
+        matchCandidateCount: 1,
+      };
+      expect(resolveMatchStatus(row).state).toBe('policy_coverage_found');
+    });
+  });
+
+  describe('resolveRuleApprovalStatusDisplay', () => {
+    it('labels a superseded rule as Superseded, not Approved/Rejected', () => {
+      expect(resolveRuleApprovalStatusDisplay({ approval_status: 'superseded' }).label).toBe('Superseded');
+    });
+
+    it('labels a structurally not-applicable rule as Not Applicable even if approval_status says approved', () => {
+      const rule = {
+        approval_status: 'approved',
+        is_excluded: true,
+        recoverable_from_tenant: 'no',
+        cam_eligible: 'no',
+      };
+      expect(resolveRuleApprovalStatusDisplay(rule).label).toBe('Not Applicable');
+    });
+
+    it('labels a rejected rule as Rejected', () => {
+      expect(resolveRuleApprovalStatusDisplay({ approval_status: 'rejected' }).label).toBe('Rejected');
+    });
+
+    it('labels a genuinely approved rule as Approved', () => {
+      expect(resolveRuleApprovalStatusDisplay({ approval_status: 'approved', review_status: 'approved' }).label).toBe('Approved');
+    });
   });
 });

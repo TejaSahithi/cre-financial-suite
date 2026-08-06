@@ -162,9 +162,13 @@ async function insertRule(admin: ReturnType<typeof adminClient>, org: { id: stri
 
 // Fully CAM-ready ("automatic", no manual reason needed): finalized,
 // recoverable, cam_eligible=yes, approved expense + approved rule, amount
-// fully allocated (no remainder), service_period_start inside fiscal 2026
-// (so send-to-cam's fiscal_year derivation lands on 2026, matching the
+// fully allocated (no remainder), service_period_start/end inside fiscal
+// 2026 (so send-to-cam's fiscal_year derivation lands on 2026, matching the
 // computation_snapshots fixtures used by the stale/locked tests below).
+// expense_category_id is left for the 20269900000048 trigger to resolve
+// from the linked rule's own category -- not set explicitly here, matching
+// the real-world path (a reviewer doesn't hand-pick a category id, the
+// system resolves it), and proving that resolution path stays live.
 async function insertReadyClassification(
   admin: ReturnType<typeof adminClient>,
   org: { id: string },
@@ -190,6 +194,7 @@ async function insertReadyClassification(
     condition_resolved: true,
     amount: expense.amount,
     service_period_start: "2026-03-15",
+    service_period_end: "2026-03-31",
     ...overrides,
   });
 }

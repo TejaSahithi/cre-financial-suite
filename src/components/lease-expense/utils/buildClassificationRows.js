@@ -133,10 +133,12 @@ export function hasExplicitCamExclusion(row) {
 }
 
 export function canSendFinalizedActualToCam(row) {
+  const isUnresolvedConditional = row?.recoverabilityResult === "conditional" && !row?.classificationRecord?.condition_resolved;
   return Boolean(
     (row?.actualExpenseId || row?.leaseExpenseRuleId) &&
     Number(row?.amount) > 0 &&
-    !row?.sentToCam
+    !row?.sentToCam &&
+    !isUnresolvedConditional
   );
 }
 
@@ -168,7 +170,9 @@ export function getCamPublicationReadiness(row) {
     { key: "rule_approved", label: "Lease rule approved", pass: ruleApproved },
     { key: "finalized", label: "Classification finalized", pass: row?.classificationStatus === "finalized" },
     { key: "amount_allocated", label: "Amount fully allocated", pass: Number(row?.amount) > 0 },
-    { key: "scope_validated", label: "Scope validated", pass: Boolean(row?.property || isRuleGap === false) },
+    { key: "scope_validated", label: "Scope validated", pass: isRuleGap ? true : Boolean(row?.property) },
+    { key: "category_resolved", label: "Canonical expense category resolved", pass: isRuleGap ? true : Boolean(row?.expenseCategoryId) },
+    { key: "service_period_set", label: "Service period set", pass: isRuleGap ? true : Boolean(row?.servicePeriodStart && row?.servicePeriodEnd) },
     { key: "conditions_resolved", label: "Conditions resolved", pass: row?.recoverabilityResult !== "conditional" },
     { key: "duplicate_check", label: "Not already published", pass: !row?.sentToCam },
     { key: "recoverable", label: "Recoverability is recoverable", pass: row?.recoverabilityResult === "recoverable" },
@@ -177,6 +181,54 @@ export function getCamPublicationReadiness(row) {
 
   const blockers = checks.filter((check) => !check.pass).map((check) => check.label);
   return { ready: blockers.length === 0, checks, blockers, alreadyPublished: false };
+}
+
+// CAM Input Decision -- the widened status vocabulary a reviewer sees per row,
+// replacing the old plain "Recoverability" column. Ten named states plus one
+// pre-finalization fallback ("Needs Review") that the spec's list doesn't
+// otherwise cover. Purely a display label -- publicationStatus (withdrawn vs
+// superseded) and readiness are passed in rather than re-derived, since both
+// already exist (cam_expense_inputs lookup, getCamPublicationReadiness).
+export function getCamInputDecision(row, { readiness = null, publicationStatus = null } = {}) {
+  if (publicationStatus === "superseded") {
+    return { state: "superseded", label: "Superseded" };
+  }
+  if (publicationStatus === "withdrawn") {
+    return { state: "withdrawn", label: "Withdrawn" };
+  }
+  if (row?.sentToCam) {
+    return { state: "published_to_cam", label: "Published to CAM" };
+  }
+  if (hasExplicitCamExclusion(row) || row?.camEligible === "no") {
+    return { state: "not_cam_eligible", label: "Not CAM Eligible" };
+  }
+  if (row?.recoverabilityResult === "conditional" && !row?.classificationRecord?.condition_resolved) {
+    return { state: "conditional_review_required", label: "Conditional — Review Required" };
+  }
+
+  const isRuleGap = row?.rowType === "rule_missing_actual";
+  if (!isRuleGap && row?.actualExpenseId) {
+    if (!row?.expenseCategoryId) {
+      return { state: "needs_category", label: "Needs Category" };
+    }
+    if (!row?.servicePeriodStart || !row?.servicePeriodEnd) {
+      return { state: "needs_service_period", label: "Needs Service Period" };
+    }
+    if (!row?.property) {
+      return { state: "needs_scope", label: "Needs Scope" };
+    }
+    const billingTreatment = row?.rule ? leaseExpenseRuleService.getBillingTreatment(row.rule) : null;
+    if (billingTreatment === "direct_bill" && !row?.tenantResolution?.tenant) {
+      return { state: "needs_direct_tenant", label: "Needs Direct Tenant" };
+    }
+  }
+
+  const effectiveReadiness = readiness || getCamPublicationReadiness(row);
+  if (row?.classificationStatus === "finalized" && effectiveReadiness.ready) {
+    return { state: "ready_to_send", label: "Ready to Send to CAM" };
+  }
+
+  return { state: "needs_review", label: "Needs Review" };
 }
 
 export function buildClassificationRows({
@@ -322,6 +374,12 @@ export function buildClassificationRows({
       property,
       building,
       unit,
+      // Only populated when this expense went through fresh matching this
+      // render (see the `if (!matchedRule)` branch above) -- a persisted,
+      // already-classified row has no live candidate count to report, so
+      // resolveMatchStatus in leaseExpenseRulesHelpers.js treats 0 the same
+      // as "not re-evaluated" rather than "no other candidates existed".
+      matchCandidateCount: match?.matchCandidateCount || 0,
       expenseDate: expense.expense_date || expense.date || expense.service_period_start || null,
       vendor: expense.vendor || expense.vendor_name || "-",
       ...(() => {
@@ -341,6 +399,9 @@ export function buildClassificationRows({
         : "-",
       amount: actualAmount,
       financialAmount: actualAmount,
+      expenseCategoryId: classificationRecord?.expense_category_id || null,
+      servicePeriodStart: classificationRecord?.service_period_start || expense.service_period_start || null,
+      servicePeriodEnd: classificationRecord?.service_period_end || expense.service_period_end || null,
       recoverabilityResult: recoverabilityResult || "needs_review",
       classificationStatus,
       exceptionType,
@@ -420,6 +481,9 @@ export function buildClassificationRows({
       ruleLabel: `${rule.expense_category || rule.category_name || "-"}${rule.expense_subcategory ? ` / ${rule.expense_subcategory}` : ""}`,
       amount: c?.amount != null ? Number(c.amount) : null,
       financialAmount: c?.amount != null ? Number(c.financial_amount || c.amount || 0) : 0,
+      expenseCategoryId: c?.expense_category_id || null,
+      servicePeriodStart: c?.service_period_start || null,
+      servicePeriodEnd: c?.service_period_end || null,
       recoverabilityResult: normalizeText(c?.recoverability_result || c?.recovery_status || leaseExpenseRuleService.getRecoverableDecision(rule)) === "yes"
         ? "recoverable"
         : normalizeText(leaseExpenseRuleService.getRecoverableDecision(rule)) || "needs_review",

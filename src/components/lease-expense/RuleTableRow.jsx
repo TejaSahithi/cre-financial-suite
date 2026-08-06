@@ -32,6 +32,7 @@ import {
   formatConfidence,
   truncate,
   getDisplayCamPublishStatus,
+  resolveRuleApprovalStatusDisplay,
 } from "./utils/leaseExpenseRulesHelpers";
 
 export default function RuleTableRow({
@@ -44,6 +45,7 @@ export default function RuleTableRow({
   isUpdating,
   isSelected = false,
   canSelect = false,
+  camPolicyStatus = null,
   onSelectChange,
   onApprove,
   onReject,
@@ -167,13 +169,19 @@ export default function RuleTableRow({
       <TableCell className="text-sm text-slate-700">{billingSummary || "-"}</TableCell>
       <TableCell className="max-w-[320px]">
         <div className="mb-1 flex flex-wrap gap-1">
-          <Badge className={`text-[10px] ${
-            String(rule.approval_status || rule.row_status).toLowerCase() === "approved"
-              ? "bg-emerald-100 text-emerald-700"
-              : "bg-amber-100 text-amber-800"
-          }`}>
-            {statusSummary}
-          </Badge>
+          {(() => {
+            const approvalDisplay = resolveRuleApprovalStatusDisplay(rule);
+            const toneClass =
+              approvalDisplay.tone === "emerald" ? "bg-emerald-100 text-emerald-700"
+              : approvalDisplay.tone === "red" ? "bg-red-100 text-red-700"
+              : approvalDisplay.tone === "amber" ? "bg-amber-100 text-amber-800"
+              : "bg-slate-100 text-slate-600";
+            return (
+              <Badge className={`text-[10px] ${toneClass}`} title={statusSummary}>
+                {approvalDisplay.label}
+              </Badge>
+            );
+          })()}
         </div>
         {(() => {
           const camPublishStatus = getDisplayCamPublishStatus(rule, validation, displayMode);
@@ -190,6 +198,19 @@ export default function RuleTableRow({
             </Badge>
           );
         })()}
+        {camPolicyStatus && (
+          <Badge
+            className={`mt-1 text-[10px] whitespace-normal text-left leading-tight ${
+              camPolicyStatus.tone === "emerald" ? "bg-emerald-100 text-emerald-700"
+              : camPolicyStatus.tone === "amber" ? "bg-amber-100 text-amber-800"
+              : camPolicyStatus.tone === "red" ? "bg-red-100 text-red-700"
+              : "bg-slate-100 text-slate-600"
+            }`}
+            title="Whether this approved rule has a materialized CAM recovery policy"
+          >
+            {camPolicyStatus.label}
+          </Badge>
+        )}
         <div className="mt-2 text-xs text-slate-600">
           {sourcePage ? <span className="mr-2 font-medium">p. {sourcePage}</span> : null}
           {sourceText && sourceText !== "-" ? <span className="italic">"{truncate(sourceText)}"</span> : "-"}

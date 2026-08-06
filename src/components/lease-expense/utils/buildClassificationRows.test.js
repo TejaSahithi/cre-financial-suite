@@ -7,7 +7,8 @@ import {
   leaseCoversYear,
   isClassificationSentToCam,
   isAutomaticCamReadyRow,
-  buildClassificationRows
+  buildClassificationRows,
+  getCamInputDecision
 } from './buildClassificationRows';
 
 describe('buildClassificationRows', () => {
@@ -232,5 +233,52 @@ describe('buildClassificationRows', () => {
     expect(isClassificationSentToCam({ sent_to_cam: true })).toBe(true);
     expect(isClassificationSentToCam({ cam_status: 'cam_ready' })).toBe(false);
     expect(isClassificationSentToCam({ cam_status: 'needs_review' })).toBe(false);
+  });
+
+  describe('getCamInputDecision — direct recovery', () => {
+    // Direct-recovery scenario 2/4: a finalized, CAM-eligible, categorized,
+    // scoped, service-period-complete expense matched to a direct_bill rule
+    // (recovery_method='direct_bill', billed to one specific tenant, never
+    // pro-rated across a shared pool) but with no resolvable tenant on the
+    // lease. Distinct from "Needs Scope"/"Needs Category" -- everything else
+    // about the row is ready, only the direct-tenant identity is missing.
+    it('flags "Needs Direct Tenant" for a direct_bill rule with no resolvable tenant', () => {
+      const row = {
+        rowType: 'matched_classification',
+        actualExpenseId: 'expense-1',
+        classificationStatus: 'finalized',
+        recoverabilityResult: 'recoverable',
+        camEligible: 'yes',
+        expenseCategoryId: 'category-1',
+        servicePeriodStart: '2026-01-01',
+        servicePeriodEnd: '2026-01-31',
+        property: { id: 'property-1' },
+        sentToCam: false,
+        classificationRecord: { id: 'classification-1' },
+        rule: { recovery_method: 'direct_bill', payment_treatment: 'reimbursable' },
+        tenantResolution: { tenant: null },
+      };
+      expect(getCamInputDecision(row).state).toBe('needs_direct_tenant');
+    });
+
+    it('resolves to "Ready to Send to CAM" once the direct tenant is resolved', () => {
+      const row = {
+        rowType: 'matched_classification',
+        actualExpenseId: 'expense-1',
+        classificationStatus: 'finalized',
+        recoverabilityResult: 'recoverable',
+        camEligible: 'yes',
+        expenseCategoryId: 'category-1',
+        servicePeriodStart: '2026-01-01',
+        servicePeriodEnd: '2026-01-31',
+        property: { id: 'property-1' },
+        amount: 100,
+        sentToCam: false,
+        classificationRecord: { id: 'classification-1' },
+        rule: { recovery_method: 'direct_bill', payment_treatment: 'reimbursable', published_to_cam: true },
+        tenantResolution: { tenant: { id: 'tenant-1', name: 'Direct Tenant' } },
+      };
+      expect(getCamInputDecision(row).state).toBe('ready_to_send');
+    });
   });
 });
