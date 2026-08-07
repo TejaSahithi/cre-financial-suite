@@ -83,7 +83,7 @@ export default function ContactUs() {
 
       <div className="max-w-6xl mx-auto px-6 py-16">
         <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold text-slate-900 mb-3">Contact Us</h1>
+          <h1 className="text-[28px] font-bold text-slate-900 mb-3">Contact Us</h1>
           <p className="text-lg text-slate-500 max-w-xl mx-auto">Have questions about CRE Platform? Our team is here to help.</p>
         </div>
 

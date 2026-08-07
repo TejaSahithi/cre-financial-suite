@@ -74,7 +74,7 @@ export default function Welcome() {
           <div className="w-16 h-16 bg-blue-100/50 rounded-2xl flex items-center justify-center mx-auto mb-5 border border-blue-200/50">
             <KeyRound className="w-8 h-8 text-blue-600" />
           </div>
-          <h1 className="text-3xl font-bold text-slate-900 tracking-tight mb-2">
+          <h1 className="text-[28px] font-bold text-slate-900 tracking-tight mb-2">
             Welcome, {firstName}!
           </h1>
           <p className="text-slate-500 text-[15px] px-4">

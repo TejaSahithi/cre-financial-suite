@@ -442,7 +442,7 @@ export default function CreateBudget() {
       <div className="flex items-center justify-between">
         <div>
           <p className="text-xs text-slate-400 mb-1">CAM Engine › Budget Studio</p>
-          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+          <h1 className="text-[28px] font-bold text-slate-900 flex items-center gap-2">
             <Zap className="w-6 h-6 text-blue-600" />
             Budget Studio
           </h1>

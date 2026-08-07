@@ -202,7 +202,7 @@ export default function RequestDemo() {
                 <Play className="w-3.5 h-3.5" />
                 <span className="text-[10px] font-black uppercase tracking-widest">Instant Video Demo</span>
               </motion.div>
-              <motion.h1 initial={{ opacity:0, y:20 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.1 }} className="text-3xl lg:text-4xl font-black text-slate-900 tracking-tight leading-[1.1]">
+              <motion.h1 initial={{ opacity:0, y:20 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.1 }} className="text-[28px] font-black text-slate-900 tracking-tight leading-[1.1]">
                 See the Platform <span className="text-blue-600">in Action.</span>
               </motion.h1>
               <motion.p initial={{ opacity:0, y:20 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.2 }} className="text-base text-slate-500 max-w-sm leading-relaxed">

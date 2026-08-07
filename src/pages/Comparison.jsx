@@ -90,7 +90,7 @@ export default function Comparison() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Year-over-Year Comparison</h1>
+          <h1 className="text-[28px] font-bold text-slate-900">Year-over-Year Comparison</h1>
           <p className="text-sm text-slate-500">Split-screen financial comparison across all entities</p>
         </div>
         <div className="flex items-center gap-3">

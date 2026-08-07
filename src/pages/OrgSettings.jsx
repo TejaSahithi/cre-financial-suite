@@ -166,7 +166,7 @@ export default function OrgSettings() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Organization Settings</h1>
+          <h1 className="text-[28px] font-bold text-slate-900">Organization Settings</h1>
           <p className="text-sm text-slate-500">{org.name} · {(org.plan || 'starter').charAt(0).toUpperCase() + (org.plan || 'starter').slice(1)} Plan</p>
         </div>
         <Button onClick={handleSave} disabled={!dirty || updateOrg.isPending} className="bg-[#1a2744] hover:bg-[#243b67]">

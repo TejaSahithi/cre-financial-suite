@@ -16,7 +16,7 @@ export default function ActualsVariance() {
   return (
     <div className="p-4 lg:p-6 space-y-4">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">Actuals & Variance</h1>
+        <h1 className="text-[28px] font-bold text-slate-900">Actuals & Variance</h1>
         <p className="text-sm text-slate-500">Actual financial performance and budget variance analysis</p>
       </div>
 

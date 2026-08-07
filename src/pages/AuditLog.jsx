@@ -99,7 +99,7 @@ export default function AuditLog() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <div className="flex items-center gap-2 mb-1"><Shield className="w-5 h-5 text-slate-500" /><h1 className="text-2xl font-bold text-slate-900">Audit Log</h1></div>
+          <div className="flex items-center gap-2 mb-1"><Shield className="w-5 h-5 text-slate-500" /><h1 className="text-[28px] font-bold text-slate-900">Audit Log</h1></div>
           <p className="text-sm text-slate-500">Immutable activity log · {logs.length} records</p>
         </div>
         <Button variant="outline"><Download className="w-4 h-4 mr-2" />Export Log</Button>

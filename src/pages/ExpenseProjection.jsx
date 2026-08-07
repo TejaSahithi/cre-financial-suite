@@ -355,7 +355,7 @@ export default function ExpenseProjection() {
                 Scope: {selectedPropertyName}
               </Badge>
             </div>
-            <h1 className="text-2xl lg:text-3xl font-extrabold tracking-tight text-white">Expense Projection</h1>
+            <h1 className="text-[28px] font-extrabold tracking-tight text-white">Expense Projection</h1>
             <p className="mt-1 max-w-2xl text-xs lg:text-sm text-slate-300">
               Interactive financial dashboard driven by finalized expense classifications. Compare actuals, prior baselines, and budgets to forecast CAM recoveries.
             </p>

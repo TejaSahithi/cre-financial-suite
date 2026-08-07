@@ -18,7 +18,7 @@ export default function PortfolioIntelligenceDashboard({ viewModel, criticalDate
     <div className="p-4 lg:p-6 space-y-4">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Portfolio Intelligence</h1>
+          <h1 className="text-[28px] font-bold text-slate-900">Portfolio Intelligence</h1>
           <p className="text-xs text-slate-500">Canonical facts, operational dates, risk, reconciliation, and metric lineage.</p>
         </div>
         <div className="text-xs text-slate-500">{isLoading ? "Refreshing" : error ? "Using last available view" : "Ready"}</div>

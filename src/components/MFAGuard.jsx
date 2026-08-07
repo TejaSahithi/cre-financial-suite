@@ -222,7 +222,7 @@ export default function MFAGuard({ onVerified }) {
             <div className="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
               <Shield className="w-8 h-8 text-blue-600" />
             </div>
-            <h1 className="text-2xl font-bold text-slate-900 mb-2">
+            <h1 className="text-[28px] font-bold text-slate-900 mb-2">
               {phase === "enroll" ? "Set Up Two-Factor Authentication" : "Enter Verification Code"}
             </h1>
             <p className="text-slate-500 text-sm">

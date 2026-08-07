@@ -60,7 +60,7 @@ export default function Notifications() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold text-slate-900">Notification Center</h1>
+          <h1 className="text-[28px] font-bold text-slate-900">Notification Center</h1>
           {unread > 0 && <Badge className="bg-red-100 text-red-700">{unread} unread</Badge>}
         </div>
         <div className="flex gap-2">

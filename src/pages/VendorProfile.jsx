@@ -148,7 +148,7 @@ export default function VendorProfile() {
             {vendor.name?.charAt(0)?.toUpperCase()}
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">{vendor.name}</h1>
+            <h1 className="text-[28px] font-bold text-slate-900">{vendor.name}</h1>
             <div className="flex items-center gap-2 mt-1">
               {vendor.company && <span className="text-sm text-slate-500">{vendor.company}</span>}
               <Badge className={`${statusColors[vendor.status]} text-[9px] uppercase`}>{vendor.status}</Badge>

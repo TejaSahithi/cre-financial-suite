@@ -73,7 +73,7 @@ export default function SecurityQuestionsSetup() {
           <div className="w-16 h-16 mx-auto bg-blue-100 rounded-full flex items-center justify-center mb-6 shadow-sm border border-blue-200">
             <ShieldCheck className="w-8 h-8 text-blue-600" />
           </div>
-          <h1 className="text-3xl font-bold text-slate-900 tracking-tight mb-3">Security Questions</h1>
+          <h1 className="text-[28px] font-bold text-slate-900 tracking-tight mb-3">Security Questions</h1>
           <p className="text-slate-500 text-sm max-w-sm mx-auto leading-relaxed">
             Please set up your security questions. These will be used to verify your identity if you lose access to your account.
           </p>

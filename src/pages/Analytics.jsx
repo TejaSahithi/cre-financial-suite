@@ -56,7 +56,7 @@ export default function Analytics() {
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">Analytics</h1>
+        <h1 className="text-[28px] font-bold text-slate-900">Analytics</h1>
         <p className="text-sm text-slate-500">Advanced portfolio performance metrics</p>
       </div>
 

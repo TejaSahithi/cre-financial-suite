@@ -698,7 +698,7 @@ export default function AddExpense() {
         <ArrowLeft className="w-4 h-4" />
         Back to Expenses
       </Link>
-      <h1 className="text-2xl font-bold text-slate-900">
+      <h1 className="text-[28px] font-bold text-slate-900">
         {isEditing ? "Edit Expense" : isInvoiceMode ? "Add Expense from Invoice" : "Add Expense"}
       </h1>
 

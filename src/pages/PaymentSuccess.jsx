@@ -92,7 +92,7 @@ export default function PaymentSuccess() {
               <div className="inline-flex w-24 h-24 rounded-3xl bg-amber-100 items-center justify-center mb-8 shadow-lg shadow-amber-200/50">
                 <Loader2 className="w-12 h-12 text-amber-600 animate-spin" strokeWidth={1.5} />
               </div>
-              <h1 className="text-3xl font-black text-slate-900 mb-3">Verifying Payment...</h1>
+              <h1 className="text-[28px] font-black text-slate-900 mb-3">Verifying Payment...</h1>
               <p className="text-slate-500 text-lg">Please wait while we confirm your payment with Stripe.</p>
             </>
           )}
@@ -106,7 +106,7 @@ export default function PaymentSuccess() {
                 <div className="inline-flex items-center gap-1.5 bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs font-bold mb-4">
                   Payment Confirmed
                 </div>
-                <h1 className="text-4xl font-black text-slate-900 mb-3">Setup Submitted</h1>
+                <h1 className="text-[28px] font-black text-slate-900 mb-3">Setup Submitted</h1>
                 <p className="text-slate-500 text-lg">
                   Your payment was verified. Pending admin review.
                 </p>
@@ -159,7 +159,7 @@ export default function PaymentSuccess() {
               <div className="inline-flex w-24 h-24 rounded-3xl bg-red-100 items-center justify-center mb-8 shadow-lg shadow-red-200/50">
                 <AlertCircle className="w-12 h-12 text-red-600" strokeWidth={1.5} />
               </div>
-              <h1 className="text-3xl font-black text-slate-900 mb-3">Still waiting for confirmation</h1>
+              <h1 className="text-[28px] font-black text-slate-900 mb-3">Still waiting for confirmation</h1>
               <p className="text-slate-500 text-lg mb-6">Payment not found yet. Please check back later or contact support if the issue persists.</p>
               <Button
                 onClick={() => window.location.reload()}

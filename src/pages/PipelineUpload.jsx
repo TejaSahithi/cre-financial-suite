@@ -17,7 +17,7 @@ export default function PipelineUpload() {
   return (
     <div className="p-6 space-y-6 max-w-2xl">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">Enhanced Data Upload & Processing</h1>
+        <h1 className="text-[28px] font-bold text-slate-900">Enhanced Data Upload & Processing</h1>
         <p className="text-sm text-slate-500 mt-1">
           Upload files with AI-powered extraction and custom field support. 
           CSV/Excel files use standard processing, while documents (PDF, Word, images) get enhanced AI extraction.

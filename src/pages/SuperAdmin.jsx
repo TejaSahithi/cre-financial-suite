@@ -704,7 +704,7 @@ export default function SuperAdmin() {
           <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center"><Shield className="w-5 h-5 text-amber-600" /></div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-bold text-slate-900">SuperAdmin Console</h1>
+              <h1 className="text-[28px] font-bold text-slate-900">SuperAdmin Console</h1>
               {pendingCount > 0 && <Badge className="bg-amber-100 text-amber-700">{pendingCount} pending approval</Badge>}
             </div>
             <p className="text-sm text-slate-500">Platform-wide management · CRE Platform v2.4.1 · All organizations</p>

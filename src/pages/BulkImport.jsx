@@ -426,7 +426,7 @@ export default function BulkImport() {
 
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Bulk Expense Import</h1>
+          <h1 className="text-[28px] font-bold text-slate-900">Bulk Expense Import</h1>
           <p className="text-sm text-slate-500">Import CSV or Excel</p>
         </div>
       </div>

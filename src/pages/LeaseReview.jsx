@@ -3110,7 +3110,7 @@ export default function LeaseReview() {
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Lease Review</h1>
+          <h1 className="text-[28px] font-bold text-slate-900">Lease Review</h1>
           <p className="text-sm text-slate-500">
             {summaryTenantName || "Unknown tenant"} -{" "}
             {totalSf ? `${Number(totalSf).toLocaleString()} SF` : "-"} --{" "}

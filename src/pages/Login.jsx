@@ -364,7 +364,7 @@ export default function Login() {
       <div className="flex-1 flex items-center justify-center px-4 pb-16">
         <div className="max-w-[420px] w-full">
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-slate-900 tracking-tight mb-2">
+            <h1 className="text-[28px] font-bold text-slate-900 tracking-tight mb-2">
               {view === "create" ? "Create your account" : "Welcome back"}
             </h1>
             <p className="text-slate-500 text-sm">

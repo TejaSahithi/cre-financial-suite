@@ -304,7 +304,7 @@ export default function Dashboard() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <div className="flex items-center gap-3">
-          <h1 className="text-xl font-extrabold text-slate-900 tracking-tight">Dashboard</h1>
+          <h1 className="text-[28px] font-extrabold text-slate-900 tracking-tight">Dashboard</h1>
           <Badge className="bg-blue-100 text-blue-700 text-xs font-bold uppercase tracking-wide px-2 py-0.5">Live</Badge>
           <span className="text-xs text-slate-400">
             {orgName || "Organization"} ·{" "}

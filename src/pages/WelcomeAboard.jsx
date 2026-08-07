@@ -234,7 +234,7 @@ export default function WelcomeAboard() {
             <CheckCircle2 className="w-3.5 h-3.5" />
             Account Activated
           </div>
-          <h1 className="text-4xl md:text-5xl font-black text-slate-900 mb-4 tracking-tight">
+          <h1 className="text-[28px] font-black text-slate-900 mb-4 tracking-tight">
             Welcome aboard, <span className="text-blue-600">{firstName}!</span>
           </h1>
           <div className="flex items-center justify-center gap-2 mb-4 flex-wrap">

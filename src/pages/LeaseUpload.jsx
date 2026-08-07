@@ -789,7 +789,7 @@ export default function LeaseUpload() {
       </Link>
 
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Upload Lease</h1>
+        <h1 className="text-[28px] font-semibold tracking-tight text-slate-900">Upload Lease</h1>
         <p className="text-sm text-slate-500">
           Intake a lease document. AI extraction runs automatically; review and approval happen in Lease Review.
         </p>

@@ -38,7 +38,7 @@ export default function HeroSection({ onRequestAccess, onRequestDemo }) {
               <span className="text-blue-300 text-sm font-medium">Trusted by 500+ commercial properties nationwide</span>
             </div>
 
-            <h1 className="text-4xl md:text-5xl lg:text-[3.5rem] font-extrabold text-white leading-[1.1] tracking-tight">
+            <h1 className="text-[28px] font-extrabold text-white leading-[1.1] tracking-tight">
               The Operating System for
               <br />
               <span className="bg-gradient-to-r from-blue-400 via-cyan-400 to-blue-400 bg-clip-text text-transparent">

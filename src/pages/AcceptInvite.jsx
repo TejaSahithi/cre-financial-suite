@@ -220,7 +220,7 @@ export default function AcceptInvite() {
           <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-100">
             <Loader2 className="h-7 w-7 animate-spin text-blue-600" />
           </div>
-          <h1 className="text-2xl font-bold text-slate-900">Verifying your invite</h1>
+          <h1 className="text-[28px] font-bold text-slate-900">Verifying your invite</h1>
           <p className="mt-2 text-sm text-slate-500">
             We&apos;re securely validating your invitation and creating your sign-in session before setup begins.
           </p>
@@ -236,7 +236,7 @@ export default function AcceptInvite() {
           <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-red-100">
             <AlertCircle className="h-7 w-7 text-red-600" />
           </div>
-          <h1 className="text-2xl font-bold text-slate-900">Invite link could not be verified</h1>
+          <h1 className="text-[28px] font-bold text-slate-900">Invite link could not be verified</h1>
           <p className="mt-2 text-sm text-slate-500">{inviteError}</p>
           <div className="mt-6 space-y-3">
             <Button className="w-full bg-[#1a2744] hover:bg-[#243b67]" onClick={() => window.location.reload()}>
@@ -261,7 +261,7 @@ export default function AcceptInvite() {
               <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-slate-900">Welcome to CRE Suite</h1>
+          <h1 className="text-[28px] font-bold text-slate-900">Welcome to CRE Suite</h1>
           <p className="text-slate-500 text-sm mt-1">Let&apos;s get your invited account ready</p>
         </div>
 

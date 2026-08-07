@@ -286,7 +286,7 @@ export default function LeaseDetail() {
 
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Lease Detail</h1>
+          <h1 className="text-[28px] font-bold text-slate-900">Lease Detail</h1>
           <p className="text-sm text-slate-500">
             {headerTenantName} ·{" "}
             {getLeaseFieldLabel("lease_type", headerLeaseType) || "Unknown lease type"}

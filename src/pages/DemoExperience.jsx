@@ -91,7 +91,7 @@ export default function DemoExperience() {
 
       {/* Hero Section */}
       <div className="w-full bg-[#1a2744] text-white py-16 px-4 text-center">
-        <h1 className="text-4xl md:text-5xl font-extrabold mb-6 max-w-4xl mx-auto tracking-tight">
+        <h1 className="text-[28px] font-extrabold mb-6 max-w-4xl mx-auto tracking-tight">
           See How CRE Teams Automate Budgeting & CAM
         </h1>
         <p className="text-lg text-slate-300 max-w-2xl mx-auto mb-8">

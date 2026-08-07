@@ -198,7 +198,7 @@ export default function PropertyDetail() {
               <div className="flex items-center gap-3 mb-2">
                 <div className="w-12 h-12 bg-slate-100 rounded-xl flex items-center justify-center"><Home className="w-6 h-6 text-slate-500" /></div>
                 <div>
-                  <h1 className="text-2xl font-bold text-slate-900">{property.name}</h1>
+                  <h1 className="text-[28px] font-bold text-slate-900">{property.name}</h1>
                   <div className="flex items-center gap-2 text-sm text-slate-500 flex-wrap">
                     <MapPin className="w-3.5 h-3.5" />
                     {property.address}{property.city ? `, ${property.city}` : ''}{property.state ? `, ${property.state} ${property.zip || ''}` : ''}

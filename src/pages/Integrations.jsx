@@ -96,7 +96,7 @@ export default function Integrations() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Integrations</h1>
+          <h1 className="text-[28px] font-bold text-slate-900">Integrations</h1>
           <p className="text-sm text-slate-500">Connect with accounting, PMS, and market data platforms</p>
         </div>
         <div className="flex gap-2">
