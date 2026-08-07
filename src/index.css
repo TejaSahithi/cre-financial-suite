@@ -29,6 +29,9 @@
     --info-soft: #edf2f8;
     --shadow: 0 10px 28px rgba(60, 46, 36, 0.08);
     --shadow-soft: 0 4px 14px rgba(60, 46, 36, 0.06);
+    --card-shadow: 0 4px 14px rgba(30, 45, 65, 0.06);
+    --card-hover-shadow: 0 10px 24px rgba(30, 45, 65, 0.10);
+    --motion-fast: 180ms;
     --sidebar-width: 240px;
     --topbar-height: 72px;
     --radius: 10px;
@@ -94,6 +97,8 @@
     --info-soft: #24303c;
     --shadow: 0 14px 34px rgba(0,0,0,.28);
     --shadow-soft: 0 6px 18px rgba(0,0,0,.18);
+    --card-shadow: 0 6px 18px rgba(0,0,0,.18);
+    --card-hover-shadow: 0 12px 28px rgba(0,0,0,.26);
 
     --background: 140 10% 10%;
     --foreground: 38 30% 91%;

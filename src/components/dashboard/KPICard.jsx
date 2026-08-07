@@ -3,6 +3,7 @@ import { TrendingUp, TrendingDown, Minus, ChevronRight, X, ExternalLink } from "
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { motion, AnimatePresence } from "framer-motion";
+import CountUpValue from "@/components/ui/count-up-value";
 
 const gradients = {
   blue: "from-blue-600 to-blue-500",
@@ -10,6 +11,14 @@ const gradients = {
   violet: "from-violet-600 to-violet-500",
   amber: "from-amber-500 to-orange-500",
   rose: "from-rose-600 to-pink-500",
+};
+
+const hoverBorders = {
+  blue: "hover:border-blue-300",
+  emerald: "hover:border-emerald-300",
+  violet: "hover:border-violet-300",
+  amber: "hover:border-amber-300",
+  rose: "hover:border-rose-300",
 };
 
 function fmtVal(value, prefix = "$") {
@@ -25,31 +34,40 @@ function fmtVal(value, prefix = "$") {
 
 export default function KPICard({ icon: Icon, label, value, prefix = "$", change, changeLabel = "vs prior year", color = "blue", insight, breakdown, drillPage, secondaryMetrics }) {
   const [showBreakdown, setShowBreakdown] = useState(false);
+  const isClickable = Boolean(breakdown);
   const isPositive = change > 0;
   const isNeutral = change === 0 || change === null || change === undefined;
   const TrendIcon = isNeutral ? Minus : isPositive ? TrendingUp : TrendingDown;
+  const formattedValue = fmtVal(value, prefix);
 
   return (
     <>
       <div
-        className="relative overflow-hidden cursor-pointer group hover:shadow-md transition-all duration-200 bg-white rounded-lg border border-slate-200/80"
-        onClick={() => breakdown ? setShowBreakdown(true) : null}
+        className={`relative flex min-h-[246px] flex-col overflow-hidden rounded-[10px] border border-slate-200/80 bg-white shadow-[var(--card-shadow)] transition-[border,box-shadow,transform] duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 ${isClickable ? `cursor-pointer hover:-translate-y-[3px] hover:shadow-[var(--card-hover-shadow)] active:translate-y-0 active:scale-[.98] ${hoverBorders[color] || hoverBorders.blue}` : ""}`}
+        onClick={() => isClickable ? setShowBreakdown(true) : null}
+        onKeyDown={(event) => {
+          if (!isClickable || (event.key !== "Enter" && event.key !== " ")) return;
+          event.preventDefault();
+          setShowBreakdown(true);
+        }}
+        role={isClickable ? "button" : undefined}
+        tabIndex={isClickable ? 0 : undefined}
       >
         <div className={`absolute top-0 left-0 w-full h-[3px] bg-gradient-to-r ${gradients[color]}`} />
-        <div className="p-3.5">
-          <div className="flex items-center justify-between mb-1.5">
+        <div className="flex h-full flex-1 flex-col p-4">
+          <div className="mb-3 flex min-h-[44px] items-start justify-between">
             <div className="flex items-center gap-2">
-              <div className={`w-7 h-7 rounded-lg bg-gradient-to-br ${gradients[color]} flex items-center justify-center`}>
-                <Icon className="w-3.5 h-3.5 text-white" />
+              <div className={`flex h-11 w-11 items-center justify-center rounded-[10px] border border-white/30 bg-gradient-to-br ${gradients[color]} shadow-sm transition-[filter] duration-200 group-hover:saturate-125`}>
+                <Icon className="h-5 w-5 text-white" strokeWidth={2} />
               </div>
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{label}</span>
+              <span className="pt-1 text-[13px] font-bold uppercase leading-tight tracking-wide text-slate-600">{label}</span>
             </div>
             {breakdown && <ChevronRight className="w-3.5 h-3.5 text-slate-300 group-hover:text-slate-500 transition-colors" />}
           </div>
-          <p className="text-2xl font-extrabold text-slate-900 tabular-nums tracking-tight leading-tight">
-            {fmtVal(value, prefix)}
+          <p className="text-[30px] font-extrabold text-slate-950 tabular-nums tracking-normal leading-tight">
+            <CountUpValue value={formattedValue} />
           </p>
-          <div className="flex items-center justify-between mt-1.5">
+          <div className="mt-3 flex min-h-[24px] items-center justify-between">
             {!isNeutral ? (
               <div className="flex items-center gap-1">
                 <span className={`inline-flex items-center gap-0.5 text-xs font-bold ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
@@ -66,7 +84,7 @@ export default function KPICard({ icon: Icon, label, value, prefix = "$", change
             )}
           </div>
           {secondaryMetrics && secondaryMetrics.length > 0 && (
-            <div className="mt-2 pt-2 border-t border-slate-100 grid grid-cols-2 gap-x-3 gap-y-1">
+            <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-slate-100 pt-3">
               {secondaryMetrics.map((m, i) => (
                 <div key={i} className="flex items-baseline justify-between">
                   <span className="text-xs text-slate-400 truncate">{m.label}</span>
@@ -76,7 +94,7 @@ export default function KPICard({ icon: Icon, label, value, prefix = "$", change
             </div>
           )}
           {insight && (
-            <p className="mt-1.5 text-xs text-slate-500 leading-snug border-t border-dashed border-slate-100 pt-1.5">
+            <p className="mt-auto border-t border-dashed border-slate-100 pt-2 text-xs leading-snug text-slate-600">
               💡 {insight}
             </p>
           )}
@@ -96,7 +114,7 @@ export default function KPICard({ icon: Icon, label, value, prefix = "$", change
               <div className={`px-5 py-3.5 bg-gradient-to-r ${gradients[color]} flex items-center justify-between`}>
                 <div>
                   <p className="text-white/70 text-xs font-semibold uppercase tracking-wider">{label} — Drill-Down</p>
-                  <p className="text-white text-lg font-bold tabular-nums">{fmtVal(value, prefix)}</p>
+                  <p className="text-white text-lg font-bold tabular-nums">{formattedValue}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   {drillPage && (

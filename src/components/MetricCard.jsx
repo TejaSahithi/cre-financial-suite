@@ -1,19 +1,21 @@
 import React from "react";
+import CountUpValue from "@/components/ui/count-up-value";
 
 export default function MetricCard({ label, value, sub, icon: Icon, color = "bg-slate-50 text-slate-600", trend, className = "" }) {
   return (
-    <div className={`group relative overflow-hidden rounded-xl border border-slate-200/80 bg-white p-4 transition-all hover:shadow-md hover:border-slate-300 ${className}`}>
-      <div className="absolute top-0 right-0 w-20 h-20 bg-gradient-to-bl from-slate-50 to-transparent rounded-bl-full opacity-50" />
+    <div className={`group relative min-h-[118px] overflow-hidden rounded-[10px] border border-slate-200/80 bg-white p-5 shadow-[var(--card-shadow)] transition-[border,box-shadow] duration-200 hover:border-slate-300 hover:shadow-[var(--shadow-soft)] ${className}`}>
       <div className="relative">
-        <div className="flex items-center justify-between mb-2">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">{label}</p>
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <p className="pt-1 text-[13px] font-bold uppercase leading-tight tracking-wide text-slate-600">{label}</p>
           {Icon && (
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${color} transition-transform group-hover:scale-110`}>
-              <Icon className="w-4 h-4" />
+            <div className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-[10px] border border-current/10 ${color}`}>
+              <Icon className="h-5 w-5" strokeWidth={2} />
             </div>
           )}
         </div>
-        <p className="text-2xl font-bold text-slate-900 tracking-tight">{value}</p>
+        <p className="text-[32px] font-extrabold leading-tight text-slate-950 tabular-nums tracking-normal">
+          <CountUpValue value={value} />
+        </p>
         {(sub || trend) && (
           <div className="flex items-center gap-1.5 mt-1">
             {trend && (
