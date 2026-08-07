@@ -6,7 +6,7 @@ const Table = React.forwardRef(({ className, ...props }, ref) => (
   <div className="relative w-full overflow-auto">
     <table
       ref={ref}
-      className={cn("w-full min-w-[760px] caption-bottom border-collapse text-xs text-[var(--ink)]", className)}
+      className={cn("w-full min-w-[760px] caption-bottom border-collapse text-[13px] text-[var(--ink)]", className)}
       {...props} />
   </div>
 ))
@@ -48,7 +48,7 @@ const TableHead = React.forwardRef(({ className, ...props }, ref) => (
   <th
     ref={ref}
     className={cn(
-      "h-10 bg-[var(--surface-2)] px-3 py-[11px] text-left align-middle text-[10px] font-bold uppercase tracking-[.05em] text-[var(--muted)] [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+      "h-10 bg-[var(--surface-2)] px-3 py-[11px] text-left align-middle text-[11px] font-bold uppercase tracking-[.05em] text-[var(--muted)] [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
       className
     )}
     {...props} />
@@ -59,7 +59,7 @@ const TableCell = React.forwardRef(({ className, ...props }, ref) => (
   <td
     ref={ref}
     className={cn(
-      "px-3 py-[11px] align-middle text-xs text-[var(--ink)] [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+      "px-3 py-[11px] align-middle text-[13px] text-[var(--ink)] [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
       className
     )}
     {...props} />
