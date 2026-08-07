@@ -14,7 +14,6 @@ import {
   MoreHorizontal,
   Plus,
   RefreshCw,
-  Upload,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -48,8 +47,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import PageHeader from "@/components/PageHeader";
 import ClassificationDebugPanel from "@/components/lease-expense/ClassificationDebugPanel";
-import BulkImportModal from "@/components/property/BulkImportModal";
 
 import {
   humanize,
@@ -138,7 +137,6 @@ export default function LeaseExpenseClassification() {
   const [activeTab, setActiveTab] = useState("actual_expenses");
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState(new Set());
-  const [showBulkImport, setShowBulkImport] = useState(false);
 
   const { data: leases = [], isLoading: loadingLeases } = useOrgQuery("Lease", {}, { allowSuperAdminGlobal: true });
   const { data: tenants = [] } = useOrgQuery("Tenant", {}, { allowSuperAdminGlobal: true });
@@ -747,47 +745,23 @@ export default function LeaseExpenseClassification() {
   }, [diagnostics, rawCounts, approvedRules.length]);
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-50/50 pb-20">
-      <div className="border-b border-slate-800 bg-slate-900 text-white shadow-sm">
-        <div className="w-full px-6 py-4 md:px-8">
-          <div className="mb-4 flex flex-col items-start justify-between gap-3 md:flex-row md:items-center">
-            <div className="flex items-center gap-3">
-              <h1 className="text-lg font-bold tracking-tight">Expense Recoverability</h1>
-              <Badge variant="outline" className="hidden border-indigo-500/30 bg-white/10 text-xs font-normal text-indigo-200 sm:inline-flex">
-                Classification Engine
-              </Badge>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" className="h-8 border-white/10 bg-white/5 text-xs text-white hover:bg-white/10" onClick={() => navigate(createPageUrl("AddExpense"))}>
-                <Plus className="mr-1.5 h-3 w-3" /> Add Expense
-              </Button>
-              <Button size="sm" variant="outline" className="h-8 border-white/10 bg-white/5 text-xs text-white hover:bg-white/10" onClick={() => setShowBulkImport(true)}>
-                <Upload className="mr-1.5 h-3 w-3" /> Bulk Import
-              </Button>
-              <Button size="sm" variant="outline" className="h-8 border-white/10 bg-white/5 text-xs text-white hover:bg-white/10" onClick={() => navigate(createPageUrl("LeaseExpenseRules", {
-                property: lease?.property_id,
-                building: lease?.building_id,
-                unit: lease?.unit_id,
-              }))}>
-                <FileText className="mr-1.5 h-3 w-3" /> Lease Rules
-              </Button>
-              {/* Carry scope (property/building/unit + lease_id) so the
-                  Exception Queue is auto-filtered to this lease instead
-                  of showing all-org exceptions. */}
-              <Button size="sm" variant="outline" className="h-8 border-white/10 bg-white/5 text-xs text-white hover:bg-white/10" onClick={() => navigate(createPageUrl("ExpenseReview", {
-                property: lease?.property_id,
-                building: lease?.building_id,
-                unit: lease?.unit_id,
-                lease_id: lease?.id,
-              }))}>
-                <CheckCircle className="mr-1.5 h-3 w-3" /> Expense Review
-              </Button>
-            </div>
-          </div>
+    <div className="p-6 space-y-6">
+      <PageHeader icon={CheckCircle} title="Expense Recoverability" subtitle="Classification Engine">
+        {/* Carry scope (property/building/unit + lease_id) so the Exception Queue is auto-filtered to this lease instead of showing all-org exceptions. */}
+        <Button size="sm" variant="outline" onClick={() => navigate(createPageUrl("ExpenseReview", {
+          property: lease?.property_id,
+          building: lease?.building_id,
+          unit: lease?.unit_id,
+          lease_id: lease?.id,
+        }))}>
+          <CheckCircle className="mr-1.5 h-4 w-4" /> Expense Review
+        </Button>
+      </PageHeader>
 
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs">
-            <span className="mr-1 font-medium uppercase tracking-wider text-slate-400">Scope:</span>
-            <select className="h-7 rounded border border-slate-700 bg-slate-800 px-2 text-slate-200 outline-none focus:ring-1 focus:ring-indigo-500" value={scopeProperty} onChange={(event) => setScopeProperty(event.target.value)}>
+      <Card>
+        <CardContent className="flex flex-wrap items-center gap-2 p-3 text-xs">
+            <span className="mr-1 font-medium uppercase tracking-wider text-slate-500">Scope:</span>
+            <select className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none focus:ring-1 focus:ring-[var(--accent)]" value={scopeProperty} onChange={(event) => setScopeProperty(event.target.value)}>
               <option value="all">All Properties</option>
               {properties.map((property) => (
                 <option key={property.id} value={property.id}>
@@ -795,7 +769,7 @@ export default function LeaseExpenseClassification() {
                 </option>
               ))}
             </select>
-            <select className="h-7 rounded border border-slate-700 bg-slate-800 px-2 text-slate-200 outline-none focus:ring-1 focus:ring-indigo-500" value={scopeBuilding} onChange={(event) => setScopeBuilding(event.target.value)}>
+            <select className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none focus:ring-1 focus:ring-[var(--accent)]" value={scopeBuilding} onChange={(event) => setScopeBuilding(event.target.value)}>
               <option value="all">All Buildings</option>
               {buildings
                 .filter((building) => scopeProperty === "all" || building.property_id === scopeProperty)
@@ -805,7 +779,7 @@ export default function LeaseExpenseClassification() {
                   </option>
                 ))}
             </select>
-            <select className="h-7 rounded border border-slate-700 bg-slate-800 px-2 text-slate-200 outline-none focus:ring-1 focus:ring-indigo-500" value={scopeUnit} onChange={(event) => setScopeUnit(event.target.value)}>
+            <select className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none focus:ring-1 focus:ring-[var(--accent)]" value={scopeUnit} onChange={(event) => setScopeUnit(event.target.value)}>
               <option value="all">All Units</option>
               {units
                 .filter((unit) => scopeBuilding === "all" || unit.building_id === scopeBuilding)
@@ -815,7 +789,7 @@ export default function LeaseExpenseClassification() {
                   </option>
                 ))}
             </select>
-            <select className="h-7 rounded border border-slate-700 bg-slate-800 px-2 text-slate-200 outline-none focus:ring-1 focus:ring-indigo-500" value={scopeLease} onChange={(event) => setScopeLease(event.target.value)}>
+            <select className="h-9 min-w-[220px] rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none focus:ring-1 focus:ring-[var(--accent)]" value={scopeLease} onChange={(event) => setScopeLease(event.target.value)}>
               <option value="all">All Leases</option>
               {scopedLeases.map((lease) => (
                 <option key={lease.id} value={lease.id}>
@@ -823,7 +797,7 @@ export default function LeaseExpenseClassification() {
                 </option>
               ))}
             </select>
-            <select className="h-7 rounded border border-slate-700 bg-slate-800 px-2 text-slate-200 outline-none focus:ring-1 focus:ring-indigo-500" value={scopeTenant} onChange={(event) => setScopeTenant(event.target.value)}>
+            <select className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none focus:ring-1 focus:ring-[var(--accent)]" value={scopeTenant} onChange={(event) => setScopeTenant(event.target.value)}>
               <option value="all">All Tenants</option>
               {tenants.map((tenant) => (
                 <option key={tenant.id} value={tenant.id}>
@@ -831,7 +805,7 @@ export default function LeaseExpenseClassification() {
                 </option>
               ))}
             </select>
-            <select className="h-7 rounded border border-slate-700 bg-slate-800 px-2 text-slate-200 outline-none focus:ring-1 focus:ring-indigo-500" value={scopeYear} onChange={(event) => setScopeYear(event.target.value)}>
+            <select className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none focus:ring-1 focus:ring-[var(--accent)]" value={scopeYear} onChange={(event) => setScopeYear(event.target.value)}>
               <option value="all">All Years</option>
               {yearOptions.map((year) => (
                 <option key={year} value={String(year)}>
@@ -839,11 +813,10 @@ export default function LeaseExpenseClassification() {
                 </option>
               ))}
             </select>
-          </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
-      <div className="mt-6 w-full space-y-6 px-6 md:px-8">
+      <div className="w-full space-y-6">
         {!isLoading && approvedActuals.length === 0 && actualEmptyState && (
           <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-900">
             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
@@ -1419,19 +1392,6 @@ export default function LeaseExpenseClassification() {
           <span className="flex items-center gap-1.5"><CheckCircle className="h-3.5 w-3.5 text-indigo-500" /> <strong>Review:</strong> Unmatched actuals and conditional / exception rows go to Expense Review.</span>
         </div>
       </div>
-
-      <BulkImportModal
-        isOpen={showBulkImport}
-        onClose={() => {
-          setShowBulkImport(false);
-          queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
-          queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
-        }}
-        moduleType="expense"
-        propertyId={scopeProperty !== "all" ? scopeProperty : undefined}
-        buildingId={scopeBuilding !== "all" ? scopeBuilding : undefined}
-        unitId={scopeUnit !== "all" ? scopeUnit : undefined}
-      />
     </div>
   );
 }

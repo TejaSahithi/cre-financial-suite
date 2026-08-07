@@ -251,9 +251,9 @@ export default function Properties() {
   const getPropUnits = (pid) => units.filter(u => u.property_id === pid);
 
   return (
-    <div className="p-4 lg:p-6 space-y-5">
+    <div className="p-6 space-y-6">
       <PageHeader icon={Home} title="Properties" subtitle={`${scopedProperties.length} properties${scopeSubtitle} · ${singleTenantProps.length} single · ${multiTenantProps.length} multi-building`} iconColor="from-blue-500 to-blue-700">
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" disabled={scopedProperties.length === 0} onClick={() => downloadCSV(scopedProperties, 'properties.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
           <Button variant="outline" size="sm" disabled={noPortfolioAccess || !canEditProperties} onClick={() => setShowImport(true)}><Upload className="w-4 h-4 mr-1" />Bulk Upload</Button>
           <Button size="sm" disabled={noPortfolioAccess || !canEditProperties} onClick={() => setShowCreate(true)} className="bg-gradient-to-r from-blue-600 to-blue-700 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Property</Button>
@@ -276,7 +276,7 @@ export default function Properties() {
         </Card>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <div onClick={() => setStructureFilter("all")} className={`cursor-pointer`}>
           <MetricCard label="All Properties" value={scopedProperties.length} icon={Home} color="bg-slate-100 text-slate-600" className={structureFilter === 'all' ? 'ring-2 ring-blue-500' : ''} />
         </div>
@@ -290,58 +290,60 @@ export default function Properties() {
         <MetricCard label="Verified" value={`${scopedProperties.filter(p => p.address_verified).length}/${scopedProperties.length}`} icon={CheckCircle2} color="bg-green-50 text-green-600" sub="addresses verified" />
       </div>
 
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div className="flex items-center gap-3 flex-1 min-w-0 flex-wrap">
-          <div className="relative max-w-sm flex-1 min-w-[240px]">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <Input placeholder="Search properties..." className="pl-9" value={search} onChange={e => setSearch(e.target.value)} />
+      <Card>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 p-3">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+            <div className="relative min-w-[240px] max-w-sm flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Input placeholder="Search properties..." className="h-9 pl-9 text-sm" value={search} onChange={e => setSearch(e.target.value)} />
+            </div>
+            <Select value={selectedPortfolioId} onValueChange={handlePortfolioChange}>
+              <SelectTrigger className="h-9 w-[260px] bg-white text-sm">
+                <SelectValue placeholder="All Accessible Portfolios" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{isAdmin ? "All Portfolios" : "All Accessible Portfolios"}</SelectItem>
+                {portfolios.map((portfolio) => (
+                  <SelectItem key={portfolio.id} value={portfolio.id}>
+                    {portfolio.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-          <Select value={selectedPortfolioId} onValueChange={handlePortfolioChange}>
-            <SelectTrigger className="w-[260px] bg-white">
-              <SelectValue placeholder="All Accessible Portfolios" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">{isAdmin ? "All Portfolios" : "All Accessible Portfolios"}</SelectItem>
-              {portfolios.map((portfolio) => (
-                <SelectItem key={portfolio.id} value={portfolio.id}>
-                  {portfolio.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {selectedPropertyIds.length > 0 && (
-            <>
-              <span className="text-xs font-medium text-slate-500">{selectedPropertyIds.length} selected</span>
-              <Button variant="outline" size="sm" onClick={() => setSelectedPropertyIds([])}>Clear</Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="border-red-200 text-red-600 hover:bg-red-50"
-                disabled={!canEditProperties}
-                onClick={() => setShowBulkDelete(true)}
-              >
-                <Trash2 className="w-4 h-4 mr-1" />
-                Delete Selected
-              </Button>
-            </>
-          )}
-          <ViewModeToggle viewMode={viewMode} onViewModeChange={setViewMode} />
-        </div>
-      </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {selectedPropertyIds.length > 0 && (
+              <>
+                <span className="text-xs font-medium text-slate-500">{selectedPropertyIds.length} selected</span>
+                <Button variant="outline" size="sm" onClick={() => setSelectedPropertyIds([])}>Clear</Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-red-200 text-red-600 hover:bg-red-50"
+                  disabled={!canEditProperties}
+                  onClick={() => setShowBulkDelete(true)}
+                >
+                  <Trash2 className="w-4 h-4 mr-1" />
+                  Delete Selected
+                </Button>
+              </>
+            )}
+            <ViewModeToggle viewMode={viewMode} onViewModeChange={setViewMode} />
+          </div>
+        </CardContent>
+      </Card>
 
       {viewMode === "grid" ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {isLoading ? (
             <div className="col-span-full flex items-center justify-center py-20"><Loader2 className="w-5 h-5 animate-spin text-slate-400" /></div>
           ) : filtered.length === 0 ? (
-            <div className="col-span-full text-center py-12 text-sm text-slate-400">No properties found</div>
+            <Card className="col-span-full"><CardContent className="py-12 text-center text-sm text-slate-400">No properties found</CardContent></Card>
           ) : filtered.map(p => {
             const propBuildings = getPropBuildings(p.id);
             const propUnits = getPropUnits(p.id);
             return (
-              <Card key={p.id} className="overflow-hidden hover:shadow-lg transition-all border-slate-200/80 group">
+              <Card key={p.id} className="group overflow-hidden border-slate-200/80 transition-all hover:shadow-md">
                 <CardContent className="p-5">
                   <div className="flex items-start gap-3 mb-3">
                     <Checkbox
@@ -407,7 +409,7 @@ export default function Properties() {
           {isLoading ? (
             <div className="flex items-center justify-center py-20"><Loader2 className="w-5 h-5 animate-spin text-slate-400" /></div>
           ) : filtered.length === 0 ? (
-            <div className="text-center py-12 text-sm text-slate-400">No properties found</div>
+            <Card><CardContent className="py-12 text-center text-sm text-slate-400">No properties found</CardContent></Card>
           ) : filtered.map(p => {
             const propBuildings = getPropBuildings(p.id);
             const propUnits = getPropUnits(p.id);
@@ -467,15 +469,15 @@ export default function Properties() {
                     aria-label="Select all filtered properties"
                   />
                 </TableHead>
-                <TableHead className="text-xs font-bold tracking-wider">PROPERTY</TableHead>
-                <TableHead className="text-xs font-bold tracking-wider">ADDRESS</TableHead>
-                <TableHead className="text-xs font-bold tracking-wider">TYPE</TableHead>
-                <TableHead className="text-xs font-bold tracking-wider">STRUCTURE</TableHead>
-                <TableHead className="text-xs font-bold tracking-wider">BUILDINGS</TableHead>
-                <TableHead className="text-xs font-bold tracking-wider">UNITS</TableHead>
-                <TableHead className="text-xs font-bold tracking-wider">TOTAL SF</TableHead>
-                <TableHead className="text-xs font-bold tracking-wider">OCCUPANCY</TableHead>
-                <TableHead className="text-xs font-bold tracking-wider">VERIFIED</TableHead>
+                <TableHead>PROPERTY</TableHead>
+                <TableHead>ADDRESS</TableHead>
+                <TableHead>TYPE</TableHead>
+                <TableHead>STRUCTURE</TableHead>
+                <TableHead>BUILDINGS</TableHead>
+                <TableHead>UNITS</TableHead>
+                <TableHead>TOTAL SF</TableHead>
+                <TableHead>OCCUPANCY</TableHead>
+                <TableHead>VERIFIED</TableHead>
                 <TableHead></TableHead>
               </TableRow>
             </TableHeader>
