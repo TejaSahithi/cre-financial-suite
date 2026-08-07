@@ -10,7 +10,7 @@ export default function PageHeader({ icon: Icon, title, subtitle, iconColor = "f
           </div>
         )}
         <div>
-          <h1 className="font-sans text-[clamp(36px,4vw,48px)] font-bold leading-[1.05] tracking-[-0.035em] text-[var(--ink)]">{title}</h1>
+          <h1 className="font-sans text-[clamp(30px,3vw,38px)] font-bold leading-[1.08] tracking-[-0.03em] text-[var(--ink)]">{title}</h1>
           {subtitle && <p className="mt-[7px] text-[13px] text-[var(--muted)]">{subtitle}</p>}
         </div>
       </div>
