@@ -1041,7 +1041,7 @@ export default function LeaseExpenseClassification() {
           ].map(({ label, value, colorBg, colorText }) => (
             <div key={label} className={`rounded-lg ${colorBg} p-2.5 shadow-sm`}>
               <div className={`text-lg font-bold ${colorText}`}>{value}</div>
-              <div className="text-slate-500">{label}</div>
+              <div className="text-slate-700">{label}</div>
             </div>
           ))}
         </div>
@@ -1172,24 +1172,24 @@ export default function LeaseExpenseClassification() {
                                 onChange={() => toggleRow(row.id)}
                               />
                             </TableCell>
-                            <TableCell className={`text-xs ${hasActualExpense ? "text-slate-500" : "text-slate-400"}`}>
+                            <TableCell className={`text-xs font-medium ${hasActualExpense ? "text-slate-700" : "text-slate-500"}`}>
                               {expenseDateLabel}
                             </TableCell>
-                            <TableCell className={`text-xs ${hasActualExpense ? "text-slate-500" : "text-slate-400"}`}>
+                            <TableCell className={`text-xs font-medium ${hasActualExpense ? "text-slate-700" : "text-slate-500"}`}>
                               {vendorLabel}
                             </TableCell>
-                            <TableCell className="text-xs text-slate-500">
+                            <TableCell className="text-xs text-slate-700">
                               <div>{propertyLabel}</div>
-                              <div className="text-[11px] text-slate-400">{buildingLabel} / {unitLabel}</div>
+                              <div className="text-[11px] text-slate-600">{buildingLabel} / {unitLabel}</div>
                             </TableCell>
-                            <TableCell className="text-xs text-slate-500">
+                            <TableCell className="text-xs text-slate-700">
                               {row.tenantResolution?.tenant?.name ? (
                                 <div title={`Resolved via ${row.tenantResolution.source}`}>
                                   {row.tenantResolution.tenant.name}
                                 </div>
                               ) : (
                                 <div
-                                  className="text-slate-400"
+                                  className="text-slate-600"
                                   title={
                                     row.tenantResolution?.reasonText
                                       ? `No tenant linked: ${row.tenantResolution.reasonText}`
@@ -1200,7 +1200,7 @@ export default function LeaseExpenseClassification() {
                                 </div>
                               )}
                               {row.lease?.tenant_name && row.tenantResolution?.tenant?.name !== row.lease.tenant_name && (
-                                <div className="text-[11px] text-slate-400">via lease: {row.lease.tenant_name}</div>
+                                <div className="text-[11px] text-slate-600">via lease: {row.lease.tenant_name}</div>
                               )}
                               {(() => {
                                 const matchStatus = resolveMatchStatus(row);
@@ -1216,7 +1216,7 @@ export default function LeaseExpenseClassification() {
                                 );
                               })()}
                             </TableCell>
-                            <TableCell className="text-right text-sm font-medium text-slate-700">
+                            <TableCell className="text-right text-sm font-semibold text-slate-900">
                               {row.actualExpenseId ? (
                                 fmt(row.amount)
                               ) : row.amount != null && row.amount > 0 ? (
@@ -1233,10 +1233,10 @@ export default function LeaseExpenseClassification() {
                                 </Button>
                               )}
                             </TableCell>
-                            <TableCell className="max-w-[220px] text-xs text-slate-600">
+                            <TableCell className="max-w-[220px] text-xs font-medium text-slate-900">
                               <div className="font-semibold text-slate-800">{categoryDisplayName}</div>
                             </TableCell>
-                            <TableCell className="text-xs text-slate-500">{servicePeriodLabel}</TableCell>
+                            <TableCell className="text-xs text-slate-700">{servicePeriodLabel}</TableCell>
                             <TableCell
                               className="max-w-[220px]"
                               title={sendToCamBlockedReason || row.message}
@@ -1245,7 +1245,7 @@ export default function LeaseExpenseClassification() {
                                 {camInputDecision.label}
                               </Badge>
                             </TableCell>
-                            <TableCell className="max-w-[200px] text-[11px] text-slate-500" title={sendToCamBlockedReason || row.message}>
+                            <TableCell className="max-w-[200px] text-[11px] font-medium text-slate-700" title={sendToCamBlockedReason || row.message}>
                               {row.nextStep}
                             </TableCell>
                             <TableCell className="pr-4 text-right">

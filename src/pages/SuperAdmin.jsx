@@ -134,7 +134,7 @@ export default function SuperAdmin() {
     setInviting(false);
   };
 
-  const { data: requests = [], isLoading } = useQuery({
+  const { data: requests = [], isLoading, refetch: refetchRequests } = useQuery({
     queryKey: ['access-requests'],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -146,7 +146,8 @@ export default function SuperAdmin() {
       return data || [];
     },
     enabled: authChecked && isSuperAdmin(user),
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: true,
+    refetchInterval: 30000, // auto-poll every 30s for new requests
   });
 
   const { data: contactRequests = [], isLoading: isLoadingContact } = useQuery({
@@ -483,6 +484,16 @@ export default function SuperAdmin() {
               Delete Selected ({selectedRequests.size})
             </Button>
           )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              refetchRequests();
+              queryClient.invalidateQueries({ queryKey: ['access-requests'] });
+            }}
+          >
+            <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
+          </Button>
           <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" /><Input placeholder="Search..." className="pl-9 w-48 h-8" /></div>
           <Button variant="outline" size="sm"><Download className="w-4 h-4 mr-1" />Export</Button>
         </div>

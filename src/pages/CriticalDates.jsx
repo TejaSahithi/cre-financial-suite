@@ -4,7 +4,7 @@
  *
  * Backed by `lease_critical_dates` (migration 20260514130000). Derived rows
  * are seeded from approved-lease columns; user-added reminders are full
- * citizens with owners and completion status.
+ * citizens with assignees and completion status.
  */
 import React, { useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -94,6 +94,18 @@ const URGENCY_LABEL = {
   unknown: "—",
 };
 
+
+const ASSIGNMENT_ROLES = [
+  { value: "lease_admin", label: "Lease Admin" },
+  { value: "asset_manager", label: "Asset Manager" },
+  { value: "property_manager", label: "Property Manager" },
+  { value: "finance", label: "Finance" },
+  { value: "legal", label: "Legal" },
+];
+
+function assignmentRoleLabel(value) {
+  return ASSIGNMENT_ROLES.find((role) => role.value === value)?.label || "Lease Admin";
+}
 const CRITICAL_DATE_FIELD_ALIASES = {
   lease_date: ["lease_date", "execution_date", "date_of_lease", "signed_at"],
   commencement_date: ["commencement_date", "start_date", "lease_start_date", "term_start_date"],
@@ -189,9 +201,10 @@ export default function CriticalDates() {
   const [newReminderDays, setNewReminderDays] = useState("");
   const [newNote, setNewNote] = useState("");
 
-  // Assign owner form state.
+  // Assignment form state.
   const [assignEmail, setAssignEmail] = useState("");
   const [assignName, setAssignName] = useState("");
+  const [assignRole, setAssignRole] = useState("lease_admin");
 
   const { data: leases = [] } = useOrgQuery("Lease");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");

@@ -32,6 +32,8 @@ const CRITICAL_DATE_COLUMNS_NO_OWNERS =
   "id, org_id, lease_id, property_id, date_type, due_date, status, completed_at, completed_by, reminder_days_before, note, source, created_at, updated_at";
 const CRITICAL_DATE_COLUMNS_BASE =
   "id, org_id, lease_id, property_id, date_type, due_date, status, reminder_days_before, note, source, created_at, updated_at";
+const CRITICAL_DATE_COLUMNS_BASE_NO_NOTE =
+  "id, org_id, lease_id, property_id, date_type, due_date, status, reminder_days_before, source, created_at, updated_at";
 
 function isMissingOwnerEmailColumn(error) {
   const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`.toLowerCase();
@@ -47,6 +49,11 @@ function isMissingCompletionColumn(error) {
   const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`.toLowerCase();
   const mentionsCompletionColumn = text.includes("completed_at") || text.includes("completed_by");
   return mentionsCompletionColumn && (text.includes("does not exist") || text.includes("schema cache") || error?.code === "42703" || error?.code === "PGRST204");
+}
+
+function isMissingNoteColumn(error) {
+  const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`.toLowerCase();
+  return text.includes("note") && (text.includes("does not exist") || text.includes("schema cache") || error?.code === "42703" || error?.code === "PGRST204");
 }
 
 function withCompatibilityFallbacks(row) {
@@ -85,6 +92,10 @@ export async function listCriticalDates({ orgId, propertyId, leaseId, status } =
   if (error && isMissingCompletionColumn(error)) {
     console.warn("[criticalDateService] completion columns missing; retrying with base critical-date columns.");
     ({ data, error } = await runQuery(CRITICAL_DATE_COLUMNS_BASE));
+  }
+  if (error && isMissingNoteColumn(error)) {
+    console.warn("[criticalDateService] note column missing; retrying without note.");
+    ({ data, error } = await runQuery(CRITICAL_DATE_COLUMNS_BASE_NO_NOTE));
   }
   if (error) {
     console.warn("[criticalDateService] list failed:", error.message);
