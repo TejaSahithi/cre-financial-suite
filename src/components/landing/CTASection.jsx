@@ -20,7 +20,7 @@ export default function CTASection({ onRequestAccess }) {
         <div className="mt-8">
           <Button
             onClick={onRequestAccess}
-            className="bg-[var(--accent)] hover:bg-[var(--accent)] text-white font-semibold px-9 h-11 text-sm shadow-[var(--shadow-soft)] rounded-[8px] gap-2"
+            className="bg-[var(--accent)] hover:bg-[var(--accent)] text-white font-semibold px-9 h-11 text-sm shadow-[var(--shadow-soft)] hover:shadow-[var(--shadow)] rounded-[8px] gap-2 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98] motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:scale-100"
           >
             Request Access <ArrowRight className="w-4 h-4" />
           </Button>

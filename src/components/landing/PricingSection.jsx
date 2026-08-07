@@ -2,7 +2,7 @@ import React from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2, X, ArrowRight } from "lucide-react";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 
 const plans = [
   {
@@ -73,6 +73,7 @@ const plans = [
 
 export default function PricingSection({ onRequestAccess, onRequestDemo, onContactSales }) {
   const [billingCycle, setBillingCycle] = React.useState("monthly");
+  const prefersReducedMotion = useReducedMotion();
 
   const getPrice = (plan) => {
     if (plan.isCustom) return "Custom pricing";
@@ -97,7 +98,12 @@ export default function PricingSection({ onRequestAccess, onRequestDemo, onConta
   return (
     <section id="pricing" className="py-20 px-6 bg-[var(--surface-2)]">
       <div className="max-w-6xl mx-auto">
-        <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="text-center mb-12">
+        <motion.div
+          initial={prefersReducedMotion ? false : { opacity: 0, y: 20 }}
+          whileInView={prefersReducedMotion ? undefined : { opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          className="text-center mb-12"
+        >
           <div className="inline-flex items-center gap-2 bg-[var(--surface)] border border-[var(--border-cre)] rounded-[8px] px-4 py-1.5 mb-4">
             <span className="text-[var(--accent)] text-xs font-bold tracking-wide uppercase">Pricing Plans</span>
           </div>
@@ -127,16 +133,22 @@ export default function PricingSection({ onRequestAccess, onRequestDemo, onConta
           </div>
         </motion.div>
 
-        <div className="grid md:grid-cols-3 gap-4">
+        <div className="grid md:grid-cols-3 gap-5 lg:gap-6">
           {plans.map((plan, i) => (
             <motion.div
               key={i}
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: i * 0.1 }}
+              initial={prefersReducedMotion ? false : { opacity: 0, y: 18 }}
+              whileInView={prefersReducedMotion ? undefined : { opacity: 1, y: 0 }}
+              whileHover={prefersReducedMotion ? undefined : { y: -4 }}
+              viewport={{ once: true, margin: "-80px" }}
+              transition={{ duration: 0.4, delay: i * 0.09, ease: "easeOut" }}
+              className="h-full"
             >
-              <div className={`relative h-full rounded-[8px] border bg-[var(--surface)] transition-all duration-300 ${plan.popular ? "border-[var(--accent)] shadow-[var(--shadow)]" : "border-[var(--border-cre)] shadow-[var(--card-shadow)]"}`}>
+              <div className={`relative h-full rounded-[14px] border transition-all duration-200 hover:border-[var(--border-strong)] hover:shadow-[var(--card-hover-shadow)] ${
+                plan.popular
+                  ? "border-[var(--accent)] bg-[color-mix(in_srgb,var(--accent)_7%,var(--surface))] shadow-[var(--shadow)]"
+                  : "border-[var(--border-cre)] bg-[var(--surface)] shadow-[var(--card-shadow)]"
+              }`}>
                 {plan.popular && (
                   <div className="absolute -top-4 left-1/2 -translate-x-1/2 z-10">
                     <Badge className="bg-[var(--accent)] text-white border-0 text-[10px] font-black uppercase tracking-widest px-4 py-1.5 shadow-[var(--shadow-soft)] rounded-[8px]">
@@ -145,11 +157,11 @@ export default function PricingSection({ onRequestAccess, onRequestDemo, onConta
                   </div>
                 )}
                 <div className="p-6 md:p-7">
-                  <h3 className="text-lg font-bold text-[var(--ink)] tracking-tight">{plan.name}</h3>
-                  <p className="text-sm text-[var(--muted)] mt-2 mb-7 min-h-[40px] font-medium leading-relaxed">{plan.desc}</p>
-                  <div className="mb-7">
+                  <h3 className="text-xl font-bold text-[var(--ink)] tracking-tight">{plan.name}</h3>
+                  <p className="text-sm text-[var(--muted)] mt-2.5 mb-8 min-h-[44px] font-medium leading-relaxed">{plan.desc}</p>
+                  <div className="mb-8">
                     {plan.isCustom ? (
-                      <span className="text-[28px] font-bold text-[var(--ink)] tracking-tight">Custom pricing</span>
+                      <span className="text-[30px] font-bold text-[var(--ink)] tracking-tight">Custom pricing</span>
                     ) : (
                       <div className="space-y-1">
                         <div className="flex items-baseline gap-1.5">
@@ -173,7 +185,7 @@ export default function PricingSection({ onRequestAccess, onRequestDemo, onConta
                   </div>
                   <Button
                     onClick={handleCtaClick(plan.cta)}
-                    className={`w-full mb-7 h-11 font-bold text-sm rounded-[8px] gap-2 transition-all active:scale-[0.98] ${
+                    className={`w-full mb-8 h-11 font-bold text-sm rounded-[8px] gap-2 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[var(--shadow)] active:translate-y-0 active:scale-[0.98] motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:scale-100 ${
                       plan.popular
                         ? "bg-[var(--accent)] hover:bg-[var(--accent)] text-white shadow-[var(--shadow-soft)]"
                         : "bg-[var(--ink)] hover:bg-[var(--ink)] text-white shadow-[var(--shadow-soft)]"
@@ -181,10 +193,10 @@ export default function PricingSection({ onRequestAccess, onRequestDemo, onConta
                   >
                     {plan.cta} <ArrowRight className="w-4 h-4" />
                   </Button>
-                  <div className="space-y-3.5">
-                    <p className="text-[10px] font-black text-[var(--muted)] uppercase tracking-widest mb-2">What's included:</p>
+                  <div className="space-y-4">
+                    <p className="text-[10px] font-black text-[var(--muted)] uppercase tracking-widest mb-2.5">What's included:</p>
                     {plan.features.map((f, fi) => (
-                      <div key={fi} className="flex items-start gap-3">
+                      <div key={fi} className="flex items-start gap-3.5">
                         {f.included ? (
                           <CheckCircle2 className="w-4 h-4 text-[var(--success)] mt-0.5 flex-shrink-0" />
                         ) : (

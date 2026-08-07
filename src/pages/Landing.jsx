@@ -4,6 +4,7 @@ import { createPageUrl } from "@/utils";
 
 import HeroSection from "@/components/landing/HeroSection";
 import FeaturesSection from "@/components/landing/FeaturesSection";
+import SocialProofSection from "@/components/landing/SocialProofSection";
 import DashboardPreview from "@/components/landing/DashboardPreview";
 import PricingSection from "@/components/landing/PricingSection";
 import FeatureComparisonTable from "@/components/landing/FeatureComparisonTable";
@@ -33,6 +34,7 @@ export default function Landing() {
       />
       <HeroSection onRequestAccess={handleRequestAccess} onRequestDemo={handleRequestDemo} />
       <FeaturesSection />
+      <SocialProofSection />
       <DashboardPreview onRequestAccess={handleRequestAccess} />
       <PricingSection 
         onRequestAccess={handleRequestAccess} 

@@ -63,7 +63,7 @@ export default function LandingNav({ onSignIn, onRequestAccess, onRequestDemo })
           </button>
           <Button
             onClick={onRequestAccess}
-            className="h-9 rounded-[8px] bg-[var(--accent)] px-5 text-[13px] font-semibold text-white shadow-[var(--shadow-soft)] hover:bg-[var(--accent)]"
+            className="h-9 rounded-[8px] bg-[var(--accent)] px-5 text-[13px] font-semibold text-white shadow-[var(--shadow-soft)] hover:bg-[var(--accent)] hover:shadow-[var(--shadow)] transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98] motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:scale-100"
           >
             Request access
           </Button>
@@ -96,7 +96,7 @@ export default function LandingNav({ onSignIn, onRequestAccess, onRequestDemo })
             </button>
             <Button
               onClick={() => { onRequestAccess(); setMobileOpen(false); }}
-              className="w-full bg-[var(--accent)] hover:bg-[var(--accent)] text-white text-sm font-semibold h-10 rounded-[8px]"
+              className="w-full bg-[var(--accent)] hover:bg-[var(--accent)] text-white text-sm font-semibold h-10 rounded-[8px] shadow-[var(--shadow-soft)] hover:shadow-[var(--shadow)] transition-all duration-200 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100"
             >
               Request access
             </Button>

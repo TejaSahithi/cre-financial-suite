@@ -128,7 +128,7 @@ export default function DashboardPreview({ onRequestAccess }) {
 
           {/* CTA overlay */}
           <div className="absolute inset-0 bg-[color-mix(in_srgb,var(--surface)_84%,transparent)] rounded-[8px] flex items-end justify-center pb-8 opacity-0 hover:opacity-100 transition-opacity duration-500 cursor-pointer" onClick={onRequestAccess}>
-            <div className="bg-[var(--accent)] text-white px-8 py-3 rounded-[8px] text-sm font-semibold shadow-[var(--shadow)]">
+            <div className="bg-[var(--accent)] text-white px-8 py-3 rounded-[8px] text-sm font-semibold shadow-[var(--shadow)] transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98] motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:scale-100">
               Request Access to Explore
             </div>
           </div>

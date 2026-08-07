@@ -176,7 +176,7 @@ export default function ContactSection() {
               <Textarea value={form.message} onChange={(e) => setField("message", e.target.value)} placeholder="How can we help you?" rows={4} className={`mt-1.5 bg-[var(--surface)] border-[var(--border-cre)] ${errors.message ? "border-[var(--danger)] ring-1 ring-[var(--danger)] bg-[var(--danger-soft)]" : ""}`} />
               <FieldError field="message" />
             </div>
-            <Button type="submit" disabled={sending} className="w-full bg-[var(--accent)] hover:bg-[var(--accent)] h-11 rounded-[8px] font-semibold gap-2 text-white">
+            <Button type="submit" disabled={sending} className="w-full bg-[var(--accent)] hover:bg-[var(--accent)] h-11 rounded-[8px] font-semibold gap-2 text-white shadow-[var(--shadow-soft)] hover:shadow-[var(--shadow)] transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98] motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:scale-100">
               {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
               {sending ? "Sending..." : "Send Message"}
             </Button>
