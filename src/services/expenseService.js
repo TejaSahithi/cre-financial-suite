@@ -3062,16 +3062,24 @@ export const expenseService = {
     // is linked. Rules with property-level allocation (e.g. allocation_basis
     // = "property") are unaffected.
     if (expense && ruleRequiresPerTenantAllocation(rule)) {
-      // Cheapest possible lookup — read the lease + unit only if we have ids;
-      // skip the tenants table because tenant_name on the expense or lease is
-      // a sufficient positive signal.
-      const tenantLeases = expense.lease_id
-        ? [await baseLeaseService.get(expense.lease_id).catch(() => null)].filter(Boolean)
+      const effectiveExpense = {
+        ...expense,
+        property_id: classification.property_id || expense.property_id || null,
+        building_id: classification.building_id || expense.building_id || null,
+        unit_id: classification.unit_id || expense.unit_id || null,
+        lease_id: classification.lease_id || expense.lease_id || null,
+        tenant_id: classification.tenant_id || expense.tenant_id || null,
+        tenant_name: classification.tenant_name || expense.tenant_name || null,
+      };
+      // Read the effective lease only if one was resolved. The UI may resolve
+      // lease/tenant from the matched rule even when the imported actual expense
+      // row itself was sparse.
+      const tenantLeases = effectiveExpense.lease_id
+        ? [await baseLeaseService.get(effectiveExpense.lease_id).catch(() => null)].filter(Boolean)
         : [];
-      const resolution = resolveTenantForExpense(expense, {
+      const resolution = resolveTenantForExpense(effectiveExpense, {
         leases: tenantLeases,
-        units: [], // unit-side lookup not available server-side; the resolver
-        // still resolves via expense.tenant_name / tenant_id / lease.
+        units: [],
         tenants: [],
       });
       if (!resolution.tenant?.name && !resolution.tenant?.id) {

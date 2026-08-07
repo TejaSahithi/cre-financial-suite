@@ -13,6 +13,7 @@ import {
   getCamDecision,
   getClassificationRecoveryBucket,
   getLinkedRuleCamBlocker,
+  getTenantAllocationBlocker,
   ruleExpectsLandlordActualExpense,
 } from './buildClassificationRows';
 
@@ -323,6 +324,43 @@ describe('buildClassificationRows', () => {
     expect(getLinkedRuleCamBlocker(row)).toBe('tenant_direct');
     expect(getCamInputDecision(row).state).toBe('not_cam_eligible');
     expect(getCamDecision(row).label).toBe('Excluded');
+    expect(canSendFinalizedActualToCam(row)).toBe(false);
+  });
+
+  it('requires a tenant or lease target for per-tenant CAM allocation', () => {
+    const row = {
+      rowType: 'matched_classification',
+      actualExpenseId: 'expense-per-tenant',
+      classificationStatus: 'finalized',
+      recoverabilityResult: 'recoverable',
+      camEligible: 'yes',
+      amount: 800,
+      property: { id: 'property-1' },
+      expenseCategoryId: 'category-1',
+      servicePeriodStart: '2026-01-01',
+      servicePeriodEnd: '2026-01-31',
+      classificationRecord: {
+        classification_status: 'finalized',
+        recoverability_result: 'recoverable',
+        cam_eligible: 'yes',
+      },
+      expense: { id: 'expense-per-tenant', unit_id: 'unit-1' },
+      rule: {
+        id: 'rule-per-tenant',
+        approval_status: 'approved',
+        published_to_cam: true,
+        expense_category: 'utilities',
+        recovery_method: 'pro_rata_share',
+        allocation_basis: 'tenant_pro_rata',
+        payment_treatment: 'reimbursable',
+        recoverable_from_tenant: 'yes',
+        cam_eligible: 'yes',
+      },
+      tenantResolution: { tenant: null, reason: 'unit_missing_tenant_id' },
+    };
+
+    expect(getTenantAllocationBlocker(row)).toBe('unit_missing_tenant_id');
+    expect(getCamInputDecision(row).state).toBe('needs_direct_tenant');
     expect(canSendFinalizedActualToCam(row)).toBe(false);
   });
 

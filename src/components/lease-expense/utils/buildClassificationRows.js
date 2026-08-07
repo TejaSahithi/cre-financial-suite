@@ -1,6 +1,6 @@
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { expenseService } from "@/services/expenseService";
-import { resolveTenantForExpense } from "@/lib/tenantResolver";
+import { resolveTenantForExpense, ruleRequiresPerTenantAllocation } from "@/lib/tenantResolver";
 import { approvedLeaseFieldValue } from "@/lib/approvedLeaseSnapshot";
 import {
   deriveOperationalResponsibility,
@@ -132,6 +132,15 @@ export function getLinkedRuleCamBlocker(row) {
   return reason;
 }
 
+export function getTenantAllocationBlocker(row) {
+  if (!row?.rule || !ruleRequiresPerTenantAllocation(row.rule)) return null;
+  const tenant = row?.tenantResolution?.tenant;
+  if (tenant?.id || tenant?.name || row?.expense?.tenant_id || row?.expense?.tenant_name || row?.lease?.tenant_id || row?.lease?.tenant_name) {
+    return null;
+  }
+  return row?.tenantResolution?.reason || "tenant_unresolved";
+}
+
 export function canSendFinalizedActualToCam(row) {
   const readiness = getCamPublicationReadiness(row);
   return getCamInputDecision(row, { readiness }).state === "ready_to_send";
@@ -199,6 +208,7 @@ export function getCamPublicationReadiness(row, { publicationStatus = null } = {
   const expenseApproved = isRuleGap || Boolean(row?.actualExpenseId);
   const ruleApproved = !row?.rule || row?.rule?.approval_status === "approved" || row?.rule?.published_to_cam === true;
   const linkedRuleCamBlocker = getLinkedRuleCamBlocker(row);
+  const tenantAllocationBlocker = getTenantAllocationBlocker(row);
 
   const checks = [
     { key: "expense_approved", label: "Expense approved", pass: expenseApproved },
@@ -209,6 +219,13 @@ export function getCamPublicationReadiness(row, { publicationStatus = null } = {
         ? `Linked lease rule CAM eligible (${humanize(linkedRuleCamBlocker)})`
         : "Linked lease rule CAM eligible",
       pass: !linkedRuleCamBlocker,
+    },
+    {
+      key: "tenant_allocation_resolved",
+      label: tenantAllocationBlocker
+        ? `Tenant allocation target resolved (${humanize(tenantAllocationBlocker)})`
+        : "Tenant allocation target resolved",
+      pass: !tenantAllocationBlocker,
     },
     { key: "finalized", label: "Classification finalized", pass: row?.classificationStatus === "finalized" },
     { key: "amount_allocated", label: "Amount fully allocated", pass: Number(row?.amount) > 0 },
@@ -256,6 +273,11 @@ export function getCamInputDecision(row, { readiness = null, publicationStatus =
       return { state: "conditional_review_required", label: "Rule Needs CAM Review" };
     }
     return { state: "not_cam_eligible", label: "Rule Not CAM Eligible" };
+  }
+
+  const tenantAllocationBlocker = getTenantAllocationBlocker(row);
+  if (tenantAllocationBlocker) {
+    return { state: "needs_direct_tenant", label: "Needs Tenant / Lease" };
   }
 
   const isRuleGap = row?.rowType === "rule_missing_actual";

@@ -553,8 +553,9 @@ export default function LeaseExpenseClassification() {
             property_id: row.expense?.property_id || row.property?.id,
             building_id: row.expense?.building_id || row.building?.id,
             unit_id: row.expense?.unit_id || row.unit?.id,
-            lease_id: row.lease?.id,
-            tenant_id: row.lease?.tenant_id,
+            lease_id: row.lease?.id || row.tenantResolution?.lease?.id || row.expense?.lease_id || null,
+            tenant_id: row.tenantResolution?.tenant?.id || row.lease?.tenant_id || row.expense?.tenant_id || null,
+            tenant_name: row.tenantResolution?.tenant?.name || row.lease?.tenant_name || row.expense?.tenant_name || null,
             expense_category_id:
               row.expenseCategoryId ||
               row.classificationRecord?.expense_category_id ||
