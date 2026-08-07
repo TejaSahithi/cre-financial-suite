@@ -638,7 +638,7 @@ DATE:         ${today}
             <div className="grid grid-cols-2 gap-6">
               <div>
                 <p className="text-[10px] text-slate-400 mb-1">Signed By:</p>
-                <p className="text-lg italic font-serif text-slate-800 border-b border-slate-300 min-h-[28px]">{fullName}</p>
+                <p className="text-lg italic font-sans text-slate-800 border-b border-slate-300 min-h-[28px]">{fullName}</p>
               </div>
               <div>
                 <p className="text-[10px] text-slate-400 mb-1">Date:</p>
@@ -834,5 +834,4 @@ function PaymentStep({ user, form, setForm, org, onBack }) {
     </div>
   );
 }
-
 

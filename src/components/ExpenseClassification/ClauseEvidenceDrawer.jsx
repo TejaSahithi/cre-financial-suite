@@ -100,7 +100,7 @@ export default function ClauseEvidenceDrawer({ isOpen, onClose, category, rule }
             {sourceText ? (
               <div className="relative">
                 <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-200 rounded-l-md" />
-                <div className="pl-4 py-3 pr-3 bg-blue-50/50 border border-blue-100 rounded-md text-sm text-slate-800 italic whitespace-pre-wrap font-serif">
+                <div className="pl-4 py-3 pr-3 bg-blue-50/50 border border-blue-100 rounded-md text-sm text-slate-800 italic whitespace-pre-wrap font-sans">
                   "{sourceText}"
                 </div>
               </div>
@@ -123,7 +123,7 @@ export default function ClauseEvidenceDrawer({ isOpen, onClose, category, rule }
                         <span>{clause.clause_type || "Evidence"}</span>
                         {clause.page_number != null ? <span>Page {clause.page_number}</span> : null}
                       </div>
-                      <div className="italic font-serif">{clause.clause_text}</div>
+                      <div className="italic font-sans">{clause.clause_text}</div>
                     </div>
                   </div>
                 ))}

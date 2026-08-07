@@ -38,7 +38,7 @@ export default function DemoExperience() {
               to: data.email,
               subject: "Thanks for exploring CRE Suite",
               html: `
-                <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+                <div style="font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto;">
                   <p>Hi ${data.full_name},</p>
                   <p>Thanks for taking the time to explore our platform.</p>
                   <p>We hope the demo gave you a clear view of how you can:</p>
