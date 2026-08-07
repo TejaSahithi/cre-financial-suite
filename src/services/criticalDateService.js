@@ -1,7 +1,7 @@
 /**
- * criticalDateService — CRUD over `lease_critical_dates` (migration
+ * criticalDateService - CRUD over `lease_critical_dates` (migration
  * 20260514130000). The table mixes derived rows (commencement, expiration,
- * renewal_notice — auto-created from approved lease columns at migration
+ * renewal_notice - auto-created from approved lease columns at migration
  * time) with user-added reminders. Both behave identically once persisted.
  */
 import { supabase } from "@/services/supabaseClient";

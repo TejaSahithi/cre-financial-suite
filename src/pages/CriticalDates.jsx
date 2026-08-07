@@ -1,5 +1,5 @@
 /**
- * CriticalDates — portfolio-wide tracker for lease milestones (renewal
+ * CriticalDates - portfolio-wide tracker for lease milestones (renewal
  * notice, option exercise, expiration, insurance certificates, etc.).
  *
  * Backed by `lease_critical_dates` (migration 20260514130000). Derived rows
@@ -91,7 +91,7 @@ const URGENCY_LABEL = {
   future: "Future",
   completed: "Completed",
   dismissed: "Dismissed",
-  unknown: "—",
+  unknown: "-",
 };
 
 
@@ -310,18 +310,42 @@ export default function CriticalDates() {
   });
 
   const assignMutation = useMutation({
-    mutationFn: async ({ id, leaseId, owner_email, owner_name }) => {
-      return updateCriticalDate({ id, leaseId, ownerEmail: owner_email, ownerName: owner_name });
+    mutationFn: async ({ row, owner_email, owner_name, assignment_role }) => {
+      const roleLabel = assignmentRoleLabel(assignment_role);
+      const assignedName = owner_name ? `${owner_name} (${roleLabel})` : roleLabel;
+
+      if (row?.preview_only) {
+        const lease = leaseById.get(row.lease_id);
+        if (!lease?.org_id) throw new Error("Lease is missing org context.");
+        return createCriticalDate({
+          org_id: lease.org_id,
+          lease_id: lease.id,
+          property_id: lease.property_id || row.property_id || null,
+          date_type: row.date_type,
+          due_date: row.due_date,
+          owner_email: owner_email || null,
+          owner_name: assignedName,
+          reminder_days_before: row.reminder_days_before ?? null,
+          note: row.note || null,
+          source: "manual",
+        });
+      }
+
+      return updateCriticalDate({
+        id: row.id,
+        leaseId: row.lease_id,
+        ownerEmail: owner_email,
+        ownerName: assignedName,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["lease-critical-dates"] });
-      toast.success("Owner assigned");
+      toast.success("Assignment saved");
       setShowAssign(false);
       setAssignTarget(null);
     },
-    onError: (err) => toast.error(err?.message || "Could not assign owner"),
+    onError: (err) => toast.error(err?.message || "Could not save assignment"),
   });
-
   const completeMutation = useMutation({
     mutationFn: async ({ id, leaseId, by }) => markCriticalDateComplete({ id, leaseId, completedBy: by }),
     onSuccess: () => {
@@ -379,19 +403,30 @@ export default function CriticalDates() {
   }
 
   function openAssign(row) {
+    const existingName = row.owner_name || "";
+    const existingRole = ASSIGNMENT_ROLES.find((role) =>
+      existingName === role.label || existingName.endsWith(` (${role.label})`),
+    );
+    const displayName = existingRole && existingName.endsWith(` (${existingRole.label})`)
+      ? existingName.slice(0, -` (${existingRole.label})`.length)
+      : existingName === existingRole?.label
+        ? ""
+        : existingName;
+
     setAssignTarget(row);
     setAssignEmail(row.owner_email || "");
-    setAssignName(row.owner_name || "");
+    setAssignName(displayName);
+    setAssignRole(existingRole?.value || "lease_admin");
     setShowAssign(true);
   }
 
   function handleAssign() {
     if (!assignTarget) return;
     assignMutation.mutate({
-      id: assignTarget.id,
-      leaseId: assignTarget.lease_id,
+      row: assignTarget,
       owner_email: assignEmail || null,
       owner_name: assignName || null,
+      assignment_role: assignRole,
     });
   }
 
@@ -448,7 +483,6 @@ export default function CriticalDates() {
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Due Date</TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Urgency</TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Lease</TableHead>
-              <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Owner</TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Status</TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Note</TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actions</TableHead>
@@ -457,13 +491,13 @@ export default function CriticalDates() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={8} className="py-12 text-center">
+                <TableCell colSpan={7} className="py-12 text-center">
                   <Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" />
                 </TableCell>
               </TableRow>
             ) : filteredDates.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="py-12 text-center text-sm text-slate-400">
+                <TableCell colSpan={7} className="py-12 text-center text-sm text-slate-400">
                   No critical dates in this view.
                 </TableCell>
               </TableRow>
@@ -509,17 +543,7 @@ export default function CriticalDates() {
                           {fieldValue(lease, ["tenant_name"]) || lease.tenant_name || lease.id.slice(0, 8)}
                         </Link>
                       ) : (
-                        <span className="text-slate-400">— deleted —</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      {row.owner_email ? (
-                        <>
-                          <div className="font-medium text-slate-700">{row.owner_name || "—"}</div>
-                          <div className="text-xs text-slate-500">{row.owner_email}</div>
-                        </>
-                      ) : (
-                        <span className="text-slate-400">Unassigned</span>
+                        <span className="text-slate-400">- deleted -</span>
                       )}
                     </TableCell>
                     <TableCell>
@@ -527,7 +551,7 @@ export default function CriticalDates() {
                         {row.status}
                       </Badge>
                     </TableCell>
-                    <TableCell className="max-w-[200px] truncate text-sm text-slate-600">{row.note || "—"}</TableCell>
+                    <TableCell className="max-w-[200px] truncate text-sm text-slate-600">{row.note || "-"}</TableCell>
                     <TableCell>
                       <div className="flex gap-1">
                         <Button
@@ -535,8 +559,8 @@ export default function CriticalDates() {
                           variant="ghost"
                           className="h-7 px-2 text-xs"
                           onClick={() => openAssign(row)}
-                          disabled={row.preview_only}
-                          title={row.preview_only ? "Persisted on next approval/backfill before assignment." : "Assign owner"}
+                          disabled={assignMutation.isPending}
+                          title={row.preview_only ? "Create reminder and assign role" : "Assign role"}
                         >
                           Assign
                         </Button>
@@ -609,11 +633,11 @@ export default function CriticalDates() {
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               <div>
-                <Label>Owner Name (optional)</Label>
+                <Label>Assignee Name (optional)</Label>
                 <Input value={newOwnerName} onChange={(e) => setNewOwnerName(e.target.value)} placeholder="Jane Doe" />
               </div>
               <div>
-                <Label>Owner Email (optional)</Label>
+                <Label>Assignee Email (optional)</Label>
                 <Input type="email" value={newOwnerEmail} onChange={(e) => setNewOwnerEmail(e.target.value)} placeholder="jane@example.com" />
               </div>
             </div>
@@ -636,23 +660,34 @@ export default function CriticalDates() {
         </DialogContent>
       </Dialog>
 
-      {/* Assign Owner Dialog */}
+      {/* Assign Role Dialog */}
       <Dialog open={showAssign} onOpenChange={setShowAssign}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Assign Owner</DialogTitle>
+            <DialogTitle>Assign Role</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-slate-500">
-            {assignTarget ? `${DATE_TYPE_LABELS[assignTarget.date_type] || assignTarget.date_type} · ${assignTarget.due_date}` : ""}
+            {assignTarget ? `${DATE_TYPE_LABELS[assignTarget.date_type] || assignTarget.date_type} - ${assignTarget.due_date}` : ""}
           </p>
           <div className="space-y-3 py-2">
             <div>
-              <Label>Owner Name</Label>
+              <Label>Assignee Name</Label>
               <Input value={assignName} onChange={(e) => setAssignName(e.target.value)} placeholder="Jane Doe" />
             </div>
             <div>
-              <Label>Owner Email</Label>
+              <Label>Assignee Email</Label>
               <Input type="email" value={assignEmail} onChange={(e) => setAssignEmail(e.target.value)} placeholder="jane@example.com" />
+            </div>
+            <div>
+              <Label>Role</Label>
+              <Select value={assignRole} onValueChange={setAssignRole}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {ASSIGNMENT_ROLES.map((role) => (
+                    <SelectItem key={role.value} value={role.value}>{role.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <DialogFooter>

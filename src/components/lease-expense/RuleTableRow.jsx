@@ -47,6 +47,7 @@ export default function RuleTableRow({
   isSelected = false,
   canSelect = false,
   camPolicyStatus = null,
+  isHighlighted = false,
   onSelectChange,
   onApprove,
   onReject,
@@ -99,7 +100,7 @@ export default function RuleTableRow({
     (lease?.id ? `Lease #${lease.id.slice(0, 8)}` : "-");
 
   return (
-    <TableRow className="align-top hover:bg-slate-50">
+    <TableRow className={isHighlighted ? "align-top bg-amber-50 ring-1 ring-amber-300" : "align-top hover:bg-slate-50"}>
       <TableCell className="text-center align-middle">
         <input
           type="checkbox"

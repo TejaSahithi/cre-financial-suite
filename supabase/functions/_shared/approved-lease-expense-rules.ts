@@ -167,7 +167,7 @@ const FALLBACK_EXPENSE_CATEGORY_PATTERNS = [
   { category: "common_area_maintenance", patterns: [/\bcam\b/i, /common\s+area\s+maintenance/i] },
   { category: "operating_expenses", patterns: [/operating\s+expenses?/i] },
   { category: "real_estate_taxes", patterns: [/real\s+estate\s+tax(?:es)?/i, /property\s+tax(?:es)?/i, /\btaxes\b/i] },
-  { category: "property_insurance", patterns: [/property\s+insurance/i, /insurance\s+premium/i, /\binsurance\b/i] },
+  { category: "property_insurance", patterns: [/property\s+insurance/i, /landlord(?:'s)?\s+insurance/i, /insurance\s+premium/i] },
   { category: "utilities", patterns: [/utilit/i, /electric(?:ity)?/i, /water/i, /sewer/i, /gas/i, /hvac/i] },
   { category: "janitorial", patterns: [/janitorial/i, /cleaning/i] },
   { category: "repairs_maintenance", patterns: [/repair/i, /maintenance/i] },
@@ -215,10 +215,31 @@ function explicitExpenseCategory(item: any): string | null {
   return null;
 }
 
+function isTenantInsuranceComplianceText(text: string): boolean {
+  return /\btenant\b[\s\S]{0,160}\b(?:obtain|maintain|carry|provide|deliver|furnish)\b[\s\S]{0,240}\b(?:insurance|policy|certificate|additional\s+insured|waiver\s+of\s+subrogation|liability)\b/i.test(text) ||
+    /\b(?:commercial\s+general\s+liability|general\s+liability|public\s+liability|bodily\s+injury|property\s+damage|additional\s+insured|certificate\s+of\s+insurance|waiver\s+of\s+subrogation)\b/i.test(text);
+}
+
+function isMonetaryCoverageLimitText(text: string): boolean {
+  return /\b(?:limit|limits|coverage|liability|each\s+occurrence|per\s+occurrence|aggregate|bodily\s+injury|property\s+damage|umbrella|excess\s+liability|not\s+less\s+than|minimum)\b/i.test(text) &&
+    !/\b(?:premium|premiums|tax(?:es)?|assessment|assessments|reimburse|reimbursement|additional\s+rent|landlord(?:'s)?\s+cost|landlord(?:'s)?\s+expense|incurred\s+by\s+landlord)\b/i.test(text);
+}
+
+function isLandlordIncurredRecoverableText(text: string): boolean {
+  const landlordExpense = /\blandlord\b[\s\S]{0,220}\b(?:pay|paid|pays|incur|incurred|levied|assessed|obtain|maintain|carry|procure)\b/i.test(text) ||
+    /\b(?:tax(?:es)?|assessment|assessments|premium|premiums|insurance)\b[\s\S]{0,160}\b(?:levied|assessed|charged|imposed|incurred|paid)\b[\s\S]{0,80}\b(?:landlord|owner|property)\b/i.test(text);
+  const tenantRecovery = /\btenant\b[\s\S]{0,260}\b(?:pay|reimburse|repay|contribute|be\s+responsible\s+for)\b/i.test(text) ||
+    /\b(?:additional\s+rent|pro\s*rata|proportionate\s+share|tenant'?s\s+share|reimburs(?:e|ement)|pass[-\s]?through)\b/i.test(text);
+  return landlordExpense && tenantRecovery;
+}
+
 function categoriesFromEvidence(item: any, text: string): string[] {
+  if (isTenantInsuranceComplianceText(text) && isMonetaryCoverageLimitText(text)) {
+    return [];
+  }
   const categories = new Set<string>();
   const explicit = explicitExpenseCategory(item);
-  if (explicit) categories.add(explicit);
+  if (explicit && !(explicit === "property_insurance" && isTenantInsuranceComplianceText(text) && !isLandlordIncurredRecoverableText(text))) categories.add(explicit);
   for (const entry of FALLBACK_EXPENSE_CATEGORY_PATTERNS) {
     if (entry.patterns.some((pattern) => pattern.test(text))) categories.add(entry.category);
   }
@@ -234,6 +255,28 @@ function treatmentFromEvidence(text: string) {
     || /(?:cam|tax(?:es)?|insurance|maintenance|utilit|janitorial)[\s\S]{0,140}(?:included\s+in|part\s+of)[\s\S]{0,80}(?:base\s+rent|monthly\s+rent|rent)/i.test(text);
   const tenantDirect = /tenant\s+(?:shall|must|will|agrees\s+to|is\s+responsible\s+for)[\s\S]{0,120}(?:pay|contract|maintain|provide|obtain).{0,80}(?:direct|directly|at\s+tenant'?s\s+(?:sole\s+)?(?:cost|expense))/i.test(text);
   const reimbursable = /(?:reimburse|reimbursement|additional\s+rent|pro\s*rata|proportionate\s+share|pass[-\s]?through|separately\s+billed|pay\s+landlord)/i.test(lower);
+  if (isTenantInsuranceComplianceText(text) && !isLandlordIncurredRecoverableText(text)) {
+    return {
+      included_in_base_rent: false,
+      recoverable_from_tenant: false,
+      cam_eligible: false,
+      payment_treatment: "tenant_direct_contract",
+      recovery_method: "tenant_direct_contract",
+      lease_treatment: "tenant_insurance_compliance",
+      recoverable_flag: false,
+    };
+  }
+  if (isLandlordIncurredRecoverableText(text)) {
+    return {
+      included_in_base_rent: false,
+      recoverable_from_tenant: true,
+      cam_eligible: true,
+      payment_treatment: "reimbursable",
+      recovery_method: /pro\s*rata|proportionate\s+share|tenant'?s\s+share/i.test(text) ? "pro_rata_share" : "pass_through",
+      lease_treatment: "landlord_incurred_tenant_recovery",
+      recoverable_flag: true,
+    };
+  }
   if (included) {
     return {
       included_in_base_rent: true,
@@ -628,6 +671,19 @@ function exactSourceText(rule: any): string | null {
   ) || null;
 }
 
+function isInsuranceComplianceRule(rule: any, category: string, sourceText: string): boolean {
+  return category === "property_insurance" &&
+    isTenantInsuranceComplianceText(sourceText) &&
+    !isLandlordIncurredRecoverableText(sourceText);
+}
+
+function explicitExpenseAmount(rule: any, sourceText: string): number | null {
+  if (isMonetaryCoverageLimitText(sourceText)) return null;
+  return numberOrNull(rule?.fixed_monthly_amount) ??
+    numberOrNull(rule?.explicit_charge_amount) ??
+    numberOrNull(rule?.base_year_amount);
+}
+
 function canonicalRuleKey(leaseId: string, rule: any): string {
   const category = normalizeToken(rule?.expense_category || rule?.normalized_key || rule?.category || "uncategorized");
   const subcategory = normalizeToken(rule?.expense_subcategory || rule?.subcategory_name);
@@ -642,6 +698,25 @@ function prepareRulePayload(lease: any, orgId: string, rule: any) {
 
   const sourceText = exactSourceText(rule);
   if (!sourceText) return null;
+  const insuranceCompliance = isInsuranceComplianceRule(rule, category, sourceText);
+  const coverageLimit = isMonetaryCoverageLimitText(sourceText);
+  if (insuranceCompliance) {
+    rule = {
+      ...rule,
+      recoverable_from_tenant: "no",
+      is_recoverable: false,
+      cam_eligible: "no",
+      payment_treatment: "tenant_direct_contract",
+      recovery_method: "tenant_direct_contract",
+      operational_responsibility: "tenant",
+      lease_treatment: "tenant_insurance_compliance",
+      fixed_monthly_amount: null,
+      explicit_charge_amount: null,
+      estimated_monthly_amount: null,
+      estimated_annual_amount: null,
+      base_year_amount: null,
+    };
+  }
   const sourcePage = numberOrNull(rule?.source_page ?? rule?.page_number);
   const recoverable = recoverableDecision(rule);
   const camEligible = camEligibleDecision(rule, recoverable);
@@ -659,14 +734,12 @@ function prepareRulePayload(lease: any, orgId: string, rule: any) {
     : (normalizeToken(rule?.extraction_status || rule?.status) || "extracted");
   const notes = [
     cleanText(rule?.notes),
+    insuranceCompliance ? "Tenant insurance coverage requirement; monetary limits are compliance thresholds, not recoverable expense amounts." : "",
+    coverageLimit && !insuranceCompliance ? "Monetary amount appears to be a coverage/cap limit; verify before treating it as an expense amount." : "",
     missingPage ? "Source page missing; verify the clause citation before approving this rule." : "",
   ].filter(Boolean).join(" ");
   const ruleKey = canonicalRuleKey(lease.id, rule);
-  const finalValue =
-    numberOrNull(rule?.fixed_monthly_amount) ??
-    numberOrNull(rule?.explicit_charge_amount) ??
-    numberOrNull(rule?.cap_amount) ??
-    numberOrNull(rule?.base_year_amount);
+  const finalValue = explicitExpenseAmount(rule, sourceText);
 
   return {
     ruleKey,
@@ -696,15 +769,15 @@ function prepareRulePayload(lease: any, orgId: string, rule: any) {
       allocation_basis: allocationBasis,
       is_excluded: Boolean(rule?.is_excluded),
       is_controllable: Boolean(rule?.is_controllable),
-      is_subject_to_cap: Boolean(rule?.is_subject_to_cap || rule?.cap_type),
-      cap_type: cleanText(rule?.cap_type) || null,
-      cap_value: numberOrNull(rule?.cap_value ?? rule?.cap_amount),
-      cap_amount: numberOrNull(rule?.cap_amount ?? rule?.cap_value),
+      is_subject_to_cap: coverageLimit ? false : Boolean(rule?.is_subject_to_cap || rule?.cap_type),
+      cap_type: coverageLimit ? null : cleanText(rule?.cap_type) || null,
+      cap_value: coverageLimit ? null : numberOrNull(rule?.cap_value ?? rule?.cap_amount),
+      cap_amount: coverageLimit ? null : numberOrNull(rule?.cap_amount ?? rule?.cap_value),
       cap_percent: numberOrNull(rule?.cap_percent),
-      has_base_year: Boolean(rule?.has_base_year || rule?.base_year || rule?.base_year_type),
-      base_year_type: cleanText(rule?.base_year_type) || null,
-      base_year: cleanText(rule?.base_year || rule?.base_year_type) || null,
-      base_year_amount: numberOrNull(rule?.base_year_amount),
+      has_base_year: coverageLimit ? false : Boolean(rule?.has_base_year || rule?.base_year || rule?.base_year_type),
+      base_year_type: coverageLimit ? null : cleanText(rule?.base_year_type) || null,
+      base_year: coverageLimit ? null : cleanText(rule?.base_year || rule?.base_year_type) || null,
+      base_year_amount: coverageLimit ? null : numberOrNull(rule?.base_year_amount),
       expense_stop_amount: numberOrNull(rule?.expense_stop_amount),
       gross_up_applicable: Boolean(rule?.gross_up_applicable || numberOrNull(rule?.gross_up_percent) != null),
       gross_up_percent: numberOrNull(rule?.gross_up_percent),
@@ -733,14 +806,14 @@ function prepareRulePayload(lease: any, orgId: string, rule: any) {
       created_from: "approved_lease_expense_publication",
       generation_source: cleanText(rule?.generation_source) || "whole_document_llm_expense_obligation_v1",
       tenant_share_percent: numberOrNull(rule?.tenant_share_percent),
-      estimated_monthly_amount: numberOrNull(rule?.fixed_monthly_amount ?? rule?.explicit_charge_amount),
-      estimated_annual_amount: numberOrNull(rule?.estimated_annual_amount),
+      estimated_monthly_amount: coverageLimit ? null : numberOrNull(rule?.fixed_monthly_amount ?? rule?.explicit_charge_amount),
+      estimated_annual_amount: coverageLimit ? null : numberOrNull(rule?.estimated_annual_amount),
     },
     value: finalValue == null
       ? null
       : {
         rule_key: ruleKey,
-        base_year_amount: numberOrNull(rule?.base_year_amount),
+        base_year_amount: coverageLimit ? null : numberOrNull(rule?.base_year_amount),
         extracted_value: finalValue,
         manual_value: null,
         final_value: finalValue,
@@ -844,7 +917,7 @@ async function resolveExpenseCategoryIds(
 }
 
 // cam-legacy-scan-allow: retirement notice, not a live reference.
-// Legacy CAM profile seed step — DEPRECATED / RETIRED. This used to upsert
+// Legacy CAM profile seed step - DEPRECATED / RETIRED. This used to upsert
 // raw LLM extraction output (workflow.cam_profile) into the now-retired
 // cam_profiles table as a draft starting point for manual CAM setup. There
 // is no CAM V2 equivalent: recovery policies are materialized exclusively

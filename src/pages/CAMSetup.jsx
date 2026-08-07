@@ -235,6 +235,19 @@ export default function CAMSetup() {
     },
     enabled: Boolean(propertyId),
   });
+  const { data: units = [] } = useQuery({
+    queryKey: ["cam-setup-units", propertyId],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("units").select("*").eq("property_id", propertyId).order("unit_number");
+      if (error) return [];
+      return data || [];
+    },
+    enabled: Boolean(propertyId),
+  });
+  const scopeUnits = useMemo(
+    () => units.filter((unit) => !buildingId || unit.building_id === buildingId),
+    [units, buildingId],
+  );
 
   const { data: calendars = [], refetch: refetchCalendars } = useQuery({
     queryKey: ["recovery_calendars", propertyId],
@@ -258,6 +271,34 @@ export default function CAMSetup() {
     },
   });
   const selectedPeriod = useMemo(() => periods.find((p) => p.id === periodId) || null, [periods, periodId]);
+  const requiredFiscalYears = useMemo(() => Array.from({ length: 7 }, (_, index) => 2021 + index), []);
+  const periodByFiscalYear = useMemo(() => {
+    const map = new Map();
+    for (const period of periods) {
+      const labelYear = String(period.label || "").match(/20\d{2}/)?.[0];
+      const startYear = period.start_date ? new Date(`${period.start_date}T00:00:00Z`).getUTCFullYear() : null;
+      const year = Number(labelYear || startYear);
+      if (Number.isFinite(year) && !map.has(year)) map.set(year, period);
+    }
+    return map;
+  }, [periods]);
+  const periodSelectOptions = useMemo(() => {
+    const seen = new Set();
+    const required = requiredFiscalYears.map((year) => {
+      const existing = periodByFiscalYear.get(year);
+      if (existing?.id) seen.add(existing.id);
+      return {
+        key: `fy-${year}`,
+        value: existing?.id || `__create_fy_${year}`,
+        label: `FY${year}`,
+        existing: Boolean(existing?.id),
+      };
+    });
+    const extra = periods
+      .filter((period) => period?.id && !seen.has(period.id))
+      .map((period) => ({ key: period.id, value: period.id, label: period.label || period.id, existing: true }));
+    return [...required, ...extra];
+  }, [periods, periodByFiscalYear, requiredFiscalYears]);
 
   const { data: pools = [], refetch: refetchPools } = useQuery({
     // Building-scoped: a property-wide pool still applies inside any of its
@@ -589,6 +630,26 @@ export default function CAMSetup() {
   });
   const doAction = (action, payload, invalidateKeys, successMsg) =>
     mutation.mutateAsync({ action, payload, invalidate: invalidateKeys }, { onSuccess: () => toast.success(successMsg ?? "Saved") });
+  const selectRecoveryPeriod = async (value) => {
+    if (!String(value || "").startsWith("__create_fy_")) {
+      setPeriodId(value);
+      return;
+    }
+    const year = Number(String(value).replace("__create_fy_", ""));
+    if (!activeCalendar?.id || !Number.isFinite(year)) {
+      toast.error("Set up a recovery calendar before creating fiscal periods.");
+      return;
+    }
+    const created = await doAction(
+      "create_recovery_period",
+      { calendar_id: activeCalendar.id, start_date: `${year}-01-01`, end_date: `${year}-12-31`, label: `FY${year}` },
+      [["recovery_periods", calendarIds.join(",")], ["recovery_periods"]],
+      `FY${year} recovery period created`,
+    );
+    refetchPeriods();
+    const createdId = created?.period?.id || created?.id || null;
+    if (createdId) setPeriodId(createdId);
+  };
 
   // "Prepare CAM Automatically" -- a separate controlled backend command
   // (prepare-cam-automatically-v2), not a cam-setup-actions-v2 action, since
@@ -2760,21 +2821,33 @@ export default function CAMSetup() {
               <SelectTrigger id="scope-property" className="w-56"><SelectValue placeholder="Property..." /></SelectTrigger>
               <SelectContent>{properties.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
             </Select>
-            <Select value={buildingId} onValueChange={setBuildingId} disabled={!propertyId || buildings.length === 0}>
+            <Select value={buildingId || "all"} onValueChange={(value) => { setBuildingId(value === "all" ? "" : value); setUnitId(""); }} disabled={!propertyId || buildings.length === 0}>
               <SelectTrigger id="scope-building" className="w-44"><SelectValue placeholder="All Buildings" /></SelectTrigger>
-              <SelectContent>{buildings.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
+              <SelectContent>
+                <SelectItem value="all">All Buildings</SelectItem>
+                {buildings.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+              </SelectContent>
             </Select>
-            <Select value={unitId} onValueChange={setUnitId} disabled={!buildingId}>
+            <Select value={unitId || "all"} onValueChange={(value) => setUnitId(value === "all" ? "" : value)} disabled={!propertyId || scopeUnits.length === 0}>
               <SelectTrigger id="scope-unit" className="w-40"><SelectValue placeholder="All Units" /></SelectTrigger>
-              <SelectContent />
+              <SelectContent>
+                <SelectItem value="all">All Units</SelectItem>
+                {scopeUnits.map((unit) => (
+                  <SelectItem key={unit.id} value={unit.id}>{unit.unit_number || unit.unit_id_code || unit.name || unit.id}</SelectItem>
+                ))}
+              </SelectContent>
             </Select>
             <Select value={activeCalendar?.id || ""} disabled>
               <SelectTrigger id="scope-calendar" className="w-40"><SelectValue placeholder="Calendar" /></SelectTrigger>
               <SelectContent>{activeCalendar && <SelectItem value={activeCalendar.id}>{activeCalendar.name}</SelectItem>}</SelectContent>
             </Select>
-            <Select value={periodId} onValueChange={setPeriodId} disabled={periods.length === 0}>
+            <Select value={periodId} onValueChange={selectRecoveryPeriod} disabled={!activeCalendar}>
               <SelectTrigger id="scope-period" className="w-44"><SelectValue placeholder="Period..." /></SelectTrigger>
-              <SelectContent>{periods.map((p) => <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>)}</SelectContent>
+              <SelectContent>
+                {periodSelectOptions.map((option) => (
+                  <SelectItem key={option.key} value={option.value}>{option.label}{option.existing ? "" : " (create)"}</SelectItem>
+                ))}
+              </SelectContent>
             </Select>
             {propertyId && periodId && (
               <div id="scope-readiness-badge" className="ml-auto flex items-center gap-2">

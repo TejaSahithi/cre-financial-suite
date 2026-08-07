@@ -72,6 +72,8 @@ function buildInitialForm(scope) {
     tenant_name: "",
     tenant_id: "",
     lease_id: "",
+    recovery_rule_id: "",
+    linked_expense_rule_id: "",
     source: "manual",
     source_file_id: "",
     description: "",
@@ -91,7 +93,20 @@ export default function AddExpense() {
   const editExpenseId = urlParams.get("id");
   const entryMode = urlParams.get("mode") === "invoice" ? "invoice" : "manual";
   const isInvoiceMode = !editExpenseId && entryMode === "invoice";
-
+  const prefillParams = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return {
+      tenantId: params.get("tenant_id") || params.get("tenant") || "",
+      leaseId: params.get("lease_id") || "",
+      category: params.get("category") || "",
+      subcategory: params.get("subcategory") || params.get("expense_subcategory") || "",
+      description: params.get("description") || "",
+      vendor: params.get("vendor") || "",
+      date: params.get("date") || "",
+      amount: params.get("amount") || "",
+      recoveryRuleId: params.get("rule_id") || params.get("recovery_rule_id") || "",
+    };
+  }, [location.search]);
   const { data: vendors = [], orgId } = useOrgQuery("Vendor");
   const { data: expenses = [] } = useOrgQuery("Expense");
   const { data: tenants = [] } = useOrgQuery("Tenant");
@@ -122,6 +137,7 @@ export default function AddExpense() {
   const [pendingInvoiceUpload, setPendingInvoiceUpload] = useState(null);
   const [invoiceDetailsVisible, setInvoiceDetailsVisible] = useState(!isInvoiceMode);
   const invoiceFileInputRef = useRef(null);
+  const prefillAppliedKeyRef = useRef("");
   const [showNewVendor, setShowNewVendor] = useState(false);
   const [newVendorForm, setNewVendorForm] = useState({
     name: "",
@@ -158,6 +174,49 @@ export default function AddExpense() {
   }, [isEditing, scope.portfolioId, scope.propertyId, scope.buildingId, scope.unitId]);
 
   useEffect(() => {
+    if (isEditing) return;
+    const hasPrefill = Object.values(prefillParams).some(Boolean);
+    if (!hasPrefill) return;
+    if (prefillParams.leaseId && leases.length === 0) return;
+    if (prefillParams.tenantId && tenants.length === 0) return;
+    const prefillKey = JSON.stringify(prefillParams);
+    if (prefillAppliedKeyRef.current === prefillKey) return;
+    prefillAppliedKeyRef.current = prefillKey;
+
+    const lease = prefillParams.leaseId
+      ? leases.find((item) => item.id === prefillParams.leaseId) || null
+      : null;
+    const tenant = prefillParams.tenantId
+      ? tenants.find((item) => item.id === prefillParams.tenantId) || null
+      : lease?.tenant_id
+        ? tenants.find((item) => item.id === lease.tenant_id) || null
+        : null;
+    const leaseUnit = lease?.unit_id ? units.find((unit) => unit.id === lease.unit_id) || null : null;
+
+    setForm((current) => ({
+      ...current,
+      date: prefillParams.date || current.date,
+      amount: prefillParams.amount || current.amount,
+      category: prefillParams.category || current.category,
+      expense_subcategory: prefillParams.subcategory || current.expense_subcategory,
+      vendor: prefillParams.vendor || current.vendor,
+      tenant_name:
+        tenant?.tenant_name ||
+        tenant?.name ||
+        tenant?.company ||
+        lease?.tenant_name ||
+        current.tenant_name,
+      tenant_id: prefillParams.tenantId || lease?.tenant_id || current.tenant_id,
+      lease_id: prefillParams.leaseId || current.lease_id,
+      description: prefillParams.description || current.description,
+      property_id: lease?.property_id || current.property_id,
+      building_id: lease?.building_id || leaseUnit?.building_id || current.building_id,
+      unit_id: lease?.unit_id || current.unit_id,
+      recovery_rule_id: prefillParams.recoveryRuleId || current.recovery_rule_id,
+      linked_expense_rule_id: prefillParams.recoveryRuleId || current.linked_expense_rule_id,
+    }));
+  }, [isEditing, prefillParams, leases, tenants, units]);
+  useEffect(() => {
     if (!editingExpense) return;
     setForm({
       date: editingExpense.date || "",
@@ -171,6 +230,8 @@ export default function AddExpense() {
       tenant_name: editingExpense.tenant_name || "",
       tenant_id: editingExpense.tenant_id || "",
       lease_id: editingExpense.lease_id || "",
+      recovery_rule_id: editingExpense.recovery_rule_id || "",
+      linked_expense_rule_id: editingExpense.linked_expense_rule_id || "",
       source: editingExpense.source || "manual",
       source_file_id: editingExpense.source_file_id || "",
       description: editingExpense.description || "",

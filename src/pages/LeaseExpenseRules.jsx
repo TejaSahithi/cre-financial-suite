@@ -115,6 +115,7 @@ export default function LeaseExpenseRules() {
   const [displayMode, setDisplayMode] = useState("lease");
   const [search, setSearch] = useState(() => new URLSearchParams(location.search).get("lease") || "");
   const leaseIdParam = useMemo(() => new URLSearchParams(location.search).get("lease_id") || null, [location.search]);
+  const highlightedRuleId = useMemo(() => new URLSearchParams(location.search).get("rule_id") || null, [location.search]);
   const [editingRuleContext, setEditingRuleContext] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const [selectedRuleIds, setSelectedRuleIds] = useState(() => new Set());
@@ -971,6 +972,7 @@ export default function LeaseExpenseRules() {
                     isSelected={selectedRuleIds.has(rule.id)}
                     canSelect={isUuid(rule?.id) && !isApprovedRule(rule)}
                     camPolicyStatus={resolveCamPolicyStatus(rule, policiesBySourceRuleId.get(rule.id) || [], leasesWithPremises.has(lease?.id))}
+                    isHighlighted={rule.id === highlightedRuleId}
                     onSelectChange={(checked) => toggleRuleSelection(rule.id, checked)}
                     onApprove={(r, l) => approveRule(r, l)}
                     onReject={(r, l) => rejectRule(r, l)}

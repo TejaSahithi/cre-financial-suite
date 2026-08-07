@@ -88,6 +88,8 @@ const ACTUAL_EXPENSE_WORKFLOW_FIELDS = [
   "lease_id",
   "tenant_id",
   "tenant_name",
+  "recovery_rule_id",
+  "linked_expense_rule_id",
   "attachment_url",
   "gl_code",
   "invoice_number",
@@ -2583,7 +2585,7 @@ export const expenseService = {
       actor_user_id: userId,
       actor_email: userEmail,
       severity: "info",
-      source: "client_ui",
+      source: "frontend",
       metadata: {
         resolution: resolution || "no_expense_this_period",
         period: period || new Date().getFullYear().toString(),
@@ -2598,6 +2600,37 @@ export const expenseService = {
     return { success: true, resolution, period, reason };
   },
 
+  async linkActualExpenseToLeaseRule({ expenseId, rule }) {
+    if (!expenseId) throw new Error("Select an actual expense to link.");
+    if (!rule?.id) throw new Error("Lease expense rule not found.");
+
+    const existingExpense = await baseExpenseService.get(expenseId);
+    if (!existingExpense?.id) throw new Error("Actual expense not found.");
+
+    const leaseId = rule.lease_id || rule.rule_set?.lease_id || existingExpense.lease_id || null;
+    const relatedLease = leaseId ? await baseLeaseService.get(leaseId).catch(() => null) : null;
+    const patch = {
+      property_id: existingExpense.property_id || rule.property_id || rule.rule_set?.property_id || relatedLease?.property_id || null,
+      building_id: existingExpense.building_id || rule.building_id || rule.rule_set?.building_id || relatedLease?.building_id || null,
+      unit_id: existingExpense.unit_id || rule.unit_id || rule.rule_set?.unit_id || relatedLease?.unit_id || null,
+      lease_id: leaseId,
+      tenant_id: existingExpense.tenant_id || rule.tenant_id || rule.rule_set?.tenant_id || relatedLease?.tenant_id || null,
+      category: existingExpense.category || rule.expense_category || rule.category_name || null,
+      expense_subcategory: existingExpense.expense_subcategory || rule.expense_subcategory || rule.subcategory_name || null,
+      recovery_rule_id: rule.id,
+      linked_expense_rule_id: rule.id,
+      approval_status: existingExpense.approval_status || existingExpense.approved_status || "approved",
+      review_status: existingExpense.review_status || "approved",
+    };
+
+    const updated = await this.updateExpenseWorkflow(expenseId, patch);
+    const expenseForClassification = { ...existingExpense, ...patch, ...(updated || {}) };
+    await this.classifyExpenses({
+      expenses: [expenseForClassification],
+      leases: relatedLease ? [relatedLease] : [],
+    });
+    return expenseForClassification;
+  },
   async createLeaseRuleAmountCamInput(rule, amount, currentYear) {
     const numericAmount = Number(amount);
     if (!Number.isFinite(numericAmount) || numericAmount < 0) {

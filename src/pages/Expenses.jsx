@@ -207,7 +207,10 @@ export default function Expenses() {
     () => new URLSearchParams(location.search).get("lease_id") || null,
     [location.search],
   );
-
+  const highlightedExpenseId = useMemo(
+    () => new URLSearchParams(location.search).get("expense_id") || new URLSearchParams(location.search).get("highlight") || null,
+    [location.search],
+  );
   const selectorScopedAllExpenses = scopedAllExpenses.filter((expense) => {
     if (scopeProperty !== "all" && expense.property_id !== scopeProperty) return false;
     if (scopeBuilding !== "all" && expense.building_id !== scopeBuilding) return false;
@@ -888,7 +891,7 @@ export default function Expenses() {
                     });
 
                     return (
-                      <TableRow key={expense.id} className="hover:bg-slate-50">
+                      <TableRow key={expense.id} className={expense.id === highlightedExpenseId ? "bg-amber-50 ring-1 ring-amber-300" : "hover:bg-slate-50"}>
                         <TableCell>
                           <Checkbox
                             checked={selectedExpenseIds.includes(expense.id)}

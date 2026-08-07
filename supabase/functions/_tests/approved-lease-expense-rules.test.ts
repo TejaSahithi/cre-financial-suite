@@ -272,6 +272,92 @@ Deno.test("approved publication fallback can build rules from stored raw documen
   assertEquals(__test__.isSourceBackedExpenseRule(rules[0]), true);
 });
 
+Deno.test("approved publication does not turn tenant liability insurance limits into property-insurance expenses", () => {
+  const sourceText = "Tenant shall maintain commercial general liability insurance with limits of not less than $2,000,000 per occurrence and name Landlord as additional insured.";
+  const fallbackRules = __test__.fallbackExpenseRulesFromRawDocument({
+    docling_raw: {
+      pages: [{ page: 7, text: sourceText }],
+      text_blocks: [],
+    },
+  });
+
+  assertEquals(fallbackRules.some((rule) => rule.expense_category === "property_insurance"), false);
+
+  const prepared = __test__.prepareRulePayload(
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      tenant_id: null,
+      property_id: null,
+      building_id: null,
+      unit_id: null,
+      abstract_approved_at: "2026-08-06T12:00:00Z",
+    },
+    "22222222-2222-4222-8222-222222222222",
+    {
+      expense_category: "property_insurance",
+      source_clause: sourceText,
+      source_page: 7,
+      confidence_score: 0.98,
+      recoverable_from_tenant: "yes",
+      cam_eligible: "yes",
+      payment_treatment: "reimbursable",
+      explicit_charge_amount: "$2,000,000",
+      cap_amount: "$2,000,000",
+      estimated_annual_amount: "$2,000,000",
+    },
+  );
+
+  assert(prepared);
+  assertEquals(prepared.rule.recoverable_from_tenant, "no");
+  assertEquals(prepared.rule.cam_eligible, "no");
+  assertEquals(prepared.rule.payment_treatment, "tenant_direct_contract");
+  assertEquals(prepared.rule.operational_responsibility, "tenant");
+  assertEquals(prepared.rule.published_to_cam, false);
+  assertEquals(prepared.rule.cap_amount, null);
+  assertEquals(prepared.rule.estimated_annual_amount, null);
+  assertEquals(prepared.value, null);
+});
+
+Deno.test("approved publication keeps Additional Charges taxes and landlord insurance recoverable", () => {
+  const sourceText = "As Additional Charges, Tenant shall pay Tenant's proportionate share of all real estate taxes levied against the Property and premiums for Landlord's property insurance incurred by Landlord.";
+  const fallbackRules = __test__.fallbackExpenseRulesFromRawDocument({
+    docling_raw: {
+      pages: [{ page: 9, text: sourceText }],
+      text_blocks: [],
+    },
+  });
+  const taxRule = fallbackRules.find((rule) => rule.expense_category === "real_estate_taxes");
+  const insuranceRule = fallbackRules.find((rule) => rule.expense_category === "property_insurance");
+
+  assert(taxRule);
+  assert(insuranceRule);
+  assertEquals(taxRule.recoverable_from_tenant, true);
+  assertEquals(taxRule.cam_eligible, true);
+  assertEquals(taxRule.recovery_method, "pro_rata_share");
+  assertEquals(insuranceRule.recoverable_from_tenant, true);
+  assertEquals(insuranceRule.cam_eligible, true);
+  assertEquals(insuranceRule.recovery_method, "pro_rata_share");
+
+  const prepared = __test__.prepareRulePayload(
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      tenant_id: null,
+      property_id: null,
+      building_id: null,
+      unit_id: null,
+      abstract_approved_at: "2026-08-06T12:00:00Z",
+    },
+    "22222222-2222-4222-8222-222222222222",
+    taxRule,
+  );
+
+  assert(prepared);
+  assertEquals(prepared.rule.recoverable_from_tenant, "yes");
+  assertEquals(prepared.rule.cam_eligible, "yes");
+  assertEquals(prepared.rule.payment_treatment, "reimbursable");
+  assertEquals(prepared.rule.recovery_method, "pro_rata_share");
+});
+
 Deno.test("approved publication materializes approved lease rules into CAM policies", async () => {
   const ruleOne = "11111111-1111-4111-8111-111111111111";
   const ruleTwo = "22222222-2222-4222-8222-222222222222";

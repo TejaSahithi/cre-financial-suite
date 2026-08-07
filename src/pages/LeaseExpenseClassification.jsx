@@ -32,7 +32,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -115,6 +117,28 @@ function rowTypeLabel(rowType) {
   if (rowType === "rule_missing_actual") return "Contract Rule - No Actual";
   return humanize(rowType);
 }
+function compactParams(params) {
+  return Object.fromEntries(
+    Object.entries(params || {}).filter(([, value]) => value !== null && value !== undefined && value !== "" && value !== "all")
+  );
+}
+
+function expenseContextParams(row, extras = {}) {
+  const rule = row?.rule || {};
+  const lease = row?.lease || {};
+  return compactParams({
+    property: row?.property?.id || lease.property_id,
+    building: row?.building?.id || lease.building_id,
+    unit: row?.unit?.id || lease.unit_id,
+    lease_id: lease.id || rule.lease_id,
+    tenant_id: lease.tenant_id || row?.tenantResolution?.tenant?.id,
+    category: rule.expense_category || rule.category_name,
+    subcategory: rule.expense_subcategory || rule.subcategory_name,
+    description: row?.ruleLabel && row.ruleLabel !== "-" ? row.ruleLabel : undefined,
+    rule_id: rule.id || row?.leaseExpenseRuleId,
+    ...extras,
+  });
+}
 
 export default function LeaseExpenseClassification() {
   const location = useLocation();
@@ -137,6 +161,8 @@ export default function LeaseExpenseClassification() {
   const [activeTab, setActiveTab] = useState("actual_expenses");
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [linkExpenseRow, setLinkExpenseRow] = useState(null);
+  const [selectedExistingExpenseId, setSelectedExistingExpenseId] = useState("");
 
   const { data: leases = [], isLoading: loadingLeases } = useOrgQuery("Lease", {}, { allowSuperAdminGlobal: true });
   const { data: tenants = [] } = useOrgQuery("Tenant", {}, { allowSuperAdminGlobal: true });
@@ -233,6 +259,19 @@ export default function LeaseExpenseClassification() {
   const hasUnlinkedExpenses = workspace.hasUnlinkedExpenses || false;
   const unlinkedActualsCount = workspace.unlinkedActualsCount || 0;
   const [showClassificationDebug, setShowClassificationDebug] = useState(false);
+  const linkableActualExpenses = useMemo(() => {
+    if (!linkExpenseRow) return [];
+    const row = linkExpenseRow;
+    return approvedActuals.filter((expense) => {
+      if (!expense?.id) return false;
+      if (row.property?.id && expense.property_id && expense.property_id !== row.property.id) return false;
+      if (row.building?.id && expense.building_id && expense.building_id !== row.building.id) return false;
+      if (row.unit?.id && expense.unit_id && expense.unit_id !== row.unit.id) return false;
+      if (row.lease?.id && expense.lease_id && expense.lease_id !== row.lease.id) return false;
+      if (row.rule?.id && [expense.recovery_rule_id, expense.linked_expense_rule_id].includes(row.rule.id)) return false;
+      return true;
+    });
+  }, [approvedActuals, linkExpenseRow]);
 
   // Read-only signal for the "Superseded / Withdrawn" status: withdraw_cam_expense_input
   // resets the classification back to classification_status='matched' with
@@ -245,14 +284,14 @@ export default function LeaseExpenseClassification() {
     [existingClassifications],
   );
   const { data: camPublicationStatusByClassificationId = new Map() } = useQuery({
-    queryKey: ["cam-withdrawn-classification-ids", classificationIdsInScope.join(",")],
+    queryKey: ["cam-publication-status-by-classification-id", classificationIdsInScope.join(",")],
     enabled: classificationIdsInScope.length > 0,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("cam_expense_inputs")
-        .select("classification_result_id, publication_status")
+        .select("classification_result_id, publication_status, status")
         .in("classification_result_id", classificationIdsInScope)
-        .in("publication_status", ["withdrawn", "superseded"]);
+        .in("publication_status", ["published", "withdrawn", "superseded"]);
       if (error) return new Map();
       return new Map((data || []).map((r) => [r.classification_result_id, r.publication_status]));
     },
@@ -280,12 +319,14 @@ export default function LeaseExpenseClassification() {
   const rowDecisions = useMemo(() => {
     const map = new Map();
     for (const row of rows) {
-      const readiness = getCamPublicationReadiness(row);
       const publicationStatus = camPublicationStatusByClassificationId.get(row.classificationRecord?.id) || null;
+      const readiness = getCamPublicationReadiness(row, { publicationStatus });
       map.set(row.id, { readiness, decision: getCamInputDecision(row, { readiness, publicationStatus }) });
     }
     return map;
   }, [rows, camPublicationStatusByClassificationId]);
+
+  const canSendRowToCam = (row) => rowDecisions.get(row?.id)?.decision?.state === "ready_to_send";
 
   // Target 5-tab structure: Coverage Gaps (approved lease rules with no
   // actual expense yet) are a separate population, never mixed into the
@@ -362,23 +403,20 @@ export default function LeaseExpenseClassification() {
         summary.ruleGapAmount += amount;
       }
       if (row.rowType !== "matched_classification" || !row.actualExpenseId) return summary;
+      const decisionState = rowDecisions.get(row.id)?.decision?.state;
       summary.matchedActualTotal += amount;
-      if (row.recoverabilityResult === "recoverable") summary.recoverable += amount;
-      if (row.recoverabilityResult === "non_recoverable") summary.nonRecoverable += amount;
-      if (row.recoverabilityResult === "conditional") summary.conditional += amount;
-      if (row.recoverabilityResult === "excluded") summary.excluded += amount;
-      if (["yes", "conditional"].includes(row.camEligible)) {
-        summary.camEligible += amount;
-        if (row.camEligible === "conditional") summary.conditionalCamEligible += amount;
-      }
+      if (decisionState === "ready_to_send" || decisionState === "published_to_cam") summary.recoverable += amount;
+      if (decisionState === "not_cam_eligible") summary.excluded += amount;
+      if (decisionState === "conditional_review_required") summary.conditional += amount;
+      if (row.camEligible === "conditional") summary.conditionalCamEligible += amount;
       if (row.classificationStatus === "finalized") {
         summary.finalized += amount;
-        if (row.recoverabilityResult === "recoverable" && row.camEligible === "yes") {
+        if (decisionState === "ready_to_send" || decisionState === "published_to_cam") {
           summary.finalizedCamEligible += amount;
         }
       }
-      if (row.camStatus === "cam_ready") summary.camReady += amount;
-      if (row.sentToCam) summary.sentToCam += amount;
+      if (decisionState === "ready_to_send") summary.camReady += amount;
+      if (decisionState === "published_to_cam") summary.sentToCam += amount;
       return summary;
     }, {
       approvedActualTotal: 0,
@@ -397,7 +435,7 @@ export default function LeaseExpenseClassification() {
       camReady: 0,
       sentToCam: 0,
     });
-  }, [rows]);
+  }, [rows, rowDecisions]);
 
   const actionableFilteredIds = useMemo(
     () => filteredRows.filter((row) => row.actualExpenseId).map((row) => row.id),
@@ -411,9 +449,9 @@ export default function LeaseExpenseClassification() {
     return {
       finalize: selectedRows.filter((row) => row.canFinalize).length,
       review: selectedRows.filter((row) => row.canSendToReview).length,
-      cam: selectedRows.filter((row) => row.canSendToCam).length,
+      cam: selectedRows.filter((row) => canSendRowToCam(row)).length,
     };
-  }, [rows, selectedIds]);
+  }, [rows, rowDecisions, selectedIds]);
 
   const runClassificationMutation = useMutation({
     mutationFn: () => expenseService.runExpenseClassification(scopePayload),
@@ -484,7 +522,7 @@ export default function LeaseExpenseClassification() {
     mutationFn: async (ids) => {
       const targetRows = Array.from(ids)
         .map((id) => rows.find((row) => row.id === id))
-        .filter((row) => row?.canSendToCam);
+        .filter((row) => canSendRowToCam(row));
 
       const requiresManualReason = targetRows.some((row) => !isAutomaticCamReadyRow(row));
       let manualReason = "";
@@ -521,7 +559,6 @@ export default function LeaseExpenseClassification() {
             cam_source: "none",
             cam_input_type: "actual_expense",
             classification_status: row.classificationStatus,
-            sent_to_cam: row.sentToCam,
           };
           return expenseService.sendClassificationToCam(classificationInput, { reason: manualReason });
         })
@@ -538,6 +575,19 @@ export default function LeaseExpenseClassification() {
     onError: (error) => toast.error(error?.message || "Could not send rows to CAM"),
   });
 
+  const linkExistingExpenseMutation = useMutation({
+    mutationFn: async ({ row, expenseId }) => expenseService.linkActualExpenseToLeaseRule({ expenseId, rule: row.rule }),
+    onSuccess: () => {
+      toast.success("Actual expense linked to lease rule");
+      setLinkExpenseRow(null);
+      setSelectedExistingExpenseId("");
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
+      queryClient.invalidateQueries({ queryKey: ["Expense"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-dashboard-classifications"] });
+    },
+    onError: (error) => toast.error(error?.message || "Could not link actual expense"),
+  });
   const markNoExpenseMutation = useMutation({
     mutationFn: async (row) => {
       if (!row?.rule?.id) throw new Error("Select a valid rule coverage gap.");
@@ -575,7 +625,7 @@ export default function LeaseExpenseClassification() {
         staleCount ? `${staleCount} CAM snapshot(s) marked stale` : null,
         restatementCount ? `${restatementCount} locked snapshot(s) flagged for restatement` : null,
       ].filter(Boolean).join(", ");
-      toast.success(`Withdrawn from CAM${extra ? ` — ${extra}` : ""}`);
+      toast.success(`Withdrawn from CAM${extra ? ` - ${extra}` : ""}`);
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
     },
@@ -981,7 +1031,7 @@ export default function LeaseExpenseClassification() {
               </div>
               <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700">CAM Ready Basis</p>
-                <p className="mt-1 text-lg font-bold text-blue-900">{fmt(totals.finalizedCamEligible)}</p>
+                <p className="mt-1 text-lg font-bold text-blue-900">{fmt(totals.camReady)}</p>
                 <p className="mt-1 text-xs text-blue-700">
                   {fmt(totals.sentToCam)} already sent to CAM
                 </p>
@@ -1085,7 +1135,7 @@ export default function LeaseExpenseClassification() {
               )}
               {activeTab === "coverage_gaps" && (
                 <div className="m-4 rounded-xl border border-amber-200 bg-amber-50/80 p-4 text-amber-900 shadow-sm">
-                  <p className="text-sm font-semibold">Coverage Gaps — Approved Recovery Rules Without Actual Expenses</p>
+                  <p className="text-sm font-semibold">Coverage Gaps - Approved Recovery Rules Without Actual Expenses</p>
                   <p className="text-xs text-amber-700">These lease rules were approved and materialized, but no matching actual expense has been posted for this period yet. They never appear in the Actual Expenses grid.</p>
                 </div>
               )}
@@ -1154,12 +1204,19 @@ export default function LeaseExpenseClassification() {
                           "General Expense";
                         const servicePeriodLabel =
                           row.servicePeriodStart && row.servicePeriodEnd
-                            ? `${row.servicePeriodStart} – ${row.servicePeriodEnd}`
+                            ? `${row.servicePeriodStart} - ${row.servicePeriodEnd}`
                             : "-";
                         const sendToCamBlockedReason =
-                          !row.canSendToCam && row.actualExpenseId && !row.sentToCam && readiness.blockers.length > 0
+                          camInputDecision.state !== "ready_to_send" && row.actualExpenseId && camInputDecision.state !== "published_to_cam" && readiness.blockers.length > 0
                             ? `Blocked: ${readiness.blockers.join(", ")}`
                             : null;
+                        const nextStepLabel = (() => {
+                          if (camInputDecision.state === "ready_to_send") return "Send to CAM";
+                          if (camInputDecision.state === "published_to_cam") return "Published to CAM";
+                          if (camInputDecision.state === "not_cam_eligible") return "Excluded from CAM";
+                          if (camInputDecision.state === "conditional_review_required") return "Resolve conditional rule";
+                          return row.nextStep;
+                        })();
 
                         return (
                           <TableRow key={row.id} className="group border-b-slate-100 transition-colors hover:bg-indigo-50/30">
@@ -1172,24 +1229,24 @@ export default function LeaseExpenseClassification() {
                                 onChange={() => toggleRow(row.id)}
                               />
                             </TableCell>
-                            <TableCell className={`text-xs font-medium ${hasActualExpense ? "text-slate-700" : "text-slate-500"}`}>
+                            <TableCell className={`text-xs font-medium ${hasActualExpense ? "text-slate-800" : "text-slate-600"}`}>
                               {expenseDateLabel}
                             </TableCell>
-                            <TableCell className={`text-xs font-medium ${hasActualExpense ? "text-slate-700" : "text-slate-500"}`}>
+                            <TableCell className={`text-xs font-medium ${hasActualExpense ? "text-slate-800" : "text-slate-600"}`}>
                               {vendorLabel}
                             </TableCell>
-                            <TableCell className="text-xs text-slate-700">
+                            <TableCell className="text-xs font-medium text-slate-800">
                               <div>{propertyLabel}</div>
-                              <div className="text-[11px] text-slate-600">{buildingLabel} / {unitLabel}</div>
+                              <div className="text-[11px] font-medium text-slate-700">{buildingLabel} / {unitLabel}</div>
                             </TableCell>
-                            <TableCell className="text-xs text-slate-700">
+                            <TableCell className="text-xs font-medium text-slate-800">
                               {row.tenantResolution?.tenant?.name ? (
                                 <div title={`Resolved via ${row.tenantResolution.source}`}>
                                   {row.tenantResolution.tenant.name}
                                 </div>
                               ) : (
                                 <div
-                                  className="text-slate-600"
+                                  className="text-slate-700"
                                   title={
                                     row.tenantResolution?.reasonText
                                       ? `No tenant linked: ${row.tenantResolution.reasonText}`
@@ -1200,7 +1257,7 @@ export default function LeaseExpenseClassification() {
                                 </div>
                               )}
                               {row.lease?.tenant_name && row.tenantResolution?.tenant?.name !== row.lease.tenant_name && (
-                                <div className="text-[11px] text-slate-600">via lease: {row.lease.tenant_name}</div>
+                                <div className="text-[11px] font-medium text-slate-700">via lease: {row.lease.tenant_name}</div>
                               )}
                               {(() => {
                                 const matchStatus = resolveMatchStatus(row);
@@ -1236,7 +1293,7 @@ export default function LeaseExpenseClassification() {
                             <TableCell className="max-w-[220px] text-xs font-medium text-slate-900">
                               <div className="font-semibold text-slate-800">{categoryDisplayName}</div>
                             </TableCell>
-                            <TableCell className="text-xs text-slate-700">{servicePeriodLabel}</TableCell>
+                            <TableCell className="text-xs font-medium text-slate-800">{servicePeriodLabel}</TableCell>
                             <TableCell
                               className="max-w-[220px]"
                               title={sendToCamBlockedReason || row.message}
@@ -1246,7 +1303,7 @@ export default function LeaseExpenseClassification() {
                               </Badge>
                             </TableCell>
                             <TableCell className="max-w-[200px] text-[11px] font-medium text-slate-700" title={sendToCamBlockedReason || row.message}>
-                              {row.nextStep}
+                              {nextStepLabel}
                             </TableCell>
                             <TableCell className="pr-4 text-right">
                               <DropdownMenu>
@@ -1268,7 +1325,7 @@ export default function LeaseExpenseClassification() {
                                       Send to Review
                                     </DropdownMenuItem>
                                   )}
-                                  {row.canSendToCam && (
+                                  {canSendRowToCam(row) && (
                                     <DropdownMenuItem onClick={() => sendToCamMutation.mutate(new Set([row.id]))}>
                                       <ArrowRightCircle className="mr-2 h-4 w-4 text-blue-600" />
                                       Send to CAM
@@ -1294,7 +1351,7 @@ export default function LeaseExpenseClassification() {
                                   )}
                                   {row.rowType === "rule_missing_actual" && (
                                     <>
-                                      <DropdownMenuItem onClick={() => navigate(createPageUrl("Expenses", { property: row.property?.id }))}>
+                                      <DropdownMenuItem onClick={() => { setLinkExpenseRow(row); setSelectedExistingExpenseId(""); }}>
                                         <Plus className="mr-2 h-4 w-4 text-blue-600" />
                                         Link Existing Expense
                                       </DropdownMenuItem>
@@ -1302,9 +1359,13 @@ export default function LeaseExpenseClassification() {
                                         <FileText className="mr-2 h-4 w-4 text-slate-500" />
                                         Mark No Expense This Period
                                       </DropdownMenuItem>
-                                      <DropdownMenuItem onClick={() => navigate(createPageUrl("AddExpense"))}>
+                                      <DropdownMenuItem onClick={() => navigate(createPageUrl("AddExpense", expenseContextParams(row, { mode: "manual" })))}>
                                         <Plus className="mr-2 h-4 w-4 text-slate-500" />
-                                        Add / Import Expense
+                                        Add Expense
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem onClick={() => navigate(createPageUrl("AddExpense", expenseContextParams(row, { mode: "invoice" })))}>
+                                        <FileText className="mr-2 h-4 w-4 text-slate-500" />
+                                        Import Expense File
                                       </DropdownMenuItem>
                                     </>
                                   )}
@@ -1321,18 +1382,13 @@ export default function LeaseExpenseClassification() {
                                     </DropdownMenuItem>
                                   )}
                                   {row.actualExpenseId && (
-                                    <DropdownMenuItem onClick={() => navigate(createPageUrl("Expenses", {
-  property: row.property?.id,
-  building: row.building?.id,
-  unit: row.unit?.id,
-  lease_id: row.lease?.id,
-}))}>
+                                    <DropdownMenuItem onClick={() => navigate(createPageUrl("Expenses", expenseContextParams(row, { expense_id: row.actualExpenseId })))}>
                                       <FileText className="mr-2 h-4 w-4 text-slate-500" />
                                       View Actual Expense
                                     </DropdownMenuItem>
                                   )}
-                                  {row.rule?.lease_id && (
-                                    <DropdownMenuItem onClick={() => navigate(createPageUrl("LeaseExpenseRules"))}>
+                                  {row.rule?.id && (
+                                    <DropdownMenuItem onClick={() => navigate(createPageUrl("LeaseExpenseRules", expenseContextParams(row, { rule_id: row.rule.id })))}>
                                       <FileText className="mr-2 h-4 w-4 text-slate-500" />
                                       View Lease Rule
                                     </DropdownMenuItem>
@@ -1386,6 +1442,63 @@ export default function LeaseExpenseClassification() {
           </Tabs>
         </Card>
 
+        <Dialog open={Boolean(linkExpenseRow)} onOpenChange={(open) => {
+          if (!open) {
+            setLinkExpenseRow(null);
+            setSelectedExistingExpenseId("");
+          }
+        }}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Link Existing Actual Expense</DialogTitle>
+              <DialogDescription>
+                Select an approved actual expense in this scope and attach it to the lease expense rule. The expense amount is not changed.
+              </DialogDescription>
+            </DialogHeader>
+
+            {linkableActualExpenses.length > 0 ? (
+              <Select value={selectedExistingExpenseId} onValueChange={setSelectedExistingExpenseId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select actual expense" />
+                </SelectTrigger>
+                <SelectContent>
+                  {linkableActualExpenses.map((expense) => (
+                    <SelectItem key={expense.id} value={expense.id}>
+                      {expense.vendor || expense.vendor_name || expense.category || "Actual expense"} - {expense.date || expense.expense_date || "No date"} - {fmt(expense.amount)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                No approved actual expenses are available in this scope. Add or import an expense with the rule context first.
+              </div>
+            )}
+
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button type="button" variant="outline" onClick={() => { setLinkExpenseRow(null); setSelectedExistingExpenseId(""); }}>
+                Cancel
+              </Button>
+              {linkableActualExpenses.length === 0 ? (
+                <Button
+                  type="button"
+                  onClick={() => navigate(createPageUrl("AddExpense", expenseContextParams(linkExpenseRow, { mode: "manual" })))}
+                >
+                  Add Expense
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  disabled={!selectedExistingExpenseId || linkExistingExpenseMutation.isPending}
+                  onClick={() => linkExistingExpenseMutation.mutate({ row: linkExpenseRow, expenseId: selectedExistingExpenseId })}
+                >
+                  {linkExistingExpenseMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Link Expense
+                </Button>
+              )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         <div className="flex flex-wrap gap-4 border-t pt-4 text-xs text-slate-500">
           <span className="flex items-center gap-1.5"><ArrowRightCircle className="h-3.5 w-3.5 text-blue-500" /> <strong>CAM:</strong> CAM Ready rows feed CAM calculation.</span>
           <span className="flex items-center gap-1.5"><RefreshCw className="h-3.5 w-3.5 text-emerald-500" /> <strong>Projection:</strong> Finalized classification rows feed Expense Projection.</span>

@@ -8,7 +8,8 @@ import {
   isClassificationSentToCam,
   isAutomaticCamReadyRow,
   buildClassificationRows,
-  getCamInputDecision
+  getCamInputDecision,
+  getClassificationRecoveryBucket
 } from './buildClassificationRows';
 
 describe('buildClassificationRows', () => {
@@ -235,7 +236,54 @@ describe('buildClassificationRows', () => {
     expect(isClassificationSentToCam({ cam_status: 'needs_review' })).toBe(false);
   });
 
-  describe('getCamInputDecision — direct recovery', () => {
+  it('uses expense_classification cam_eligible=no as authoritative exclusion', () => {
+    const classification = {
+      id: 'classification-excluded',
+      classification_status: 'finalized',
+      recoverability_result: 'recoverable',
+      cam_eligible: 'no',
+    };
+    const row = {
+      rowType: 'matched_classification',
+      actualExpenseId: 'expense-excluded',
+      classificationStatus: 'finalized',
+      recoverabilityResult: 'recoverable',
+      camEligible: 'no',
+      amount: 20400,
+      property: { id: 'property-1' },
+      expenseCategoryId: 'category-1',
+      servicePeriodStart: '2026-01-01',
+      servicePeriodEnd: '2026-01-31',
+      classificationRecord: classification,
+      rule: { published_to_cam: true, recoverable_from_tenant: 'yes', cam_eligible: 'yes' },
+    };
+
+    expect(getClassificationRecoveryBucket(classification)).toBe('excluded');
+    expect(getCamInputDecision(row).state).toBe('not_cam_eligible');
+  });
+
+  it('treats published CAM as true only when cam_expense_inputs publication status is published', () => {
+    const row = {
+      rowType: 'matched_classification',
+      actualExpenseId: 'expense-published',
+      classificationStatus: 'finalized',
+      recoverabilityResult: 'recoverable',
+      camEligible: 'yes',
+      amount: 100,
+      sentToCam: true,
+      property: { id: 'property-1' },
+      expenseCategoryId: 'category-1',
+      servicePeriodStart: '2026-01-01',
+      servicePeriodEnd: '2026-01-31',
+      classificationRecord: { recoverability_result: 'recoverable', cam_eligible: 'yes', classification_status: 'finalized' },
+      rule: { published_to_cam: true, recoverable_from_tenant: 'yes', cam_eligible: 'yes' },
+    };
+
+    expect(getCamInputDecision(row).state).toBe('ready_to_send');
+    expect(getCamInputDecision(row, { publicationStatus: 'published' }).state).toBe('published_to_cam');
+  });
+
+  describe('getCamInputDecision - direct recovery', () => {
     // Direct-recovery scenario 2/4: a finalized, CAM-eligible, categorized,
     // scoped, service-period-complete expense matched to a direct_bill rule
     // (recovery_method='direct_bill', billed to one specific tenant, never

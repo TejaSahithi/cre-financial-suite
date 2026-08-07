@@ -20,13 +20,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { createPageUrl } from "@/utils";
 import { resolveTenantForExpense } from "@/lib/tenantResolver";
 import { supabase } from "@/services/supabaseClient";
+import { getClassificationRecoveryBucket } from "@/components/lease-expense/utils/buildClassificationRows";
 
 function normalizeBucket(expense) {
-  const status = String(expense?.recoverability_result || expense?.recovery_status || expense?.classification || "needs_review").toLowerCase();
-  if (status === "recoverable") return "recoverable";
-  if (["non_recoverable", "excluded"].includes(status)) return status;
-  if (status === "conditional") return "conditional";
-  return "needs_review";
+  return getClassificationRecoveryBucket(expense);
 }
 
 function toAmount(expense) {
@@ -56,18 +53,19 @@ function getCamHandoffState(expense, publishedCamInput) {
 
   const recovery = normalizeBucket(expense);
   const eligible = String(expense?.cam_eligible || "").toLowerCase();
-  if (recovery === "recoverable" && eligible === "yes") {
+  const finalized = String(expense?.classification_status || "").toLowerCase() === "finalized";
+  if (recovery === "recoverable" && eligible === "yes" && finalized) {
     return {
       label: "candidate",
       tone: "bg-amber-100 text-amber-800",
-      title: "Recoverable and CAM eligible, but not published to cam_expense_inputs yet.",
+      title: "Classification is finalized, recoverable, and CAM eligible, but no published cam_expense_inputs row exists yet.",
     };
   }
   if (eligible === "no" || recovery === "non_recoverable" || recovery === "excluded") {
     return {
       label: "not eligible",
       tone: "bg-slate-200 text-slate-700",
-      title: "Not eligible for CAM publication.",
+      title: "The authoritative expense classification marks this row as not CAM eligible.",
     };
   }
   return {

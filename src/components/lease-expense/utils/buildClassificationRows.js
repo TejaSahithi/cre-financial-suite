@@ -150,15 +150,27 @@ export function isAutomaticCamReadyRow(row) {
   );
 }
 
-// Publication-readiness checklist with exact blocking reasons — the
+// Publication-readiness checklist with exact blocking reasons - the
 // client-side mirror of deriveExpenseCamSendBlockers
 // (_shared/send-expense-classification-to-cam-workflow.ts) and
 // send_expense_classification_to_cam_workflow's own server-side checks
 // (20260905000000_cam_publication_rpcs.sql). Server-side remains
 // authoritative; this only drives what the UI shows so a reviewer can see
 // *why* Send to CAM is disabled without guessing.
-export function getCamPublicationReadiness(row) {
-  if (row?.sentToCam) {
+export function getClassificationRecoveryBucket(record = {}) {
+  const status = normalizeText(record?.classificationStatus || record?.classification_status);
+  const recovery = normalizeText(record?.recoverabilityResult || record?.recoverability_result || record?.recovery_status);
+  const camEligible = normalizeText(record?.camEligible || record?.cam_eligible);
+
+  if (status === "excluded" || camEligible === "no" || recovery === "excluded") return "excluded";
+  if (recovery === "non_recoverable") return "non_recoverable";
+  if (recovery === "conditional") return "conditional";
+  if (recovery === "recoverable" && camEligible === "yes") return "recoverable";
+  return "needs_review";
+}
+
+export function getCamPublicationReadiness(row, { publicationStatus = null } = {}) {
+  if (publicationStatus === "published") {
     return { ready: true, checks: [], blockers: [], alreadyPublished: true };
   }
 
@@ -175,7 +187,7 @@ export function getCamPublicationReadiness(row) {
     { key: "category_resolved", label: "Canonical expense category resolved", pass: isRuleGap ? true : Boolean(row?.expenseCategoryId) },
     { key: "service_period_set", label: "Service period set", pass: isRuleGap ? true : Boolean(row?.servicePeriodStart && row?.servicePeriodEnd) },
     { key: "conditions_resolved", label: "Conditions resolved", pass: row?.recoverabilityResult !== "conditional" },
-    { key: "duplicate_check", label: "Not already published", pass: !row?.sentToCam },
+    { key: "duplicate_check", label: "Not already published", pass: publicationStatus !== "published" },
     { key: "recoverable", label: "Recoverability is recoverable", pass: row?.recoverabilityResult === "recoverable" },
     { key: "cam_eligible", label: "CAM eligibility is yes", pass: row?.camEligible === "yes" },
   ];
@@ -197,14 +209,16 @@ export function getCamInputDecision(row, { readiness = null, publicationStatus =
   if (publicationStatus === "withdrawn") {
     return { state: "withdrawn", label: "Withdrawn" };
   }
-  if (row?.sentToCam) {
+  if (publicationStatus === "published") {
     return { state: "published_to_cam", label: "Published to CAM" };
   }
-  if (hasExplicitCamExclusion(row) || row?.camEligible === "no") {
+
+  const classificationBucket = getClassificationRecoveryBucket({ ...(row || {}), ...(row?.classificationRecord || {}) });
+  if (classificationBucket === "excluded" || classificationBucket === "non_recoverable") {
     return { state: "not_cam_eligible", label: "Not CAM Eligible" };
   }
-  if (row?.recoverabilityResult === "conditional" && !row?.classificationRecord?.condition_resolved) {
-    return { state: "conditional_review_required", label: "Conditional — Review Required" };
+  if (classificationBucket === "conditional" && !row?.classificationRecord?.condition_resolved) {
+    return { state: "conditional_review_required", label: "Conditional - Review Required" };
   }
 
   const isRuleGap = row?.rowType === "rule_missing_actual";
@@ -224,8 +238,8 @@ export function getCamInputDecision(row, { readiness = null, publicationStatus =
     }
   }
 
-  const effectiveReadiness = readiness || getCamPublicationReadiness(row);
-  if (row?.classificationStatus === "finalized" && effectiveReadiness.ready) {
+  const effectiveReadiness = readiness || getCamPublicationReadiness(row, { publicationStatus });
+  if (row?.classificationStatus === "finalized" && classificationBucket === "recoverable" && effectiveReadiness.ready) {
     return { state: "ready_to_send", label: "Ready to Send to CAM" };
   }
 
@@ -358,6 +372,12 @@ export function buildClassificationRows({
     const building = buildingById.get(expense.building_id || lease?.building_id) || null;
     const unit = unitById.get(expense.unit_id || lease?.unit_id) || null;
     const sentToCam = isClassificationSentToCam(classificationRecord);
+    const classificationBucket = getClassificationRecoveryBucket({
+      classificationStatus,
+      recoverabilityResult,
+      camEligible,
+      classificationRecord,
+    });
     const leaseTenantName = approvedLeaseFieldValue(lease, ["tenant_name", "tenant", "tenant_legal_name", "lessee"]);
     const expenseForTenantResolution = {
       ...expense,
@@ -409,15 +429,16 @@ export function buildClassificationRows({
       expenseCategoryId: classificationRecord?.expense_category_id || null,
       servicePeriodStart: classificationRecord?.service_period_start || expense.service_period_start || null,
       servicePeriodEnd: classificationRecord?.service_period_end || expense.service_period_end || null,
-      recoverabilityResult: recoverabilityResult || "needs_review",
+      recoverabilityResult: classificationBucket,
+      rawRecoverabilityResult: recoverabilityResult || "needs_review",
       classificationStatus,
       exceptionType,
       camEligible,
       camStatus,
-      recoverableAmount: hasMatchedRule ? (amountBuckets.recoverable_amount || (recoverabilityResult === "recoverable" ? actualAmount : 0)) : 0,
-      nonRecoverableAmount: hasMatchedRule ? (amountBuckets.non_recoverable_amount || (recoverabilityResult === "non_recoverable" ? actualAmount : 0)) : 0,
-      conditionalAmount: hasMatchedRule ? (amountBuckets.conditional_amount || (recoverabilityResult === "conditional" ? actualAmount : 0)) : 0,
-      excludedAmount: hasMatchedRule ? (amountBuckets.excluded_amount || (recoverabilityResult === "excluded" ? actualAmount : 0)) : 0,
+      recoverableAmount: hasMatchedRule && classificationBucket === "recoverable" ? actualAmount : 0,
+      nonRecoverableAmount: hasMatchedRule && classificationBucket === "non_recoverable" ? actualAmount : 0,
+      conditionalAmount: hasMatchedRule && classificationBucket === "conditional" ? actualAmount : 0,
+      excludedAmount: hasMatchedRule && classificationBucket === "excluded" ? actualAmount : 0,
       sentToCam,
       nextStep:
         (camStatus === "cam_ready" ? "CAM Ready" : classificationRecord?.next_step) ||

@@ -16,9 +16,10 @@ import { AlertTriangle, ArrowLeft, Upload, Download, CheckCircle2, Loader2 } fro
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
+import { buildExpenseBulkImportColumnMap } from "@/lib/expenseBulkImportMapping";
 import { toast } from "sonner";
 
-const systemFields = ["expense_date", "category", "expense_subcategory", "amount", "vendor", "recoverable_flag", "description", "gl_code", "invoice_number"];
+const systemFields = ["expense_date", "category", "expense_subcategory", "amount", "vendor", "recoverable_flag", "description", "gl_code", "invoice_number", "source_type"];
 
 const IMPORT_TEMPLATES = {
   generic: {
@@ -41,7 +42,7 @@ const IMPORT_TEMPLATES = {
   },
 };
 
-// Lowercase column name → systemField mappings for each source system.
+// Lowercase column name -> systemField mappings for each source system.
 // null means intentionally unmapped (e.g. Property Code must be set via the scope selector).
 const IMPORT_PRESETS = {
   generic: { label: "Generic CSV / Excel", autoMap: {} },
@@ -216,7 +217,7 @@ export default function BulkImport() {
         const { data: urlData } = supabase.storage.from('financial-uploads').getPublicUrl(fileName);
         uploadedUrl = urlData?.publicUrl || "";
       } else {
-        // Storage bucket missing or unavailable — use local blob URL
+        // Storage bucket missing or unavailable - use local blob URL
         uploadedUrl = URL.createObjectURL(f);
       }
     } catch {
@@ -245,28 +246,8 @@ export default function BulkImport() {
 
       const { headers, rows } = parseCSV(csvText);
       if (headers.length > 0) {
-        const autoMap = {};
-        headers.forEach(c => {
-          const lower = c.toLowerCase();
-          if (lower.includes('date')) autoMap[c] = 'expense_date';
-          else if (lower.includes('subcategory') || lower.includes('sub category') || lower.includes('service type')) autoMap[c] = 'expense_subcategory';
-          else if (lower.includes('category') || lower.includes('type')) autoMap[c] = 'category';
-          else if (lower.includes('amount') || lower.includes('cost') || lower.includes('total')) autoMap[c] = 'amount';
-          else if (lower.includes('vendor') || lower.includes('supplier') || lower.includes('payee')) autoMap[c] = 'vendor';
-          else if (lower.includes('recover') || lower.includes('class')) autoMap[c] = 'recoverable_flag';
-          else if (lower.includes('desc') || lower.includes('note') || lower.includes('memo')) autoMap[c] = 'description';
-          else if (lower.includes('gl') || lower.includes('account') || lower.includes('cost_center')) autoMap[c] = 'gl_code';
-          else if (lower.includes('invoice') || lower === 'ref no' || lower === 'reference') autoMap[c] = 'invoice_number';
-        });
-        // Apply source-specific preset mappings on top of generic detection
-        // (exact lowercase column name match; null = intentionally unmapped)
         const preset = IMPORT_PRESETS[importSource] ?? IMPORT_PRESETS.generic;
-        headers.forEach(c => {
-          const field = preset.autoMap[c.toLowerCase()];
-          if (field !== undefined && !autoMap[c]) {
-            if (field !== null) autoMap[c] = field;
-          }
-        });
+        const autoMap = buildExpenseBulkImportColumnMap(headers, preset);
         setColumnMap(autoMap);
         setExtractedRows(rows);
       } else {
@@ -289,10 +270,10 @@ export default function BulkImport() {
       const mappedRow = {};
       Object.entries(columnMap).forEach(([col, field]) => { mappedRow[field] = row[col]; });
 
-      if (!mappedRow.amount || isNaN(parseFloat(String(mappedRow.amount).replace(/[$,]/g, '')))) errors.push("Amount field is empty — required field");
+      if (!mappedRow.amount || isNaN(parseFloat(String(mappedRow.amount).replace(/[$,]/g, '')))) errors.push("Amount field is empty - required field");
       if (!mappedRow.category) errors.push("Category is empty");
-      if (mappedRow.expense_date && !/^\d{4}-\d{2}-\d{2}$/.test(mappedRow.expense_date)) warnings.push("Date format mismatch — expected YYYY-MM-DD");
-      if (mappedRow.recoverable_flag?.toLowerCase() === 'conditional') warnings.push("Conditional recoverable — will require lease validation check on import");
+      if (mappedRow.expense_date && !/^\d{4}-\d{2}-\d{2}$/.test(mappedRow.expense_date)) warnings.push("Date format mismatch - expected YYYY-MM-DD");
+      if (mappedRow.recoverable_flag?.toLowerCase() === 'conditional') warnings.push("Conditional recoverable - will require lease validation check on import");
 
       return { ...mappedRow, row_num: i + 1, warnings, errors, status: errors.length > 0 ? 'error' : warnings.length > 0 ? 'warning' : 'ready', original: row };
     });
@@ -382,7 +363,7 @@ export default function BulkImport() {
       description: row.description || "",
       classification: row.recoverable_flag?.toLowerCase().includes('non') ? 'non_recoverable' : row.recoverable_flag?.toLowerCase().includes('cond') ? 'conditional' : 'recoverable',
       source: "bulk_import",
-      source_type: "bulk_import",
+      source_type: row.source_type || "bulk_import",
       approval_status: "needs_review",
       approved_status: "needs_review",
       review_status: "needs_review",
@@ -480,7 +461,7 @@ export default function BulkImport() {
             <CardContent className="p-4 space-y-3">
               <div>
                 <h2 className="text-sm font-semibold text-slate-900">Import Source</h2>
-                <p className="text-xs text-slate-500 mt-0.5">Templates are import helpers — not live Yardi/MRI integrations.</p>
+                <p className="text-xs text-slate-500 mt-0.5">Templates are import helpers - not live Yardi/MRI integrations.</p>
               </div>
               <div className="flex flex-wrap items-end gap-3">
                 <div className="space-y-1">
@@ -501,7 +482,7 @@ export default function BulkImport() {
               </div>
               {importSource !== "generic" && (
                 <p className="text-xs text-blue-600">
-                  {IMPORT_PRESETS[importSource].label} preset loaded — recognized column names will be auto-mapped when you upload your file.
+                  {IMPORT_PRESETS[importSource].label} preset loaded - recognized column names will be auto-mapped when you upload your file.
                 </p>
               )}
             </CardContent>
@@ -535,7 +516,7 @@ export default function BulkImport() {
               <p className="text-sm text-slate-500">Map columns from your file to the system fields. Auto-detected matches are pre-filled.</p>
               {importSource !== "generic" && (
                 <p className="text-xs text-blue-600 mt-1">
-                  {IMPORT_PRESETS[importSource].label} preset active — {Object.values(IMPORT_PRESETS[importSource].autoMap).filter(Boolean).length} column name(s) pre-mapped. Columns not in the preset are left unmapped.
+                  {IMPORT_PRESETS[importSource].label} preset active - {Object.values(IMPORT_PRESETS[importSource].autoMap).filter(Boolean).length} column name(s) pre-mapped. Columns not in the preset are left unmapped.
                 </p>
               )}
             </div>
@@ -608,7 +589,7 @@ export default function BulkImport() {
                   <React.Fragment key={r.row_num}>
                     <TableRow className={r.status === 'error' ? 'bg-red-50/50' : r.status === 'warning' ? 'bg-amber-50/50' : ''}>
                       <TableCell className="text-sm">{r.row_num}</TableCell>
-                      <TableCell className="text-sm">{r.expense_date || '—'}</TableCell>
+                      <TableCell className="text-sm">{r.expense_date || '-'}</TableCell>
                       <TableCell className="text-sm font-medium">{r.category}</TableCell>
                       <TableCell className="text-sm font-mono">{r.amount}</TableCell>
                       <TableCell className="text-sm">{r.vendor}</TableCell>
@@ -616,17 +597,17 @@ export default function BulkImport() {
                       <TableCell>
                         {r.gl_code
                           ? glMappingLookup[r.gl_code.trim()]
-                            ? <Badge className="bg-blue-100 text-blue-700 text-[9px]">Mapped → {glMappingLookup[r.gl_code.trim()].category?.replace(/_/g,' ') || r.gl_code}</Badge>
+                            ? <Badge className="bg-blue-100 text-blue-700 text-[9px]">Mapped to {glMappingLookup[r.gl_code.trim()].category?.replace(/_/g,' ') || r.gl_code}</Badge>
                             : <Badge className="bg-amber-100 text-amber-700 text-[9px]">Unmapped ({r.gl_code})</Badge>
-                          : <span className="text-[10px] text-slate-300">—</span>}
+                          : <span className="text-[10px] text-slate-300">-</span>}
                       </TableCell>
-                      <TableCell><Badge className={r.status === 'error' ? 'bg-red-100 text-red-600' : r.status === 'warning' ? 'bg-amber-100 text-amber-600' : 'bg-emerald-100 text-emerald-700'} >{r.status === 'ready' ? '✓ Ready' : r.status === 'warning' ? '⚠ Warning' : '✕ Error'}</Badge></TableCell>
+                      <TableCell><Badge className={r.status === 'error' ? 'bg-red-100 text-red-600' : r.status === 'warning' ? 'bg-amber-100 text-amber-600' : 'bg-emerald-100 text-emerald-700'} >{r.status === 'ready' ? 'Ready' : r.status === 'warning' ? 'Warning' : 'Error'}</Badge></TableCell>
                     </TableRow>
                     {(r.warnings.length > 0 || r.errors.length > 0) && (
                       <TableRow>
                         <TableCell colSpan={8} className="py-1 px-8">
-                          {r.warnings.map((w, i) => <p key={i} className="text-xs text-amber-600">⚠ {w}</p>)}
-                          {r.errors.map((w, i) => <p key={i} className="text-xs text-red-600">✕ {w}</p>)}
+                          {r.warnings.map((w, i) => <p key={i} className="text-xs text-amber-600">Warning: {w}</p>)}
+                          {r.errors.map((w, i) => <p key={i} className="text-xs text-red-600">Error: {w}</p>)}
                         </TableCell>
                       </TableRow>
                     )}
@@ -648,14 +629,14 @@ export default function BulkImport() {
                 <div className="space-y-1 max-h-36 overflow-y-auto">
                   {dupCheck.warnings.map(w => (
                     <div key={w.rowNum} className="text-xs text-amber-700 bg-white rounded px-2 py-1 border border-amber-200">
-                      Row {w.rowNum}: {w.category} · {w.amount} · {w.date || '—'} · {w.vendor || '—'} — matches existing expense from {w.existingDate || '—'} ({w.existingVendor || 'same vendor'})
+                      Row {w.rowNum}: {w.category} | {w.amount} | {w.date || '-'} | {w.vendor || '-'} - matches existing expense from {w.existingDate || '-'} ({w.existingVendor || 'same vendor'})
                     </div>
                   ))}
                 </div>
                 <div className="flex gap-2 pt-1">
                   <Button size="sm" variant="outline" className="border-amber-400 text-amber-700 hover:bg-amber-100"
                     onClick={() => importData(true)}>
-                    Skip {dupCheck.warnings.length} flagged — import rest
+                    Skip {dupCheck.warnings.length} flagged - import rest
                   </Button>
                   <Button size="sm" className="bg-amber-600 hover:bg-amber-700"
                     onClick={() => importData(false)}>

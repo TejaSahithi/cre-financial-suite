@@ -14,6 +14,7 @@
 
 export interface ParsedExpense {
   category: string | null;
+  expense_subcategory: string | null;
   amount: number | null;
   date: string | null;
   property_id: string | null;
@@ -24,6 +25,7 @@ export interface ParsedExpense {
   fiscal_year: number | null;
   month: number | null;
   source: string | null;
+  source_type: string | null;
   is_controllable: boolean | null;
   [key: string]: string | number | boolean | null;
   _row_number?: number;
@@ -43,7 +45,8 @@ export interface ExpenseParseResult {
  * Maps various column name variations to standardized field names
  */
 const COLUMN_MAPPINGS: Record<string, string[]> = {
-  category: ['category', 'expense_category', 'expense category', 'type', 'expense_type', 'expense type'],
+  category: ['category', 'expense_category', 'expense category'],
+  expense_subcategory: ['subcategory', 'sub category', 'expense_subcategory', 'expense subcategory', 'service type'],
   amount: ['amount', 'expense_amount', 'expense amount', 'cost', 'total', 'expense'],
   date: ['date', 'expense_date', 'expense date', 'transaction_date', 'transaction date'],
   property_id: ['property_id', 'property', 'property id', 'property_name', 'property name'],
@@ -54,6 +57,7 @@ const COLUMN_MAPPINGS: Record<string, string[]> = {
   fiscal_year: ['fiscal_year', 'fiscal year', 'year', 'fy'],
   month: ['month', 'period', 'month_number', 'month number'],
   source: ['source', 'data_source', 'data source', 'origin'],
+  source_type: ['source_type', 'source type'],
   is_controllable: ['is_controllable', 'controllable', 'is controllable', 'can_control', 'can control']
 };
 
@@ -112,7 +116,7 @@ export function normalizeDate(dateStr: string | null): string | null {
 
 /**
  * Convert currency string to numeric value
- * Removes symbols ($, €, £), commas, and spaces
+ * Removes currency symbols, commas, and spaces
  */
 export function normalizeCurrency(currencyStr: string | null): number | null {
   if (!currencyStr || currencyStr.trim() === '') {
@@ -123,7 +127,7 @@ export function normalizeCurrency(currencyStr: string | null): number | null {
   
   // Remove currency symbols, commas, and spaces
   const cleaned = trimmed
-    .replace(/[$€£,\s]/g, '')
+    .replace(/[^0-9.-]/g, '')
     .trim();
   
   if (cleaned === '') {
@@ -191,6 +195,7 @@ export function parseExpenses(rawRows: Array<Record<string, any>>): ExpenseParse
     
     const parsedRow: ParsedExpense = {
       category: null,
+      expense_subcategory: null,
       amount: null,
       date: null,
       property_id: null,
@@ -201,6 +206,7 @@ export function parseExpenses(rawRows: Array<Record<string, any>>): ExpenseParse
       fiscal_year: null,
       month: null,
       source: null,
+      source_type: null,
       is_controllable: null,
       _row_number: rowNumber
     };
