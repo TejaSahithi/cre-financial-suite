@@ -458,6 +458,15 @@ export default function LeaseExpenseClassification() {
     };
   }, [rows, rowDecisions, selectedIds]);
 
+  const invalidateCamPublicationQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["cam-overview-expenses"] });
+    queryClient.invalidateQueries({ queryKey: ["cam_expense_inputs_published"] });
+    queryClient.invalidateQueries({ queryKey: ["cam-publication-status-by-classification-id"] });
+    queryClient.invalidateQueries({ queryKey: ["cam-overview-readiness"] });
+    queryClient.invalidateQueries({ queryKey: ["recovery_pools"] });
+    queryClient.invalidateQueries({ queryKey: ["lease_recovery_policies"] });
+  };
+
   const runClassificationMutation = useMutation({
     mutationFn: () => expenseService.runExpenseClassification(scopePayload),
     onSuccess: () => {
@@ -582,6 +591,7 @@ export default function LeaseExpenseClassification() {
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
+      invalidateCamPublicationQueries();
     },
     onError: (error) => toast.error(error?.message || "Could not send rows to CAM"),
   });
@@ -639,6 +649,7 @@ export default function LeaseExpenseClassification() {
       toast.success(`Withdrawn from CAM${extra ? ` - ${extra}` : ""}`);
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
+      invalidateCamPublicationQueries();
     },
     onError: (error) => toast.error(error?.message || "Could not withdraw from CAM"),
   });

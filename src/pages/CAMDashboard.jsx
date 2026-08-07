@@ -18,6 +18,8 @@ import { Link } from "react-router-dom";
 import { Calculator, ArrowRight, TrendingUp, Building2, ClipboardCheck, AlertTriangle, CheckCircle2, DollarSign } from "lucide-react";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
+import useOrgId from "@/hooks/useOrgId";
+import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { supabase } from "@/services/supabaseClient";
 import { getCamScopeContext } from "@/lib/camScope";
 import { createPageUrl } from "@/utils";
@@ -54,6 +56,11 @@ function StatusBadge({ status }) {
 export default function CAMDashboard() {
   const currentYear = new Date().getFullYear();
   const prevYear = currentYear - 1;
+  const { orgId: resolvedOrgId } = useOrgId();
+  const actingOrgId = getStoredActingOrgId();
+  const orgScopeId = resolvedOrgId || actingOrgId || null;
+  const orgScopeKey = orgScopeId || "__global__";
+  const queriesEnabled = resolvedOrgId !== undefined;
 
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
@@ -83,8 +90,8 @@ export default function CAMDashboard() {
 
   // Active period for selected property
   const { data: recoveryPeriods = [] } = useQuery({
-    queryKey: ["cam-overview-periods", scope.targetPropertyId],
-    enabled: !!scope.targetPropertyId,
+    queryKey: ["cam-overview-periods", orgScopeKey, scope.targetPropertyId],
+    enabled: queriesEnabled && !!scope.targetPropertyId,
     queryFn: async () => {
       try {
         const { data: cals, error: calErr } = await supabase.from("recovery_calendars").select("id").eq("property_id", scope.targetPropertyId);
@@ -203,11 +210,18 @@ export default function CAMDashboard() {
   // actual expense is not part of the CAM pool until Expense Classification
   // marks it CAM-eligible and publishes it into cam_expense_inputs.
   const { data: eligibleExpenses = [] } = useQuery({
-    queryKey: ["cam-overview-expenses", scope.targetPropertyId, scopeProperty],
-    enabled: !!scope.targetPropertyId || scopeProperty === "all",
+    queryKey: ["cam-overview-expenses", orgScopeKey, scope.targetPropertyId || "all", scopeProperty],
+    enabled: queriesEnabled && (!!scope.targetPropertyId || scopeProperty === "all"),
+    staleTime: 0,
+    refetchOnMount: "always",
     queryFn: async () => {
       try {
-        let query = supabase.from("cam_expense_inputs").select("id, property_id, amount, actual_amount, eligible_amount, category, description, publication_status");
+        let query = supabase
+          .from("cam_expense_inputs")
+          .select("id, org_id, property_id, building_id, unit_id, lease_id, tenant_id, actual_expense_id, classification_result_id, lease_expense_rule_id, category, amount, fiscal_year, service_period_start, service_period_end, status, publication_status");
+        if (orgScopeId && orgScopeId !== "__none__") {
+          query = query.eq("org_id", orgScopeId);
+        }
         if (scope.targetPropertyId) {
           query = query.eq("property_id", scope.targetPropertyId);
         }
@@ -593,3 +607,4 @@ export default function CAMDashboard() {
     </div>
   );
 }
+
