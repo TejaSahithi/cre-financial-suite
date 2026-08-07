@@ -16,7 +16,7 @@ const MODULE_RICH = {
     icon: BarChart2,
     label: "Executive Dashboard",
     desc: "High-level KPIs, rent collection trends, occupancy rates, and NOI tracking at a glance. Your command center for the entire portfolio.",
-    color: "from-blue-500 to-indigo-600",
+    color: "from-[var(--accent)] to-indigo-600",
     badge: "Core"
   },
   portfolio: {
@@ -65,7 +65,7 @@ const MODULE_RICH = {
     icon: TrendingUp,
     label: "Analytics & Reports",
     desc: "Unlock powerful reporting with NOI analysis, rent projection, market benchmarks, and exportable dashboards.",
-    color: "from-blue-600 to-cyan-500",
+    color: "from-[var(--accent)] to-cyan-500",
     badge: "Insights"
   },
   expenses: {
@@ -86,7 +86,7 @@ const MODULE_RICH = {
     icon: GitMerge,
     label: "Financial Reconciliation",
     desc: "Reconcile bank statements, rent rolls, and payable ledgers against your operational data.",
-    color: "from-indigo-500 to-blue-500",
+    color: "from-indigo-500 to-[var(--accent)]",
     badge: "Financial"
   },
   workflows: {
@@ -124,7 +124,7 @@ const SUPER_ADMIN_FEATURES = [
     icon: BarChart2,
     label: "Cross-Portfolio Analytics",
     desc: "Aggregate and compare performance metrics across all client organizations for internal review.",
-    color: "from-blue-600 to-indigo-700",
+    color: "from-[var(--accent)] to-indigo-700",
     badge: "Insights"
   },
   {
@@ -152,12 +152,12 @@ const SUPER_ADMIN_FEATURES = [
 
 const badgeColors = {
   Admin: "bg-rose-100 text-rose-700",
-  Core: "bg-blue-100 text-blue-700",
-  Financial: "bg-emerald-100 text-emerald-700",
+  Core: "bg-[var(--accent-soft)] text-[var(--accent)]",
+  Financial: "bg-[var(--success-soft)] text-[var(--success)]",
   Smart: "bg-violet-100 text-violet-700",
-  Insights: "bg-amber-100 text-amber-700",
+  Insights: "bg-[var(--warning-soft)] text-[var(--warning)]",
   Operations: "bg-teal-100 text-teal-700",
-  "All Access": "bg-gradient-to-r from-blue-600 to-emerald-600 text-white",
+  "All Access": "bg-[var(--accent)] text-white",
 };
 
 function formatLabel(value) {
@@ -217,34 +217,31 @@ export default function WelcomeAboard() {
 
   const getRoleLabel = () => {
     if (isSuperAdmin) return { text: "Platform SuperAdmin", color: "bg-rose-100 text-rose-700 border border-rose-200" };
-    if (isOrgAdmin) return { text: "Organization Admin", color: "bg-amber-100 text-amber-700 border border-amber-200" };
-    return { text: roleName, color: "bg-blue-100 text-blue-700 border border-blue-200" };
+    if (isOrgAdmin) return { text: "Organization Admin", color: "bg-[var(--warning-soft)] text-[var(--warning)] border border-[var(--border-cre)]" };
+    return { text: roleName, color: "bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--border-cre)]" };
   };
 
   const roleLabel = getRoleLabel();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 flex flex-col items-center justify-start p-6 py-16 relative overflow-hidden font-sans">
-      <div className="absolute top-0 right-0 h-[500px] w-[500px] rounded-full bg-blue-200/20 blur-3xl pointer-events-none" />
-      <div className="absolute bottom-0 left-0 h-[400px] w-[400px] rounded-full bg-indigo-200/20 blur-3xl pointer-events-none" />
-
+    <div className="min-h-screen bg-[var(--bg)] flex flex-col items-center justify-start p-6 py-16 relative overflow-hidden font-sans">
       <div className="max-w-5xl w-full relative z-10">
         <div className="text-center mb-14 animate-in fade-in slide-in-from-bottom-6 duration-700">
-          <div className="inline-flex items-center gap-2 bg-emerald-100 text-emerald-700 px-4 py-1.5 rounded-full text-xs font-bold mb-6">
+          <div className="inline-flex items-center gap-2 bg-[var(--success-soft)] text-[var(--success)] px-4 py-1.5 rounded-full text-xs font-bold mb-6">
             <CheckCircle2 className="w-3.5 h-3.5" />
             Account Activated
           </div>
-          <h1 className="text-[28px] font-black text-slate-900 mb-4 tracking-tight">
-            Welcome aboard, <span className="text-blue-600">{firstName}!</span>
+          <h1 className="text-[28px] font-black text-[var(--ink)] mb-4 tracking-tight">
+            Welcome aboard, <span className="text-[var(--accent)]">{firstName}!</span>
           </h1>
           <div className="flex items-center justify-center gap-2 mb-4 flex-wrap">
             <span className={`px-3 py-1 rounded-full text-xs font-bold ${roleLabel.color}`}>
               {roleLabel.text}
             </span>
-            {!isSuperAdmin && <span className="text-slate-400 text-xs">·</span>}
-            {!isSuperAdmin && <span className="text-slate-500 text-sm font-medium">{orgName}</span>}
+            {!isSuperAdmin && <span className="text-[var(--muted)] text-xs">·</span>}
+            {!isSuperAdmin && <span className="text-[var(--muted)] text-sm font-medium">{orgName}</span>}
           </div>
-          <p className="text-slate-500 text-base max-w-2xl mx-auto leading-relaxed">
+          <p className="text-[var(--muted)] text-base max-w-2xl mx-auto leading-relaxed">
             {isSuperAdmin
               ? "You have full SuperAdmin access to the CRE Financial Suite platform. Monitor all organizations, manage users, and configure the platform from your console."
               : isOrgAdmin
@@ -260,10 +257,10 @@ export default function WelcomeAboard() {
               { label: "Assigned Pages", value: totalAssignedPages, icon: FileText },
               { label: "Role", value: roleName, icon: Shield },
             ].map((stat) => (
-              <div key={stat.label} className="bg-white rounded-2xl border border-slate-200 px-6 py-5 text-center shadow-sm">
-                <stat.icon className="w-4 h-4 text-slate-400 mx-auto mb-2" />
-                <p className="text-xl font-black text-slate-900">{stat.value}</p>
-                <p className="text-xs text-slate-400 font-medium mt-0.5">{stat.label}</p>
+              <div key={stat.label} className="bg-[var(--surface)] rounded-[8px] border border-[var(--border-cre)] px-6 py-5 text-center shadow-[var(--shadow-soft)]">
+                <stat.icon className="w-4 h-4 text-[var(--muted)] mx-auto mb-2" />
+                <p className="text-xl font-black text-[var(--ink)]">{stat.value}</p>
+                <p className="text-xs text-[var(--muted)] font-medium mt-0.5">{stat.label}</p>
               </div>
             ))}
           </div>
@@ -277,33 +274,33 @@ export default function WelcomeAboard() {
               <div
                 key={feature.key}
                 style={{ animationDelay: `${100 + idx * 60}ms` }}
-                className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm hover:shadow-lg hover:border-blue-200 transition-all duration-300 group animate-in fade-in zoom-in-95 duration-500 fill-mode-both cursor-default"
+                className="bg-[var(--surface)] border border-[var(--border-cre)] rounded-[8px] p-6 shadow-[var(--shadow-soft)] hover:shadow-[var(--shadow-soft)] hover:border-[var(--border-cre)] transition-all duration-300 group animate-in fade-in zoom-in-95 duration-500 fill-mode-both cursor-default"
               >
                 <div className="flex items-start gap-4">
-                  <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${feature.color} flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform`}>
-                    <feature.icon className="w-5 h-5 text-white" strokeWidth={1.75} />
+                  <div className="w-11 h-11 rounded-[8px] border border-[color-mix(in_srgb,var(--accent)_50%,var(--border-cre))] bg-[var(--surface-2)] flex items-center justify-center shrink-0 text-[var(--accent)] shadow-[var(--shadow-soft)] group-hover:scale-105 transition-transform">
+                    <feature.icon className="w-5 h-5" strokeWidth={1.75} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                      <h3 className="font-bold text-slate-900 text-sm leading-snug">{feature.label}</h3>
+                      <h3 className="font-bold text-[var(--ink)] text-sm leading-snug">{feature.label}</h3>
                       {feature.badge && (
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide ${badgeColors[feature.badge] || "bg-slate-100 text-slate-500"}`}>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide ${badgeColors[feature.badge] || "bg-[var(--surface-2)] text-[var(--muted)]"}`}>
                           {feature.badge}
                         </span>
                       )}
                     </div>
-                    <p className="text-slate-500 text-xs leading-relaxed">{feature.desc}</p>
+                    <p className="text-[var(--muted)] text-xs leading-relaxed">{feature.desc}</p>
 
                     {!isSuperAdmin && !isOrgAdmin && assignedPages.length > 0 && (
                       <div className="mt-4">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400 mb-2">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--muted)] mb-2">
                           Assigned Pages
                         </p>
                         <div className="flex flex-wrap gap-1.5">
                           {assignedPages.map((pageName) => (
                             <span
                               key={`${feature.key}-${pageName}`}
-                              className="inline-flex items-center rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600"
+                              className="inline-flex items-center rounded-full bg-[var(--surface-2)] px-2 py-1 text-[10px] font-semibold text-[var(--muted)]"
                             >
                               {formatLabel(pageName)}
                             </span>
@@ -325,10 +322,10 @@ export default function WelcomeAboard() {
               { label: "Role", value: isSuperAdmin ? "SuperAdmin" : "Org Admin", icon: Shield },
               { label: "Status", value: "Active", icon: CheckCircle2 },
             ].map((stat) => (
-              <div key={stat.label} className="bg-white rounded-2xl border border-slate-200 px-6 py-5 text-center shadow-sm">
-                <stat.icon className="w-4 h-4 text-slate-400 mx-auto mb-2" />
-                <p className="text-xl font-black text-slate-900">{stat.value}</p>
-                <p className="text-xs text-slate-400 font-medium mt-0.5">{stat.label}</p>
+              <div key={stat.label} className="bg-[var(--surface)] rounded-[8px] border border-[var(--border-cre)] px-6 py-5 text-center shadow-[var(--shadow-soft)]">
+                <stat.icon className="w-4 h-4 text-[var(--muted)] mx-auto mb-2" />
+                <p className="text-xl font-black text-[var(--ink)]">{stat.value}</p>
+                <p className="text-xs text-[var(--muted)] font-medium mt-0.5">{stat.label}</p>
               </div>
             ))}
           </div>
@@ -338,7 +335,7 @@ export default function WelcomeAboard() {
           <Button
             onClick={handleGoToDashboard}
             disabled={loading}
-            className="h-14 px-14 rounded-2xl bg-[#0f1c3a] hover:bg-[#1a2744] text-white font-bold text-base shadow-2xl shadow-blue-900/20 gap-3 group transition-all hover:scale-[1.02] active:scale-[0.98]"
+            className="h-14 px-14 rounded-[8px] bg-[var(--ink)] hover:bg-[var(--ink)] text-white font-bold text-base shadow-[var(--shadow)] shadow-[var(--shadow-soft)] gap-3 group transition-all hover:scale-[1.02] active:scale-[0.98]"
           >
             {loading ? (
               <Loader2 className="w-5 h-5 animate-spin" />
@@ -349,7 +346,7 @@ export default function WelcomeAboard() {
               </>
             )}
           </Button>
-          <p className="text-slate-400 text-[11px] font-medium tracking-wider uppercase mt-8 opacity-60">
+          <p className="text-[var(--muted)] text-[11px] font-medium tracking-wider uppercase mt-8 opacity-60">
             CRE Financial Suite · Enterprise Real Estate Intelligence
           </p>
         </div>

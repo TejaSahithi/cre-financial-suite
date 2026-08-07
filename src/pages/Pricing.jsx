@@ -24,7 +24,7 @@ export default function Pricing() {
   const handleSignIn = () => navigate(createPageUrl("Login"));
 
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-[var(--surface)]">
       <LandingNav 
         onSignIn={handleSignIn} 
         onRequestAccess={() => navigate(createPageUrl("RequestAccess"))} 

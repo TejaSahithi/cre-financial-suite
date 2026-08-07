@@ -66,29 +66,29 @@ export default function Welcome() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 flex flex-col items-center justify-center p-4">
+    <div className="min-h-screen bg-[var(--bg)] flex flex-col items-center justify-center p-4">
       
       <div className="max-w-md w-full">
         {/* Header */}
         <div className="text-center mb-10">
-          <div className="w-16 h-16 bg-blue-100/50 rounded-2xl flex items-center justify-center mx-auto mb-5 border border-blue-200/50">
-            <KeyRound className="w-8 h-8 text-blue-600" />
+          <div className="w-16 h-16 bg-[var(--accent-soft)] rounded-[8px] flex items-center justify-center mx-auto mb-5 border border-[var(--border-cre)]">
+            <KeyRound className="w-8 h-8 text-[var(--accent)]" />
           </div>
-          <h1 className="text-[28px] font-bold text-slate-900 tracking-tight mb-2">
+          <h1 className="text-[28px] font-bold text-[var(--ink)] tracking-tight mb-2">
             Welcome, {firstName}!
           </h1>
-          <p className="text-slate-500 text-[15px] px-4">
+          <p className="text-[var(--muted)] text-[15px] px-4">
             For your security, please change your temporary password to something only you know.
           </p>
         </div>
 
         {/* Reset Form */}
-        <Card className="border-slate-200/80 shadow-lg shadow-slate-200/40 rounded-2xl overflow-hidden">
+        <Card className="border-[var(--border-cre)] shadow-[var(--shadow-soft)] shadow-slate-200/40 rounded-[8px] overflow-hidden">
           <CardContent className="p-8">
             <form onSubmit={handleResetPassword} className="space-y-5">
               
               {error && (
-                <div className="bg-red-50 text-red-600 text-sm font-medium p-3 rounded-lg border border-red-100 flex items-start gap-2">
+                <div className="bg-[var(--danger-soft)] text-[var(--danger)] text-sm font-medium p-3 rounded-lg border border-[var(--border-cre)] flex items-start gap-2">
                   <div className="mt-0.5 mt-0.5 shrink-0 px-0.5">⚠️</div>
                   <span>{error}</span>
                 </div>
@@ -96,26 +96,26 @@ export default function Welcome() {
 
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="password" className="text-slate-700 font-semibold">New Password</Label>
+                  <Label htmlFor="password" className="text-[var(--muted)] font-semibold">New Password</Label>
                   <Input 
                     id="password" 
                     type="password" 
                     placeholder="Enter new password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="h-11 bg-slate-50/50"
+                    className="h-11 bg-[var(--surface-2)]"
                   />
                 </div>
                 
                 <div className="space-y-2">
-                  <Label htmlFor="confirmPassword" className="text-slate-700 font-semibold">Confirm Password</Label>
+                  <Label htmlFor="confirmPassword" className="text-[var(--muted)] font-semibold">Confirm Password</Label>
                   <Input 
                     id="confirmPassword" 
                     type="password" 
                     placeholder="Confirm new password"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    className="h-11 bg-slate-50/50"
+                    className="h-11 bg-[var(--surface-2)]"
                   />
                 </div>
               </div>
@@ -124,7 +124,7 @@ export default function Welcome() {
                 <Button 
                   type="submit" 
                   disabled={loading || !password || !confirmPassword} 
-                  className="w-full h-11 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl"
+                  className="w-full h-11 bg-[var(--accent)] hover:bg-[var(--accent)] text-white font-semibold rounded-[8px]"
                 >
                   {loading ? (
                     <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving Password...</>
@@ -139,7 +139,7 @@ export default function Welcome() {
         </Card>
 
         {/* Security Notice */}
-        <div className="mt-8 flex items-center justify-center gap-2 text-slate-400">
+        <div className="mt-8 flex items-center justify-center gap-2 text-[var(--muted)]">
           <Shield className="w-4 h-4" />
           <span className="text-xs font-medium uppercase tracking-widest">Secure Login Portal</span>
         </div>

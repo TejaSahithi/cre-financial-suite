@@ -336,27 +336,27 @@ export default function Onboarding() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+      <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center">
         <div className="text-center">
-          <Loader2 className="w-8 h-8 animate-spin text-slate-400 mx-auto mb-3" />
-          <p className="text-sm text-slate-400">Loading your account...</p>
+          <Loader2 className="w-8 h-8 animate-spin text-[var(--muted)] mx-auto mb-3" />
+          <p className="text-sm text-[var(--muted)]">Loading your account...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex flex-col">
+    <div className="min-h-screen bg-[var(--bg)] flex flex-col">
       {/* Header */}
-      <div className="bg-[#1a2744] px-6 py-4">
+      <div className="bg-[var(--ink)] px-6 py-4">
         <div className="max-w-3xl mx-auto flex items-center gap-3">
-          <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center">
+          <div className="w-8 h-8 bg-[color-mix(in_srgb,var(--surface)_18%,transparent)] rounded-lg flex items-center justify-center">
             <Building2 className="w-5 h-5 text-white" />
           </div>
           <span className="text-white font-bold text-lg">CRE Platform</span>
           <div className="ml-auto flex items-center gap-4">
-            <span className="text-white/50 text-sm">Account Setup</span>
-            <Button variant="ghost" size="sm" className="text-white/70 hover:text-white hover:bg-white/10" onClick={() => logout(true)}>
+            <span className="text-[color-mix(in_srgb,var(--surface)_60%,transparent)] text-sm">Account Setup</span>
+            <Button variant="ghost" size="sm" className="text-white/70 hover:text-white hover:bg-[color-mix(in_srgb,var(--surface)_18%,transparent)]" onClick={() => logout(true)}>
               Sign Out
             </Button>
           </div>
@@ -364,23 +364,23 @@ export default function Onboarding() {
       </div>
 
       {/* Progress Steps */}
-      <div className="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-10">
+      <div className="bg-[var(--surface)] border-b border-[var(--border-cre)] shadow-[var(--shadow-soft)] sticky top-0 z-10">
         <div className="max-w-3xl mx-auto px-6 py-5">
           <div className="flex items-center gap-0">
             {steps.map((s, i) => (
               <React.Fragment key={s.id}>
                 <div className="flex items-center gap-2.5">
                   <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300
-                    ${step > s.id ? 'bg-emerald-500 text-white shadow-sm shadow-emerald-200' : step === s.id ? 'bg-[#1a2744] text-white shadow-sm' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}>
+                    ${step > s.id ? 'bg-[var(--success)] text-white shadow-[var(--shadow-soft)] shadow-[var(--shadow-soft)]' : step === s.id ? 'bg-[var(--ink)] text-white shadow-[var(--shadow-soft)]' : 'bg-[var(--surface-2)] text-[var(--muted)] border border-[var(--border-cre)]'}`}>
                     {step > s.id ? <CheckCircle2 className="w-4 h-4" /> : s.id}
                   </div>
-                  <span className={`text-sm font-medium hidden sm:inline ${step === s.id ? 'text-[#1a2744] font-semibold' : step > s.id ? 'text-emerald-600' : 'text-slate-400'}`}>
+                  <span className={`text-sm font-medium hidden sm:inline ${step === s.id ? 'text-[var(--ink)] font-semibold' : step > s.id ? 'text-[var(--success)]' : 'text-[var(--muted)]'}`}>
                     {s.label}
                   </span>
                 </div>
                 {i < steps.length - 1 && (
                   <div className="flex-1 mx-4 h-px relative">
-                    <div className="absolute inset-0 bg-slate-200" />
+                    <div className="absolute inset-0 bg-[var(--border-cre)]" />
                     <div className={`absolute inset-y-0 left-0 bg-emerald-400 transition-all duration-500 ${step > s.id ? 'w-full' : 'w-0'}`} />
                   </div>
                 )}
@@ -392,43 +392,43 @@ export default function Onboarding() {
 
       {/* Content */}
       <div className="flex-1 flex items-start justify-center p-6 pt-10 overflow-y-auto">
-        <div className="bg-white rounded-2xl shadow-xl border border-slate-200/50 max-w-2xl w-full p-8 mb-10">
+        <div className="bg-[var(--surface)] rounded-[8px] shadow-[var(--shadow)] border border-[var(--border-cre)] max-w-2xl w-full p-8 mb-10">
 
           {/* Step 1: Company Info */}
           {step === 1 && (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
               <div className="mb-6">
-                <h2 className="text-2xl font-bold text-slate-900 mb-1">Company Information</h2>
-                <p className="text-slate-500 text-sm">Tell us about your organization to personalize your experience.</p>
+                <h2 className="text-2xl font-bold text-[var(--ink)] mb-1">Company Information</h2>
+                <p className="text-[var(--muted)] text-sm">Tell us about your organization to personalize your experience.</p>
               </div>
               <div className="space-y-5">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="col-span-2">
-                    <Label className={`text-xs font-semibold uppercase tracking-wider ${!form.name ? 'text-slate-700' : 'text-slate-700'}`}>
+                    <Label className={`text-xs font-semibold uppercase tracking-wider ${!form.name ? 'text-[var(--muted)]' : 'text-[var(--muted)]'}`}>
                       Organization Name <span className="text-red-400">*</span>
                     </Label>
                     <Input
                       value={form.name}
                       onChange={e => setForm({ ...form, name: e.target.value })}
                       placeholder="e.g. Meridian Capital Group"
-                      className={`mt-1.5 h-11 transition-all ${!form.name && saving === 'val_error' ? 'border-red-500 bg-red-50/20' : ''}`}
+                      className={`mt-1.5 h-11 transition-all ${!form.name && saving === 'val_error' ? 'border-[var(--danger)] bg-[var(--danger-soft)]' : ''}`}
                     />
-                    {!form.name && saving === 'val_error' && <p className="text-[10px] text-red-500 mt-1">Organization name is required to continue.</p>}
+                    {!form.name && saving === 'val_error' && <p className="text-[10px] text-[var(--danger)] mt-1">Organization name is required to continue.</p>}
                   </div>
                   <div className="col-span-2">
-                    <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Primary Contact Email <span className="text-red-400">*</span></Label>
+                    <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">Primary Contact Email <span className="text-red-400">*</span></Label>
                     <Input type="email" value={form.primary_contact_email} onChange={e => setForm({ ...form, primary_contact_email: e.target.value })} className="mt-1.5 h-11" />
                   </div>
                   <div className="col-span-2">
-                    <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">HQ Address</Label>
+                    <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">HQ Address</Label>
                     <Input value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} placeholder="123 Main St, New York, NY 10001" className="mt-1.5 h-11" />
                   </div>
                   <div>
-                    <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Phone</Label>
+                    <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">Phone</Label>
                     <Input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="+1 (555) 000-0000" className="mt-1.5 h-11" />
                   </div>
                   <div>
-                    <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Industry</Label>
+                    <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">Industry</Label>
                     <Select value={form.industry} onValueChange={v => setForm({ ...form, industry: v })}>
                       <SelectTrigger className="mt-1.5 h-11"><SelectValue /></SelectTrigger>
                       <SelectContent>
@@ -441,7 +441,7 @@ export default function Onboarding() {
                     </Select>
                   </div>
                   <div>
-                    <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Timezone</Label>
+                    <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">Timezone</Label>
                     <Select value={form.timezone} onValueChange={v => setForm({ ...form, timezone: v })}>
                       <SelectTrigger className="mt-1.5 h-11"><SelectValue /></SelectTrigger>
                       <SelectContent>
@@ -454,7 +454,7 @@ export default function Onboarding() {
                     </Select>
                   </div>
                   <div>
-                    <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Currency</Label>
+                    <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">Currency</Label>
                     <Select value={form.currency} onValueChange={v => setForm({ ...form, currency: v })}>
                       <SelectTrigger className="mt-1.5 h-11"><SelectValue /></SelectTrigger>
                       <SelectContent>
@@ -470,7 +470,7 @@ export default function Onboarding() {
               <Button
                 onClick={saveCompanyInfo}
                 disabled={saving === true || !form.name || !form.primary_contact_email}
-                className="w-full mt-8 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl font-semibold gap-2 transition-all shadow-lg active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full mt-8 bg-[var(--ink)] hover:bg-[var(--ink)] h-12 rounded-[8px] font-semibold gap-2 transition-all shadow-[var(--shadow-soft)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving === true ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                 Continue to Agreement <ArrowRight className="w-4 h-4" />
@@ -611,20 +611,20 @@ DATE:         ${today}
   return (
     <div>
       <div className="mb-6">
-        <h2 className="text-2xl font-bold text-slate-900 mb-1">Master Service Agreement</h2>
-        <p className="text-slate-500 text-sm">Review, sign, and download to complete your enterprise activation.</p>
+        <h2 className="text-2xl font-bold text-[var(--ink)] mb-1">Master Service Agreement</h2>
+        <p className="text-[var(--muted)] text-sm">Review, sign, and download to complete your enterprise activation.</p>
       </div>
 
       {/* Document Viewer */}
-      <div className="border border-slate-200 rounded-xl bg-slate-50 mb-6 flex flex-col overflow-hidden">
-        <div className="bg-slate-100/50 px-4 py-2 border-b border-slate-200 flex items-center justify-between">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Document â€” MSA-2026-01</span>
-          <FileText className="w-4 h-4 text-slate-300" />
+      <div className="border border-[var(--border-cre)] rounded-[8px] bg-[var(--bg)] mb-6 flex flex-col overflow-hidden">
+        <div className="bg-[var(--surface-2)] px-4 py-2 border-b border-[var(--border-cre)] flex items-center justify-between">
+          <span className="text-[10px] font-bold text-[var(--muted)] uppercase tracking-widest">Document â€” MSA-2026-01</span>
+          <FileText className="w-4 h-4 text-[var(--muted)]" />
         </div>
-        <div className="h-64 overflow-y-auto p-6 text-[13px] text-slate-600 leading-relaxed space-y-4 scrollbar-thin">
+        <div className="h-64 overflow-y-auto p-6 text-[13px] text-[var(--muted)] leading-relaxed space-y-4 scrollbar-thin">
           <div className="text-center pb-4">
-            <h3 className="font-bold text-slate-900 text-base">CRE PLATFORM MASTER SERVICE AGREEMENT</h3>
-            <p className="text-[11px] text-slate-400">Version 4.2 â€¢ Effective Date: {today}</p>
+            <h3 className="font-bold text-[var(--ink)] text-base">CRE PLATFORM MASTER SERVICE AGREEMENT</h3>
+            <p className="text-[11px] text-[var(--muted)]">Version 4.2 â€¢ Effective Date: {today}</p>
           </div>
           <p>This Master Service Agreement ("Agreement") is entered into between <strong>CRE Platform, Inc.</strong> ("Provider") and the organization <strong>{org?.name || "The Client"}</strong> ("Client").</p>
           <p><strong>1. Scope of Service.</strong> Provider shall provide Client with access to the CRE Platform cloud-based platform for commercial real estate portfolio management and automation.</p>
@@ -634,23 +634,23 @@ DATE:         ${today}
           <p><strong>5. Acceptance of Terms.</strong> By signing below, Client acknowledges they have read, understood, and agree to be bound by the terms and conditions set forth in this document.</p>
 
           {/* Signature block inside document */}
-          <div className="pt-8 border-t border-slate-200">
+          <div className="pt-8 border-t border-[var(--border-cre)]">
             <div className="grid grid-cols-2 gap-6">
               <div>
-                <p className="text-[10px] text-slate-400 mb-1">Signed By:</p>
-                <p className="text-lg italic font-sans text-slate-800 border-b border-slate-300 min-h-[28px]">{fullName}</p>
+                <p className="text-[10px] text-[var(--muted)] mb-1">Signed By:</p>
+                <p className="text-lg italic font-sans text-[var(--ink)] border-b border-[var(--border-cre)] min-h-[28px]">{fullName}</p>
               </div>
               <div>
-                <p className="text-[10px] text-slate-400 mb-1">Date:</p>
-                <p className="text-sm font-medium text-slate-800">{today}</p>
+                <p className="text-[10px] text-[var(--muted)] mb-1">Date:</p>
+                <p className="text-sm font-medium text-[var(--ink)]">{today}</p>
               </div>
               <div>
-                <p className="text-[10px] text-slate-400 mb-1">Role/Title:</p>
-                <p className="text-sm text-slate-800 border-b border-slate-300 min-h-[20px]">{role}</p>
+                <p className="text-[10px] text-[var(--muted)] mb-1">Role/Title:</p>
+                <p className="text-sm text-[var(--ink)] border-b border-[var(--border-cre)] min-h-[20px]">{role}</p>
               </div>
               <div>
-                <p className="text-[10px] text-slate-400 mb-1">Email:</p>
-                <p className="text-sm text-slate-800 border-b border-slate-300 min-h-[20px]">{email}</p>
+                <p className="text-[10px] text-[var(--muted)] mb-1">Email:</p>
+                <p className="text-sm text-[var(--ink)] border-b border-[var(--border-cre)] min-h-[20px]">{email}</p>
               </div>
             </div>
           </div>
@@ -658,51 +658,51 @@ DATE:         ${today}
       </div>
 
       {/* Signatory Details */}
-      <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 mb-6 space-y-4">
-        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Signatory Details</h3>
+      <div className="bg-[var(--bg)] border border-[var(--border-cre)] rounded-[8px] p-5 mb-6 space-y-4">
+        <h3 className="text-xs font-bold text-[var(--muted)] uppercase tracking-widest">Signatory Details</h3>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Full Name <span className="text-red-400">*</span></Label>
+            <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">Full Name <span className="text-red-400">*</span></Label>
             <Input value={fullName} onChange={e => setFullName(e.target.value)} placeholder="Full Legal Name" className="mt-1.5 h-11" />
           </div>
           <div>
-            <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Email <span className="text-red-400">*</span></Label>
+            <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">Email <span className="text-red-400">*</span></Label>
             <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" className="mt-1.5 h-11" />
           </div>
           <div>
-            <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Role / Title <span className="text-red-400">*</span></Label>
+            <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">Role / Title <span className="text-red-400">*</span></Label>
             <Input value={role} onChange={e => setRole(e.target.value)} placeholder="e.g. CEO, Director of Finance" className="mt-1.5 h-11" />
           </div>
           <div>
-            <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Date</Label>
-            <Input value={today} readOnly className="mt-1.5 h-11 bg-slate-100 text-slate-500 cursor-not-allowed" />
+            <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">Date</Label>
+            <Input value={today} readOnly className="mt-1.5 h-11 bg-[var(--surface-2)] text-[var(--muted)] cursor-not-allowed" />
           </div>
         </div>
       </div>
 
       {/* Consent Checkbox */}
-      <div className={`flex items-start gap-3 mb-6 p-4 rounded-xl border transition-all ${accepted ? 'bg-blue-50 border-blue-200' : 'bg-slate-50 border-slate-100'}`}>
-        <input type="checkbox" id="accept" checked={accepted} onChange={e => setAccepted(e.target.checked)} className="mt-1 w-4 h-4 cursor-pointer accent-[#1a2744]" />
-        <label htmlFor="accept" className="text-sm text-slate-700 cursor-pointer leading-relaxed">
+      <div className={`flex items-start gap-3 mb-6 p-4 rounded-[8px] border transition-all ${accepted ? 'bg-[var(--accent-soft)] border-[var(--border-cre)]' : 'bg-[var(--bg)] border-[var(--border-cre)]'}`}>
+        <input type="checkbox" id="accept" checked={accepted} onChange={e => setAccepted(e.target.checked)} className="mt-1 w-4 h-4 cursor-pointer accent-[var(--ink)]" />
+        <label htmlFor="accept" className="text-sm text-[var(--muted)] cursor-pointer leading-relaxed">
           I, <strong>{fullName || '___'}</strong>, confirm that I am an authorized representative of <strong>{org?.name}</strong> and I agree to the terms of the Master Service Agreement.
         </label>
       </div>
 
       {/* Download + Nav Buttons */}
       <div className="flex gap-3">
-        <Button variant="outline" onClick={onBack} className="h-12 w-28 rounded-xl text-slate-600">
+        <Button variant="outline" onClick={onBack} className="h-12 w-28 rounded-[8px] text-[var(--muted)]">
           <ArrowLeft className="w-4 h-4 mr-2" /> Back
         </Button>
-        <Button variant="outline" onClick={handleDownload} className="h-12 rounded-xl text-slate-600 gap-2">
+        <Button variant="outline" onClick={handleDownload} className="h-12 rounded-[8px] text-[var(--muted)] gap-2">
           <FileText className="w-4 h-4" /> Download MSA
         </Button>
-        <Button onClick={handleSign} disabled={!canProceed || saving} className="flex-1 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl font-semibold gap-2 shadow-lg shadow-blue-900/10">
+        <Button onClick={handleSign} disabled={!canProceed || saving} className="flex-1 bg-[var(--ink)] hover:bg-[var(--ink)] h-12 rounded-[8px] font-semibold gap-2 shadow-[var(--shadow-soft)] shadow-blue-900/10">
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
           Continue to Payment
         </Button>
       </div>
 
-      <p className="text-[10px] text-slate-400 text-center mt-3 italic flex items-center justify-center gap-1">
+      <p className="text-[10px] text-[var(--muted)] text-center mt-3 italic flex items-center justify-center gap-1">
         <Lock className="w-3 h-3" /> Secure Electronic Signature (ESIGN Act compliant)
       </p>
     </div>
@@ -765,21 +765,21 @@ function PaymentStep({ user, form, setForm, org, onBack }) {
   return (
     <div>
       <div className="mb-6">
-        <h2 className="text-2xl font-bold text-slate-900 mb-1">Activate Subscription</h2>
-        <p className="text-slate-500 text-sm">Select a plan and billing cycle to proceed to secure checkout.</p>
+        <h2 className="text-2xl font-bold text-[var(--ink)] mb-1">Activate Subscription</h2>
+        <p className="text-[var(--muted)] text-sm">Select a plan and billing cycle to proceed to secure checkout.</p>
       </div>
 
       {/* Billing Toggle */}
       <div className="flex items-center justify-center mb-6">
-        <div className="bg-slate-100 rounded-xl p-1 flex gap-1">
+        <div className="bg-[var(--surface-2)] rounded-[8px] p-1 flex gap-1">
           <button type="button" onClick={() => setBillingCycle("monthly")}
-            className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all ${billingCycle === "monthly" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+            className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all ${billingCycle === "monthly" ? "bg-[var(--surface)] text-[var(--ink)] shadow-[var(--shadow-soft)]" : "text-[var(--muted)] hover:text-[var(--muted)]"}`}>
             Monthly
           </button>
           <button type="button" onClick={() => setBillingCycle("yearly")}
-            className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 ${billingCycle === "yearly" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+            className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 ${billingCycle === "yearly" ? "bg-[var(--surface)] text-[var(--ink)] shadow-[var(--shadow-soft)]" : "text-[var(--muted)] hover:text-[var(--muted)]"}`}>
             Yearly
-            <span className="bg-emerald-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-tight">Save 25%</span>
+            <span className="bg-[var(--success)] text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-tight">Save 25%</span>
           </button>
         </div>
       </div>
@@ -790,44 +790,44 @@ function PaymentStep({ user, form, setForm, org, onBack }) {
           const price = getPrice(p.price);
           return (
             <button key={p.key} type="button" onClick={() => setForm((prev) => ({ ...prev, plan: p.key }))}
-              className={`p-4 rounded-xl border-2 transition-all relative text-left ${form.plan === p.key ? "border-blue-600 bg-blue-50/50 shadow-md ring-4 ring-blue-50" : "border-slate-100 bg-slate-50 hover:border-slate-300"}`}>
-              {p.popular && <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-tighter">Recommended</div>}
-              <p className="text-xs font-bold text-slate-900 mb-1">{p.name}</p>
+              className={`p-4 rounded-[8px] border-2 transition-all relative text-left ${form.plan === p.key ? "border-[var(--accent)] bg-[var(--accent-soft)] shadow-[var(--shadow-soft)] ring-4 ring-blue-50" : "border-[var(--border-cre)] bg-[var(--bg)] hover:border-[var(--border-cre)]"}`}>
+              {p.popular && <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-[var(--accent)] text-white text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-tighter">Recommended</div>}
+              <p className="text-xs font-bold text-[var(--ink)] mb-1">{p.name}</p>
               {p.price ? (
                 <div>
-                  <p className="text-xl font-black text-[#1a2744]">${price}<span className="text-[10px] uppercase font-bold text-slate-400 ml-1">/mo</span></p>
-                  {billingCycle === "yearly" && <p className="text-[9px] text-emerald-600 font-bold mt-0.5">${p.price}/mo → Save ${p.price - price}/mo</p>}
+                  <p className="text-xl font-black text-[var(--ink)]">${price}<span className="text-[10px] uppercase font-bold text-[var(--muted)] ml-1">/mo</span></p>
+                  {billingCycle === "yearly" && <p className="text-[9px] text-[var(--success)] font-bold mt-0.5">${p.price}/mo → Save ${p.price - price}/mo</p>}
                 </div>
-              ) : <p className="text-xl font-black text-[#1a2744]">Custom</p>}
+              ) : <p className="text-xl font-black text-[var(--ink)]">Custom</p>}
             </button>
           );
         })}
       </div>
 
       {billingCycle === "yearly" && selectedPlan.price > 0 && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 mb-6 flex items-center justify-between">
+        <div className="bg-[var(--success-soft)] border border-[var(--border-cre)] rounded-[8px] px-4 py-3 mb-6 flex items-center justify-between">
           <div>
             <p className="text-sm font-semibold text-emerald-800">Annual billing: 25% savings applied</p>
-            <p className="text-xs text-emerald-600">Billed as ${yearlyTotal.toLocaleString()}/year</p>
+            <p className="text-xs text-[var(--success)]">Billed as ${yearlyTotal.toLocaleString()}/year</p>
           </div>
           <div className="text-right">
-            <p className="text-[10px] text-emerald-500 line-through">${(selectedPlan.price * 12).toLocaleString()}</p>
-            <p className="text-sm font-black text-emerald-700">${yearlyTotal.toLocaleString()}</p>
+            <p className="text-[10px] text-[var(--success)] line-through">${(selectedPlan.price * 12).toLocaleString()}</p>
+            <p className="text-sm font-black text-[var(--success)]">${yearlyTotal.toLocaleString()}</p>
           </div>
         </div>
       )}
 
       <form onSubmit={handlePayment} className="space-y-4">
-        {error && <div className="p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-600 flex items-center gap-2"><AlertCircle className="w-3.5 h-3.5" /> {error}</div>}
+        {error && <div className="p-3 bg-[var(--danger-soft)] border border-[var(--border-cre)] rounded-lg text-xs text-[var(--danger)] flex items-center gap-2"><AlertCircle className="w-3.5 h-3.5" /> {error}</div>}
 
         <div className="flex gap-4">
-          <Button type="button" variant="outline" onClick={onBack} className="h-12 w-32 rounded-xl text-slate-500">Back</Button>
-          <Button type="submit" disabled={processing} className="flex-1 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl text-base font-bold shadow-lg">
+          <Button type="button" variant="outline" onClick={onBack} className="h-12 w-32 rounded-[8px] text-[var(--muted)]">Back</Button>
+          <Button type="submit" disabled={processing} className="flex-1 bg-[var(--ink)] hover:bg-[var(--ink)] h-12 rounded-[8px] text-base font-bold shadow-[var(--shadow-soft)]">
             {processing ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Lock className="w-4 h-4 mr-2" />}
             {processing ? "Preparing Secure Checkout..." : selectedPlan.price ? `Proceed to Checkout` : "Request Enterprise Access"}
           </Button>
         </div>
-        <p className="text-center text-[10px] text-slate-400 flex items-center justify-center gap-1">
+        <p className="text-center text-[10px] text-[var(--muted)] flex items-center justify-center gap-1">
           <Lock className="w-3 h-3" /> Secure payment via Stripe
         </p>
       </form>

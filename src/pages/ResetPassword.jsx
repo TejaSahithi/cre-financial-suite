@@ -69,14 +69,14 @@ export default function ResetPassword() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 flex flex-col">
+    <div className="min-h-screen bg-[var(--bg)] flex flex-col">
       {/* Top Bar */}
       <div className="px-6 py-5 flex items-center max-w-6xl mx-auto w-full">
         <a href={createPageUrl("Landing")} className="flex items-center gap-2.5">
-          <div className="w-8 h-8 bg-[#1a2744] rounded-lg flex items-center justify-center">
+          <div className="w-8 h-8 bg-[var(--ink)] rounded-lg flex items-center justify-center">
             <Building2 className="w-4 h-4 text-white" />
           </div>
-          <span className="text-[#1a2744] font-bold text-lg tracking-tight">CRE Platform</span>
+          <span className="text-[var(--ink)] font-bold text-lg tracking-tight">CRE Platform</span>
         </a>
       </div>
 
@@ -84,34 +84,34 @@ export default function ResetPassword() {
         <div className="max-w-[420px] w-full">
           {success ? (
             <div className="text-center">
-              <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-emerald-100 flex items-center justify-center">
-                <CheckCircle2 className="w-10 h-10 text-emerald-600" />
+              <div className="w-20 h-20 mx-auto mb-6 rounded-[8px] bg-[var(--success-soft)] flex items-center justify-center">
+                <CheckCircle2 className="w-10 h-10 text-[var(--success)]" />
               </div>
-              <h2 className="text-2xl font-bold text-slate-900 mb-2">Password updated!</h2>
-              <p className="text-slate-500 text-sm">Redirecting you to sign in with your new password…</p>
+              <h2 className="text-2xl font-bold text-[var(--ink)] mb-2">Password updated!</h2>
+              <p className="text-[var(--muted)] text-sm">Redirecting you to sign in with your new password…</p>
             </div>
           ) : (
             <>
               <div className="text-center mb-8">
-                <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-100 flex items-center justify-center">
-                  <Lock className="w-7 h-7 text-blue-600" />
+                <div className="w-14 h-14 mx-auto mb-4 rounded-[8px] bg-[var(--accent-soft)] flex items-center justify-center">
+                  <Lock className="w-7 h-7 text-[var(--accent)]" />
                 </div>
-                <h1 className="text-[28px] font-bold text-slate-900 tracking-tight mb-2">Set new password</h1>
-                <p className="text-slate-500 text-sm">Choose a strong password for your account.</p>
+                <h1 className="text-[28px] font-bold text-[var(--ink)] tracking-tight mb-2">Set new password</h1>
+                <p className="text-[var(--muted)] text-sm">Choose a strong password for your account.</p>
               </div>
 
-              <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-8">
+              <div className="bg-[var(--surface)] rounded-[8px] border border-[var(--border-cre)] shadow-[var(--shadow-soft)] p-8">
                 {!sessionReady ? (
                   <div className="flex flex-col items-center py-6 gap-3">
-                    <Loader2 className="w-7 h-7 animate-spin text-slate-400" />
-                    <p className="text-slate-500 text-sm">Verifying your reset link…</p>
+                    <Loader2 className="w-7 h-7 animate-spin text-[var(--muted)]" />
+                    <p className="text-[var(--muted)] text-sm">Verifying your reset link…</p>
                   </div>
                 ) : (
                   <form onSubmit={handleSubmit} className="space-y-5">
                     <div>
-                      <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">New Password</Label>
+                      <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">New Password</Label>
                       <div className="relative mt-1.5">
-                        <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                        <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--muted)]" />
                         <Input
                           type={showPassword ? "text" : "password"}
                           value={password}
@@ -123,7 +123,7 @@ export default function ResetPassword() {
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--muted)]"
                         >
                           {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
@@ -131,9 +131,9 @@ export default function ResetPassword() {
                     </div>
 
                     <div>
-                      <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Confirm Password</Label>
+                      <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">Confirm Password</Label>
                       <div className="relative mt-1.5">
-                        <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                        <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--muted)]" />
                         <Input
                           type={showConfirm ? "text" : "password"}
                           value={confirmPassword}
@@ -145,7 +145,7 @@ export default function ResetPassword() {
                         <button
                           type="button"
                           onClick={() => setShowConfirm(!showConfirm)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--muted)]"
                         >
                           {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
@@ -153,23 +153,23 @@ export default function ResetPassword() {
                     </div>
 
                     {error && (
-                      <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
-                        <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
-                        <p className="text-red-600 text-sm">{error}</p>
+                      <div className="flex items-start gap-2 bg-[var(--danger-soft)] border border-red-200 rounded-lg px-3 py-2.5">
+                        <AlertCircle className="w-4 h-4 text-[var(--danger)] mt-0.5 shrink-0" />
+                        <p className="text-[var(--danger)] text-sm">{error}</p>
                       </div>
                     )}
 
                     <Button
                       type="submit"
                       disabled={loading}
-                      className="w-full h-11 bg-[#1a2744] hover:bg-[#243b67] font-semibold"
+                      className="w-full h-11 bg-[var(--ink)] hover:bg-[var(--ink)] font-semibold"
                     >
                       {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
                       {loading ? "Updating…" : "Update Password"}
                     </Button>
 
-                    <p className="text-center text-sm text-slate-500">
-                      <button type="button" onClick={() => navigate(createPageUrl("Login"))} className="text-blue-600 hover:underline font-medium">
+                    <p className="text-center text-sm text-[var(--muted)]">
+                      <button type="button" onClick={() => navigate(createPageUrl("Login"))} className="text-[var(--accent)] hover:underline font-medium">
                         Back to Sign In
                       </button>
                     </p>
