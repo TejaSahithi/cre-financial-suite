@@ -1,3 +1,5 @@
+import { approvedLeaseFieldValue } from "@/lib/approvedLeaseSnapshot";
+
 /**
  * Tenant resolution helper for actual expenses.
  *
@@ -36,18 +38,23 @@
  *   }
  */
 
-function leaseOverlapsDate(lease, dateLike) {
-  if (!lease) return false;
-  if (!dateLike) return true; // no date on expense → can't filter, accept any
-  const d = new Date(dateLike);
-  if (Number.isNaN(d.getTime())) return true;
-  const start = lease.start_date ? new Date(lease.start_date) : null;
-  const end = lease.end_date ? new Date(lease.end_date) : null;
-  if (start && d < start) return false;
-  if (end && d > end) return false;
-  return true;
+function leaseDateValue(lease, keys) {
+  return approvedLeaseFieldValue(lease, keys) || null;
 }
 
+function leaseOverlapsDate(lease, dateLike) {
+  if (!lease) return false;
+  if (!dateLike) return true; // no date on expense -> can't filter, accept any
+  const d = new Date(dateLike);
+  if (Number.isNaN(d.getTime())) return true;
+  const startValue = leaseDateValue(lease, ["start_date", "commencement_date", "lease_start", "lease_start_date", "rent_commencement_date"]);
+  const endValue = leaseDateValue(lease, ["end_date", "expiration_date", "lease_end", "lease_end_date"]);
+  const start = startValue ? new Date(startValue) : null;
+  const end = endValue ? new Date(endValue) : null;
+  if (start && !Number.isNaN(start.getTime()) && d < start) return false;
+  if (end && !Number.isNaN(end.getTime()) && d > end) return false;
+  return true;
+}
 function pickExpenseDate(expense) {
   return expense?.date
     || expense?.expense_date
@@ -159,11 +166,7 @@ function resolveTenantForExpense(expense, options = {}) {
   }
 
   if (matchedLease) {
-    const approvedTenantName =
-      matchedLease.approved_fields?.tenant_name?.value ||
-      matchedLease.approved_fields?.tenant?.value ||
-      matchedLease.approved_fields?.tenant_legal_name?.value ||
-      null;
+    const approvedTenantName = approvedLeaseFieldValue(matchedLease, ["tenant_name", "tenant", "tenant_legal_name", "lessee"]);
     const directName = matchedLease.tenant_name || matchedLease.tenant?.name || approvedTenantName || null;
 
     if (!matchedLease.tenant_id && !directName) {

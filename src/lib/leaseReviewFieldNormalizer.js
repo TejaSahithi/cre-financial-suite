@@ -111,28 +111,32 @@ function isVerboseNormalizedValue(value) {
 }
 
 function clausePercentValue(text) {
-  const numeric = text.match(/(\d{1,3}(?:\.\d+)?)\s*%/);
+  const source = compactText(text);
+  if (!source) return null;
+  const numeric = source.match(/(\d{1,3}(?:\.\d+)?)\s*%/);
   if (numeric) return `${Number(numeric[1])}%`;
-  const parenthetical = text.match(/\((\d{1,3}(?:\.\d+)?)\s*%\)/);
+  const parenthetical = source.match(/\((\d{1,3}(?:\.\d+)?)\s*%\)/);
   if (parenthetical) return `${Number(parenthetical[1])}%`;
   const written = [
     [/one\s+hundred\s+fifty\s+percent/i, "150%"],
     [/fifty\s+percent/i, "50%"],
     [/five\s+percent/i, "5%"],
-  ].find(([pattern]) => pattern.test(text));
+  ].find(([pattern]) => pattern.test(source));
   return written?.[1] || null;
 }
 
 function clauseDayValue(text) {
-  const numeric = text.match(/\b(\d{1,3})\s+(business\s+)?days?\b/i);
+  const source = compactText(text);
+  if (!source) return null;
+  const numeric = source.match(/\b(\d{1,3})\s+(business\s+)?days?\b/i);
   if (numeric) return `${Number(numeric[1])} ${numeric[2] ? "business " : ""}days`;
-  const parenthetical = text.match(/\((\d{1,3})\)\s+(business\s+)?days?\b/i);
+  const parenthetical = source.match(/\((\d{1,3})\)\s+(business\s+)?days?\b/i);
   if (parenthetical) return `${Number(parenthetical[1])} ${parenthetical[2] ? "business " : ""}days`;
   const written = [
     [/thirty\s+\(30\)\s+days/i, "30 days"],
     [/ten\s+\(10\)\s+business\s+days/i, "10 business days"],
     [/five\s+\(5\)\s+days/i, "5 days"],
-  ].find(([pattern]) => pattern.test(text));
+  ].find(([pattern]) => pattern.test(source));
   return written?.[1] || null;
 }
 

@@ -248,7 +248,7 @@ export default function ExpenseDashboard() {
   };
 
   const subtitle = getScopeSubtitle(scope, {
-    default: "Read-only workflow summary for approved actuals, approved lease rules, classification status, and CAM readiness.",
+    default: "Read-only workflow summary for approved actuals, approved lease rules, classification status, and CAM candidates.",
     portfolio: (portfolio) => `Workflow summary for ${portfolio.name}`,
     property: (property) => `Workflow summary for ${property.name}`,
     building: (building) => `Workflow summary for ${building.name}`,
@@ -351,9 +351,9 @@ export default function ExpenseDashboard() {
           color="bg-amber-50 text-amber-700"
         />
         <MetricCard
-          label="CAM Ready"
+          label="CAM Candidates"
           value={String(summary.camReadyCount)}
-          sub={summary.camReadyCount > 0 ? `$${summary.camReadyAmount.toLocaleString()} ready` : "Nothing ready for CAM yet"}
+          sub={summary.camReadyCount > 0 ? `$${summary.camReadyAmount.toLocaleString()} awaiting publish` : "No publish candidates"}
           icon={CheckCircle2}
           color="bg-blue-50 text-blue-700"
         />

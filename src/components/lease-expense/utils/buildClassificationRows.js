@@ -1,6 +1,7 @@
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { expenseService } from "@/services/expenseService";
 import { resolveTenantForExpense } from "@/lib/tenantResolver";
+import { approvedLeaseFieldValue } from "@/lib/approvedLeaseSnapshot";
 
 export function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
@@ -357,6 +358,22 @@ export function buildClassificationRows({
     const building = buildingById.get(expense.building_id || lease?.building_id) || null;
     const unit = unitById.get(expense.unit_id || lease?.unit_id) || null;
     const sentToCam = isClassificationSentToCam(classificationRecord);
+    const leaseTenantName = approvedLeaseFieldValue(lease, ["tenant_name", "tenant", "tenant_legal_name", "lessee"]);
+    const expenseForTenantResolution = {
+      ...expense,
+      lease_id: expense.lease_id || lease?.id || null,
+      tenant_id: expense.tenant_id || lease?.tenant_id || null,
+      tenant_name: expense.tenant_name || lease?.tenant_name || leaseTenantName || null,
+      property_id: expense.property_id || lease?.property_id || null,
+      building_id: expense.building_id || lease?.building_id || null,
+      unit_id: expense.unit_id || lease?.unit_id || null,
+    };
+    const tenantResolution = resolveTenantForExpense(expenseForTenantResolution, {
+      leases,
+      leaseById,
+      unitById,
+      tenantById,
+    });
     const camStatus = normalizeText(
       classificationRecord?.cam_status ||
       (sentToCam ? "cam_ready" : hasMatchedRule ? null : "needs_review")
@@ -382,18 +399,8 @@ export function buildClassificationRows({
       matchCandidateCount: match?.matchCandidateCount || 0,
       expenseDate: expense.expense_date || expense.date || expense.service_period_start || null,
       vendor: expense.vendor || expense.vendor_name || "-",
-      ...(() => {
-        const resolution = resolveTenantForExpense(expense, {
-          leases,
-          leaseById,
-          unitById,
-          tenantById,
-        });
-        return {
-          tenantLabel: resolution.tenant?.name || "-",
-          tenantResolution: resolution,
-        };
-      })(),
+      tenantLabel: tenantResolution.tenant?.name || "-",
+      tenantResolution,
       ruleLabel: matchedRule
         ? `${matchedRule.expense_category || matchedRule.category_name || "-"}${matchedRule.expense_subcategory ? ` / ${matchedRule.expense_subcategory}` : ""}`
         : "-",
@@ -474,9 +481,9 @@ export function buildClassificationRows({
       unit,
       expenseDate: null,
       vendor: "-",
-      tenantLabel: lease?.tenant_name || "-",
-      tenantResolution: lease?.tenant_name
-        ? { tenant: { id: lease.tenant_id || null, name: lease.tenant_name }, source: "matched_lease", reason: null, lease, unit, reasonText: null }
+      tenantLabel: approvedLeaseFieldValue(lease, ["tenant_name", "tenant", "tenant_legal_name", "lessee"]) || lease?.tenant_name || "-",
+      tenantResolution: (approvedLeaseFieldValue(lease, ["tenant_name", "tenant", "tenant_legal_name", "lessee"]) || lease?.tenant_name)
+        ? { tenant: { id: lease.tenant_id || null, name: approvedLeaseFieldValue(lease, ["tenant_name", "tenant", "tenant_legal_name", "lessee"]) || lease.tenant_name }, source: "matched_lease", reason: null, lease, unit, reasonText: null }
         : { tenant: null, source: "unresolved", reason: "lease_missing_tenant_id", lease, unit, reasonText: "Matched lease has no tenant_id." },
       ruleLabel: `${rule.expense_category || rule.category_name || "-"}${rule.expense_subcategory ? ` / ${rule.expense_subcategory}` : ""}`,
       amount: c?.amount != null ? Number(c.amount) : null,

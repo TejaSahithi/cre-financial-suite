@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { createPageUrl } from "@/utils";
 import { resolveTenantForExpense } from "@/lib/tenantResolver";
+import { supabase } from "@/services/supabaseClient";
 
 function normalizeBucket(expense) {
   const status = String(expense?.recoverability_result || expense?.recovery_status || expense?.classification || "needs_review").toLowerCase();
@@ -38,6 +39,42 @@ function getRecoveryTone(bucket) {
   if (bucket === "excluded") return "bg-slate-200 text-slate-700";
   if (bucket === "conditional") return "bg-amber-100 text-amber-800";
   return "bg-slate-100 text-slate-700";
+}
+
+function camInputAmount(row) {
+  return Number(row?.eligible_amount ?? row?.actual_amount ?? row?.amount ?? 0) || 0;
+}
+
+function getCamHandoffState(expense, publishedCamInput) {
+  if (publishedCamInput) {
+    return {
+      label: "published",
+      tone: "bg-blue-100 text-blue-700",
+      title: "Published cam_expense_inputs row exists and can be consumed by CAM.",
+    };
+  }
+
+  const recovery = normalizeBucket(expense);
+  const eligible = String(expense?.cam_eligible || "").toLowerCase();
+  if (recovery === "recoverable" && eligible === "yes") {
+    return {
+      label: "candidate",
+      tone: "bg-amber-100 text-amber-800",
+      title: "Recoverable and CAM eligible, but not published to cam_expense_inputs yet.",
+    };
+  }
+  if (eligible === "no" || recovery === "non_recoverable" || recovery === "excluded") {
+    return {
+      label: "not eligible",
+      tone: "bg-slate-200 text-slate-700",
+      title: "Not eligible for CAM publication.",
+    };
+  }
+  return {
+    label: "needs review",
+    tone: "bg-amber-100 text-amber-800",
+    title: "CAM eligibility has not been resolved for publication.",
+  };
 }
 
 export default function ExpenseReview() {
@@ -164,6 +201,36 @@ export default function ExpenseReview() {
     () => reviewRows.filter((expense) => String(expense?.classification_status || "").toLowerCase() === "finalized"),
     [reviewRows]
   );
+  const finalizedClassificationIds = useMemo(
+    () => finalizedRows.map((expense) => expense.id).filter(Boolean),
+    [finalizedRows]
+  );
+
+  const { data: publishedCamInputs = [], isLoading: isLoadingCamInputs } = useQuery({
+    queryKey: ["expense-review-published-cam-inputs", finalizedClassificationIds.join("|")],
+    queryFn: async () => {
+      if (finalizedClassificationIds.length === 0) return [];
+      const { data, error } = await supabase
+        .from("cam_expense_inputs")
+        .select("id, classification_result_id, actual_expense_id, amount, status, publication_status, sent_to_cam_at")
+        .in("classification_result_id", finalizedClassificationIds)
+        .eq("publication_status", "published");
+      if (error) {
+        console.warn("[ExpenseReview] published CAM input query failed:", error.message);
+        return [];
+      }
+      return data || [];
+    },
+    enabled: finalizedClassificationIds.length > 0,
+  });
+
+  const publishedCamInputByClassificationId = useMemo(() => {
+    const map = new Map();
+    for (const row of publishedCamInputs) {
+      if (row?.classification_result_id) map.set(row.classification_result_id, row);
+    }
+    return map;
+  }, [publishedCamInputs]);
 
   const finalizedSummary = useMemo(() => {
     return finalizedRows.reduce((summary, expense) => {
@@ -172,12 +239,17 @@ export default function ExpenseReview() {
       summary.count += 1;
       const bucket = normalizeBucket(expense);
       summary.byBucket[bucket] = (summary.byBucket[bucket] || 0) + amount;
-      if (String(expense?.cam_eligible || "").toLowerCase() === "yes") summary.camEligible += amount;
+      if (publishedCamInputByClassificationId.has(expense.id)) {
+        summary.publishedToCam += camInputAmount(publishedCamInputByClassificationId.get(expense.id));
+      } else if (bucket === "recoverable" && String(expense?.cam_eligible || "").toLowerCase() === "yes") {
+        summary.camCandidates += amount;
+      }
       return summary;
     }, {
       total: 0,
       count: 0,
-      camEligible: 0,
+      publishedToCam: 0,
+      camCandidates: 0,
       byBucket: {
         recoverable: 0,
         non_recoverable: 0,
@@ -186,7 +258,7 @@ export default function ExpenseReview() {
         needs_review: 0,
       },
     });
-  }, [finalizedRows]);
+  }, [finalizedRows, publishedCamInputByClassificationId]);
 
   const ruleSummary = useMemo(() => {
     const allRules = scopedRuleSets.flatMap((entry) => entry.rules || []);
@@ -332,7 +404,7 @@ export default function ExpenseReview() {
     ? createPageUrl("LeaseExpenseClassification", { id: scopedLeaseIds[0] })
     : createPageUrl("LeaseExpenseClassification");
 
-  const isLoading = isLoadingRuleSets || isLoadingClassifications;
+  const isLoading = isLoadingRuleSets || isLoadingClassifications || isLoadingCamInputs;
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
@@ -373,7 +445,7 @@ export default function ExpenseReview() {
         <MetricCard label="Finalized Total" value={`$${finalizedSummary.total.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub={`${finalizedSummary.count} finalized rows`} />
         <MetricCard label="Recoverable Finalized" value={`$${finalizedSummary.byBucket.recoverable.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub="tenant recoverable" />
         <MetricCard label="Non-Recoverable / Excluded" value={`$${(finalizedSummary.byBucket.non_recoverable + finalizedSummary.byBucket.excluded).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub="landlord or excluded" />
-        <MetricCard label="CAM Eligible" value={`$${finalizedSummary.camEligible.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub="ready for CAM workflow" />
+        <MetricCard label="Published to CAM" value={`$${finalizedSummary.publishedToCam.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub={`$${finalizedSummary.camCandidates.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })} candidate waiting`} />
         <MetricCard label="Exceptions" value={`${exceptionCounts.total}`} sub="need human decision" />
       </div>
 
@@ -598,8 +670,8 @@ export default function ExpenseReview() {
                 <p className="text-sm font-bold text-emerald-900">${finalizedSummary.byBucket.recoverable.toLocaleString()}</p>
               </div>
               <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2">
-                <p className="text-[10px] font-bold uppercase text-blue-700">CAM Eligible</p>
-                <p className="text-sm font-bold text-blue-900">${finalizedSummary.camEligible.toLocaleString()}</p>
+                <p className="text-[10px] font-bold uppercase text-blue-700">Published CAM</p>
+                <p className="text-sm font-bold text-blue-900">${finalizedSummary.publishedToCam.toLocaleString()}</p>
               </div>
             </div>
           </div>
@@ -622,6 +694,7 @@ export default function ExpenseReview() {
             leases={leases}
             units={allUnits}
             tenants={tenants}
+            publishedCamInputByClassificationId={publishedCamInputByClassificationId}
             isLoading={isLoading}
           />
         </CardContent>
@@ -630,7 +703,7 @@ export default function ExpenseReview() {
   );
 }
 
-function FinalizedExpensesTable({ expenses, totalAmount, scope, leases = [], units = [], tenants = [], isLoading }) {
+function FinalizedExpensesTable({ expenses, totalAmount, scope, leases = [], units = [], tenants = [], publishedCamInputByClassificationId = new Map(), isLoading }) {
   return (
     <Card className="border-slate-200/80">
       <Table>
@@ -664,7 +737,8 @@ function FinalizedExpensesTable({ expenses, totalAmount, scope, leases = [], uni
               const building = expense.building_id ? scope.buildingById.get(expense.building_id) ?? null : null;
               const unit = expense.unit_id ? scope.unitById.get(expense.unit_id) ?? null : null;
               const reviewStatus = normalizeBucket(expense);
-              const camEligible = String(expense.cam_eligible || "").toLowerCase();
+              const publishedCamInput = publishedCamInputByClassificationId.get(expense.id);
+              const camHandoff = getCamHandoffState(expense, publishedCamInput);
               const tenantResolution = resolveTenantForExpense(expense, {
                 leases,
                 units,
@@ -699,8 +773,8 @@ function FinalizedExpensesTable({ expenses, totalAmount, scope, leases = [], uni
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <Badge className={camEligible === "yes" ? "bg-blue-100 text-blue-700" : camEligible === "no" ? "bg-slate-200 text-slate-700" : "bg-amber-100 text-amber-800"}>
-                      {camEligible || "needs_review"}
+                    <Badge className={camHandoff.tone} title={camHandoff.title}>
+                      {camHandoff.label}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right text-xs font-semibold tabular-nums">

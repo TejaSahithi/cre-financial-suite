@@ -47,6 +47,33 @@ function isApprovedLease(lease) {
   return String(lease?.status || "").toLowerCase() === "approved";
 }
 
+function classificationAmount(row) {
+  const direct = Number(row?.amount);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  return (
+    Number(row?.recoverable_amount || 0) +
+    Number(row?.non_recoverable_amount || 0) +
+    Number(row?.conditional_amount || 0) +
+    Number(row?.excluded_amount || 0)
+  );
+}
+
+function classificationYear(row, fallbackYear) {
+  if (Number.isFinite(Number(row?.fiscal_year))) return Number(row.fiscal_year);
+  const dateValue = row?.service_period_start || row?.service_period_end || row?.finalized_at || row?.classified_at;
+  if (!dateValue) return fallbackYear;
+  const date = new Date(String(dateValue).length === 10 ? `${dateValue}T00:00:00` : dateValue);
+  return Number.isNaN(date.getTime()) ? fallbackYear : date.getFullYear();
+}
+
+function recoverabilityBucket(row) {
+  const value = String(row?.recoverability_result || row?.recovery_status || row?.classification || "").toLowerCase();
+  if (value === "recoverable") return "recoverable";
+  if (value === "conditional") return "conditional";
+  if (value === "excluded") return "excluded";
+  return "non_recoverable";
+}
+
 export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
   const year = Number(budgetYear) || new Date().getFullYear();
   const { data: leases = [] } = useOrgQuery("Lease");
@@ -83,21 +110,21 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
     enabled: leaseIds.length > 0,
   });
 
-  // Property-scoped actual expenses (for the expense budget baseline).
-  const { data: expenses = [] } = useQuery({
-    queryKey: ["budget-preview-expenses", propertyId, year],
+  // Property-scoped finalized expense classifications (for the expense budget baseline).
+  const { data: finalizedExpenseClassifications = [] } = useQuery({
+    queryKey: ["budget-preview-finalized-expense-classifications", propertyId, year],
     queryFn: async () => {
       if (!propertyId) return [];
       const { data, error } = await supabase
-        .from("expenses")
-        .select("id, category, classification, amount, fiscal_year, recoverable")
+        .from("expense_classifications")
+        .select("id, category, amount, fiscal_year, service_period_start, service_period_end, finalized_at, classified_at, classification, recovery_status, recoverability_result, recoverable_amount, non_recoverable_amount, conditional_amount, excluded_amount, classification_status, row_type")
         .eq("property_id", propertyId)
-        .eq("fiscal_year", year);
+        .eq("classification_status", "finalized");
       if (error) {
-        console.warn("[BudgetPreviewTabs] expense query failed:", error.message);
+        console.warn("[BudgetPreviewTabs] finalized classification query failed:", error.message);
         return [];
       }
-      return data || [];
+      return (data || []).filter((row) => row.row_type !== "rule_missing_actual" && classificationYear(row, year) === year);
     },
     enabled: !!propertyId,
   });
@@ -125,22 +152,23 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
   const totalRevenue = revenueRows.reduce((sum, r) => sum + r.total, 0);
 
   const expenseRows = useMemo(() => {
-    // Group actuals by category to seed an expense budget baseline.
+    // Group reviewed actuals by category to seed an expense budget baseline.
     const grouped = new Map();
-    for (const e of expenses) {
+    for (const e of finalizedExpenseClassifications) {
       const key = e.category || "Other";
       const existing = grouped.get(key) || { category: key, recoverable: 0, nonRecoverable: 0, total: 0 };
-      const amount = Number(e.amount || 0);
+      const amount = classificationAmount(e);
+      const bucket = recoverabilityBucket(e);
       existing.total += amount;
-      if (e.recoverable === true || String(e.classification || "").toLowerCase() === "recoverable") {
-        existing.recoverable += amount;
+      if (bucket === "recoverable") {
+        existing.recoverable += Number(e.recoverable_amount || amount || 0);
       } else {
-        existing.nonRecoverable += amount;
+        existing.nonRecoverable += Number(e.non_recoverable_amount || e.excluded_amount || e.conditional_amount || amount || 0);
       }
       grouped.set(key, existing);
     }
     return [...grouped.values()].sort((a, b) => b.total - a.total);
-  }, [expenses]);
+  }, [finalizedExpenseClassifications]);
 
   const totalExpense = expenseRows.reduce((sum, r) => sum + r.total, 0);
   const totalRecoverableExpense = expenseRows.reduce((sum, r) => sum + r.recoverable, 0);
@@ -187,8 +215,8 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
         <CardContent className="p-4 text-sm text-blue-800">
           <p className="font-medium">Preview reads approved data only</p>
           <p className="text-xs">
-            Revenue comes from approved lease abstracts. Expense baseline comes from approved actual
-            expenses for the property. Recovery uses approved CAM Setup profiles. None of these
+            Revenue comes from approved lease abstracts. Expense baseline comes from finalized expense
+            classifications for the property. Recovery uses approved CAM Setup profiles. None of these
             tables are edited from this page — use the upstream review pages to make corrections.
           </p>
         </CardContent>
@@ -256,7 +284,7 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Expense Budget — FY {year}</CardTitle>
               <p className="text-xs text-slate-500">
-                Baseline grouped by category from {expenses.length} approved actual expense
+                Baseline grouped by category from {finalizedExpenseClassifications.length} finalized expense classification
                 record(s). Total: <span className="font-semibold text-slate-900">{fmtCurrency(totalExpense)}</span> ·
                 Recoverable: <span className="font-semibold text-slate-900">{fmtCurrency(totalRecoverableExpense)}</span>.
               </p>
@@ -268,7 +296,7 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
                 </p>
               ) : expenseRows.length === 0 ? (
                 <p className="py-6 text-center text-sm text-slate-500">
-                  No actual expenses for FY {year}. Add expenses or bulk import to populate the baseline.
+                  No finalized expense classifications for FY {year}. Review actual expenses before budgeting.
                 </p>
               ) : (
                 <div className="overflow-x-auto">
@@ -290,7 +318,7 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
                           <TableCell className="text-right text-sm font-mono">{fmtCurrency(row.nonRecoverable)}</TableCell>
                           <TableCell className="text-right text-sm font-mono">{fmtCurrency(row.total)}</TableCell>
                           <TableCell>
-                            <Badge className="text-[10px] bg-blue-100 text-blue-700">Actual Expenses</Badge>
+                            <Badge className="text-[10px] bg-blue-100 text-blue-700">Finalized Review</Badge>
                           </TableCell>
                         </TableRow>
                       ))}

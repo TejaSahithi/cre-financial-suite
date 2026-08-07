@@ -37,6 +37,10 @@ function fmtCurrency(value) {
   return num.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
+function camInputAmount(row) {
+  return Number(row?.amount ?? row?.actual_amount ?? row?.eligible_amount ?? 0) || 0;
+}
+
 function StatusBadge({ status }) {
   const tone =
     status === "posted"      ? "bg-emerald-100 text-emerald-700"
@@ -195,30 +199,21 @@ export default function CAMDashboard() {
     },
   });
 
-  // Published eligible pool expenses with fallback to expenses table
+  // Published CAM inputs only. Do not fall back to raw expenses here: a logged
+  // actual expense is not part of the CAM pool until Expense Classification
+  // marks it CAM-eligible and publishes it into cam_expense_inputs.
   const { data: eligibleExpenses = [] } = useQuery({
     queryKey: ["cam-overview-expenses", scope.targetPropertyId, scopeProperty],
     enabled: !!scope.targetPropertyId || scopeProperty === "all",
     queryFn: async () => {
       try {
-        let query = supabase.from("cam_expense_inputs").select("*");
+        let query = supabase.from("cam_expense_inputs").select("id, property_id, amount, actual_amount, eligible_amount, category, description, publication_status");
         if (scope.targetPropertyId) {
           query = query.eq("property_id", scope.targetPropertyId);
         }
         const { data, error } = await query.eq("publication_status", "published");
-        if (!error && data && data.length > 0) return data;
-      } catch {
-        // Fallback below
-      }
-
-      // Fallback: Query expenses table directly for CAM eligible expenses
-      try {
-        let expQuery = supabase.from("expenses").select("id, amount, description, category");
-        if (scope.targetPropertyId) {
-          expQuery = expQuery.eq("property_id", scope.targetPropertyId);
-        }
-        const { data: rawExp } = await expQuery;
-        return (rawExp || []).map(e => ({ id: e.id, amount: e.amount, description: e.description, category: e.category }));
+        if (error) return [];
+        return data ?? [];
       } catch {
         return [];
       }
@@ -244,7 +239,7 @@ export default function CAMDashboard() {
   });
 
   // Calculated metrics
-  const eligiblePoolExpensesTotal = eligibleExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+  const eligiblePoolExpensesTotal = eligibleExpenses.reduce((sum, e) => sum + camInputAmount(e), 0);
   const calculatedRecoveryTotal = leaseResults.reduce((sum, r) => sum + (Number(r.final_recovery) || 0), 0);
   const estimatesScheduledTotal = estimateSchedules.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
   const expectedDueCreditTotal = leaseResults.reduce((sum, r) => sum + (Number(r.amount_due_credit) || 0), 0);
@@ -305,8 +300,8 @@ export default function CAMDashboard() {
               <CardContent className="p-4 flex items-center justify-between">
                 <div>
                   <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Portfolio CAM Expenses</p>
-                  <p className="text-2xl font-bold text-slate-900 mt-1">{fmtCurrency(expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0))}</p>
-                  <p className="text-xs text-teal-700 mt-1 font-medium">{expenses.length} expense item(s) logged</p>
+                  <p className="text-2xl font-bold text-slate-900 mt-1">{fmtCurrency(eligiblePoolExpensesTotal)}</p>
+                  <p className="text-xs text-teal-700 mt-1 font-medium">{eligibleExpenses.length} published CAM input(s)</p>
                 </div>
                 <div className="w-10 h-10 rounded-xl bg-teal-500/10 flex items-center justify-center text-teal-600">
                   <DollarSign className="w-5 h-5" />
@@ -385,8 +380,8 @@ export default function CAMDashboard() {
                   <TableBody>
                     {properties.map((prop) => {
                       const propLeases = leaseList.filter((l) => l.property_id === prop.id || l.propertyId === prop.id);
-                      const propExpenses = expenses.filter((e) => e.property_id === prop.id || e.propertyId === prop.id);
-                      const propExpTotal = propExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+                      const propExpenses = eligibleExpenses.filter((e) => e.property_id === prop.id || e.propertyId === prop.id);
+                      const propExpTotal = propExpenses.reduce((s, e) => s + camInputAmount(e), 0);
 
                       return (
                         <TableRow key={prop.id} className="hover:bg-slate-50/80 transition-colors">

@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { createPageUrl } from "@/utils";
+import { supabase } from "@/services/supabaseClient";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const ALL_PROPERTIES = "__all__";
@@ -118,6 +119,34 @@ export default function ExpenseProjection() {
     },
   });
 
+  const finalizedClassificationIds = useMemo(
+    () => finalizedClassifications.map((classification) => classification.id).filter(Boolean),
+    [finalizedClassifications]
+  );
+
+  const { data: publishedCamInputs = [] } = useQuery({
+    queryKey: ["expense-projection-published-cam-inputs", finalizedClassificationIds.join("|")],
+    queryFn: async () => {
+      if (finalizedClassificationIds.length === 0) return [];
+      const { data, error } = await supabase
+        .from("cam_expense_inputs")
+        .select("id, classification_result_id, amount, publication_status")
+        .in("classification_result_id", finalizedClassificationIds)
+        .eq("publication_status", "published");
+      if (error) {
+        console.warn("[ExpenseProjection] published CAM input query failed:", error.message);
+        return [];
+      }
+      return data || [];
+    },
+    enabled: finalizedClassificationIds.length > 0,
+  });
+
+  const publishedCamInputTotal = useMemo(
+    () => publishedCamInputs.reduce((sum, input) => sum + (Number(input?.amount) || 0), 0),
+    [publishedCamInputs]
+  );
+
   const expensesForProjection = useMemo(() => {
     return finalizedClassifications.map((classification) => {
       const dateValue = classificationDate(classification);
@@ -161,7 +190,6 @@ export default function ExpenseProjection() {
         nonRecoverable: 0,
         conditional: 0,
         excluded: 0,
-        camEligible: 0,
         landlordAbsorbed: 0,
         tenantRecoveryEstimate: 0,
       };
@@ -172,7 +200,6 @@ export default function ExpenseProjection() {
       nonRecoverable: 0,
       conditional: 0,
       excluded: 0,
-      camEligible: 0,
       landlordAbsorbed: 0,
       tenantRecoveryEstimate: 0,
     };
@@ -190,7 +217,6 @@ export default function ExpenseProjection() {
       if (result === "recoverable") {
         totals.recoverable += recoverableAmount;
         totals.tenantRecoveryEstimate += recoverableAmount;
-        if (normalizeProjectionText(expense.cam_eligible) === "yes") totals.camEligible += recoverableAmount;
       } else if (result === "conditional") {
         totals.conditional += conditionalAmount;
       } else if (result === "excluded") {
@@ -253,12 +279,6 @@ export default function ExpenseProjection() {
     currentBudget?.total_expenses || categoryData.reduce((sum, category) => sum + category.budgeted, 0);
   const totalProjected = categoryData.reduce((sum, category) => sum + category.projected, 0);
   const totalFinalized = expensesForProjection.reduce((sum, expense) => sum + (expense.amount || 0), 0);
-  const camEligibleFinalized = expensesForProjection
-    .filter((expense) => normalizeProjectionText(expense.cam_eligible) === "yes")
-    .reduce((sum, expense) => sum + (expense.amount || 0), 0);
-  const sentToCamTotal = expensesForProjection
-    .filter((expense) => expense.sent_to_cam || normalizeProjectionText(expense.cam_status) === "sent")
-    .reduce((sum, expense) => sum + (expense.amount || 0), 0);
 
   const yearlyChart = useMemo(() => {
     const byYear = {};
@@ -375,9 +395,9 @@ export default function ExpenseProjection() {
               <p className="text-[10px] text-emerald-300/80 mt-0.5">Estimated tenant recovery</p>
             </div>
             <div className="rounded-xl bg-blue-500/10 p-3.5 border border-blue-500/20 backdrop-blur-sm">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-blue-300">CAM-Eligible Allocation</p>
-              <p className="mt-1 text-xl font-bold font-mono text-blue-400">${camEligibleFinalized.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-              <p className="text-[10px] text-blue-300/80 mt-0.5">Ready for CAM engine</p>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-blue-300">Published CAM Inputs</p>
+              <p className="mt-1 text-xl font-bold font-mono text-blue-400">${publishedCamInputTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="text-[10px] text-blue-300/80 mt-0.5">Published via CAM input workflow</p>
             </div>
             <div className="rounded-xl bg-amber-500/10 p-3.5 border border-amber-500/20 backdrop-blur-sm">
               <p className="text-[10px] font-bold uppercase tracking-wider text-amber-300">Forward Projection</p>

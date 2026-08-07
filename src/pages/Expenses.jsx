@@ -59,6 +59,7 @@ import {
 import { createPageUrl, downloadCSV } from "@/utils";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { resolveTenantForExpense } from "@/lib/tenantResolver";
+import { approvedLeaseFieldValue } from "@/lib/approvedLeaseSnapshot";
 import { getEffectiveApprovalStatus } from "@/lib/ruleStatus";
 
 function normalizeExpenseDate(value) {
@@ -74,19 +75,26 @@ function isDisplayActiveLease(status) {
   return ["approved", "active", "executed", "budget_ready", "signed"].includes(normalized);
 }
 
+function leaseFieldValue(lease, keys) {
+  return approvedLeaseFieldValue(lease, keys) || null;
+}
+
 function leaseOverlapsExpense(expense, lease) {
   const expenseDate = normalizeExpenseDate(
     expense?.expense_date || expense?.date || expense?.service_period_start || expense?.billing_period_start
   );
   if (!expenseDate) return true;
 
-  const leaseStart = normalizeExpenseDate(lease?.start_date);
-  const leaseEnd = normalizeExpenseDate(lease?.end_date);
+  const leaseStart = normalizeExpenseDate(
+    leaseFieldValue(lease, ["start_date", "commencement_date", "lease_start", "lease_start_date", "rent_commencement_date"])
+  );
+  const leaseEnd = normalizeExpenseDate(
+    leaseFieldValue(lease, ["end_date", "expiration_date", "lease_end", "lease_end_date"])
+  );
   if (leaseStart && expenseDate < leaseStart) return false;
   if (leaseEnd && expenseDate > leaseEnd) return false;
   return true;
 }
-
 function resolveDisplayLeaseForExpense(expense, leases = [], unitsById = new Map()) {
   if (expense?.lease_id) {
     return leases.find((lease) => lease.id === expense.lease_id) || null;
@@ -327,6 +335,7 @@ export default function Expenses() {
             tenant_name:
               expense.tenant_name ||
               matchedLease.tenant_name ||
+              approvedLeaseFieldValue(matchedLease, ["tenant_name", "tenant", "tenant_legal_name", "lessee"]) ||
               directTenant?.tenant_name ||
               directTenant?.name ||
               null,
