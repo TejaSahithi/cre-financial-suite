@@ -67,26 +67,26 @@ export default function SecurityQuestionsSetup() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center p-4">
       <div className="max-w-xl w-full">
         <div className="text-center mb-8">
-          <div className="w-16 h-16 mx-auto bg-blue-100 rounded-full flex items-center justify-center mb-6 shadow-sm border border-blue-200">
-            <ShieldCheck className="w-8 h-8 text-blue-600" />
+          <div className="w-16 h-16 mx-auto bg-[var(--accent-soft)] rounded-full flex items-center justify-center mb-6 shadow-[var(--shadow-soft)] border border-[var(--border-cre)]">
+            <ShieldCheck className="w-8 h-8 text-[var(--accent)]" />
           </div>
-          <h1 className="text-[28px] font-bold text-slate-900 tracking-tight mb-3">Security Questions</h1>
-          <p className="text-slate-500 text-sm max-w-sm mx-auto leading-relaxed">
+          <h1 className="text-[28px] font-bold text-[var(--ink)] tracking-tight mb-3">Security Questions</h1>
+          <p className="text-[var(--muted)] text-sm max-w-sm mx-auto leading-relaxed">
             Please set up your security questions. These will be used to verify your identity if you lose access to your account.
           </p>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-8">
+        <div className="bg-[var(--surface)] rounded-[8px] shadow-[var(--shadow-soft)] border border-[var(--border-cre)] p-8">
           <form onSubmit={handleSubmit} className="space-y-6">
             
             {/* Question 1 */}
             <div className="space-y-3">
-              <Label className="text-slate-700 font-semibold uppercase tracking-wider text-xs">Question 1</Label>
+              <Label className="text-[var(--muted)] font-semibold uppercase tracking-wider text-xs">Question 1</Label>
               <Select value={q1} onValueChange={(val) => { setQ1(val); setError(""); }}>
-                <SelectTrigger className="w-full text-slate-700 bg-slate-50/50">
+                <SelectTrigger className="w-full text-[var(--muted)] bg-[var(--surface-2)]">
                   <SelectValue placeholder="Select a question..." />
                 </SelectTrigger>
                 <SelectContent>
@@ -104,13 +104,13 @@ export default function SecurityQuestionsSetup() {
               />
             </div>
 
-            <div className="h-px bg-slate-100" />
+            <div className="h-px bg-[var(--surface-2)]" />
 
             {/* Question 2 */}
             <div className="space-y-3">
-              <Label className="text-slate-700 font-semibold uppercase tracking-wider text-xs">Question 2</Label>
+              <Label className="text-[var(--muted)] font-semibold uppercase tracking-wider text-xs">Question 2</Label>
               <Select value={q2} onValueChange={(val) => { setQ2(val); setError(""); }}>
-                <SelectTrigger className="w-full text-slate-700 bg-slate-50/50">
+                <SelectTrigger className="w-full text-[var(--muted)] bg-[var(--surface-2)]">
                   <SelectValue placeholder="Select a question..." />
                 </SelectTrigger>
                 <SelectContent>
@@ -128,13 +128,13 @@ export default function SecurityQuestionsSetup() {
               />
             </div>
 
-            <div className="h-px bg-slate-100" />
+            <div className="h-px bg-[var(--surface-2)]" />
 
             {/* Question 3 */}
             <div className="space-y-3">
-              <Label className="text-slate-700 font-semibold uppercase tracking-wider text-xs">Question 3</Label>
+              <Label className="text-[var(--muted)] font-semibold uppercase tracking-wider text-xs">Question 3</Label>
               <Select value={q3} onValueChange={(val) => { setQ3(val); setError(""); }}>
-                <SelectTrigger className="w-full text-slate-700 bg-slate-50/50">
+                <SelectTrigger className="w-full text-[var(--muted)] bg-[var(--surface-2)]">
                   <SelectValue placeholder="Select a question..." />
                 </SelectTrigger>
                 <SelectContent>
@@ -153,7 +153,7 @@ export default function SecurityQuestionsSetup() {
             </div>
 
             {error && (
-              <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-3">
+              <div className="flex items-center gap-2 text-sm text-[var(--danger)] bg-[var(--danger-soft)] border border-[var(--border-cre)] rounded-lg p-3">
                 <AlertCircle className="w-4 h-4 flex-shrink-0" />
                 <span>{error}</span>
               </div>
@@ -162,7 +162,7 @@ export default function SecurityQuestionsSetup() {
             <Button
               type="submit"
               disabled={loading}
-              className="w-full h-12 bg-[#1a2744] hover:bg-[#243b67] text-white font-semibold rounded-xl mt-4"
+              className="w-full h-12 bg-[var(--ink)] hover:bg-[var(--ink)] text-white font-semibold rounded-[8px] mt-4"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
               Save Security Questions

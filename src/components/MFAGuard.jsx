@@ -171,10 +171,10 @@ export default function MFAGuard({ onVerified }) {
 
   if (phase === "loading") {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 flex items-center justify-center">
+      <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center">
         <div className="text-center">
-          <Loader2 className="w-8 h-8 animate-spin text-slate-400 mx-auto mb-3" />
-          <p className="text-sm text-slate-500">Setting up security...</p>
+          <Loader2 className="w-8 h-8 animate-spin text-[var(--muted)] mx-auto mb-3" />
+          <p className="text-sm text-[var(--muted)]">Setting up security...</p>
         </div>
       </div>
     );
@@ -182,17 +182,17 @@ export default function MFAGuard({ onVerified }) {
 
   if (phase === "session_error") {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 flex items-center justify-center px-4">
-        <div className="max-w-sm w-full text-center bg-white rounded-2xl border border-slate-200 shadow-sm p-8">
-          <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <AlertCircle className="w-7 h-7 text-red-500" />
+      <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center px-4">
+        <div className="max-w-sm w-full text-center bg-[var(--surface)] rounded-[8px] border border-[var(--border-cre)] shadow-[var(--shadow-soft)] p-8">
+          <div className="w-14 h-14 bg-[var(--danger-soft)] rounded-[8px] flex items-center justify-center mx-auto mb-4">
+            <AlertCircle className="w-7 h-7 text-[var(--danger)]" />
           </div>
-          <h2 className="text-xl font-bold text-slate-900 mb-2">Session Expired</h2>
-          <p className="text-slate-500 text-sm mb-6">
+          <h2 className="text-xl font-bold text-[var(--ink)] mb-2">Session Expired</h2>
+          <p className="text-[var(--muted)] text-sm mb-6">
             Your session has expired or the link you used is no longer valid. Please sign in again to continue.
           </p>
           <Button
-            className="w-full bg-[#1a2744] hover:bg-[#243460] text-white font-semibold rounded-xl h-11"
+            className="w-full bg-[var(--ink)] hover:bg-[#243460] text-white font-semibold rounded-[8px] h-11"
             onClick={() => { supabase.auth.signOut().finally(() => { window.location.href = '/Login'; }); }}
           >
             Sign In Again
@@ -203,14 +203,14 @@ export default function MFAGuard({ onVerified }) {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 flex flex-col">
+    <div className="min-h-screen bg-[var(--bg)] flex flex-col">
       {/* Header */}
       <div className="px-6 py-5 max-w-6xl mx-auto w-full">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 bg-[#1a2744] rounded-lg flex items-center justify-center">
+          <div className="w-8 h-8 bg-[var(--ink)] rounded-lg flex items-center justify-center">
             <Building2 className="w-4 h-4 text-white" />
           </div>
-          <span className="text-[#1a2744] font-bold text-lg tracking-tight">CRE Suite</span>
+          <span className="text-[var(--ink)] font-bold text-lg tracking-tight">CRE Suite</span>
         </div>
       </div>
 
@@ -219,49 +219,49 @@ export default function MFAGuard({ onVerified }) {
         <div className="max-w-md w-full">
           {/* Icon header */}
           <div className="text-center mb-8">
-            <div className="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-              <Shield className="w-8 h-8 text-blue-600" />
+            <div className="w-16 h-16 bg-[var(--accent-soft)] rounded-[8px] flex items-center justify-center mx-auto mb-4">
+              <Shield className="w-8 h-8 text-[var(--accent)]" />
             </div>
-            <h1 className="text-[28px] font-bold text-slate-900 mb-2">
+            <h1 className="text-[28px] font-bold text-[var(--ink)] mb-2">
               {phase === "enroll" ? "Set Up Two-Factor Authentication" : "Enter Verification Code"}
             </h1>
-            <p className="text-slate-500 text-sm">
+            <p className="text-[var(--muted)] text-sm">
               {phase === "enroll"
                 ? "Scan the QR code with your Authenticator app to add an extra layer of security."
                 : "Open your Authenticator app and enter the 6-digit code for CRE Suite."}
             </p>
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-8">
+          <div className="bg-[var(--surface)] rounded-[8px] border border-[var(--border-cre)] shadow-[var(--shadow-soft)] p-8">
             {/* ── ENROLL phase: QR code steps ── */}
             {phase === "enroll" && (
               <>
                 {enrolling ? (
                   <div className="flex flex-col items-center py-8">
-                    <Loader2 className="w-8 h-8 animate-spin text-slate-400 mb-3" />
-                    <p className="text-sm text-slate-500">Generating QR code...</p>
+                    <Loader2 className="w-8 h-8 animate-spin text-[var(--muted)] mb-3" />
+                    <p className="text-sm text-[var(--muted)]">Generating QR code...</p>
                   </div>
                 ) : qrCode ? (
                   <div className="space-y-5">
                     {/* Step 1 */}
                     <div className="flex items-start gap-3">
-                      <div className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs flex items-center justify-center font-bold flex-shrink-0 mt-0.5">1</div>
+                      <div className="w-6 h-6 rounded-full bg-[var(--accent)] text-white text-xs flex items-center justify-center font-bold flex-shrink-0 mt-0.5">1</div>
                       <div>
-                        <p className="text-sm font-semibold text-slate-800">Download an Authenticator App</p>
-                        <p className="text-xs text-slate-500 mt-0.5">Google Authenticator, Authy, or Microsoft Authenticator</p>
+                        <p className="text-sm font-semibold text-[var(--ink)]">Download an Authenticator App</p>
+                        <p className="text-xs text-[var(--muted)] mt-0.5">Google Authenticator, Authy, or Microsoft Authenticator</p>
                       </div>
                     </div>
                     {/* Step 2 */}
                     <div className="flex items-start gap-3">
-                      <div className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs flex items-center justify-center font-bold flex-shrink-0 mt-0.5">2</div>
+                      <div className="w-6 h-6 rounded-full bg-[var(--accent)] text-white text-xs flex items-center justify-center font-bold flex-shrink-0 mt-0.5">2</div>
                       <div className="flex-1">
-                        <p className="text-sm font-semibold text-slate-800">Scan This QR Code</p>
-                        <div className="mt-3 flex flex-col items-center bg-slate-50 rounded-xl p-4 border border-slate-200">
+                        <p className="text-sm font-semibold text-[var(--ink)]">Scan This QR Code</p>
+                        <div className="mt-3 flex flex-col items-center bg-[var(--bg)] rounded-[8px] p-4 border border-[var(--border-cre)]">
                           <img src={qrCode} alt="TOTP QR Code" className="w-44 h-44" />
                           {secret && (
                             <div className="mt-3 w-full">
-                              <p className="text-[10px] text-slate-400 text-center mb-1">Or enter manually:</p>
-                              <code className="block text-xs text-center text-slate-600 bg-slate-100 rounded px-2 py-1 font-mono break-all">{secret}</code>
+                              <p className="text-[10px] text-[var(--muted)] text-center mb-1">Or enter manually:</p>
+                              <code className="block text-xs text-center text-[var(--muted)] bg-[var(--surface-2)] rounded px-2 py-1 font-mono break-all">{secret}</code>
                             </div>
                           )}
                         </div>
@@ -269,19 +269,19 @@ export default function MFAGuard({ onVerified }) {
                     </div>
                     {/* Step 3 */}
                     <div className="flex items-start gap-3">
-                      <div className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs flex items-center justify-center font-bold flex-shrink-0 mt-0.5">3</div>
+                      <div className="w-6 h-6 rounded-full bg-[var(--accent)] text-white text-xs flex items-center justify-center font-bold flex-shrink-0 mt-0.5">3</div>
                       <div className="flex-1">
-                        <p className="text-sm font-semibold text-slate-800">Enter the 6-Digit Code</p>
-                        <p className="text-xs text-slate-500 mt-0.5">Enter the code shown in your app to complete setup</p>
+                        <p className="text-sm font-semibold text-[var(--ink)]">Enter the 6-Digit Code</p>
+                        <p className="text-xs text-[var(--muted)] mt-0.5">Enter the code shown in your app to complete setup</p>
                       </div>
                     </div>
                   </div>
                 ) : (
                   <div className="text-center py-6 space-y-3">
-                    <p className="text-sm text-red-500">
+                    <p className="text-sm text-[var(--danger)]">
                       {error?.includes("Maximum number") ? "Maximum number of verified factors reached, unenroll to continue" : (error || "Failed to generate QR code.")}
                     </p>
-                    <p className="text-xs text-slate-400">This can happen if a previous setup was interrupted. Click below to try again.</p>
+                    <p className="text-xs text-[var(--muted)]">This can happen if a previous setup was interrupted. Click below to try again.</p>
                     <Button
                       variant="outline"
                       size="sm"
@@ -297,7 +297,7 @@ export default function MFAGuard({ onVerified }) {
 
                 {/* Verification form for ENROLL phase */}
                 {qrCode && (
-                  <form onSubmit={handleVerify} className="space-y-4 mt-5 pt-5 border-t border-slate-100">
+                  <form onSubmit={handleVerify} className="space-y-4 mt-5 pt-5 border-t border-[var(--border-cre)]">
                     <Input
                       type="text"
                       inputMode="numeric"
@@ -314,7 +314,7 @@ export default function MFAGuard({ onVerified }) {
                     />
 
                     {error && (
-                      <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 rounded-lg p-3">
+                      <div className="flex items-start gap-2 text-sm text-[var(--danger)] bg-[var(--danger-soft)] rounded-lg p-3">
                         <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
                         {error}
                       </div>
@@ -322,7 +322,7 @@ export default function MFAGuard({ onVerified }) {
 
                     <Button
                       type="submit"
-                      className="w-full h-12 bg-[#1a2744] hover:bg-[#243b67] gap-2"
+                      className="w-full h-12 bg-[var(--ink)] hover:bg-[var(--ink)] gap-2"
                       disabled={verifying || code.length !== 6}
                     >
                       {verifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
@@ -336,9 +336,9 @@ export default function MFAGuard({ onVerified }) {
             {/* ── CHALLENGE phase: code input + QR re-scan option ── */}
             {phase === "challenge" && (
               <div className="space-y-4">
-                <div className="flex items-center gap-2 bg-blue-50 rounded-xl p-3">
-                  <Smartphone className="w-4 h-4 text-blue-600 flex-shrink-0" />
-                  <p className="text-xs text-blue-700">Open your Authenticator app and enter the current 6-digit code for <strong>CRE Suite</strong>.</p>
+                <div className="flex items-center gap-2 bg-[var(--accent-soft)] rounded-[8px] p-3">
+                  <Smartphone className="w-4 h-4 text-[var(--accent)] flex-shrink-0" />
+                  <p className="text-xs text-[var(--accent)]">Open your Authenticator app and enter the current 6-digit code for <strong>CRE Suite</strong>.</p>
                 </div>
 
                 <Input
@@ -359,7 +359,7 @@ export default function MFAGuard({ onVerified }) {
                 />
 
                 {error && (
-                  <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 rounded-lg p-3">
+                  <div className="flex items-start gap-2 text-sm text-[var(--danger)] bg-[var(--danger-soft)] rounded-lg p-3">
                     <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
                     {error}
                   </div>
@@ -367,7 +367,7 @@ export default function MFAGuard({ onVerified }) {
 
                 <Button
                   onClick={handleVerify}
-                  className="w-full h-12 bg-[#1a2744] hover:bg-[#243b67] gap-2"
+                  className="w-full h-12 bg-[var(--ink)] hover:bg-[var(--ink)] gap-2"
                   disabled={verifying || code.length !== 6}
                 >
                   {verifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
@@ -375,7 +375,7 @@ export default function MFAGuard({ onVerified }) {
                 </Button>
 
                 <div className="mt-6 text-center">
-                  <p className="text-sm text-slate-500">
+                  <p className="text-sm text-[var(--muted)]">
                     Can’t access your authenticator? <br />
                     Contact your administrator or support to reset MFA.
                   </p>
@@ -384,7 +384,7 @@ export default function MFAGuard({ onVerified }) {
             )}
           </div>
 
-          <p className="text-center text-[11px] text-slate-400 mt-4">
+          <p className="text-center text-[11px] text-[var(--muted)] mt-4">
             Protected by enterprise-grade two-factor authentication.
           </p>
         </div>
