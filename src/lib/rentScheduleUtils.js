@@ -62,8 +62,8 @@ export function scheduleRowAmountForMonth(row, monthStart, monthEnd) {
 }
 
 export function previewAmountForMonth(row, monthStart, monthEnd) {
-  const rentStart = safeDate(row.rent_commencement_date || row.lease_start);
-  const leaseEnd = safeDate(row.lease_end);
+  const rentStart = safeDate(row.rent_commencement_date || row.lease_start || row.commencement_date || row.start_date || row.lease_start_date || row.term_start_date);
+  const leaseEnd = safeDate(row.lease_end || row.expiration_date || row.end_date || row.lease_end_date || row.term_end_date);
   const monthly = Number(row.monthly_rent || 0) || (Number(row.annualized_rent || 0) / 12);
   if (!rentStart || !leaseEnd || monthly <= 0 || rentStart > monthEnd || leaseEnd < monthStart) return 0;
 

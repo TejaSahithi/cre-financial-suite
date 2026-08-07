@@ -109,14 +109,22 @@ function simpleStripMarkup(value) {
     .trim();
 }
 
+function sentenceBoundedPreview(value, maxLength = 300) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text || text === "-" || text === "null") return "-";
+  if (text.length <= maxLength) return text;
+  const clipped = text.slice(0, maxLength + 1);
+  const sentenceEnd = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf("?"), clipped.lastIndexOf("!"));
+  if (sentenceEnd >= 80) return clipped.slice(0, sentenceEnd + 1).trim();
+  const lastSpace = clipped.lastIndexOf(" ");
+  return `${clipped.slice(0, lastSpace > 80 ? lastSpace : maxLength).trimEnd()}...`;
+}
+
 export function sourcePreview(text) {
   const cleaned = cleanSourceEvidenceText(text, { truncate: false });
-  if (cleaned) {
-    return cleaned.length > 240 ? `${cleaned.slice(0, 239).trimEnd()}...` : cleaned;
-  }
+  if (cleaned) return sentenceBoundedPreview(cleaned);
   const fallback = simpleStripMarkup(text);
-  if (!fallback || fallback === "-" || fallback === "null") return "-";
-  return fallback.length > 240 ? `${fallback.slice(0, 239).trimEnd()}...` : fallback;
+  return sentenceBoundedPreview(fallback);
 }
 
 function normalizeConfidence(value) {

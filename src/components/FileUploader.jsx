@@ -528,7 +528,7 @@ export default function FileUploader({
       setUploadState("success");
       toast.success(
         `${results.length} file${results.length === 1 ? "" : "s"} uploaded. ` +
-        `Review and confirm below to start extraction.`,
+        `Review the preview and confirm to start extraction.`,
       );
       if (onUploadComplete) onUploadComplete(multiple ? results : results[0]);
       return;
@@ -557,6 +557,7 @@ export default function FileUploader({
   const selectedFileLabel = multiple
     ? `${files.length} files selected`
     : files[0]?.name || "No file selected";
+  const hasPendingConfirmations = pendingConfirmations.length > 0;
 
   return (
     <Card className="w-full">
@@ -589,8 +590,10 @@ export default function FileUploader({
           </div>
         )}
 
-        <div
-          role="button"
+        <div className={hasPendingConfirmations ? "grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.95fr)] xl:items-start" : "space-y-4"}>
+          <div className="space-y-4">
+            <div
+              role="button"
           tabIndex={0}
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
@@ -707,7 +710,7 @@ export default function FileUploader({
                   uploadState === "success" ? "text-emerald-800" : "text-amber-800"
                 }`}>
                   {uploadState === "success"
-                    ? `Uploaded ${uploadResults.length} file${uploadResults.length === 1 ? "" : "s"}; confirm below to start extraction`
+                    ? `Uploaded ${uploadResults.length} file${uploadResults.length === 1 ? "" : "s"}; confirm preview to start extraction`
                     : `Uploaded ${uploadResults.length} of ${files.length} files`}
                 </p>
                 <div className="mt-1 flex flex-wrap gap-2">
@@ -761,10 +764,12 @@ export default function FileUploader({
           </div>
         )}
 
+          </div>
+
         {pendingConfirmations.length > 0 && (
-          <div className="space-y-3 pt-1">
+          <div className="space-y-3 pt-1 xl:sticky xl:top-4">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-              Confirm to Start Extraction
+              Review Document
             </p>
             {pendingConfirmations.map((pending) => {
               const actionState = confirmationActionState[pending.file_id];
@@ -778,7 +783,7 @@ export default function FileUploader({
               return (
                 <div
                   key={pending.file_id}
-                  className="space-y-3 rounded-lg border border-blue-200 bg-blue-50/60 p-3"
+                  className="space-y-3 rounded-lg border border-blue-200 bg-blue-50/60 p-3 shadow-sm"
                 >
                   <div className="flex items-start gap-3">
                     <FileText className="mt-0.5 h-5 w-5 shrink-0 text-blue-500" />
@@ -799,14 +804,14 @@ export default function FileUploader({
                     {canEmbedPreview && pending.previewState === "ready" && pending.previewUrl && isPdf && (
                       <iframe
                         src={pending.previewUrl}
-                        className="h-64 w-full rounded border-0"
+                        className="h-72 w-full rounded border-0 xl:h-[min(62vh,640px)] xl:min-h-[520px]"
                         title={`Preview of ${pending.file_name}`}
                       />
                     )}
                     {canEmbedPreview && pending.previewState === "ready" && pending.previewUrl && isImage && (
                       <img
                         src={pending.previewUrl}
-                        className="max-h-64 w-full rounded border border-slate-100 object-contain"
+                        className="max-h-72 w-full rounded border border-slate-100 object-contain xl:max-h-[min(62vh,640px)]"
                         alt={pending.file_name}
                       />
                     )}
@@ -848,14 +853,14 @@ export default function FileUploader({
                         {pending.previewState === "ready" && pending.previewUrl && isPdf && (
                           <iframe
                             src={pending.previewUrl}
-                            className="h-64 w-full rounded border-0"
+                            className="h-72 w-full rounded border-0 xl:h-[min(62vh,640px)] xl:min-h-[520px]"
                             title={`Preview of ${pending.file_name}`}
                           />
                         )}
                         {pending.previewState === "ready" && pending.previewUrl && isImage && (
                           <img
                             src={pending.previewUrl}
-                            className="max-h-64 w-full rounded border border-slate-100 object-contain"
+                            className="max-h-72 w-full rounded border border-slate-100 object-contain xl:max-h-[min(62vh,640px)]"
                             alt={pending.file_name}
                           />
                         )}
@@ -905,6 +910,8 @@ export default function FileUploader({
             })}
           </div>
         )}
+
+        </div>
 
         {trackedFileIds.length > 0 && (
           <div className="space-y-1.5 pt-1">

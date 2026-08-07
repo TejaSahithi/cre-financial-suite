@@ -19,6 +19,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
+import { approvedLeaseFieldValue } from "@/lib/approvedLeaseSnapshot";
 import { createPageUrl } from "@/utils";
 import {
   getRuleValidation,
@@ -90,6 +91,7 @@ export default function RuleTableRow({
   ].filter(Boolean).join(" · ");
 
   const tenantDisplayName =
+    approvedLeaseFieldValue(lease, ["tenant_name", "tenant", "tenant_legal_name", "lessee"]) ||
     lease?.tenant_name ||
     lease?.tenant?.name ||
     lease?.approved_fields?.tenant_name?.value ||

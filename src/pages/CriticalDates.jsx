@@ -493,7 +493,7 @@ export default function CriticalDates() {
                           }
                           className="text-blue-600 hover:text-blue-700"
                         >
-                          {lease.tenant_name || lease.id.slice(0, 8)}
+                          {fieldValue(lease, ["tenant_name"]) || lease.tenant_name || lease.id.slice(0, 8)}
                         </Link>
                       ) : (
                         <span className="text-slate-400">— deleted —</span>

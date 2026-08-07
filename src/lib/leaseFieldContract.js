@@ -311,7 +311,7 @@ const FIELD_DATA_TYPES = {
   annual_rent: "money",
   rent_per_sf: "number",
   security_deposit: "money",
-  late_fee_amount: "money",
+  late_fee_amount: "text",
   returned_payment_fee_amount: "money",
   application_fee_amount: "money",
   administrative_fee_amount: "money",

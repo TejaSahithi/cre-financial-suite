@@ -315,8 +315,22 @@ function moneyDisplay(value) {
 
 function sourceSnippet(text, index = 0, radius = 520) {
   const raw = String(text ?? "");
-  const start = Math.max(0, index - radius);
-  const end = Math.min(raw.length, index + radius);
+  if (!raw) return "";
+  const anchor = Math.max(0, Math.min(Number(index) || 0, raw.length));
+  const windowStart = Math.max(0, anchor - radius);
+  const windowEnd = Math.min(raw.length, anchor + radius);
+  const before = raw.slice(windowStart, anchor);
+  const after = raw.slice(anchor, windowEnd);
+  const sentenceStartOffset = Math.max(
+    before.lastIndexOf("."),
+    before.lastIndexOf("?"),
+    before.lastIndexOf("!"),
+    before.lastIndexOf("\n"),
+  );
+  const sentenceEndMatches = [after.indexOf("."), after.indexOf("?"), after.indexOf("!"), after.indexOf("\n")]
+    .filter((pos) => pos >= 0);
+  const start = sentenceStartOffset >= 0 ? windowStart + sentenceStartOffset + 1 : windowStart;
+  const end = sentenceEndMatches.length > 0 ? anchor + Math.min(...sentenceEndMatches) + 1 : windowEnd;
   return compactText(raw.slice(start, end));
 }
 
@@ -665,6 +679,11 @@ function recoverStandardValueFromEvidence(canonicalKey, evidence) {
     if (!match) return null;
     const parsed = Number(String(match[1]).replace(/,/g, ""));
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  if (canonicalKey === "late_fee_amount") {
+    const percent = clausePercentValue(text);
+    if (percent && /%|percent/i.test(text) && !/\$\s*[\d,]+(?:\.\d{2})?/.test(text)) return percent;
   }
 
   if (/amount|deposit|rent|fee|allowance/i.test(canonicalKey)) {
@@ -1230,6 +1249,17 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
       fallbackReviewReason = grossNoSeparateCharge.reviewReason;
       displayValueOverride = grossNoSeparateCharge.displayValue;
       statusOverride = grossNoSeparateCharge.status;
+    }
+
+
+    if (canonicalKey === "late_fee_amount") {
+      const lateFeeEvidenceText = recoveryEvidenceText(evidence);
+      const percent = clausePercentValue(lateFeeEvidenceText);
+      if (percent && /%|percent/i.test(lateFeeEvidenceText) && !/\$\s*[\d,]+(?:\.\d{2})?/.test(lateFeeEvidenceText)) {
+        value = percent;
+        displayValueOverride = percent;
+        fallbackReviewReason = fallbackReviewReason || "Late fee source states a percentage, so the normalized value is stored as a percent rather than a dollar amount.";
+      }
     }
 
     const recoveredMissingValue = !isMeaningfulValue(value)

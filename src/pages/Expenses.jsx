@@ -12,7 +12,6 @@ import {
   Receipt,
   Download,
   ClipboardCheck,
-  FileSearch,
   MoreVertical,
   Check,
   X,
@@ -35,7 +34,7 @@ import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/
 import { ExpenseService } from "@/services/api";
 import { expenseService } from "@/services/expenseService";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -476,19 +475,6 @@ export default function Expenses() {
     };
   }, [selectorScopedLeaseIds.length, selectorScopedRuleSets]);
 
-  const classificationTargetLeaseId = selectorScopedLeases[0]?.id || null;
-  const classificationUrl = classificationTargetLeaseId
-    ? createPageUrl("LeaseExpenseClassification", { id: classificationTargetLeaseId })
-    : createPageUrl("LeaseExpenseClassification");
-  const reviewUrl = createPageUrl("ExpenseReview", {
-    property: scopeProperty !== "all" ? scopeProperty : undefined,
-    building: scopeBuilding !== "all" ? scopeBuilding : undefined,
-    unit: scopeUnit !== "all" ? scopeUnit : undefined,
-  });
-  const projectionUrl = createPageUrl("ExpenseProjection", {
-    property: scopeProperty !== "all" ? scopeProperty : undefined,
-  });
-
   const filtered = displayedExpenses.filter((expense) => {
     const property = expense.property_id ? scope.propertyById.get(expense.property_id) ?? null : null;
     const building = expense.building_id ? scope.buildingById.get(expense.building_id) ?? null : null;
@@ -768,58 +754,6 @@ export default function Expenses() {
       />
 
 
-
-
-      <div className="grid lg:grid-cols-1 gap-6">
-        <Card className="border-blue-200 bg-blue-50/60">
-          <CardHeader>
-            <CardTitle className="text-base">Lease Rule Extraction</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm text-slate-700">
-            <div className="flex flex-wrap gap-2">
-              <Badge className="bg-emerald-100 text-emerald-700">{scopedRuleSummary.recoverable} recoverable</Badge>
-              <Badge className="bg-rose-100 text-rose-700">{scopedRuleSummary.nonRecoverable} non-recoverable</Badge>
-              <Badge className="bg-amber-100 text-amber-800">{scopedRuleSummary.conditional} conditional</Badge>
-              <Badge className="bg-slate-100 text-slate-700">{scopedRuleSummary.needsReview} needs review</Badge>
-            </div>
-            {scopedRuleSummary.total > 0 ? (
-              <p>
-                {scopedRuleSummary.total} extracted lease expense rule(s) are available in this scope.
-                Review the yes/no decisions and manual values before CAM.
-              </p>
-            ) : selectorScopedLeases.length > 0 ? (
-              <p>
-                No approved lease expense rules are loaded in this scope yet.
-                Open Lease Expense Rules to review and approve rule sets before sending approved actuals into Expense Classification.
-              </p>
-            ) : (
-              <p>
-                No scoped lease records were found yet for this property/building/unit selection.
-                If you just uploaded a lease, it will not appear here until you send it to Lease Review and save an approved lease/rule set into this scope.
-              </p>
-            )}
-            <div className="flex flex-wrap gap-2">
-              <Link to={classificationUrl}>
-                <Button size="sm" variant="outline" className="bg-white">
-                  <FileSearch className="mr-2 h-4 w-4" />
-                  Expense Classification
-                </Button>
-              </Link>
-              <Link to={reviewUrl}>
-                <Button size="sm" className="bg-slate-900 hover:bg-slate-800 font-normal">
-                  <ClipboardCheck className="mr-2 h-4 w-4" />
-                  Expense Review
-                </Button>
-              </Link>
-              <Link to={projectionUrl}>
-                <Button size="sm" variant="outline" className="bg-white">
-                  Projection
-                </Button>
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
 
 
       <Tabs defaultValue="expenses" className="space-y-4">

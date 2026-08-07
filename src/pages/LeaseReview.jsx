@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -138,17 +138,9 @@ import LeaseReviewTabTable from "@/components/lease-review/LeaseReviewTabTable";
 import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
 import { getFieldPolicyLabel } from "@/lib/leaseReviewCurrentPolicy";
 import { isLeaseReviewEnrichmentInFlight } from "@/lib/leaseReviewUiState";
-import { EnterpriseHeaderIntelligenceBar } from "@/components/lease-review/EnterpriseHeaderIntelligenceBar";
-import { EnterpriseCoverageDashboard } from "@/components/lease-review/EnterpriseCoverageDashboard";
-import { EnterpriseFindings } from "@/components/lease-review/EnterpriseFindings";
-import SemanticPanelBoundary from "@/components/lease-review/SemanticPanelBoundary";
-import GroundedCopilotPanel from "@/components/copilot/GroundedCopilotPanel";
 import { useReviewDocument } from "@/lib/review/useReviewDocument";
 import { reviewDocumentToLegacyReviewPayload, shouldBridgeReviewDocumentToLegacyPayload } from "@/lib/review/adapters/viewModelLegacyBridge";
 
-const DocumentFamilyTimeline = lazy(() => import("@/components/lease-review/DocumentFamilyTimeline"));
-const SemanticCoveragePanel = lazy(() => import("@/components/lease-review/SemanticCoveragePanel"));
-const FieldSearchCommand = lazy(() => import("@/components/lease-review/FieldSearchCommand"));
 
 // Minimum number of source-backed fields required before a new extraction is
 // considered "richer" than the previous one. Used only for debug diagnostics.
@@ -628,7 +620,7 @@ export default function LeaseReview() {
     return () => {
       cancelled = true;
     };
-  }, [lease?.id]);  
+  }, [lease?.id]);
 
   // Auto-link: when a lease has no source_file_id, search uploaded_files
   // for a matching upload by tenant_name / property_id / building_id /
@@ -744,7 +736,7 @@ export default function LeaseReview() {
     return () => {
       cancelled = true;
     };
-  }, [lease?.id]);  
+  }, [lease?.id]);
 
   // Manual link from the banner picker.
   const handleLinkSourceFile = async (fileId) => {
@@ -1005,7 +997,7 @@ export default function LeaseReview() {
     return () => {
       cancelled = true;
     };
-  }, [lease?.id]);  
+  }, [lease?.id]);
 
   // Mark related notifications as read.
   useEffect(() => {
@@ -1036,7 +1028,7 @@ export default function LeaseReview() {
       if (!leaseId) return EMPTY;
       const { ruleSet, rules } = await leaseExpenseRuleService.loadRuleSet(leaseId);
       if (!ruleSet) return EMPTY;
-      
+
       const totals = (rules || []).reduce(
         (acc, r) => {
           const expenseCat = String(r.expense_category || "").toLowerCase().replace(/[^a-z0-9]+/g, "_");
@@ -1436,7 +1428,7 @@ export default function LeaseReview() {
       const row = directRow || aliasedRow || fieldDef;
       const isRequired = requiredFieldKeySet.has(key);
       const isDynamic = !fieldDef.key;
-      
+
       const reviewKeys = [...new Set([key, ...getFieldAliases(key)])];
       const reviewKey = reviewKeys.find((candidateKey) => fieldReviews[candidateKey]) || key;
       const review = fieldReviews[reviewKey];
@@ -1466,7 +1458,7 @@ export default function LeaseReview() {
           ['accepted', 'approved'].includes(reviewStatus) ||
           (reviewHasValue && (reviewHasEvidence || reviewHasOverride))
         );
-      
+
       if (reviewStatus === REVIEW_STATUSES.N_A) {
         return; // already marked N/A - doesn't block
       }
@@ -1497,7 +1489,7 @@ export default function LeaseReview() {
       if (reviewStatus === REVIEW_STATUSES.EDITED && reviewClearsAutomatedValidation) {
         return; // reviewer-corrected value/evidence is authoritative
       }
-      
+
       if (reviewStatus === REVIEW_STATUSES.MANUAL_REQUIRED) {
         return; // explicit reviewer decision; downstream treats value as not approved
       }
@@ -1514,7 +1506,7 @@ export default function LeaseReview() {
         });
         return;
       }
-      
+
       const value = row?.normalized_value ?? row?.value ?? readFieldValue(leaseFull, key);
       const evidence = readFieldEvidence(leaseFull, key);
       const extractionStatus = row?.extraction_status ?? row?.status ?? resolveExtractionStatus(leaseFull, key, {
@@ -3160,25 +3152,27 @@ export default function LeaseReview() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            onClick={() => setShowReextractConfirm(true)}
-            disabled={reextracting || !resolvedSourceFileId}
-            title={
-              resolvedSourceFileId
-                ? "Re-run the AI extraction on the source PDF and refresh values + evidence on this lease"
-                : "No source file is linked to this lease. Use Extraction Debug -> Re-link Source Document first."
-            }
-          >
-            {reextracting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
-            {reextracting
-              ? reextractStage === "polling"
-                ? "Waiting on extraction-"
-                : reextractStage === "applying"
-                  ? "Applying values..."
-                  : "Re-extracting..."
-              : "Re-extract Lease"}
-          </Button>
+          {lease?.abstract_status !== "approved" && (
+            <Button
+              variant="outline"
+              onClick={() => setShowReextractConfirm(true)}
+              disabled={reextracting || !resolvedSourceFileId}
+              title={
+                resolvedSourceFileId
+                  ? "Re-run the AI extraction on the source PDF and refresh values + evidence on this lease"
+                  : "No source file is linked to this lease. Use Extraction Debug -> Re-link Source Document first."
+              }
+            >
+              {reextracting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
+              {reextracting
+                ? reextractStage === "polling"
+                  ? "Waiting on extraction-"
+                  : reextractStage === "applying"
+                    ? "Applying values..."
+                    : "Re-extracting..."
+                : "Re-extract Lease"}
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)}
@@ -3205,36 +3199,6 @@ export default function LeaseReview() {
         </div>
       </div>
 
-      <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs text-slate-600">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-semibold text-slate-800">Extraction truth</span>
-          <Badge className="bg-blue-50 text-blue-700">
-            Parser: {humanizeExtractionToken(extractionSummary.parserProvider, "azure document intelligence")}
-          </Badge>
-          <Badge className={
-            extractionSummary.extractionMode === "whole_document_llm_v2"
-              ? "bg-emerald-50 text-emerald-700"
-              : "bg-amber-50 text-amber-800"
-          }>
-            Mode: {humanizeExtractionToken(extractionSummary.extractionMode)}
-          </Badge>
-          <Badge className={extractionSummary.fallbackUsed ? "bg-amber-50 text-amber-800" : "bg-slate-100 text-slate-700"}>
-            Provider: {leaseExtractionProviderLabel(extractionSummary)}
-          </Badge>
-          <Badge className="bg-slate-100 text-slate-700">
-            Generation: {extractionSummary.activeGenerationId ? String(extractionSummary.activeGenerationId).slice(0, 8) : "none"}
-          </Badge>
-          <Badge className={isReviewReady ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}>
-            Readiness: {humanizeExtractionToken(extractionSummary.reviewReadiness || reviewReadiness || "pending")}
-          </Badge>
-          <Badge className="bg-slate-100 text-slate-700">
-            Enrichment: {humanizeExtractionToken(extractionSummary.enrichmentStatus || enrichmentStatus || "unknown")}
-          </Badge>
-        </div>
-        {extractionSummary.fallbackReason && (
-          <p className="mt-2 text-amber-700">Fallback reason: {extractionSummary.fallbackReason}</p>
-        )}
-      </div>
 
       {leaseArchitectureMismatch && (
         <div className="mx-4 mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
@@ -3544,28 +3508,14 @@ export default function LeaseReview() {
       </div>
       )}
 
-      <EnterpriseHeaderIntelligenceBar document={reviewDocument} />
-      <SemanticPanelBoundary>
-        <Suspense fallback={<div className="mb-4 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">Loading semantic review tools...</div>}>
-          <FieldSearchCommand document={reviewDocument} uploadedFileId={resolvedSourceFileId} onNavigateToField={handleNavigateToField} />
-          <DocumentFamilyTimeline documentFamily={reviewDocument?.documentFamily} />
-          <SemanticCoveragePanel semanticCoverage={reviewDocument?.semanticCoverage} definitions={reviewDocument?.definitions || []} crossReferences={reviewDocument?.crossReferences || []} />
-        </Suspense>
-      </SemanticPanelBoundary>
 
-
-      <div className="mb-4">
-        <GroundedCopilotPanel scope="lease" />
-      </div>
-
-      <EnterpriseFindings findings={reviewDocument?.findings || []} onNavigateToField={handleNavigateToField} />
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex h-auto flex-wrap justify-start gap-1 border bg-white">
           {LEASE_REVIEW_TABS.map((tab) => {
             if (tab.key === "extraction_debug" && !isSuperAdminUser) return null;
             const tabFields = enterpriseTabs[tab.key] || [];
-            const extractedInTab = tabFields.filter((f) => isMeaningfulValue(f.value ?? f.normalized_value ?? f.normalizedValue) || f.sourceText || f.source_text).length;
+            const extractedInTab = tabFields.filter((f) => isMeaningfulValue(f.value ?? f.normalized_value ?? f.normalizedValue)).length;
             // Flag tabs that are inapplicable for assignment/amendment docs.
             // A tab is "not in this document" when: we're in assignment mode AND
             // every standard field in the tab is empty (no extracted value).
@@ -3599,7 +3549,6 @@ export default function LeaseReview() {
 
         {/* Summary tab */}
         <TabsContent value="summary" className="mt-4 space-y-4">
-          <EnterpriseCoverageDashboard coverage={reviewDocument?.coverage} approval={reviewDocument?.approval} />
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Lease Summary</CardTitle>
@@ -3681,7 +3630,7 @@ export default function LeaseReview() {
               </CardHeader>
               <CardContent className="space-y-2">
                 {validationChecks.map((c, i) => (
-                  <div key={i} className={`rounded-lg p-2.5 ${c.pass ? "bg-emerald-50" : "bg-red-50"}`}>
+                  <div key={i} className={`rounded-lg border p-2.5 ${c.pass ? "border-emerald-100 bg-emerald-50/55" : "border-red-100 bg-red-50/70"}`}>
                     <div className="flex items-center gap-2">
                       {c.pass ? (
                         <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
@@ -3709,14 +3658,23 @@ export default function LeaseReview() {
                     const { review } = getReviewForFieldKey(key);
                     const resolved = isResolvedReview(review);
                     const tabLabel = approvalFieldTabLabel(field);
+                    const row = reviewRowByKey.get(key) || standardRowByKey.get(key) || getFieldAliases(key)
+                      .map((aliasKey) => reviewRowByKey.get(aliasKey) || standardRowByKey.get(aliasKey))
+                      .find(Boolean);
+                    const hasExtractedValue = isMeaningfulValue(row?.value ?? row?.normalized_value ?? row?.normalizedValue ?? readFieldValue(leaseFull, key));
+                    const badgeClass = resolved
+                      ? "bg-emerald-100 text-emerald-700"
+                      : hasExtractedValue
+                        ? "bg-blue-50 text-blue-700 border border-blue-100"
+                        : "bg-amber-100 text-amber-800";
                     return (
                       <li key={key} className="flex items-center justify-between gap-2 rounded border border-slate-200 bg-slate-50 px-2 py-1">
                         <span className="min-w-0 text-slate-600">
                           <span className="truncate">{field?.label || key}</span>
                           <span className="ml-1 text-slate-400">[{tabLabel}]</span>
                         </span>
-                        <Badge className={resolved ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}>
-                          {resolved ? REVIEW_STATUS_LABELS[review?.status] : "Pending"}
+                        <Badge className={badgeClass}>
+                          {resolved ? REVIEW_STATUS_LABELS[review?.status] : hasExtractedValue ? "Ready to review" : "Missing"}
                         </Badge>
                       </li>
                     );
@@ -4129,8 +4087,7 @@ export default function LeaseReview() {
       />
 
       {/* Sticky bottom action bar - once the abstract is approved we collapse
-          to a confirmation message + Re-extract escape hatch (re-extraction
-          creates the next version on next approval).
+          to a confirmation message and next-step navigation.
           Uses `sticky bottom-0` (not `fixed`) so the bar stays contained
           inside the Lease Review page's scroll area and does not overlap
           the sidebar / other modules. The negative horizontal margin lets
@@ -4156,16 +4113,9 @@ export default function LeaseReview() {
                 <Link to={createPageUrl("LeaseDetail") + `?id=${lease.id}`}>
                   <Button variant="outline">Open Lease Detail</Button>
                 </Link>
-                <Button
-                  variant="outline"
-                  onClick={() => setShowReextractConfirm(true)}
-                  disabled={reextracting || !resolvedSourceFileId}
-                  className="border-blue-300 text-blue-700 hover:bg-blue-50"
-                  title="Re-run AI extraction - next approval will create a new version"
-                >
-                  {reextracting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
-                  {reextracting ? "Re-extracting..." : "Re-extract Lease"}
-                </Button>
+                <Link to={createPageUrl("RentProjection") + `?property_id=${lease.property_id || ""}`}>
+                  <Button className="bg-emerald-600 hover:bg-emerald-700">Next: Rent Projection</Button>
+                </Link>
               </div>
             </>
           ) : (
@@ -4322,7 +4272,7 @@ export default function LeaseReview() {
                   </ul>
                 </div>
                 <p className="mb-2 text-sm text-slate-500 text-left">
-                  Approval converts this draft into the official lease abstract. Downstream modules 
+                  Approval converts this draft into the official lease abstract. Downstream modules
                   (Expenses, CAM, Budget, Billing) will only read from the approved abstract.
                 </p>
               </div>
