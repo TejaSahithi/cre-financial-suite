@@ -6,6 +6,7 @@ import {
   deriveOperationalResponsibility,
   derivePaymentTreatment,
   deriveRuleDecision,
+  getRuleCamExclusionReason,
 } from "@/services/utils/ruleDecisionEngine";
 
 export function normalizeText(value) {
@@ -114,6 +115,23 @@ export function hasExplicitCamExclusion(row) {
     Boolean(row?.rule?.is_excluded);
 }
 
+export function getLinkedRuleCamBlocker(row) {
+  if (!row?.rule) return null;
+  const reason = getRuleCamExclusionReason(row.rule, { scopeMatch: true });
+  // Classification publication can manually publish an approved, recoverable,
+  // CAM-eligible rule that is not yet materialized in CAM setup. Other linked
+  // rule blockers mirror the server-side Send-to-CAM gate.
+  if (!reason || reason === "not_published_to_cam") return null;
+
+  const decision = deriveRuleDecision(row.rule);
+  const paymentTreatment = derivePaymentTreatment(row.rule);
+  if (paymentTreatment === "tenant_direct_contract") return "tenant_direct";
+  if (paymentTreatment === "included_in_base_rent") return "included_in_base_rent";
+  if (decision.recoverability === "not_recoverable") return "not_recoverable";
+  if (decision.camEligibility === "not_eligible") return "not_cam_eligible";
+  return reason;
+}
+
 export function canSendFinalizedActualToCam(row) {
   const readiness = getCamPublicationReadiness(row);
   return getCamInputDecision(row, { readiness }).state === "ready_to_send";
@@ -180,10 +198,18 @@ export function getCamPublicationReadiness(row, { publicationStatus = null } = {
   const isRuleGap = row?.rowType === "rule_missing_actual";
   const expenseApproved = isRuleGap || Boolean(row?.actualExpenseId);
   const ruleApproved = !row?.rule || row?.rule?.approval_status === "approved" || row?.rule?.published_to_cam === true;
+  const linkedRuleCamBlocker = getLinkedRuleCamBlocker(row);
 
   const checks = [
     { key: "expense_approved", label: "Expense approved", pass: expenseApproved },
     { key: "rule_approved", label: "Lease rule approved", pass: ruleApproved },
+    {
+      key: "linked_rule_cam_eligible",
+      label: linkedRuleCamBlocker
+        ? `Linked lease rule CAM eligible (${humanize(linkedRuleCamBlocker)})`
+        : "Linked lease rule CAM eligible",
+      pass: !linkedRuleCamBlocker,
+    },
     { key: "finalized", label: "Classification finalized", pass: row?.classificationStatus === "finalized" },
     { key: "amount_allocated", label: "Amount fully allocated", pass: Number(row?.amount) > 0 },
     { key: "scope_validated", label: "Scope validated", pass: isRuleGap ? true : Boolean(row?.property) },
@@ -222,6 +248,14 @@ export function getCamInputDecision(row, { readiness = null, publicationStatus =
   }
   if (classificationBucket === "conditional" && !row?.classificationRecord?.condition_resolved) {
     return { state: "conditional_review_required", label: "Conditional - Review Required" };
+  }
+
+  const linkedRuleCamBlocker = getLinkedRuleCamBlocker(row);
+  if (linkedRuleCamBlocker) {
+    if (linkedRuleCamBlocker === "conditional_unresolved") {
+      return { state: "conditional_review_required", label: "Rule Needs CAM Review" };
+    }
+    return { state: "not_cam_eligible", label: "Rule Not CAM Eligible" };
   }
 
   const isRuleGap = row?.rowType === "rule_missing_actual";

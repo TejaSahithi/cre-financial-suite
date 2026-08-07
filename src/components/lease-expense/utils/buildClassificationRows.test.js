@@ -12,6 +12,7 @@ import {
   getCamInputDecision,
   getCamDecision,
   getClassificationRecoveryBucket,
+  getLinkedRuleCamBlocker,
   ruleExpectsLandlordActualExpense,
 } from './buildClassificationRows';
 
@@ -262,7 +263,7 @@ describe('buildClassificationRows', () => {
       servicePeriodStart: '2026-01-01',
       servicePeriodEnd: '2026-01-31',
       classificationRecord: classification,
-      rule: { published_to_cam: true, recoverable_from_tenant: 'yes', cam_eligible: 'yes' },
+      rule: { published_to_cam: true, expense_category: 'insurance', recoverable_from_tenant: 'yes', cam_eligible: 'yes' },
     };
 
     expect(getClassificationRecoveryBucket(classification)).toBe('excluded');
@@ -283,11 +284,80 @@ describe('buildClassificationRows', () => {
       servicePeriodStart: '2026-01-01',
       servicePeriodEnd: '2026-01-31',
       classificationRecord: { recoverability_result: 'recoverable', cam_eligible: 'yes', classification_status: 'finalized' },
-      rule: { published_to_cam: true, recoverable_from_tenant: 'yes', cam_eligible: 'yes' },
+      rule: { published_to_cam: true, expense_category: 'insurance', recoverable_from_tenant: 'yes', cam_eligible: 'yes' },
     };
 
     expect(getCamInputDecision(row).state).toBe('ready_to_send');
     expect(getCamInputDecision(row, { publicationStatus: 'published' }).state).toBe('published_to_cam');
+  });
+
+  it('blocks CAM send when a finalized classification is linked to a non-CAM lease rule', () => {
+    const row = {
+      rowType: 'matched_classification',
+      actualExpenseId: 'expense-tenant-direct',
+      classificationStatus: 'finalized',
+      recoverabilityResult: 'recoverable',
+      camEligible: 'yes',
+      amount: 1200,
+      property: { id: 'property-1' },
+      expenseCategoryId: 'category-1',
+      servicePeriodStart: '2026-01-01',
+      servicePeriodEnd: '2026-01-31',
+      classificationRecord: {
+        classification_status: 'finalized',
+        recoverability_result: 'recoverable',
+        cam_eligible: 'yes',
+      },
+      rule: {
+        id: 'rule-tenant-direct',
+        approval_status: 'approved',
+        published_to_cam: true,
+        expense_category: 'utilities',
+        payment_treatment: 'tenant_direct_contract',
+        operational_responsibility: 'tenant',
+        recoverable_from_tenant: 'no',
+        cam_eligible: 'no',
+      },
+    };
+
+    expect(getLinkedRuleCamBlocker(row)).toBe('tenant_direct');
+    expect(getCamInputDecision(row).state).toBe('not_cam_eligible');
+    expect(getCamDecision(row).label).toBe('Excluded');
+    expect(canSendFinalizedActualToCam(row)).toBe(false);
+  });
+
+  it('blocks CAM send when the linked lease rule has unresolved conditional CAM treatment', () => {
+    const row = {
+      rowType: 'matched_classification',
+      actualExpenseId: 'expense-conditional-rule',
+      classificationStatus: 'finalized',
+      recoverabilityResult: 'recoverable',
+      camEligible: 'yes',
+      amount: 3500,
+      property: { id: 'property-1' },
+      expenseCategoryId: 'category-1',
+      servicePeriodStart: '2026-01-01',
+      servicePeriodEnd: '2026-01-31',
+      classificationRecord: {
+        classification_status: 'finalized',
+        recoverability_result: 'recoverable',
+        cam_eligible: 'yes',
+      },
+      rule: {
+        id: 'rule-conditional',
+        approval_status: 'approved',
+        published_to_cam: true,
+        expense_category: 'roof_repair',
+        payment_treatment: 'reimbursable',
+        operational_responsibility: 'shared',
+        recoverable_from_tenant: 'conditional',
+        cam_eligible: 'conditional',
+      },
+    };
+
+    expect(getLinkedRuleCamBlocker(row)).toBe('conditional_unresolved');
+    expect(getCamInputDecision(row).state).toBe('conditional_review_required');
+    expect(canSendFinalizedActualToCam(row)).toBe(false);
   });
 
   it('keeps authoritative cam_eligible=no excluded even if legacy cam_status says cam_ready', () => {
@@ -474,7 +544,7 @@ describe('buildClassificationRows', () => {
         property: { id: 'property-1' },
         sentToCam: false,
         classificationRecord: { id: 'classification-1' },
-        rule: { recovery_method: 'direct_bill', payment_treatment: 'reimbursable' },
+        rule: { recovery_method: 'direct_bill', payment_treatment: 'reimbursable', expense_category: 'insurance', recoverable_from_tenant: 'yes', cam_eligible: 'yes', published_to_cam: true },
         tenantResolution: { tenant: null },
       };
       expect(getCamInputDecision(row).state).toBe('needs_direct_tenant');
@@ -494,7 +564,7 @@ describe('buildClassificationRows', () => {
         amount: 100,
         sentToCam: false,
         classificationRecord: { id: 'classification-1' },
-        rule: { recovery_method: 'direct_bill', payment_treatment: 'reimbursable', published_to_cam: true },
+        rule: { recovery_method: 'direct_bill', payment_treatment: 'reimbursable', expense_category: 'insurance', recoverable_from_tenant: 'yes', cam_eligible: 'yes', published_to_cam: true },
         tenantResolution: { tenant: { id: 'tenant-1', name: 'Direct Tenant' } },
       };
       expect(getCamInputDecision(row).state).toBe('ready_to_send');
