@@ -92,6 +92,10 @@ import {
   dedupeDisplayRows,
   calculateRuleCounts,
 } from '@/components/lease-expense/utils/leaseExpenseRulesHelpers';
+import {
+  buildExpenseFindingCoverageRows,
+  calculateFindingCoverageCounts,
+} from '@/components/lease-expense/utils/expenseFindingCoverage';
 
 function normalizeStatus(value) {
   return String(value || "").trim().toLowerCase();
@@ -302,12 +306,26 @@ export default function LeaseExpenseRules() {
     [allDisplayRows],
   );
 
-  const coverageGapRows = useMemo(
-    () => dedupeDisplayRows(allDisplayRows.filter(({ rule }) => isCoverageGapRule(rule))),
-    [allDisplayRows],
+  const allFindingRows = useMemo(
+    () => buildExpenseFindingCoverageRows({
+      leases: approvedSelectorFilteredLeases,
+      ruleRows: allDisplayRows,
+      propertyById: scope.propertyById,
+    }),
+    [approvedSelectorFilteredLeases, allDisplayRows, scope.propertyById],
   );
 
-  const flattenedRows = displayMode === "gaps" ? coverageGapRows : leaseDerivedRows;
+  const coverageGapRows = useMemo(() => {
+    const persistedGaps = allDisplayRows.filter(({ rule }) => isCoverageGapRule(rule));
+    const evidenceOnlyFindings = allFindingRows.filter(({ rule }) => rule?._findingOnly);
+    return dedupeDisplayRows([...persistedGaps, ...evidenceOnlyFindings]);
+  }, [allDisplayRows, allFindingRows]);
+
+  const flattenedRows = displayMode === "gaps"
+    ? coverageGapRows
+    : displayMode === "findings"
+      ? allFindingRows
+      : leaseDerivedRows;
 
   // Dev-only diagnostic: print scope / filter / hide counts so we can see why
   // a rule that exists in the DB might not be appearing in the table. Logged
@@ -352,6 +370,10 @@ export default function LeaseExpenseRules() {
         rule.exact_source_text,
         rule.notes,
         rule.source,
+        rule._coverage?.contractStatus,
+        rule._coverage?.expenseTreatment,
+        rule._coverage?.camParticipation,
+        rule._coverage?.materialization,
       ]
         .filter(Boolean)
         .map((value) => String(value).toLowerCase());
@@ -373,6 +395,7 @@ export default function LeaseExpenseRules() {
   }), [flattenedRows, search, statusFilter]);
 
   const counts = useMemo(() => calculateRuleCounts(flattenedRows), [flattenedRows]);
+  const coverageSummary = useMemo(() => calculateFindingCoverageCounts(allFindingRows), [allFindingRows]);
 
   const selectableRuleIds = useMemo(
     () =>
@@ -763,8 +786,10 @@ export default function LeaseExpenseRules() {
 
   const subtitle = getScopeSubtitle(scope, {
     default: displayMode === "gaps"
-      ? `${filteredRows.length} coverage gap${filteredRows.length === 1 ? "" : "s"} / needs review`
-      : `${filteredRows.length} expense-related lease term${filteredRows.length === 1 ? "" : "s"} found in the lease`,
+      ? `${filteredRows.length} coverage gap${filteredRows.length === 1 ? "" : "s"} / not materialized`
+      : displayMode === "findings"
+        ? `${filteredRows.length} expense-related finding${filteredRows.length === 1 ? "" : "s"} accounted for`
+        : `${filteredRows.length} normalized lease expense rule${filteredRows.length === 1 ? "" : "s"}`,
   });
 
   return (
@@ -813,7 +838,7 @@ export default function LeaseExpenseRules() {
               <Link to={createPageUrl("Expenses")} className="underline">
                 Actual Expenses
               </Link>
-              . This page is for contract rule review only.
+              . This page separates evidence findings, contract approval, CAM participation, and actual-expense expectation.
             </p>
           </div>
         </CardContent>
@@ -832,12 +857,12 @@ export default function LeaseExpenseRules() {
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
-        <StatCard label="All Rules" value={counts.all} />
-        <StatCard label="Recoverable" value={counts.recoverable} accent="border-l-emerald-500 bg-emerald-50" />
-        <StatCard label="Non-Recoverable" value={counts.non_recoverable} accent="border-l-slate-400 bg-slate-50" />
-        <StatCard label="Conditional" value={counts.conditional} accent="border-l-purple-500 bg-purple-50" />
-        <StatCard label="Needs Review" value={counts.needs_review} accent="border-l-amber-500 bg-amber-50" />
-        <StatCard label="Approved" value={counts.approved} accent="border-l-blue-500 bg-blue-50" />
+        <StatCard label="All Findings" value={coverageSummary.all} />
+        <StatCard label="Rule Candidates" value={coverageSummary.rule_candidates} accent="border-l-amber-500 bg-amber-50" />
+        <StatCard label="Contract Approved" value={coverageSummary.contract_approved} accent="border-l-emerald-500 bg-emerald-50" />
+        <StatCard label="CAM Eligible" value={coverageSummary.cam_enabled} accent="border-l-blue-500 bg-blue-50" />
+        <StatCard label="Actual Expected" value={coverageSummary.actual_expected} accent="border-l-purple-500 bg-purple-50" />
+        <StatCard label="Evidence Only" value={coverageSummary.evidence_only} accent="border-l-slate-400 bg-slate-50" />
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -859,8 +884,9 @@ export default function LeaseExpenseRules() {
         </Tabs>
         <Tabs value={displayMode} onValueChange={setDisplayMode}>
           <TabsList className="bg-white border">
-            <TabsTrigger value="lease" className="text-xs">Lease-Derived ({leaseDerivedRows.length})</TabsTrigger>
-            <TabsTrigger value="gaps" className="text-xs">Coverage Gaps / Needs Review ({coverageGapRows.length})</TabsTrigger>
+            <TabsTrigger value="findings" className="text-xs">All Findings ({allFindingRows.length})</TabsTrigger>
+            <TabsTrigger value="lease" className="text-xs">Rule Candidates ({leaseDerivedRows.length})</TabsTrigger>
+            <TabsTrigger value="gaps" className="text-xs">Not Materialized ({coverageGapRows.length})</TabsTrigger>
           </TabsList>
         </Tabs>
         <div className="ml-auto flex items-center gap-2">
@@ -909,6 +935,7 @@ export default function LeaseExpenseRules() {
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Responsibility</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Recoverable</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">CAM Eligible</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actual Expected</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Method / Allocation</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Amount / Cap / Share</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Billing</TableHead>
@@ -919,13 +946,13 @@ export default function LeaseExpenseRules() {
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={13} className="py-12 text-center">
+                  <TableCell colSpan={14} className="py-12 text-center">
                     <Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" />
                   </TableCell>
                 </TableRow>
               ) : filteredRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={13} className="py-12 text-center text-sm text-slate-400">
+                  <TableCell colSpan={14} className="py-12 text-center text-sm text-slate-400">
                     <div className="mx-auto flex max-w-2xl flex-col items-center gap-3">
                       {ruleSetLoadError ? (
                         <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-left text-red-700">
@@ -971,7 +998,7 @@ export default function LeaseExpenseRules() {
                     isUpdating={updateRuleMutation.isPending || bulkApproveRulesMutation.isPending}
                     isSelected={selectedRuleIds.has(rule.id)}
                     canSelect={isUuid(rule?.id) && !isApprovedRule(rule)}
-                    camPolicyStatus={resolveCamPolicyStatus(rule, policiesBySourceRuleId.get(rule.id) || [], leasesWithPremises.has(lease?.id))}
+                    camPolicyStatus={rule?._findingOnly ? null : resolveCamPolicyStatus(rule, policiesBySourceRuleId.get(rule.id) || [], leasesWithPremises.has(lease?.id))}
                     isHighlighted={rule.id === highlightedRuleId}
                     onSelectChange={(checked) => toggleRuleSelection(rule.id, checked)}
                     onApprove={(r, l) => approveRule(r, l)}

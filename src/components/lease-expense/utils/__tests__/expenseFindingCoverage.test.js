@@ -1,0 +1,111 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildExpenseFindingCoverageRows,
+  deriveFindingCoverageDecision,
+  extractExpenseClauseFindings,
+} from "../expenseFindingCoverage";
+
+const lease = {
+  id: "lease-1",
+  property_id: "property-1",
+  extraction_data: {
+    workflow_output: {
+      clause_records: [
+        {
+          clause_type: "insurance",
+          clause_text: "Tenant shall maintain commercial general liability insurance coverage of $1,000,000 and provide certificates of insurance.",
+          source_page: 7,
+        },
+        {
+          clause_type: "taxes",
+          clause_text: "Tenant shall reimburse Landlord for Tenant's pro-rata share of real estate taxes as additional rent.",
+          source_page: 9,
+        },
+        {
+          clause_type: "utilities",
+          clause_text: "Tenant shall pay all electricity and water charges directly to the utility provider at Tenant's sole expense.",
+          source_page: 4,
+        },
+      ],
+    },
+  },
+};
+
+describe("expense finding coverage", () => {
+  it("preserves expense-related clauses as evidence-only findings when no rule exists", () => {
+    const findings = extractExpenseClauseFindings(lease);
+
+    expect(findings.map((finding) => finding.category)).toEqual([
+      "tenant_insurance",
+      "real_estate_taxes",
+      "utilities",
+    ]);
+
+    const rows = buildExpenseFindingCoverageRows({ leases: [lease], ruleRows: [] });
+    expect(rows).toHaveLength(3);
+    expect(rows[0].rule._coverage.contractStatus).toBe("Evidence Only");
+    expect(rows[0].rule._coverage.expenseTreatment).toBe("Compliance Only");
+    expect(rows[0].rule._coverage.actualExpenseExpected).toBe("no");
+  });
+
+  it("does not duplicate a raw finding already materialized as a rule", () => {
+    const ruleRows = [{
+      lease,
+      property: { id: "property-1", name: "Macon Crossing" },
+      ruleSet: { version: 1, status: "approved" },
+      category: null,
+      rule: {
+        id: "11111111-1111-4111-8111-111111111111",
+        lease_id: lease.id,
+        expense_category: "real_estate_taxes",
+        exact_source_text: "Tenant shall reimburse Landlord for Tenant's pro-rata share of real estate taxes as additional rent.",
+        source_page: 9,
+        review_status: "approved",
+        approval_status: "approved",
+        recoverable_from_tenant: "yes",
+        cam_eligible: "yes",
+      },
+    }];
+
+    const rows = buildExpenseFindingCoverageRows({ leases: [lease], ruleRows });
+    expect(rows.filter(({ rule }) => rule.expense_category === "real_estate_taxes")).toHaveLength(1);
+  });
+
+  it("keeps contract approval separate from CAM eligibility and actual expense expectation", () => {
+    const tenantInsuranceRule = {
+      expense_category: "tenant_insurance",
+      exact_source_text: "Tenant shall maintain commercial general liability insurance coverage of $1,000,000.",
+      payment_treatment: "tenant_direct_contract",
+      recoverable_from_tenant: "no",
+      cam_eligible: "no",
+      review_status: "approved",
+      approval_status: "approved",
+    };
+
+    expect(deriveFindingCoverageDecision(tenantInsuranceRule)).toMatchObject({
+      contractStatus: "Approved",
+      expenseTreatment: "Tenant Direct",
+      camParticipation: "Not Eligible",
+      actualExpenseExpected: "no",
+      materialization: "Approved Contractual Rule",
+    });
+
+    const taxRule = {
+      expense_category: "real_estate_taxes",
+      exact_source_text: "Tenant shall reimburse Landlord for Tenant's pro-rata share of real estate taxes.",
+      payment_treatment: "reimbursable",
+      recoverable_from_tenant: "yes",
+      cam_eligible: "yes",
+      review_status: "approved",
+      approval_status: "approved",
+    };
+
+    expect(deriveFindingCoverageDecision(taxRule)).toMatchObject({
+      contractStatus: "Approved",
+      expenseTreatment: "Landlord Expense",
+      camParticipation: "Eligible",
+      actualExpenseExpected: "yes",
+      materialization: "CAM-Enabled Subset",
+    });
+  });
+});

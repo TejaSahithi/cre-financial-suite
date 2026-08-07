@@ -35,6 +35,21 @@ import {
   getDisplayCamPublishStatus,
   resolveRuleApprovalStatusDisplay,
 } from "./utils/leaseExpenseRulesHelpers";
+import { deriveFindingCoverageDecision } from "./utils/expenseFindingCoverage";
+
+function coverageBadgeClass(value, kind) {
+  const normalized = String(value || "").toLowerCase();
+  if (kind === "actual") {
+    if (normalized === "yes") return "bg-emerald-100 text-emerald-700";
+    if (normalized === "conditional") return "bg-amber-100 text-amber-800";
+    return "bg-slate-100 text-slate-600";
+  }
+  if (normalized.includes("not eligible")) return "bg-slate-100 text-slate-600";
+  if (normalized.includes("eligible") || normalized.includes("approved")) return "bg-emerald-100 text-emerald-700";
+  if (normalized.includes("conditional") || normalized.includes("direct recovery")) return "bg-amber-100 text-amber-800";
+  if (normalized.includes("evidence")) return "bg-blue-100 text-blue-700";
+  return "bg-slate-100 text-slate-600";
+}
 
 export default function RuleTableRow({
   rule,
@@ -55,6 +70,7 @@ export default function RuleTableRow({
   onEdit,
 }) {
   const validation = getRuleValidation(rule);
+  const coverage = rule?._coverage || deriveFindingCoverageDecision(rule);
   const recoverableDecision = validation.recoverableFromTenant;
   const camEligibleDecision = validation.camEligible;
   const paymentTreatment = validation.paymentTreatment;
@@ -123,11 +139,11 @@ export default function RuleTableRow({
           "-"
         )}
         <p className="text-[10px] text-slate-400">
-          Rule set v{ruleSet?.version} - {ruleSet?.status}
+          {rule?._findingOnly ? "Raw finding - not materialized" : `Rule set v${ruleSet?.version} - ${ruleSet?.status}`}
         </p>
         {displayMode === "gaps" && (
           <Badge className="bg-amber-100 text-amber-800 text-[9px] px-1 py-0 h-4 mt-1">
-            {getCoverageGapLabel(rule)}
+            {rule?._findingOnly ? "Not materialized" : getCoverageGapLabel(rule)}
           </Badge>
         )}
         {rule._is_fallback && (
@@ -150,6 +166,9 @@ export default function RuleTableRow({
         <div className="mt-1 text-slate-500">
           {validation.includedInBaseRent ? "Included in rent" : "Separate charge / obligation"}
         </div>
+        <Badge className={`mt-2 text-[10px] ${coverageBadgeClass(coverage.expenseTreatment)}`}>
+          {coverage.expenseTreatment}
+        </Badge>
       </TableCell>
       <TableCell className="text-sm text-slate-700">{humanizeToken(responsibility)}</TableCell>
       <TableCell>
@@ -160,6 +179,14 @@ export default function RuleTableRow({
       <TableCell>
         <Badge className={`text-[10px] ${["yes", "conditional"].includes(camEligibleDecision) ? "bg-sky-100 text-sky-700" : "bg-slate-100 text-slate-600"}`}>
           {formatTriState(camEligibleDecision)}
+        </Badge>
+        <Badge className={`mt-1 block w-fit text-[10px] ${coverageBadgeClass(coverage.camParticipation)}`}>
+          {coverage.camParticipation}
+        </Badge>
+      </TableCell>
+      <TableCell>
+        <Badge className={`text-[10px] ${coverageBadgeClass(coverage.actualExpenseExpected, "actual")}`}>
+          {humanizeToken(coverage.actualExpenseExpected)}
         </Badge>
       </TableCell>
       <TableCell className="text-sm text-slate-700">
@@ -218,8 +245,21 @@ export default function RuleTableRow({
           {sourcePage ? <span className="mr-2 font-medium">p. {sourcePage}</span> : null}
           {sourceText && sourceText !== "-" ? <span className="italic">"{truncate(sourceText)}"</span> : "-"}
         </div>
+        <div className="mt-2 flex flex-wrap gap-1">
+          <Badge className={`text-[10px] ${coverageBadgeClass(coverage.contractStatus)}`}>
+            {coverage.contractStatus}
+          </Badge>
+          <Badge className={`text-[10px] ${coverageBadgeClass(coverage.materialization)}`} title={coverage.reason}>
+            {coverage.materialization}
+          </Badge>
+        </div>
       </TableCell>
       <TableCell>
+        {rule?._findingOnly ? (
+          <span className="text-xs text-slate-500" title={coverage.reason}>
+            Evidence only
+          </span>
+        ) : (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -285,6 +325,7 @@ export default function RuleTableRow({
             ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
+        )}
       </TableCell>
     </TableRow>
   );
