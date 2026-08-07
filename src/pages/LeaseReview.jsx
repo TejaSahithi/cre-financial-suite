@@ -2261,6 +2261,8 @@ export default function LeaseReview() {
         autoNaFields: fieldsToAutoNa || [],
         fieldReviews,
         lease,
+        rowByKey: reviewRowByKey,
+        fallbackRowByKey: standardRowByKey,
         signedBy,
         nowIso,
         reviewStatuses: REVIEW_STATUSES,

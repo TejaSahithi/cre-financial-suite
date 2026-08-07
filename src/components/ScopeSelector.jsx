@@ -27,11 +27,7 @@ export default function ScopeSelector({ properties, buildings, units, selectedPr
   const showBuildingSelector = Boolean(onBuildingChange) && hasSelectedProperty;
   const showUnitSelector = showUnit && Boolean(onUnitChange) && hasSelectedProperty;
   const buildingPlaceholder = filteredBuildings.length > 0 ? "All Buildings" : "No Buildings Available";
-  const unitPlaceholder = !hasSelectedBuilding
-    ? "Select Building First"
-    : visibleUnits.length > 0
-    ? "All Units"
-    : "No Units Available";
+  const unitPlaceholder = visibleUnits.length > 0 ? "All Units" : "No Units Available";
 
   return (
     <div className="flex items-center gap-2 flex-wrap bg-white border border-slate-200 rounded-xl p-2">
@@ -70,7 +66,7 @@ export default function ScopeSelector({ properties, buildings, units, selectedPr
       {showUnitSelector && (
         <Select
           value={selectedUnit || "all"}
-          disabled={!hasSelectedBuilding || visibleUnits.length === 0}
+          disabled={visibleUnits.length === 0}
           onValueChange={(v) => { if (onUnitChange) onUnitChange(v); }}
         >
           <SelectTrigger className="w-40 h-9 text-sm border-slate-200 bg-slate-50">

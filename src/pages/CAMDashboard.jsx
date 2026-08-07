@@ -43,6 +43,10 @@ function camInputAmount(row) {
   return Number(row?.amount ?? row?.actual_amount ?? row?.eligible_amount ?? 0) || 0;
 }
 
+function effectiveCamInputPropertyId(row) {
+  return row?.property_id || row?.propertyId || row?._classification?.property_id || row?._sourceExpense?.property_id || null;
+}
+
 function StatusBadge({ status }) {
   const tone =
     status === "posted"      ? "bg-emerald-100 text-emerald-700"
@@ -216,19 +220,41 @@ export default function CAMDashboard() {
     refetchOnMount: "always",
     queryFn: async () => {
       try {
-        let query = supabase
+        const { data, error } = await supabase
           .from("cam_expense_inputs")
-          .select("id, org_id, property_id, building_id, unit_id, lease_id, tenant_id, actual_expense_id, classification_result_id, lease_expense_rule_id, category, amount, fiscal_year, service_period_start, service_period_end, status, publication_status");
-        if (orgScopeId && orgScopeId !== "__none__") {
-          query = query.eq("org_id", orgScopeId);
+          .select("id, org_id, property_id, actual_expense_id, classification_result_id, category, amount, status, publication_status")
+          .eq("publication_status", "published");
+        if (error) {
+          console.warn("[CAMDashboard] published CAM input query failed:", error.message);
+          return [];
         }
-        if (scope.targetPropertyId) {
-          query = query.eq("property_id", scope.targetPropertyId);
-        }
-        const { data, error } = await query.eq("publication_status", "published");
-        if (error) return [];
-        return data ?? [];
-      } catch {
+
+        const rows = data ?? [];
+        const classificationIds = [...new Set(rows.map((row) => row.classification_result_id).filter(Boolean))];
+        const actualExpenseIds = [...new Set(rows.map((row) => row.actual_expense_id).filter(Boolean))];
+        const [classificationsRes, expensesRes] = await Promise.all([
+          classificationIds.length
+            ? supabase.from("expense_classifications").select("id, property_id").in("id", classificationIds)
+            : Promise.resolve({ data: [] }),
+          actualExpenseIds.length
+            ? supabase.from("expenses").select("id, property_id").in("id", actualExpenseIds)
+            : Promise.resolve({ data: [] }),
+        ]);
+        if (classificationsRes.error) console.warn("[CAMDashboard] CAM input classification enrichment failed:", classificationsRes.error.message);
+        if (expensesRes.error) console.warn("[CAMDashboard] CAM input expense enrichment failed:", expensesRes.error.message);
+
+        const classificationById = new Map((classificationsRes.data || []).map((row) => [row.id, row]));
+        const expenseById = new Map((expensesRes.data || []).map((row) => [row.id, row]));
+        const enrichedRows = rows.map((row) => ({
+          ...row,
+          _classification: row.classification_result_id ? classificationById.get(row.classification_result_id) || null : null,
+          _sourceExpense: row.actual_expense_id ? expenseById.get(row.actual_expense_id) || null : null,
+        }));
+
+        if (!scope.targetPropertyId) return enrichedRows;
+        return enrichedRows.filter((row) => effectiveCamInputPropertyId(row) === scope.targetPropertyId);
+      } catch (error) {
+        console.warn("[CAMDashboard] published CAM input query failed:", error?.message || error);
         return [];
       }
     },
@@ -394,7 +420,7 @@ export default function CAMDashboard() {
                   <TableBody>
                     {properties.map((prop) => {
                       const propLeases = leaseList.filter((l) => l.property_id === prop.id || l.propertyId === prop.id);
-                      const propExpenses = eligibleExpenses.filter((e) => e.property_id === prop.id || e.propertyId === prop.id);
+                      const propExpenses = eligibleExpenses.filter((e) => effectiveCamInputPropertyId(e) === prop.id);
                       const propExpTotal = propExpenses.reduce((s, e) => s + camInputAmount(e), 0);
 
                       return (
