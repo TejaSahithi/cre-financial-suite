@@ -25,7 +25,7 @@ export default function Landing() {
   const handleSignIn = () => navigate(createPageUrl("Login"));
 
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
       <LandingNav 
         onSignIn={handleSignIn} 
         onRequestAccess={handleRequestAccess} 

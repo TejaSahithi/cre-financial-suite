@@ -107,60 +107,60 @@ export default function ContactSection() {
   };
 
   const FieldError = ({ field }) => errors[field] ? (
-    <p className="text-red-500 text-xs mt-1 flex items-center gap-1"><AlertCircle className="w-3 h-3" />{errors[field]}</p>
+    <p className="text-[var(--danger)] text-xs mt-1 flex items-center gap-1"><AlertCircle className="w-3 h-3" />{errors[field]}</p>
   ) : null;
 
   return (
-    <section id="contact-us" className="py-20 px-6 bg-white">
+    <section id="contact-us" className="py-20 px-6 bg-[var(--bg-2)]">
       <div className="max-w-3xl mx-auto">
         <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="text-center mb-10">
-          <h2 className="text-3xl font-extrabold text-slate-900">Contact Us</h2>
-          <p className="text-slate-500 mt-3 text-sm max-w-md mx-auto">Have questions? Reach out and our team will get back to you within 4 business hours.</p>
+          <h2 className="text-[28px] font-bold text-[var(--ink)] tracking-[-0.03em]">Contact Us</h2>
+          <p className="text-[var(--muted)] mt-3 text-sm max-w-md mx-auto">Have questions? Reach out and our team will get back to you within 4 business hours.</p>
         </motion.div>
 
         {sent ? (
           <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-12">
-            <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <CheckCircle2 className="w-8 h-8 text-emerald-600" />
+            <div className="w-14 h-14 bg-[var(--success-soft)] rounded-[8px] flex items-center justify-center mx-auto mb-4">
+              <CheckCircle2 className="w-7 h-7 text-[var(--success)]" />
             </div>
-            <h3 className="text-xl font-bold text-slate-900 mb-2">Message Sent!</h3>
-            <p className="text-slate-500 text-sm">We'll get back to you within 4 business hours.</p>
+            <h3 className="text-xl font-bold text-[var(--ink)] mb-2">Message Sent!</h3>
+            <p className="text-[var(--muted)] text-sm">We'll get back to you within 4 business hours.</p>
             <Button variant="outline" onClick={() => { setSent(false); setForm({ name: "", email: "", phone: "", message: "", department: "" }); }} className="mt-6">
               Send Another Message
             </Button>
           </motion.div>
         ) : (
-          <motion.form initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} onSubmit={handleSubmit} className="bg-slate-50 rounded-2xl border border-slate-200/80 p-8 space-y-5">
+          <motion.form initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} onSubmit={handleSubmit} className="bg-[var(--surface)] rounded-[8px] border border-[var(--border-cre)] p-6 md:p-8 space-y-5 shadow-[var(--card-shadow)]">
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
-                <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Full Name <span className="text-red-400">*</span></Label>
-                <Input value={form.name} onChange={(e) => setField("name", e.target.value)} placeholder="Jane Smith" className={`mt-1.5 h-11 bg-white ${errors.name ? "border-red-500 ring-1 ring-red-500 bg-red-50" : ""}`} />
+                <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">Full Name <span className="text-[var(--danger)]">*</span></Label>
+                <Input value={form.name} onChange={(e) => setField("name", e.target.value)} placeholder="Jane Smith" className={`mt-1.5 h-11 bg-[var(--surface)] border-[var(--border-cre)] ${errors.name ? "border-[var(--danger)] ring-1 ring-[var(--danger)] bg-[var(--danger-soft)]" : ""}`} />
                 <FieldError field="name" />
               </div>
               <div>
-                <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Email <span className="text-red-400">*</span></Label>
+                <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">Email <span className="text-[var(--danger)]">*</span></Label>
                 <div className="relative mt-1.5">
-                  <Input type="email" value={form.email} onChange={(e) => setField("email", e.target.value)} onBlur={handleEmailBlur} placeholder="jane@company.com" className={`h-11 bg-white pr-10 ${errors.email ? "border-red-500 ring-1 ring-red-500 bg-red-50" : emailVerified ? "border-emerald-400 ring-1 ring-emerald-400" : ""}`} />
-                  {emailVerified && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-500" />}
-                  {errors.email && <AlertCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />}
+                  <Input type="email" value={form.email} onChange={(e) => setField("email", e.target.value)} onBlur={handleEmailBlur} placeholder="jane@company.com" className={`h-11 bg-[var(--surface)] border-[var(--border-cre)] pr-10 ${errors.email ? "border-[var(--danger)] ring-1 ring-[var(--danger)] bg-[var(--danger-soft)]" : emailVerified ? "border-[var(--success)] ring-1 ring-[var(--success)]" : ""}`} />
+                  {emailVerified && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--success)]" />}
+                  {errors.email && <AlertCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--danger)]" />}
                 </div>
                 <FieldError field="email" />
               </div>
             </div>
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
-                <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Phone Number <span className="text-red-400">*</span></Label>
+                <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">Phone Number <span className="text-[var(--danger)]">*</span></Label>
                 <div className="relative mt-1.5">
-                  <Input value={form.phone} onChange={(e) => setField("phone", e.target.value)} onBlur={handlePhoneBlur} placeholder="+1 555 123 4567" className={`h-11 bg-white pr-10 ${errors.phone ? "border-red-500 ring-1 ring-red-500 bg-red-50" : phoneVerified ? "border-emerald-400 ring-1 ring-emerald-400" : ""}`} />
-                  {phoneVerified && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-500" />}
-                  {errors.phone && <AlertCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />}
+                  <Input value={form.phone} onChange={(e) => setField("phone", e.target.value)} onBlur={handlePhoneBlur} placeholder="+1 555 123 4567" className={`h-11 bg-[var(--surface)] border-[var(--border-cre)] pr-10 ${errors.phone ? "border-[var(--danger)] ring-1 ring-[var(--danger)] bg-[var(--danger-soft)]" : phoneVerified ? "border-[var(--success)] ring-1 ring-[var(--success)]" : ""}`} />
+                  {phoneVerified && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--success)]" />}
+                  {errors.phone && <AlertCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--danger)]" />}
                 </div>
                 <FieldError field="phone" />
               </div>
               <div>
-                <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Department <span className="text-red-400">*</span></Label>
+                <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">Department <span className="text-[var(--danger)]">*</span></Label>
                 <Select value={form.department} onValueChange={(value) => setField("department", value)}>
-                  <SelectTrigger className={`mt-1.5 h-11 bg-white ${errors.department ? "border-red-500 ring-1 ring-red-500 bg-red-50" : ""}`}>
+                  <SelectTrigger className={`mt-1.5 h-11 bg-[var(--surface)] border-[var(--border-cre)] ${errors.department ? "border-[var(--danger)] ring-1 ring-[var(--danger)] bg-[var(--danger-soft)]" : ""}`}>
                     <SelectValue placeholder="Select department..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -172,11 +172,11 @@ export default function ContactSection() {
               </div>
             </div>
             <div>
-              <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Message <span className="text-red-400">*</span></Label>
-              <Textarea value={form.message} onChange={(e) => setField("message", e.target.value)} placeholder="How can we help you?" rows={4} className={`mt-1.5 bg-white ${errors.message ? "border-red-500 ring-1 ring-red-500 bg-red-50" : ""}`} />
+              <Label className="text-[var(--muted)] text-xs font-semibold uppercase tracking-wider">Message <span className="text-[var(--danger)]">*</span></Label>
+              <Textarea value={form.message} onChange={(e) => setField("message", e.target.value)} placeholder="How can we help you?" rows={4} className={`mt-1.5 bg-[var(--surface)] border-[var(--border-cre)] ${errors.message ? "border-[var(--danger)] ring-1 ring-[var(--danger)] bg-[var(--danger-soft)]" : ""}`} />
               <FieldError field="message" />
             </div>
-            <Button type="submit" disabled={sending} className="w-full bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl font-semibold gap-2">
+            <Button type="submit" disabled={sending} className="w-full bg-[var(--accent)] hover:bg-[var(--accent)] h-11 rounded-[8px] font-semibold gap-2 text-white">
               {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
               {sending ? "Sending..." : "Send Message"}
             </Button>

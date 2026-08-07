@@ -15,36 +15,36 @@ export default function FAQSection() {
   const [openIndex, setOpenIndex] = useState(null);
 
   return (
-    <section id="faq" className="py-24 px-6 bg-white">
+    <section id="faq" className="py-20 px-6 bg-[var(--surface)]">
       <div className="max-w-3xl mx-auto">
         <div className="text-center mb-14">
-          <div className="inline-flex items-center gap-2 bg-amber-50 border border-amber-100 rounded-full px-4 py-1.5 mb-4">
-            <span className="text-amber-700 text-xs font-bold tracking-wide uppercase">FAQ</span>
+          <div className="inline-flex items-center gap-2 bg-[var(--surface-2)] border border-[var(--border-cre)] rounded-[8px] px-4 py-1.5 mb-4">
+            <span className="text-[var(--accent)] text-xs font-bold tracking-wide uppercase">FAQ</span>
           </div>
-          <h2 className="text-3xl md:text-4xl font-extrabold text-gray-900">Frequently Asked Questions</h2>
-          <p className="mt-3 text-gray-500">Everything you need to know about the platform.</p>
+          <h2 className="text-[28px] font-bold text-[var(--ink)] tracking-[-0.03em]">Frequently Asked Questions</h2>
+          <p className="mt-3 text-[var(--muted)] text-sm">Everything you need to know about the platform.</p>
         </div>
         <div className="space-y-3">
           {faqs.map((item, i) => (
             <div
               key={i}
-              className={`rounded-xl border transition-all duration-200 overflow-hidden ${
-                openIndex === i ? "border-blue-200 bg-blue-50/30 shadow-sm" : "border-gray-200 hover:border-gray-300"
+              className={`rounded-[8px] border transition-all duration-200 overflow-hidden ${
+                openIndex === i ? "border-[var(--accent)] bg-[var(--accent-soft)] shadow-[var(--shadow-soft)]" : "border-[var(--border-cre)] hover:border-[var(--border-strong)] bg-[var(--surface)]"
               }`}
             >
               <button
                 onClick={() => setOpenIndex(openIndex === i ? null : i)}
                 className="w-full flex items-center justify-between p-5 text-left"
               >
-                <span className="font-semibold text-gray-800 text-sm pr-4">{item.q}</span>
-                <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 transition-colors ${openIndex === i ? "bg-blue-100" : "bg-gray-100"}`}>
-                  <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${openIndex === i ? "rotate-180 text-blue-600" : "text-gray-400"}`} />
+                <span className="font-semibold text-[var(--ink)] text-sm pr-4">{item.q}</span>
+                <div className={`w-7 h-7 rounded-[8px] flex items-center justify-center flex-shrink-0 transition-colors ${openIndex === i ? "bg-[var(--surface)]" : "bg-[var(--surface-2)]"}`}>
+                  <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${openIndex === i ? "rotate-180 text-[var(--accent)]" : "text-[var(--muted)]"}`} />
                 </div>
               </button>
               <AnimatePresence>
                 {openIndex === i && (
                   <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}>
-                    <p className="px-5 pb-5 text-gray-500 leading-relaxed text-sm">{item.a}</p>
+                    <p className="px-5 pb-5 text-[var(--muted)] leading-relaxed text-sm">{item.a}</p>
                   </motion.div>
                 )}
               </AnimatePresence>
