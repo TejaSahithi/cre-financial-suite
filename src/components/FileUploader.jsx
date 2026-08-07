@@ -107,6 +107,7 @@ export { getFriendlyExtractionLabel, payloadHasMeaningfulFields };
  * @param {string}   [props.orgId]
  * @param {boolean}  [props.multiple]
  * @param {string}   [props.accept]
+ * @param {"default"|"fullscreen-split"} [props.confirmationLayout]
  * @param {Function} [props.onOpenReview] Called with (fileId) when the user
  *   clicks "Open Lease Review" on a ready extraction. FileUploader has no
  *   lease-specific knowledge (find-or-create-lease, navigation) — that logic
@@ -123,6 +124,7 @@ export default function FileUploader({
   orgId: orgIdOverride,
   multiple = false,
   accept = DEFAULT_ACCEPT,
+  confirmationLayout = "default",
   onOpenReview,
 }) {
   const { orgId, isAdmin } = useOrgId();
@@ -558,10 +560,24 @@ export default function FileUploader({
     ? `${files.length} files selected`
     : files[0]?.name || "No file selected";
   const hasPendingConfirmations = pendingConfirmations.length > 0;
-
+  const useFullscreenSplit = confirmationLayout === "fullscreen-split" && hasPendingConfirmations;
+  const contentLayoutClass = useFullscreenSplit
+    ? "grid min-h-[calc(100vh-310px)] gap-4 xl:grid-cols-[minmax(340px,0.7fr)_minmax(0,1.55fr)] xl:items-stretch"
+    : hasPendingConfirmations
+      ? "grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.95fr)] xl:items-start"
+      : "space-y-4";
+  const previewColumnClass = useFullscreenSplit
+    ? "flex min-h-[calc(100vh-330px)] flex-col space-y-3 pt-1 xl:sticky xl:top-4"
+    : "space-y-3 pt-1 xl:sticky xl:top-4";
+  const previewFrameClass = useFullscreenSplit
+    ? "h-[calc(100vh-450px)] min-h-[620px] w-full rounded border-0"
+    : "h-72 w-full rounded border-0 xl:h-[min(62vh,640px)] xl:min-h-[520px]";
+  const previewImageClass = useFullscreenSplit
+    ? "h-[calc(100vh-450px)] min-h-[620px] w-full rounded border border-slate-100 object-contain"
+    : "max-h-72 w-full rounded border border-slate-100 object-contain xl:max-h-[min(62vh,640px)]";
   return (
     <Card className="w-full">
-      <CardHeader>
+      <CardHeader className={useFullscreenSplit ? "pb-3" : undefined}>
         <CardTitle className="flex items-center gap-2 text-lg">
           <Upload className="w-5 h-5" />
           Upload File
@@ -590,7 +606,7 @@ export default function FileUploader({
           </div>
         )}
 
-        <div className={hasPendingConfirmations ? "grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.95fr)] xl:items-start" : "space-y-4"}>
+        <div className={contentLayoutClass}>
           <div className="space-y-4">
             <div
               role="button"
@@ -767,7 +783,7 @@ export default function FileUploader({
           </div>
 
         {pendingConfirmations.length > 0 && (
-          <div className="space-y-3 pt-1 xl:sticky xl:top-4">
+          <div className={previewColumnClass}>
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
               Review Document
             </p>
@@ -783,7 +799,7 @@ export default function FileUploader({
               return (
                 <div
                   key={pending.file_id}
-                  className="space-y-3 rounded-lg border border-blue-200 bg-blue-50/60 p-3 shadow-sm"
+                  className={useFullscreenSplit ? "flex min-h-0 flex-1 flex-col space-y-3 rounded-lg border border-blue-200 bg-blue-50/60 p-3 shadow-sm" : "space-y-3 rounded-lg border border-blue-200 bg-blue-50/60 p-3 shadow-sm"}
                 >
                   <div className="flex items-start gap-3">
                     <FileText className="mt-0.5 h-5 w-5 shrink-0 text-blue-500" />
@@ -800,18 +816,18 @@ export default function FileUploader({
                     </div>
                   </div>
 
-                  <div className="rounded-md border border-blue-100 bg-white p-2">
+                  <div className={useFullscreenSplit ? "min-h-0 flex-1 rounded-md border border-blue-100 bg-white p-2" : "rounded-md border border-blue-100 bg-white p-2"}>
                     {canEmbedPreview && pending.previewState === "ready" && pending.previewUrl && isPdf && (
                       <iframe
                         src={pending.previewUrl}
-                        className="h-72 w-full rounded border-0 xl:h-[min(62vh,640px)] xl:min-h-[520px]"
+                        className={previewFrameClass}
                         title={`Preview of ${pending.file_name}`}
                       />
                     )}
                     {canEmbedPreview && pending.previewState === "ready" && pending.previewUrl && isImage && (
                       <img
                         src={pending.previewUrl}
-                        className="max-h-72 w-full rounded border border-slate-100 object-contain xl:max-h-[min(62vh,640px)]"
+                        className={previewImageClass}
                         alt={pending.file_name}
                       />
                     )}
@@ -853,14 +869,14 @@ export default function FileUploader({
                         {pending.previewState === "ready" && pending.previewUrl && isPdf && (
                           <iframe
                             src={pending.previewUrl}
-                            className="h-72 w-full rounded border-0 xl:h-[min(62vh,640px)] xl:min-h-[520px]"
+                            className={previewFrameClass}
                             title={`Preview of ${pending.file_name}`}
                           />
                         )}
                         {pending.previewState === "ready" && pending.previewUrl && isImage && (
                           <img
                             src={pending.previewUrl}
-                            className="max-h-72 w-full rounded border border-slate-100 object-contain xl:max-h-[min(62vh,640px)]"
+                            className={previewImageClass}
                             alt={pending.file_name}
                           />
                         )}

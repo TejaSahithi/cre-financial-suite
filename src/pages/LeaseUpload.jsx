@@ -783,7 +783,7 @@ export default function LeaseUpload() {
   );
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
+    <div className="w-full max-w-none space-y-5 p-4 lg:p-6">
       <Link to={leaseListUrl} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
         <ArrowLeft className="h-4 w-4" /> Back to Leases
       </Link>
@@ -854,6 +854,7 @@ export default function LeaseUpload() {
 
       {!fileId && (
         <FileUploader
+          confirmationLayout="fullscreen-split"
           defaultFileType="leases"
           allowedFileTypes={["leases"]}
           propertyId={effectivePropertyId || undefined}
