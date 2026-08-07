@@ -843,6 +843,7 @@ const EXPENSE_CLASSIFICATION_UUID_COLUMNS = new Set([
   "lease_id",
   "tenant_id",
   "rule_set_id",
+  "expense_category_id",
   "recovery_rule_id",
   "linked_expense_rule_id",
   "lease_expense_rule_id",
@@ -863,6 +864,7 @@ const BASELINE_EXPENSE_CLASSIFICATION_COLUMNS = new Set([
   "lease_id",
   "tenant_id",
   "rule_set_id",
+  "expense_category_id",
   "recovery_rule_id",
   "recovery_status",
   "allocation_method",
@@ -895,6 +897,7 @@ const EXPENSE_CLASSIFICATION_WORKFLOW_COLUMNS = [
   "cam_eligible",
   "recovery_method",
   "cam_pool_id",
+  "expense_category_id",
   "category",
   "subcategory",
   "amount",
@@ -2477,6 +2480,7 @@ export const expenseService = {
         lease_expense_rule_id: linkedExpenseRuleId,          // spec alias
         // Denormalized snapshot — Expense Review / Projection can read
         // these without joining expenses + lease_expense_rules.
+        expense_category_id: existingClassification?.expense_category_id || matchedRule?.expense_category_id || null,
         category: expense.category || matchedRule?.expense_category || null,
         subcategory: expense.subcategory || matchedRule?.expense_subcategory || null,
         amount,
@@ -2957,6 +2961,7 @@ export const expenseService = {
             "lease_id",
             "tenant_id",
             "category",
+            "expense_category_id",
             "amount",
             "recoverability_result",
             "recovery_status",
@@ -2990,6 +2995,22 @@ export const expenseService = {
 
     if (!classification?.id) {
       throw new Error("Run Classification before sending to CAM.");
+    }
+
+    if (classification.expense_category_id) {
+      const persisted = await upsertExpenseClassification({
+        ...classification,
+        recovery_status: classification.recovery_status || classification.recoverability_result || "needs_review",
+        recoverability_result: classification.recoverability_result || classification.recovery_status || "needs_review",
+        classification_status: classification.classification_status || "matched",
+        approved_status: classification.approved_status || "needs_review",
+        cam_eligible: classification.cam_eligible || "needs_review",
+        cam_status: classification.cam_status || "needs_review",
+        cam_source: classification.cam_source || "none",
+        cam_input_type: "actual_expense",
+        next_step: classification.next_step || "Send to CAM",
+      });
+      classification = { ...classification, ...(persisted || {}), expense_category_id: persisted?.expense_category_id || classification.expense_category_id };
     }
 
     const expenseId = classification.expense_id || classification.actual_expense_id;

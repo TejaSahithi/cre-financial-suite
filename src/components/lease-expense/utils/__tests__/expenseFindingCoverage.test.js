@@ -71,6 +71,27 @@ describe("expense finding coverage", () => {
     expect(rows.filter(({ rule }) => rule.expense_category === "real_estate_taxes")).toHaveLength(1);
   });
 
+  it("does not let a generic clause type hide the expense category found in evidence text", () => {
+    const leaseWithGenericClause = {
+      id: "lease-generic-clause",
+      extraction_data: {
+        workflow_output: {
+          clause_records: [{
+            clause_type: "clause",
+            clause_text: "All real estate taxes and insurance premiums on the Premises shall be reimbursed by Tenant as additional rent.",
+            source_page: 2,
+          }],
+        },
+      },
+    };
+
+    const findings = extractExpenseClauseFindings(leaseWithGenericClause);
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe("real_estate_taxes");
+    expect(findings[0].categoryLabel).toBe("Real Estate Taxes");
+  });
+
   it("keeps contract approval separate from CAM eligibility and actual expense expectation", () => {
     const tenantInsuranceRule = {
       expense_category: "tenant_insurance",

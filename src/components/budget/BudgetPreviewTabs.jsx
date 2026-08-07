@@ -47,31 +47,20 @@ function isApprovedLease(lease) {
   return String(lease?.status || "").toLowerCase() === "approved";
 }
 
-function classificationAmount(row) {
-  const direct = Number(row?.amount);
-  if (Number.isFinite(direct) && direct > 0) return direct;
-  return (
-    Number(row?.recoverable_amount || 0) +
-    Number(row?.non_recoverable_amount || 0) +
-    Number(row?.conditional_amount || 0) +
-    Number(row?.excluded_amount || 0)
-  );
+function camInputAmount(row) {
+  return Number(row?.eligible_amount ?? row?.actual_amount ?? row?.amount ?? 0) || 0;
 }
 
-function classificationYear(row, fallbackYear) {
+function camInputYear(row, fallbackYear) {
   if (Number.isFinite(Number(row?.fiscal_year))) return Number(row.fiscal_year);
-  const dateValue = row?.service_period_start || row?.service_period_end || row?.finalized_at || row?.classified_at;
+  const dateValue = row?.service_period_start || row?.service_period_end || row?.sent_to_cam_at || row?.created_at;
   if (!dateValue) return fallbackYear;
   const date = new Date(String(dateValue).length === 10 ? `${dateValue}T00:00:00` : dateValue);
   return Number.isNaN(date.getTime()) ? fallbackYear : date.getFullYear();
 }
 
-function recoverabilityBucket(row) {
-  const value = String(row?.recoverability_result || row?.recovery_status || row?.classification || "").toLowerCase();
-  if (value === "recoverable") return "recoverable";
-  if (value === "conditional") return "conditional";
-  if (value === "excluded") return "excluded";
-  return "non_recoverable";
+function camInputCategory(row) {
+  return row?.category || "Other";
 }
 
 export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
@@ -110,21 +99,23 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
     enabled: leaseIds.length > 0,
   });
 
-  // Property-scoped finalized expense classifications (for the expense budget baseline).
-  const { data: finalizedExpenseClassifications = [] } = useQuery({
-    queryKey: ["budget-preview-finalized-expense-classifications", propertyId, year],
+  // Published CAM inputs only. Budget preview must not reinterpret raw
+  // classifications as CAM recovery; classification decides eligibility,
+  // explicit Send to CAM creates the published input consumed here.
+  const { data: publishedCamInputs = [] } = useQuery({
+    queryKey: ["budget-preview-published-cam-inputs", propertyId, year],
     queryFn: async () => {
       if (!propertyId) return [];
       const { data, error } = await supabase
-        .from("expense_classifications")
-        .select("id, category, amount, fiscal_year, service_period_start, service_period_end, finalized_at, classified_at, classification, recovery_status, recoverability_result, recoverable_amount, non_recoverable_amount, conditional_amount, excluded_amount, classification_status, row_type")
+        .from("cam_expense_inputs")
+        .select("id, category, amount, actual_amount, eligible_amount, fiscal_year, service_period_start, service_period_end, sent_to_cam_at, created_at, publication_status, status")
         .eq("property_id", propertyId)
-        .eq("classification_status", "finalized");
+        .eq("publication_status", "published");
       if (error) {
-        console.warn("[BudgetPreviewTabs] finalized classification query failed:", error.message);
+        console.warn("[BudgetPreviewTabs] published CAM input query failed:", error.message);
         return [];
       }
-      return (data || []).filter((row) => row.row_type !== "rule_missing_actual" && classificationYear(row, year) === year);
+      return (data || []).filter((row) => camInputYear(row, year) === year);
     },
     enabled: !!propertyId,
   });
@@ -152,23 +143,18 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
   const totalRevenue = revenueRows.reduce((sum, r) => sum + r.total, 0);
 
   const expenseRows = useMemo(() => {
-    // Group reviewed actuals by category to seed an expense budget baseline.
+    // Group published CAM inputs by category to seed the CAM expense budget baseline.
     const grouped = new Map();
-    for (const e of finalizedExpenseClassifications) {
-      const key = e.category || "Other";
+    for (const e of publishedCamInputs) {
+      const key = camInputCategory(e);
       const existing = grouped.get(key) || { category: key, recoverable: 0, nonRecoverable: 0, total: 0 };
-      const amount = classificationAmount(e);
-      const bucket = recoverabilityBucket(e);
+      const amount = camInputAmount(e);
       existing.total += amount;
-      if (bucket === "recoverable") {
-        existing.recoverable += Number(e.recoverable_amount || amount || 0);
-      } else {
-        existing.nonRecoverable += Number(e.non_recoverable_amount || e.excluded_amount || e.conditional_amount || amount || 0);
-      }
+      existing.recoverable += amount;
       grouped.set(key, existing);
     }
     return [...grouped.values()].sort((a, b) => b.total - a.total);
-  }, [finalizedExpenseClassifications]);
+  }, [publishedCamInputs]);
 
   const totalExpense = expenseRows.reduce((sum, r) => sum + r.total, 0);
   const totalRecoverableExpense = expenseRows.reduce((sum, r) => sum + r.recoverable, 0);
@@ -215,8 +201,7 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
         <CardContent className="p-4 text-sm text-blue-800">
           <p className="font-medium">Preview reads approved data only</p>
           <p className="text-xs">
-            Revenue comes from approved lease abstracts. Expense baseline comes from finalized expense
-            classifications for the property. Recovery uses approved CAM Setup profiles. None of these
+            Revenue comes from approved lease abstracts. Expense baseline comes from published CAM inputs for the property. Recovery uses approved CAM Setup profiles. None of these
             tables are edited from this page — use the upstream review pages to make corrections.
           </p>
         </CardContent>
@@ -284,8 +269,7 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Expense Budget — FY {year}</CardTitle>
               <p className="text-xs text-slate-500">
-                Baseline grouped by category from {finalizedExpenseClassifications.length} finalized expense classification
-                record(s). Total: <span className="font-semibold text-slate-900">{fmtCurrency(totalExpense)}</span> ·
+                Baseline grouped by category from {publishedCamInputs.length} published CAM input record(s). Total: <span className="font-semibold text-slate-900">{fmtCurrency(totalExpense)}</span> ·
                 Recoverable: <span className="font-semibold text-slate-900">{fmtCurrency(totalRecoverableExpense)}</span>.
               </p>
             </CardHeader>
@@ -296,7 +280,7 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
                 </p>
               ) : expenseRows.length === 0 ? (
                 <p className="py-6 text-center text-sm text-slate-500">
-                  No finalized expense classifications for FY {year}. Review actual expenses before budgeting.
+                  No published CAM inputs for FY {year}. Finalize classifications and explicitly send eligible rows to CAM before budgeting.
                 </p>
               ) : (
                 <div className="overflow-x-auto">
@@ -318,7 +302,7 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
                           <TableCell className="text-right text-sm font-mono">{fmtCurrency(row.nonRecoverable)}</TableCell>
                           <TableCell className="text-right text-sm font-mono">{fmtCurrency(row.total)}</TableCell>
                           <TableCell>
-                            <Badge className="text-[10px] bg-blue-100 text-blue-700">Finalized Review</Badge>
+                            <Badge className="text-[10px] bg-blue-100 text-blue-700">Published CAM Input</Badge>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -335,8 +319,8 @@ export default function BudgetPreviewTabs({ propertyId, budgetYear }) {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Recovery Budget — FY {year}</CardTitle>
               <p className="text-xs text-slate-500">
-                Tenant recoveries projected from approved CAM profiles × approved recoverable
-                expense baseline. Annual total:{" "}
+                Tenant recoveries projected from approved CAM profiles x published CAM input
+                baseline. Annual total:{" "}
                 <span className="font-semibold text-slate-900">{fmtCurrency(totalAnnualRecovery)}</span>.
               </p>
             </CardHeader>

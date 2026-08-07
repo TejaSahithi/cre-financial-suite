@@ -2,6 +2,11 @@ import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { expenseService } from "@/services/expenseService";
 import { resolveTenantForExpense } from "@/lib/tenantResolver";
 import { approvedLeaseFieldValue } from "@/lib/approvedLeaseSnapshot";
+import {
+  deriveOperationalResponsibility,
+  derivePaymentTreatment,
+  deriveRuleDecision,
+} from "@/services/utils/ruleDecisionEngine";
 
 export function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
@@ -80,45 +85,21 @@ export function preferClassificationRecord(current, candidate) {
   return candidateTime >= currentTime ? candidate : current;
 }
 
-export function getCamDecision(row) {
-  const camStatus = normalizeText(row.camStatus || row.classificationRecord?.cam_status);
-  if (camStatus === "cam_ready") {
-    return { label: "CAM Ready", why: "This row is approved for CAM calculation." };
+export function getCamDecision(row, options = {}) {
+  const decision = getCamInputDecision(row, options);
+  if (decision.state === "published_to_cam") {
+    return { label: "Published to CAM", why: "A published cam_expense_inputs row exists for this classification." };
   }
-
-  if (row.rowType === "rule_missing_actual") {
-    if (row.rule?.published_to_cam) {
-      return { label: "Needs Review", why: "The approved lease rule is published, but CAM needs either an actual expense or a reviewed rule amount." };
-    }
-    return { label: "Needs Review", why: "The lease rule exists, but no CAM rule amount or actual expense has been reviewed yet." };
+  if (decision.state === "ready_to_send") {
+    return { label: "Ready to Send to CAM", why: "The authoritative classification is finalized, recoverable, and CAM eligible." };
   }
-
-  if (row.rowType === "actual_missing_rule") {
-    return { label: "Needs Review", why: "This actual expense is unmatched. A reviewer can send it to CAM with a reason unless an explicit lease rule excludes it." };
+  if (decision.state === "not_cam_eligible") {
+    return { label: "Excluded", why: "The authoritative expense classification keeps this row out of CAM." };
   }
-
-  // Matched Classification
-  if (row.sentToCam) {
-    return { label: "CAM Ready", why: "This finalized recoverable expense is ready for CAM calculation." };
+  if (decision.state === "conditional_review_required") {
+    return { label: "Needs Review", why: "The classification is conditional and must be resolved before CAM." };
   }
-
-  const paymentTreatment = normalizeText(row.rule?.payment_treatment);
-  if (
-    row.recoverabilityResult === "non_recoverable" ||
-    row.recoverabilityResult === "excluded" ||
-    (Boolean(row.rule) && row.camEligible === "no") ||
-    paymentTreatment === "included_in_base_rent" ||
-    paymentTreatment === "tenant_direct_contract" ||
-    row.rule?.is_excluded
-  ) {
-    return { label: "Excluded", why: "An approved lease rule explicitly excludes this expense from CAM." };
-  }
-
-  if (row.classificationStatus !== "finalized" || row.recoverabilityResult === "conditional" || row.recoverabilityResult === "needs_review") {
-    return { label: "Needs Review", why: "This row is conditional, unfinalized, or missing required CAM allocation details." };
-  }
-
-  return { label: "Eligible", why: "Finalized recoverable expense matched to an approved CAM-eligible lease rule." };
+  return { label: decision.label, why: "The authoritative classification decision is not ready for CAM publication." };
 }
 
 export function hasExplicitCamExclusion(row) {
@@ -134,19 +115,41 @@ export function hasExplicitCamExclusion(row) {
 }
 
 export function canSendFinalizedActualToCam(row) {
-  const isUnresolvedConditional = row?.recoverabilityResult === "conditional" && !row?.classificationRecord?.condition_resolved;
-  return Boolean(
-    (row?.actualExpenseId || row?.leaseExpenseRuleId) &&
-    Number(row?.amount) > 0 &&
-    !row?.sentToCam &&
-    !isUnresolvedConditional
-  );
+  const readiness = getCamPublicationReadiness(row);
+  return getCamInputDecision(row, { readiness }).state === "ready_to_send";
 }
 
 export function isAutomaticCamReadyRow(row) {
   return Boolean(
     canSendFinalizedActualToCam(row) &&
     row?.rule?.published_to_cam === true
+  );
+}
+
+export function ruleExpectsLandlordActualExpense(rule = {}) {
+  const decision = deriveRuleDecision(rule);
+  const responsibility = deriveOperationalResponsibility(rule);
+  const paymentTreatment = derivePaymentTreatment(rule);
+  const explicitStatus = normalizeText(
+    rule?.approval_status ||
+    rule?.approved_status ||
+    rule?.review_status ||
+    rule?.status ||
+    rule?.rule_status
+  );
+  const approvedEnoughForGapAnalysis =
+    decision.status === "approved" ||
+    rule?.published_to_cam === true ||
+    ["approved", "finalized", "active", "executed"].includes(explicitStatus);
+
+  return Boolean(
+    approvedEnoughForGapAnalysis &&
+    !["rejected", "not_applicable"].includes(decision.status) &&
+    decision.recoverability === "recoverable" &&
+    ["eligible", "conditional"].includes(decision.camEligibility) &&
+    !["tenant", "unknown"].includes(responsibility) &&
+    !["tenant_direct_contract", "included_in_base_rent", "not_applicable"].includes(paymentTreatment) &&
+    decision.exclusion === "included"
   );
 }
 
@@ -426,7 +429,7 @@ export function buildClassificationRows({
         : "-",
       amount: actualAmount,
       financialAmount: actualAmount,
-      expenseCategoryId: classificationRecord?.expense_category_id || null,
+      expenseCategoryId: classificationRecord?.expense_category_id || matchedRule?.expense_category_id || null,
       servicePeriodStart: classificationRecord?.service_period_start || expense.service_period_start || null,
       servicePeriodEnd: classificationRecord?.service_period_end || expense.service_period_end || null,
       recoverabilityResult: classificationBucket,
@@ -481,6 +484,7 @@ export function buildClassificationRows({
 
   for (const rule of approvedRules) {
     if (usedRuleIds.has(rule.id) || ruleIdsLinkedToActuals.has(rule.id)) continue;
+    if (!ruleExpectsLandlordActualExpense(rule)) continue;
     const lease = leaseById.get(rule.rule_set?.lease_id || rule.lease_id) || null;
     const property = propertyById.get(rule.property_id || rule.rule_set?.property_id || lease?.property_id) || null;
     const building = buildingById.get(rule.building_id || lease?.building_id) || null;
@@ -507,8 +511,8 @@ export function buildClassificationRows({
         ? { tenant: { id: lease.tenant_id || null, name: approvedLeaseFieldValue(lease, ["tenant_name", "tenant", "tenant_legal_name", "lessee"]) || lease.tenant_name }, source: "matched_lease", reason: null, lease, unit, reasonText: null }
         : { tenant: null, source: "unresolved", reason: "lease_missing_tenant_id", lease, unit, reasonText: "Matched lease has no tenant_id." },
       ruleLabel: `${rule.expense_category || rule.category_name || "-"}${rule.expense_subcategory ? ` / ${rule.expense_subcategory}` : ""}`,
-      amount: c?.amount != null ? Number(c.amount) : null,
-      financialAmount: c?.amount != null ? Number(c.financial_amount || c.amount || 0) : 0,
+      amount: null,
+      financialAmount: 0,
       expenseCategoryId: c?.expense_category_id || null,
       servicePeriodStart: c?.service_period_start || null,
       servicePeriodEnd: c?.service_period_end || null,
@@ -519,20 +523,20 @@ export function buildClassificationRows({
       exceptionType: c?.exception_type || null,
       camEligible: c?.cam_eligible || leaseExpenseRuleService.getCamEligibleDecision(rule) || "no",
       camStatus: normalizeText(c?.cam_status || (isClassificationSentToCam(c) ? "cam_ready" : "needs_review")),
-      recoverableAmount: c?.amount != null && normalizeText(c?.recoverability_result || leaseExpenseRuleService.getRecoverableDecision(rule)) === "recoverable" ? Number(c.amount) : 0,
-      nonRecoverableAmount: c?.amount != null && normalizeText(c?.recoverability_result || leaseExpenseRuleService.getRecoverableDecision(rule)) === "non_recoverable" ? Number(c.amount) : 0,
-      conditionalAmount: c?.amount != null && normalizeText(c?.recoverability_result || leaseExpenseRuleService.getRecoverableDecision(rule)) === "conditional" ? Number(c.amount) : 0,
-      excludedAmount: c?.amount != null && normalizeText(c?.recoverability_result || leaseExpenseRuleService.getRecoverableDecision(rule)) === "excluded" ? Number(c.amount) : 0,
+      recoverableAmount: 0,
+      nonRecoverableAmount: 0,
+      conditionalAmount: 0,
+      excludedAmount: 0,
       sentToCam: isClassificationSentToCam(c),
-      nextStep: isClassificationSentToCam(c) ? "CAM Ready" : (c?.next_step || "Provide CAM rule amount"),
+      nextStep: c?.next_step || "Link actual expense or mark no expense",
       message: "Approved lease rule exists, but no actual expense found for this period.",
       canFinalize: false,
       canSendToReview: false,
       canSendToCam: false,
     };
 
-    gapRow.canFinalize = gapRow.amount != null && Number(gapRow.amount) > 0 && gapRow.classificationStatus !== "finalized";
-    gapRow.canSendToCam = canSendFinalizedActualToCam(gapRow);
+    gapRow.canFinalize = false;
+    gapRow.canSendToCam = false;
 
     const decisionObj = getCamDecision(gapRow);
     gapRow.camDecision = decisionObj.label;

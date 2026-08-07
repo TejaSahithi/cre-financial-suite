@@ -50,7 +50,20 @@ function readNestedArrays(root, paths) {
   return arrays;
 }
 
-const GENERIC_EXPLICIT_CATEGORIES = new Set(["expense", "expenses", "insurance", "tax", "taxes", "maintenance", "repairs", "cam", "utilities"]);
+const GENERIC_EXPLICIT_CATEGORIES = new Set([
+  "clause",
+  "contract_clause",
+  "lease_clause",
+  "expense",
+  "expenses",
+  "insurance",
+  "tax",
+  "taxes",
+  "maintenance",
+  "repairs",
+  "cam",
+  "utilities",
+]);
 
 function findExpenseCategory(text, explicitCategory) {
   const explicit = normalizeKey(explicitCategory);

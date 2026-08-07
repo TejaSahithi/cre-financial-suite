@@ -197,6 +197,11 @@ export default function LeaseExpenseClassification() {
   const buildingById = useMemo(() => new Map(buildings.map((building) => [building.id, building])), [buildings]);
   const unitById = useMemo(() => new Map(units.map((unit) => [unit.id, unit])), [units]);
 
+  const selectedLease = useMemo(() => {
+    if (scopeLease !== "all") return leaseById.get(scopeLease) || null;
+    return scopedLeases.length === 1 ? scopedLeases[0] : null;
+  }, [scopeLease, leaseById, scopedLeases]);
+
   useEffect(() => {
     if (!preselectedLeaseId || preselectedLeaseId === "all") return;
     const lease = leases.find((item) => item.id === preselectedLeaseId);
@@ -550,6 +555,11 @@ export default function LeaseExpenseClassification() {
             unit_id: row.expense?.unit_id || row.unit?.id,
             lease_id: row.lease?.id,
             tenant_id: row.lease?.tenant_id,
+            expense_category_id:
+              row.expenseCategoryId ||
+              row.classificationRecord?.expense_category_id ||
+              row.rule?.expense_category_id ||
+              null,
             category: row.expense?.category,
             amount: row.amount,
             recoverability_result: row.recoverabilityResult,
@@ -672,19 +682,6 @@ export default function LeaseExpenseClassification() {
     onError: (error) => toast.error(error?.message || "Could not update amount"),
   });
 
-  const classificationAmountMutation = useMutation({
-    mutationFn: async ({ rule, amount }) => {
-      return expenseService.createLeaseRuleAmountCamInput(rule, amount, currentYear);
-    },
-    onSuccess: () => {
-      toast.success("CAM rule amount saved");
-      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
-      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
-      queryClient.invalidateQueries({ queryKey: ["Expense"] });
-    },
-    onError: (error) => toast.error(error?.message || "Could not add CAM rule amount"),
-  });
-
   const manualOverrideMutation = useMutation({
     mutationFn: async ({ classificationId, payload }) => {
       return expenseService.markManualOverride(classificationId, payload);
@@ -710,8 +707,7 @@ export default function LeaseExpenseClassification() {
   });
 
   const isLoading = loadingLeases || loadingWorkspace;
-  const currentYear = new Date().getFullYear();
-  const yearOptions = [currentYear - 1, currentYear, currentYear + 1];
+  const yearOptions = [2021, 2022, 2023, 2024, 2025, 2026, 2027];
   const rawCounts = diagnostics?.raw_db_counts || {};
   const scopedCounts = diagnostics?.counts_after_scope_filters || {};
   const hiddenCounts = diagnostics?.hidden_by_filter_counts || {};
@@ -729,7 +725,7 @@ export default function LeaseExpenseClassification() {
   };
 
   const promptForAmount = (row) => {
-    if (!row?.actualExpenseId && row?.rowType !== "rule_missing_actual") return;
+    if (!row?.actualExpenseId) return;
     const input = window.prompt(
       `Enter amount for ${row.vendor || row.ruleLabel || "this expense"}:`,
       row.amount != null ? String(row.amount) : "",
@@ -742,12 +738,7 @@ export default function LeaseExpenseClassification() {
       toast.error("Invalid amount");
       return;
     }
-
-    if (row.actualExpenseId) {
-      amountMutation.mutate({ actualExpenseId: row.actualExpenseId, amount });
-    } else {
-      classificationAmountMutation.mutate({ rule: row.rule, amount });
-    }
+    amountMutation.mutate({ actualExpenseId: row.actualExpenseId, amount });
   };
 
   const promptForOverride = (row) => {
@@ -799,10 +790,10 @@ export default function LeaseExpenseClassification() {
       <PageHeader icon={CheckCircle} title="Expense Recoverability" subtitle="Classification Engine">
         {/* Carry scope (property/building/unit + lease_id) so the Exception Queue is auto-filtered to this lease instead of showing all-org exceptions. */}
         <Button size="sm" variant="outline" onClick={() => navigate(createPageUrl("ExpenseReview", {
-          property: lease?.property_id,
-          building: lease?.building_id,
-          unit: lease?.unit_id,
-          lease_id: lease?.id,
+          property: selectedLease?.property_id,
+          building: selectedLease?.building_id,
+          unit: selectedLease?.unit_id,
+          lease_id: selectedLease?.id,
         }))}>
           <CheckCircle className="mr-1.5 h-4 w-4" /> Expense Review
         </Button>
@@ -875,10 +866,10 @@ export default function LeaseExpenseClassification() {
               <p className="mt-1 text-xs text-amber-700">{actualEmptyState}</p>
             </div>
             <Button size="sm" variant="outline" className="h-8 border-amber-300 bg-white text-xs text-amber-900" onClick={() => navigate(createPageUrl("Expenses", {
-  property: lease?.property_id,
-  building: lease?.building_id,
-  unit: lease?.unit_id,
-  lease_id: lease?.id,
+  property: selectedLease?.property_id,
+  building: selectedLease?.building_id,
+  unit: selectedLease?.unit_id,
+  lease_id: selectedLease?.id,
 }))}>
               Actual Expenses
             </Button>
@@ -1276,18 +1267,8 @@ export default function LeaseExpenseClassification() {
                             <TableCell className="text-right text-sm font-semibold text-slate-900">
                               {row.actualExpenseId ? (
                                 fmt(row.amount)
-                              ) : row.amount != null && row.amount > 0 ? (
-                                fmt(row.amount)
                               ) : (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-6 border-blue-200 bg-blue-50/50 px-2 text-[10px] font-semibold text-blue-700 hover:bg-blue-100"
-                                  onClick={() => promptForAmount(row)}
-                                >
-                                  + Set Amount
-                                </Button>
+                                <span className="text-xs font-medium text-slate-500">No actual posted</span>
                               )}
                             </TableCell>
                             <TableCell className="max-w-[220px] text-xs font-medium text-slate-900">
@@ -1369,10 +1350,10 @@ export default function LeaseExpenseClassification() {
                                       </DropdownMenuItem>
                                     </>
                                   )}
-                                  {(row.actualExpenseId || canPublishContractRuleForCam || row.rowType === "rule_missing_actual") && (
+                                  {row.actualExpenseId && (
                                     <DropdownMenuItem onClick={() => promptForAmount(row)}>
                                       <FileText className="mr-2 h-4 w-4 text-emerald-600" />
-                                      {row.rowType === "rule_missing_actual" ? "Enter CAM Rule Amount" : row.amount ? "Edit Amount" : "Set Amount"}
+                                      {row.amount ? "Edit Amount" : "Set Amount"}
                                     </DropdownMenuItem>
                                   )}
                                   {row.classificationRecord?.id && (
