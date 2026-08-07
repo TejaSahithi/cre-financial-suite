@@ -7,14 +7,11 @@ import {
   BarChart3,
   Building2,
   Calendar,
-  CheckCircle2,
   DollarSign,
   FileText,
-  Filter,
   Layers,
   Loader2,
   PieChart,
-  ShieldCheck,
   TrendingUp,
   Wallet
 } from "lucide-react";

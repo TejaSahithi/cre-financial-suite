@@ -22,7 +22,7 @@
  */
 import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Lock, AlertTriangle, CheckCircle2, XCircle, ChevronRight } from "lucide-react";
+import { Lock, AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 import { supabase } from "@/services/supabaseClient";
 import { toast } from "sonner";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
@@ -31,7 +31,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {

@@ -17,7 +17,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   Calculator, RefreshCw, Send, ExternalLink, FileDown,
-  CheckCircle2, XCircle, AlertTriangle, Package, Lock, Loader2,
+  CheckCircle2, XCircle, AlertTriangle, Package, Lock,
 } from "lucide-react";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
@@ -28,7 +28,6 @@ import PageHeader from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";

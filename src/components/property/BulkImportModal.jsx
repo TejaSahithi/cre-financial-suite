@@ -274,16 +274,118 @@ function normalizePropertyStructureType(value) {
 async function parseStructuredFileLocally(file) {
   const { read, utils } = await import('xlsx');
   const buffer = await file.arrayBuffer();
-  
-  // XLSX automatically detects and parses csv, tsv, txt, and excel formats
-  const workbook = read(buffer, { type: 'array' });
+
+  // XLSX automatically detects and parses csv, tsv, txt, and excel formats.
+  // Read as a matrix first so title/status rows before the real headers do not
+  // become bogus column names.
+  const workbook = read(buffer, { type: 'array', cellDates: true });
   const firstSheet = workbook.SheetNames?.[0];
   if (!firstSheet) {
     throw new Error('File contains no worksheets or data.');
   }
-  
-  const rawRows = utils.sheet_to_json(workbook.Sheets[firstSheet], { defval: null });
-  return rawRows;
+
+  const matrix = utils.sheet_to_json(workbook.Sheets[firstSheet], {
+    header: 1,
+    defval: null,
+    blankrows: false,
+    raw: false,
+  });
+
+  return matrixToStructuredRows(matrix);
+}
+
+const HEADER_TEXT_HINTS = [
+  'name', 'address', 'city', 'state', 'zip', 'postal', 'type', 'structure',
+  'date', 'amount', 'tenant', 'property', 'building', 'unit', 'vendor',
+  'category', 'code', 'id', 'sf', 'sqft', 'rsf', 'rent', 'lease', 'status',
+  'notes', 'source', 'confidence',
+];
+
+const HEADER_KEY_HINTS = new Set([
+  'property_name', 'property_code', 'property_id', 'street_address', 'address',
+  'city', 'state', 'zip', 'postal_code', 'property_type', 'structure',
+  'total_sf', 'total_sqft', 'total_rsf', 'rsf', 'source_lease',
+  'tenant_name', 'building_name', 'unit_number', 'vendor_name',
+  'invoice_number', 'account_code', 'amount', 'date',
+]);
+
+function getCellText(value) {
+  if (value == null) return '';
+  return String(value).trim();
+}
+
+function isBlankCell(value) {
+  return getCellText(value) === '';
+}
+
+function scoreHeaderRow(row) {
+  const values = row.filter(value => !isBlankCell(value));
+  if (values.length < 2) return 0;
+
+  let score = values.length >= 4 ? 1 : 0;
+  values.forEach(value => {
+    const normalized = normalizeFieldKey(value);
+    if (!normalized) return;
+    if (HEADER_KEY_HINTS.has(normalized)) {
+      score += 4;
+      return;
+    }
+    if (HEADER_TEXT_HINTS.some(hint => normalized.includes(hint))) {
+      score += 2;
+    }
+  });
+
+  return score;
+}
+
+function findHeaderRowIndex(matrix) {
+  let bestIndex = 0;
+  let bestScore = 0;
+  const scanLimit = Math.min(matrix.length, 25);
+
+  for (let index = 0; index < scanLimit; index += 1) {
+    const row = Array.isArray(matrix[index]) ? matrix[index] : [];
+    const score = scoreHeaderRow(row);
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  }
+
+  return bestIndex;
+}
+
+function makeUniqueHeader(value, index, seen) {
+  const fallback = `column_${index + 1}`;
+  const base = getCellText(value) || fallback;
+  const normalizedBase = normalizeFieldKey(base) || fallback;
+  const count = seen.get(normalizedBase) || 0;
+  seen.set(normalizedBase, count + 1);
+  return count === 0 ? base : `${base} ${count + 1}`;
+}
+
+function matrixToStructuredRows(matrix) {
+  if (!Array.isArray(matrix) || matrix.length === 0) return [];
+
+  const headerIndex = findHeaderRowIndex(matrix);
+  const headerRow = Array.isArray(matrix[headerIndex]) ? matrix[headerIndex] : [];
+  const seen = new Map();
+  const headers = headerRow.map((value, index) => makeUniqueHeader(value, index, seen));
+
+  return matrix
+    .slice(headerIndex + 1)
+    .filter(row => Array.isArray(row) && row.some(value => !isBlankCell(value)))
+    .map(row => {
+      const record = {};
+      headers.forEach((header, index) => {
+        if (isBlankCell(header)) return;
+        const value = row[index];
+        if (isBlankCell(value)) return;
+        record[header] = value;
+      });
+      return record;
+    })
+    .filter(record => Object.keys(record).length > 0);
 }
 
 // Detects whether a record is a plain CSV-row object (no pipeline-wrapper keys).
@@ -621,9 +723,11 @@ export default function BulkImportModal({
         property: 'name', property_name: 'name', building_name: 'name', asset_name: 'name',
         asset: 'name', project_name: 'name', site_name: 'name',
         // SF
-        total_sqft: 'total_sf', total_square_feet: 'total_sf', square_footage: 'total_sf',
-        square_feet: 'total_sf', sqft: 'total_sf', sf: 'total_sf',
-        rentable_sf: 'total_sf', rentable_square_feet: 'total_sf',
+        total_sqft: 'total_sf', total_square_feet: 'total_sf', total_rsf: 'total_sf', square_footage: 'total_sf',
+        square_feet: 'total_sf', sqft: 'total_sf', sf: 'total_sf', rsf: 'total_sf',
+        rentable_sf: 'total_sf', rentable_sqft: 'total_sf', rentable_rsf: 'total_sf',
+        rentable_square_feet: 'total_sf', rentable_area: 'total_sf', rentable_area_sqft: 'total_sf',
+        total_rentable_sf: 'total_sf', total_rentable_sqft: 'total_sf',
         gla: 'total_sf', gross_leasable_area: 'total_sf', nra: 'total_sf',
         leased_sqft: 'leased_sf', occupied_sf: 'leased_sf', occupied_sqft: 'leased_sf',
         // Address
@@ -665,6 +769,8 @@ export default function BulkImportModal({
         policy_number: 'insurance_policy', insurance: 'insurance_policy',
         // Status
         asset_status: 'status', property_status: 'status',
+        comments: 'notes', remarks: 'notes', import_notes: 'notes', source: 'notes',
+        source_document: 'notes', source_file: 'notes', source_lease: 'notes',
       },
       building: {
         property_id: 'property_id',
@@ -673,8 +779,11 @@ export default function BulkImportModal({
         property_code: 'property_id_code', property_id_code: 'property_id_code', parent_property_id: 'property_id_code',
         building_id: 'building_id_code', building_code: 'building_id_code', building_id_code: 'building_id_code',
         building_name: 'name', asset_name: 'name', building: 'name',
-        total_sqft: 'total_sf', square_feet: 'total_sf', sqft: 'total_sf',
-        street: 'address', location: 'address',
+        total_sqft: 'total_sf', total_square_feet: 'total_sf', total_rsf: 'total_sf',
+        square_feet: 'total_sf', sqft: 'total_sf', sf: 'total_sf', rsf: 'total_sf',
+        rentable_sf: 'total_sf', rentable_sqft: 'total_sf', rentable_square_feet: 'total_sf',
+        street: 'address', street_address: 'address', address_line_1: 'address', address1: 'address', location: 'address',
+        zipcode: 'zip', zip_code: 'zip', postal_code: 'zip', postal: 'zip',
         built: 'year_built',
         building_status: 'status', asset_status: 'status',
       },
@@ -688,15 +797,16 @@ export default function BulkImportModal({
         building: 'building_name', building_name: 'building_name', parent_building: 'building_name',
         unit_id: 'unit_id_code', unit_code: 'unit_id_code',
         // Unit number
-        suite: 'unit_number', suite_number: 'unit_number', space: 'unit_number', space_number: 'unit_number',
-        unit_no: 'unit_number', unit_no_: 'unit_number',
+        suite: 'unit_number', suite_number: 'unit_number', suite_no: 'unit_number', unit_suite: 'unit_number',
+        unit_suite_number: 'unit_number', unit_or_suite: 'unit_number', space: 'unit_number', space_number: 'unit_number',
+        unit_no: 'unit_number', unit_no_: 'unit_number', premises: 'unit_number', leased_premises: 'unit_number',
         unit_number: 'unit_number',
         // Bed/bath
         bed_bath: 'bedroom_bathroom', beds_baths: 'bedroom_bathroom', bedroom_bathroom: 'bedroom_bathroom',
         // SF
         square_footage: 'square_footage', square_feet: 'square_footage', square_foot: 'square_footage',
         sq_footage: 'square_footage', sq_feet: 'square_footage', sqft: 'square_footage', sq_ft: 'square_footage',
-        sf: 'square_footage', total_sf: 'square_footage', total_sqft: 'square_footage',
+        sf: 'square_footage', total_sf: 'square_footage', total_sqft: 'square_footage', total_rsf: 'square_footage',
         unit_size: 'square_footage', unit_area: 'square_footage', area: 'square_footage', area_sqft: 'square_footage',
         unit_sqft: 'square_footage', floor_area_sqft: 'square_footage', size: 'square_footage',
         rsf: 'square_footage', rentable_sf: 'square_footage', rentable_sqft: 'square_footage',
@@ -794,7 +904,13 @@ export default function BulkImportModal({
         year: 'fiscal_year',
       },
     };
-    const aliases = ALIAS_MAP[moduleType] || {};
+    const labelAliases = Object.fromEntries(
+      fieldDefs.flatMap(field => {
+        const normalizedLabel = normalizeFieldKey(field.label);
+        return normalizedLabel ? [[normalizedLabel, field.key], [field.key, field.key]] : [[field.key, field.key]];
+      })
+    );
+    const aliases = { ...labelAliases, ...(ALIAS_MAP[moduleType] || {}) };
 
     return extractedRows.map((extracted, idx) => {
       // 1. Apply per-module aliases (without overwriting an existing canonical value)
@@ -802,7 +918,7 @@ export default function BulkImportModal({
       Object.entries(extracted).forEach(([k, v]) => {
         const sourceKey = normalizeFieldKey(k);
         const targetKey = aliases[sourceKey] || sourceKey;
-        if (aliased[targetKey] === undefined || aliased[targetKey] === null) {
+        if (sourceKey === targetKey || aliased[targetKey] === undefined || aliased[targetKey] === null || aliased[targetKey] === '') {
           aliased[targetKey] = v;
         }
       });
@@ -1443,7 +1559,7 @@ export default function BulkImportModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={v => { if (!v) { onClose(); reset(); } }}>
-      <DialogContent className="max-w-6xl max-h-[94vh] overflow-hidden flex flex-col p-0 gap-0">
+      <DialogContent className="w-[calc(100vw-2rem)] max-w-6xl max-h-[92vh] overflow-hidden flex flex-col p-0 gap-0">
 
         {/* ── Header ──────────────────────────────────────────── */}
         <DialogHeader className="px-6 py-4 border-b bg-gradient-to-r from-slate-50 to-white shrink-0">

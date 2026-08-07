@@ -49,6 +49,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import ClassificationDebugPanel from "@/components/lease-expense/ClassificationDebugPanel";
+import BulkImportModal from "@/components/property/BulkImportModal";
 
 import {
   humanize,
@@ -137,6 +138,7 @@ export default function LeaseExpenseClassification() {
   const [activeTab, setActiveTab] = useState("actual_expenses");
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [showBulkImport, setShowBulkImport] = useState(false);
 
   const { data: leases = [], isLoading: loadingLeases } = useOrgQuery("Lease", {}, { allowSuperAdminGlobal: true });
   const { data: tenants = [] } = useOrgQuery("Tenant", {}, { allowSuperAdminGlobal: true });
@@ -759,7 +761,7 @@ export default function LeaseExpenseClassification() {
               <Button size="sm" variant="outline" className="h-8 border-white/10 bg-white/5 text-xs text-white hover:bg-white/10" onClick={() => navigate(createPageUrl("AddExpense"))}>
                 <Plus className="mr-1.5 h-3 w-3" /> Add Expense
               </Button>
-              <Button size="sm" variant="outline" className="h-8 border-white/10 bg-white/5 text-xs text-white hover:bg-white/10" onClick={() => navigate(createPageUrl("BulkImport"))}>
+              <Button size="sm" variant="outline" className="h-8 border-white/10 bg-white/5 text-xs text-white hover:bg-white/10" onClick={() => setShowBulkImport(true)}>
                 <Upload className="mr-1.5 h-3 w-3" /> Bulk Import
               </Button>
               <Button size="sm" variant="outline" className="h-8 border-white/10 bg-white/5 text-xs text-white hover:bg-white/10" onClick={() => navigate(createPageUrl("LeaseExpenseRules", {
@@ -1417,6 +1419,19 @@ export default function LeaseExpenseClassification() {
           <span className="flex items-center gap-1.5"><CheckCircle className="h-3.5 w-3.5 text-indigo-500" /> <strong>Review:</strong> Unmatched actuals and conditional / exception rows go to Expense Review.</span>
         </div>
       </div>
+
+      <BulkImportModal
+        isOpen={showBulkImport}
+        onClose={() => {
+          setShowBulkImport(false);
+          queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+          queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
+        }}
+        moduleType="expense"
+        propertyId={scopeProperty !== "all" ? scopeProperty : undefined}
+        buildingId={scopeBuilding !== "all" ? scopeBuilding : undefined}
+        unitId={scopeUnit !== "all" ? scopeUnit : undefined}
+      />
     </div>
   );
 }
