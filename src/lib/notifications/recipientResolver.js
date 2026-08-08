@@ -396,8 +396,12 @@ function resolveInternalRecipients(event, policy, rule, context, recipientsByKey
     const isAssignedMatch = rule.assigned && assignedUserIds.has(membership.user_id);
     const isRoleMatch = rule.role ? memberMatchesRole(membership, rule.role) : false;
     const requiredPermission = requiredPermissionForRule(rule, policy);
+    const capabilities = normalizeObject(membership.capabilities);
+    const isCustomPermissionMatch = Boolean(capabilities.custom_role || normalizeArray(capabilities.roles).includes("custom")) &&
+      Boolean(requiredPermission) &&
+      hasNotificationPermission(membership, requiredPermission);
 
-    if (!isAssignedMatch && !isRoleMatch) return;
+    if (!isAssignedMatch && !isRoleMatch && !isCustomPermissionMatch) return;
     if (requiredPermission && !hasNotificationPermission(membership, requiredPermission)) return;
     if (!memberHasScopeAccess(membership, event, context)) return;
 
@@ -416,8 +420,8 @@ function resolveInternalRecipients(event, policy, rule, context, recipientsByKey
       event,
       {
         role: normalizeNotificationRole(membership.role, membership),
-        customRole: normalizeObject(membership.capabilities).custom_role || membership.custom_role || null,
-        source: isAssignedMatch ? "assignment" : "role",
+        customRole: capabilities.custom_role || membership.custom_role || null,
+        source: isAssignedMatch ? "assignment" : (isCustomPermissionMatch ? "custom_permission" : "role"),
       }
     );
   });
