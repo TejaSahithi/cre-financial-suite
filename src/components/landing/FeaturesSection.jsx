@@ -1,5 +1,5 @@
-import React from "react";
-import { motion } from "framer-motion";
+import React, { useState } from "react";
+import { motion, useReducedMotion } from "framer-motion";
 import {
   BarChart3, FileText, Calculator, Shield, ClipboardCheck, TrendingUp,
   Layers, Target, GitBranch, LineChart, FolderOpen, Users
@@ -21,10 +21,18 @@ const features = [
 ];
 
 export default function FeaturesSection() {
+  const prefersReducedMotion = useReducedMotion();
+  const [selectedFeatureIndex, setSelectedFeatureIndex] = useState(0);
+
   return (
     <section id="features" className="py-20 px-6 bg-[var(--bg-2)]">
       <div className="max-w-7xl mx-auto">
-        <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="text-center mb-12">
+        <motion.div
+          initial={prefersReducedMotion ? false : { opacity: 0, y: 20 }}
+          whileInView={prefersReducedMotion ? undefined : { opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          className="text-center mb-12"
+        >
           <div className="inline-flex items-center gap-2 bg-[var(--surface)] border border-[var(--border-cre)] rounded-[8px] px-4 py-1.5 mb-4">
             <span className="text-[var(--accent)] text-xs font-bold tracking-wide uppercase">Platform Capabilities</span>
           </div>
@@ -40,20 +48,33 @@ export default function FeaturesSection() {
 
         <div className="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {features.map((f, i) => (
-            <motion.div
+            <motion.button
               key={i}
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: i * 0.04 }}
-              className="group relative bg-[var(--surface)] rounded-[8px] border border-[var(--border-cre)] p-5 shadow-[var(--card-shadow)] hover:shadow-[var(--card-hover-shadow)] transition-all duration-300 cursor-default"
+              type="button"
+              initial={prefersReducedMotion ? false : { opacity: 0, y: 16 }}
+              whileInView={prefersReducedMotion ? undefined : { opacity: 1, y: 0 }}
+              animate={selectedFeatureIndex === i && !prefersReducedMotion ? { scale: 1.025 } : { scale: 1 }}
+              whileHover={prefersReducedMotion ? undefined : { y: -3 }}
+              whileTap={prefersReducedMotion ? undefined : { scale: selectedFeatureIndex === i ? 1.005 : 0.99 }}
+              viewport={{ once: true, margin: "-70px" }}
+              transition={{ duration: 0.38, delay: i * 0.085, ease: "easeOut" }}
+              onClick={() => setSelectedFeatureIndex(i)}
+              className={`group relative text-left bg-[var(--surface)] rounded-[8px] border p-5 shadow-[var(--card-shadow)] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-2)] ${
+                selectedFeatureIndex === i
+                  ? "border-[color-mix(in_srgb,var(--accent)_72%,var(--border-cre))] bg-[color-mix(in_srgb,var(--accent)_8%,var(--surface))] shadow-[var(--shadow)]"
+                  : "border-[var(--border-cre)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)] hover:shadow-[var(--card-hover-shadow)]"
+              }`}
             >
-              <div className="w-10 h-10 rounded-[8px] border border-[color-mix(in_srgb,var(--accent)_45%,var(--border-cre))] bg-[var(--surface-2)] flex items-center justify-center mb-4 text-[var(--accent)] shadow-[var(--shadow-soft)]">
+              <div className={`w-10 h-10 rounded-[8px] border flex items-center justify-center mb-4 shadow-[var(--shadow-soft)] transition-all duration-200 ${
+                selectedFeatureIndex === i
+                  ? "border-[color-mix(in_srgb,var(--accent)_75%,var(--border-cre))] bg-[var(--accent-soft)] text-[var(--accent)]"
+                  : "border-[color-mix(in_srgb,var(--accent)_45%,var(--border-cre))] bg-[var(--surface-2)] text-[var(--accent)] group-hover:border-[color-mix(in_srgb,var(--accent)_65%,var(--border-cre))]"
+              }`}>
                 <f.icon className="w-5 h-5" />
               </div>
-              <h3 className="text-sm font-bold text-[var(--ink)] mb-1.5">{f.title}</h3>
+              <h3 className={`text-sm text-[var(--ink)] mb-1.5 ${selectedFeatureIndex === i ? "font-bold" : "font-semibold"}`}>{f.title}</h3>
               <p className="text-[var(--muted)] text-xs leading-relaxed">{f.desc}</p>
-            </motion.div>
+            </motion.button>
           ))}
         </div>
       </div>
