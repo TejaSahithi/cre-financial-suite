@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Plus, Download, Mail, Loader2, CheckCircle2, X, Info } from "lucide-react";
+import { Plus, Download, Mail, Loader2, CheckCircle2, Lock, X, Info } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -665,7 +665,21 @@ export default function BudgetDashboard() {
                   <BudgetInsights budget={selectedBudget} />
 
                   <div className="flex flex-wrap gap-3 pt-2">
-                    {["draft", "ai_generated", "under_review", "reviewed"].includes(selectedBudget.status) && (
+                    {["draft", "ai_generated", "under_review"].includes(selectedBudget.status) && (
+                      <Button
+                        className="flex-1 bg-amber-500 hover:bg-amber-600"
+                        onClick={() => handleStatusChange(selectedBudget, "mark_reviewed")}
+                        disabled={updateMutation.isPending}
+                      >
+                        {updateMutation.isPending ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="mr-2 h-4 w-4" />
+                        )}
+                        Mark as Reviewed
+                      </Button>
+                    )}
+                    {selectedBudget.status === "reviewed" && (
                       <Button
                         className="flex-1 bg-emerald-600 hover:bg-emerald-700"
                         onClick={() => handleStatusChange(selectedBudget, "approve")}
@@ -677,6 +691,20 @@ export default function BudgetDashboard() {
                           <CheckCircle2 className="mr-2 h-4 w-4" />
                         )}
                         Approve Budget
+                      </Button>
+                    )}
+                    {selectedBudget.status === "approved" && (
+                      <Button
+                        className="flex-1 bg-slate-800 hover:bg-slate-900"
+                        onClick={() => handleStatusChange(selectedBudget, "lock")}
+                        disabled={updateMutation.isPending}
+                      >
+                        {updateMutation.isPending ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <Lock className="mr-2 h-4 w-4" />
+                        )}
+                        Lock Budget
                       </Button>
                     )}
                     {!["approved", "locked", "signed"].includes(selectedBudget.status) && (

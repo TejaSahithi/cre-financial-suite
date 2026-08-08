@@ -32,6 +32,7 @@ import CreateUnitModal from "@/components/property/CreateUnitModal";
 import BulkImportModal from "@/components/property/BulkImportModal";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { toast } from "sonner";
+import { useModuleAccess } from "@/lib/ModuleAccessContext";
 
 export default function BuildingsUnits({ mode = "combined" }) {
   const location = useLocation();
@@ -40,6 +41,9 @@ export default function BuildingsUnits({ mode = "combined" }) {
   const portfolioId = params.get("portfolio");
   const propertyId = params.get("property");
   const buildingId = params.get("building");
+  const { canWritePage } = useModuleAccess();
+  const canManageBuildings = canWritePage("Buildings");
+  const canManageUnits = canWritePage("Units");
 
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState("grid");
@@ -381,6 +385,7 @@ export default function BuildingsUnits({ mode = "combined" }) {
             <Button
               variant="outline"
               size="sm"
+              disabled={!canManageBuildings}
               onClick={() => setShowCreateBuilding(true)}
               className="border-purple-200 text-purple-700 hover:bg-purple-50"
             >
@@ -389,7 +394,7 @@ export default function BuildingsUnits({ mode = "combined" }) {
             </Button>
           )}
           {showingUnits && (
-            <Button size="sm" onClick={() => setShowCreateUnit(true)} className="bg-gradient-to-r from-purple-600 to-purple-700 shadow-sm">
+            <Button size="sm" disabled={!canManageUnits} onClick={() => setShowCreateUnit(true)} className="bg-gradient-to-r from-purple-600 to-purple-700 shadow-sm">
               <Plus className="w-4 h-4 mr-1" />
               Add Unit
             </Button>

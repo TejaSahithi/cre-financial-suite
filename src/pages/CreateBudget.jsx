@@ -341,55 +341,31 @@ export default function CreateBudget() {
     }
   }, [budgets, selectedBudgetId]);
 
+  // The in-app "Budget Sent Back for Rework" notification is already written
+  // by the fn_on_budget_changed DB trigger when compute-budget's reject
+  // action sets status='draft' + rejection_comment — this only needs to
+  // handle the stakeholder email, not a second notifications row.
   const notifyStakeholdersOfRework = async (budget, comment) => {
     const recipients = normalizeBudgetNotificationRecipients(stakeholders, budget?.property_id);
-    const propertyName = properties.find((property) => property.id === budget?.property_id)?.name || "selected property";
-    const message = `Budget "${budget?.name}" (FY ${budget?.budget_year || budget?.fiscal_year || "current"}) was sent back for rework for ${propertyName}. Comments: ${comment}`;
 
-    const notificationPayload = {
-      org_id: budget?.org_id,
-      type: "budget_approval",
-      title: "Budget Sent Back for Rework",
-      message,
-      link: String(budget?.id || ""),
-      priority: "high",
-    };
-
-    const notificationPromise = budget?.org_id
-      ? supabase.from("notifications").insert(notificationPayload)
-      : Promise.resolve({ error: null });
-
-    const actionUrl = typeof window !== "undefined"
-      ? `${window.location.origin}${createPageUrl("CreateBudget")}${location.search}`
-      : "";
-
-    const emailPromise = recipients.length > 0
-      ? invokeEdgeFunction("send-email", {
-          to: recipients,
-          templateId: 'generic_internal_notification',
-          variables: {
-            subject: `${budget?.name || "Budget"} requires rework`,
-            message: `Budget "${budget?.name}" (FY ${budget?.budget_year || budget?.fiscal_year || "current"}) needs updates before approval. Reviewer comments: ${comment}. Open Budget Studio to view details.`
-          }
-        })
-      : Promise.resolve();
-
-    const [notificationResult, emailResult] = await Promise.allSettled([notificationPromise, emailPromise]);
-
-    if (notificationResult.status === "fulfilled" && notificationResult.value?.error) {
-      console.error("[CreateBudget] Failed to create rework notification:", notificationResult.value.error);
-    }
-
-    if (emailResult.status === "rejected") {
-      console.error("[CreateBudget] Failed to email stakeholders:", emailResult.reason);
-      toast.warning("Budget was sent back for rework, but stakeholder email delivery failed.");
+    if (recipients.length === 0) {
+      toast.info("Budget was sent back for rework. No stakeholder email recipients were configured.");
       return;
     }
 
-    if (recipients.length > 0) {
+    try {
+      await invokeEdgeFunction("send-email", {
+        to: recipients,
+        templateId: 'generic_internal_notification',
+        variables: {
+          subject: `${budget?.name || "Budget"} requires rework`,
+          message: `Budget "${budget?.name}" (FY ${budget?.budget_year || budget?.fiscal_year || "current"}) needs updates before approval. Reviewer comments: ${comment}. Open Budget Studio to view details.`
+        }
+      });
       toast.success(`Rework notes sent to ${recipients.length} stakeholder${recipients.length === 1 ? "" : "s"}`);
-    } else {
-      toast.info("Budget was sent back for rework. No stakeholder email recipients were configured.");
+    } catch (error) {
+      console.error("[CreateBudget] Failed to email stakeholders:", error);
+      toast.warning("Budget was sent back for rework, but stakeholder email delivery failed.");
     }
   };
 

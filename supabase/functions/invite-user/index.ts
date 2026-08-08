@@ -20,6 +20,21 @@ const SYSTEM_ROLES = new Set([
   "viewer",
   "finance",
   "property_manager",
+  "asset_manager",
+  "portfolio_manager",
+  "operations_director",
+  "facility_manager",
+  "construction_manager",
+  "cfo_controller",
+  "financial_analyst",
+  "accounts_manager",
+  "investor_relations",
+  "leasing_director",
+  "leasing_agent",
+  "lease_admin",
+  "acquisitions_mgr",
+  "compliance_officer",
+  "internal_auditor",
 ]);
 
 function normalizeRoleValue(value: unknown) {
@@ -127,8 +142,15 @@ Deno.serve(async (req: Request) => {
       access_scopes, access_role
     } = await req.json();
 
-    const PLATFORM_ASSIGNABLE_ROLES = ["super_admin", "org_admin", "admin", "manager", "editor", "viewer", "finance", "auditor"];
-    const ORG_ASSIGNABLE_ROLES = ["org_admin", "admin", "manager", "editor", "viewer", "finance", "auditor"];
+    const CRE_ASSIGNABLE_ROLES = [
+      "asset_manager", "portfolio_manager", "operations_director",
+      "property_manager", "facility_manager", "construction_manager",
+      "cfo_controller", "financial_analyst", "accounts_manager", "investor_relations",
+      "leasing_director", "leasing_agent", "lease_admin",
+      "acquisitions_mgr", "compliance_officer", "internal_auditor",
+    ];
+    const PLATFORM_ASSIGNABLE_ROLES = ["super_admin", "org_admin", "admin", "manager", "editor", "viewer", "finance", "auditor", ...CRE_ASSIGNABLE_ROLES];
+    const ORG_ASSIGNABLE_ROLES = ["org_admin", "admin", "manager", "editor", "viewer", "finance", "auditor", ...CRE_ASSIGNABLE_ROLES];
 
     if (callerMembership.role === "org_admin" && !ORG_ASSIGNABLE_ROLES.includes(role)) {
       if (role === "super_admin") {
