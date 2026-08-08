@@ -338,7 +338,7 @@ The current `type` values mix workflow types and generic `approval`. For impleme
 4. Add `recipient_user_id`, `recipient_role`, or `audience` if notifications need to target specific users instead of the whole organization.
 5. Add de-duplication keys for recurring alerts, for example `lease_expiry:{lease_id}:90` or `critical_date:{id}:overdue`.
 6. Add scheduled reminder jobs for critical dates and stale snapshots. Trigger-based notifications catch writes, but reminders require time-based checks.
-7. Add user notification preferences only after mandatory events are protected. Mandatory high-priority events should not be fully disabled, only channel-muted where policy allows.
+7. Add user notification preferences only after mandat ory events are protected. Mandatory high-priority events should not be fully disabled, only channel-muted where policy allows.
 8. Add email delivery for high-priority deadlines, review assignments, rejected budgets, failed computations, and true-up approvals.
 9. Show notification counts in the layout bell or sidebar so users do not have to open the Notification Center to discover urgent work.
 10. Create a daily digest that groups low/medium events by module to prevent notification fatigue.

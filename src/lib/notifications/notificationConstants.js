@@ -1,0 +1,59 @@
+export const NOTIFICATION_TYPES = Object.freeze({
+  ACTION_REQUIRED: "ACTION_REQUIRED",
+  INFORMATIONAL: "INFORMATIONAL",
+  WARNING: "WARNING",
+  CRITICAL: "CRITICAL",
+  APPROVAL_REQUIRED: "APPROVAL_REQUIRED",
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED",
+  CORRECTION_REQUIRED: "CORRECTION_REQUIRED",
+  SYSTEM_ERROR: "SYSTEM_ERROR",
+});
+
+export const NOTIFICATION_SCOPES = Object.freeze({
+  ORGANIZATION: "ORGANIZATION",
+  PORTFOLIO: "PORTFOLIO",
+  PROPERTY: "PROPERTY",
+  ASSET: "ASSET",
+  TENANT: "TENANT",
+  ASSIGNED_ONLY: "ASSIGNED_ONLY",
+});
+
+export const NOTIFICATION_CHANNELS = Object.freeze({
+  EMAIL: "email",
+  SMS: "sms",
+});
+
+export const NOTIFICATION_MODULES = Object.freeze({
+  CRITICAL_DATES: "critical_dates",
+  PORTFOLIO: "portfolio",
+  PROPERTY: "property",
+  LEASE: "lease",
+  EXPENSE: "expense",
+  CAM: "cam",
+  BUDGET: "budget",
+});
+
+export const ROLE_KEYS = Object.freeze({
+  ORG_OWNER: "org_owner",
+  ORG_ADMIN: "org_admin",
+  PROPERTY_MANAGER: "property_manager",
+  FINANCE: "finance",
+  ACCOUNTING: "accounting",
+  AUDITOR: "auditor",
+  ASSET_OWNER: "asset_owner",
+  TENANT: "tenant",
+});
+
+export const PERMISSION_ACTION_BY_NOTIFICATION_TYPE = Object.freeze({
+  [NOTIFICATION_TYPES.INFORMATIONAL]: "view",
+  [NOTIFICATION_TYPES.WARNING]: "view",
+  [NOTIFICATION_TYPES.CRITICAL]: "view",
+  [NOTIFICATION_TYPES.ACTION_REQUIRED]: "review",
+  [NOTIFICATION_TYPES.APPROVAL_REQUIRED]: "approve",
+  [NOTIFICATION_TYPES.APPROVED]: "view",
+  [NOTIFICATION_TYPES.REJECTED]: "view",
+  [NOTIFICATION_TYPES.CORRECTION_REQUIRED]: "edit",
+  [NOTIFICATION_TYPES.SYSTEM_ERROR]: "manage",
+});
+

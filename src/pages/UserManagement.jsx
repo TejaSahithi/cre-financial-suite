@@ -204,6 +204,32 @@ const PAGE_PERMISSION_GROUPS = [
   },
 ];
 
+const CUSTOM_ROLE_PERMISSION_GROUPS = [
+  { key: "portfolio", label: "Portfolio", actions: ["view", "create", "edit", "manage"] },
+  { key: "property", label: "Property", actions: ["view", "create", "edit", "manage"] },
+  { key: "lease", label: "Lease", actions: ["view", "create", "edit", "review", "approve"] },
+  { key: "expense", label: "Expense", actions: ["view", "create", "edit", "review", "approve"] },
+  { key: "cam", label: "CAM", actions: ["view", "review", "approve"] },
+  { key: "budget", label: "Budget", actions: ["view", "create", "edit", "review", "approve"] },
+  { key: "critical_dates", label: "Critical Dates", actions: ["view", "manage"] },
+];
+
+const DEFAULT_NOTIFICATION_PERMISSIONS = Object.fromEntries(
+  CUSTOM_ROLE_PERMISSION_GROUPS.map((group) => [
+    group.key,
+    Object.fromEntries(group.actions.map((action) => [action, false])),
+  ])
+);
+
+function cloneDefaultNotificationPermissions() {
+  return Object.fromEntries(
+    Object.entries(DEFAULT_NOTIFICATION_PERMISSIONS).map(([module, actions]) => [
+      module,
+      { ...actions },
+    ])
+  );
+}
+
 // ─── Access Levels ─────────────────────────────────────────────────────────────
 const ACCESS_LEVELS = {
   admin:   { label: "Admin",   chipClass: "bg-violet-100 text-violet-700 border-violet-200",   btnActive: "bg-violet-600 text-white border-transparent" },
@@ -318,6 +344,7 @@ function normalizeCapabilities(capabilities) {
     ...parsed,
     roles: normalizeArray(parsed.roles),
     signing_privileges: normalizeObject(parsed.signing_privileges, {}),
+    permissions: normalizeObject(parsed.permissions, {}),
   };
 }
 
@@ -329,6 +356,17 @@ function getMemberRoles(member) {
 
 function getMemberSigningPrivileges(member) {
   return { ...DEFAULT_SIGNING, ...normalizeObject(member?.capabilities?.signing_privileges, {}) };
+}
+
+function getMemberNotificationPermissions(member) {
+  const raw = normalizeObject(member?.capabilities?.permissions, {});
+  return CUSTOM_ROLE_PERMISSION_GROUPS.reduce((acc, group) => {
+    acc[group.key] = {
+      ...DEFAULT_NOTIFICATION_PERMISSIONS[group.key],
+      ...normalizeObject(raw[group.key], {}),
+    };
+    return acc;
+  }, {});
 }
 
 function getMemberPagePerms(member) {
@@ -455,6 +493,48 @@ async function syncUserAccessGrants({ userId, orgId, dataScope, role }) {
     .insert(rows);
 
   if (insertError) throw insertError;
+}
+
+function CustomRolePermissionMatrix({ permissions, onChange, readonly = false }) {
+  const setPermission = (moduleKey, action, checked) => {
+    onChange({
+      ...permissions,
+      [moduleKey]: {
+        ...(permissions[moduleKey] || {}),
+        [action]: Boolean(checked),
+      },
+    });
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-3">
+      <div>
+        <p className="text-xs font-bold text-slate-700">Custom Role Workflow Privileges</p>
+        <p className="text-[11px] text-slate-500 mt-1">
+          Users assigned to this role may receive Email and SMS notifications related to these privileges and their portfolio/property access.
+        </p>
+      </div>
+      <div className="space-y-2">
+        {CUSTOM_ROLE_PERMISSION_GROUPS.map((group) => (
+          <div key={group.key} className="rounded-xl border border-slate-200 bg-white p-3">
+            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-2">{group.label}</p>
+            <div className="flex flex-wrap gap-3">
+              {group.actions.map((action) => (
+                <label key={action} className="flex items-center gap-2 text-xs font-medium text-slate-700 capitalize">
+                  <Checkbox
+                    checked={Boolean(permissions[group.key]?.[action])}
+                    disabled={readonly}
+                    onCheckedChange={(checked) => setPermission(group.key, action, checked)}
+                  />
+                  {action}
+                </label>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function DataScopeEditor({ orgId, value, onChange, readonly = false }) {
@@ -940,6 +1020,8 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
   const [activeTab, setActiveTab] = useState("roles");
   const [selectedRoles, setSelectedRoles] = useState(getMemberRoles(member));
   const [customRoleName, setCustomRoleName] = useState(member.capabilities?.custom_role || "");
+  const [customRoleDescription, setCustomRoleDescription] = useState(member.capabilities?.custom_role_description || "");
+  const [notificationPermissions, setNotificationPermissions] = useState(getMemberNotificationPermissions(member));
   const [pagePerms, setPagePerms] = useState(getMemberPagePerms(member));
   const [signingPrivs, setSigningPrivs] = useState(getMemberSigningPrivileges(member));
   const [dataScope, setDataScope] = useState(DEFAULT_DATA_SCOPE);
@@ -976,6 +1058,8 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
   useEffect(() => {
     setSelectedRoles(getMemberRoles(member));
     setCustomRoleName(member.capabilities?.custom_role || "");
+    setCustomRoleDescription(member.capabilities?.custom_role_description || "");
+    setNotificationPermissions(getMemberNotificationPermissions(member));
     setPagePerms(getMemberPagePerms(member));
     setSigningPrivs(getMemberSigningPrivileges(member));
   }, [member]);
@@ -1004,6 +1088,8 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
           ...(member.capabilities || {}),
           roles: selectedRoles,
           custom_role: customRoleName || null,
+          custom_role_description: customRoleDescription || null,
+          permissions: notificationPermissions,
           signing_privileges: signingPrivs,
           scope_access: {
             all_portfolios: Boolean(dataScope.allPortfolios),
@@ -1013,7 +1099,7 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
       }).eq("user_id", member.user_id).eq("org_id", orgId);
       if (error) throw error;
       await syncUserAccessGrants({ userId: member.user_id, orgId, dataScope, role: accessRole });
-      await logAudit({ action: "update_user_permissions", target_user_id: member.user_id, details: { roles: selectedRoles, signing: signingPrivs } });
+      await logAudit({ action: "update_user_permissions", target_user_id: member.user_id, details: { roles: selectedRoles, custom_role: customRoleName, signing: signingPrivs, permissions: notificationPermissions } });
       toast.success("Permissions saved");
       queryClient.invalidateQueries({ queryKey: ["org-members"] });
       queryClient.invalidateQueries({ queryKey: ["member-access-grants", member.user_id, orgId] });
@@ -1176,6 +1262,25 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
                   </div>
                 </div>
               )}
+              {selectedRoles.includes("custom") && (
+                <div className="space-y-3">
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 block">Custom Role Description</Label>
+                    <Input
+                      value={customRoleDescription}
+                      disabled={readOnly}
+                      onChange={(event) => setCustomRoleDescription(event.target.value)}
+                      placeholder="Describe this role's operational responsibility"
+                      className="text-sm"
+                    />
+                  </div>
+                  <CustomRolePermissionMatrix
+                    permissions={notificationPermissions}
+                    onChange={setNotificationPermissions}
+                    readonly={readOnly}
+                  />
+                </div>
+              )}
             </div>
           )}
 
@@ -1274,6 +1379,8 @@ function InviteDialog({ open, onClose, orgId }) {
   const [form, setForm] = useState({ full_name: "", email: "", phone: "" });
   const [selectedRoles, setSelectedRoles] = useState([]);
   const [customRoleName, setCustomRoleName] = useState("");
+  const [customRoleDescription, setCustomRoleDescription] = useState("");
+  const [notificationPermissions, setNotificationPermissions] = useState(cloneDefaultNotificationPermissions());
   const [pagePerms, setPagePerms] = useState({ ...DEFAULT_PAGE_PERMS });
   const [signingPrivs, setSigningPrivs] = useState({ ...DEFAULT_SIGNING });
   const [dataScope, setDataScope] = useState({ ...DEFAULT_DATA_SCOPE });
@@ -1285,6 +1392,8 @@ function InviteDialog({ open, onClose, orgId }) {
     setForm({ full_name: "", email: "", phone: "" });
     setSelectedRoles([]);
     setCustomRoleName("");
+    setCustomRoleDescription("");
+    setNotificationPermissions(cloneDefaultNotificationPermissions());
     setPagePerms({ ...DEFAULT_PAGE_PERMS });
     setSigningPrivs({ ...DEFAULT_SIGNING });
     setDataScope({ ...DEFAULT_DATA_SCOPE });
@@ -1332,6 +1441,8 @@ function InviteDialog({ open, onClose, orgId }) {
         capabilities: {
           roles: selectedRoles,
           custom_role: customRoleName || null,
+          custom_role_description: customRoleDescription || null,
+          permissions: notificationPermissions,
           signing_privileges: signingPrivs,
           scope_access: {
             all_portfolios: Boolean(dataScope.allPortfolios),
@@ -1419,6 +1530,23 @@ function InviteDialog({ open, onClose, orgId }) {
                   <AlertTriangle className="w-3.5 h-3.5" />
                   No roles selected — user will be created with No Access status.
                 </p>
+              )}
+              {selectedRoles.includes("custom") && (
+                <div className="space-y-3">
+                  <div>
+                    <Label className="text-sm font-medium mb-2 block">Custom Role Description</Label>
+                    <Input
+                      value={customRoleDescription}
+                      onChange={(event) => setCustomRoleDescription(event.target.value)}
+                      placeholder="Describe this role's operational responsibility"
+                      className="text-sm"
+                    />
+                  </div>
+                  <CustomRolePermissionMatrix
+                    permissions={notificationPermissions}
+                    onChange={setNotificationPermissions}
+                  />
+                </div>
               )}
               <div className="flex gap-2">
                 <Button variant="outline" className="flex-1" onClick={() => setActiveTab("info")}>← Back</Button>
@@ -1698,6 +1826,8 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
   const queryClient = useQueryClient();
   const [selectedRoles, setSelectedRoles] = useState([]);
   const [customRoleName, setCustomRoleName] = useState("");
+  const [customRoleDescription, setCustomRoleDescription] = useState("");
+  const [notificationPermissions, setNotificationPermissions] = useState(cloneDefaultNotificationPermissions());
   const [pagePerms, setPagePerms] = useState({ ...DEFAULT_PAGE_PERMS });
   const [signingPrivs, setSigningPrivs] = useState({ ...DEFAULT_SIGNING });
   const [dataScope, setDataScope] = useState({ ...DEFAULT_DATA_SCOPE });
@@ -1728,6 +1858,8 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
             ...(m.capabilities || {}),
             roles: selectedRoles,
             custom_role: customRoleName || null,
+            custom_role_description: customRoleDescription || null,
+            permissions: notificationPermissions,
             signing_privileges: signingPrivs,
             scope_access: {
               all_portfolios: Boolean(dataScope.allPortfolios),
@@ -1737,7 +1869,7 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
         }).eq("user_id", m.user_id).eq("org_id", orgId);
         await syncUserAccessGrants({ userId: m.user_id, orgId, dataScope, role: accessRole });
       }
-      await logAudit({ action: "bulk_update_permissions", details: { count: selectedMembers.length, roles: selectedRoles } });
+      await logAudit({ action: "bulk_update_permissions", details: { count: selectedMembers.length, roles: selectedRoles, permissions: notificationPermissions } });
       toast.success(`Updated ${selectedMembers.length} users`);
       queryClient.invalidateQueries({ queryKey: ["org-members"] });
       onClose();
@@ -1768,8 +1900,27 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
 
         <div className="flex-1 overflow-y-auto py-4">
           {activeTab === "roles" && (
-            <RoleSelector selectedRoles={selectedRoles} onChange={setSelectedRoles}
-              customRoleName={customRoleName} onCustomNameChange={setCustomRoleName} />
+            <div className="space-y-4">
+              <RoleSelector selectedRoles={selectedRoles} onChange={setSelectedRoles}
+                customRoleName={customRoleName} onCustomNameChange={setCustomRoleName} />
+              {selectedRoles.includes("custom") && (
+                <div className="space-y-3">
+                  <div>
+                    <Label className="text-sm font-medium mb-2 block">Custom Role Description</Label>
+                    <Input
+                      value={customRoleDescription}
+                      onChange={(event) => setCustomRoleDescription(event.target.value)}
+                      placeholder="Describe this role's operational responsibility"
+                      className="text-sm"
+                    />
+                  </div>
+                  <CustomRolePermissionMatrix
+                    permissions={notificationPermissions}
+                    onChange={setNotificationPermissions}
+                  />
+                </div>
+              )}
+            </div>
           )}
           {activeTab === "access" && (
             <PagePermissionMatrix permissions={pagePerms} onChange={(k, v) => setPagePerms(p => ({ ...p, [k]: v }))} />

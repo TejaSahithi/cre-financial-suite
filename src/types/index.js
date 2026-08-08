@@ -23,6 +23,8 @@ export const ENTITIES = {
   Document:          'documents',
   Organization:      'organizations',
   Notification:      'notifications',
+  NotificationDelivery: 'notification_deliveries',
+  NotificationPreference: 'notification_preferences',
   AuditLog:          'audit_logs',
   AccessRequest:     'access_requests',
   Portfolio:         'portfolios',
