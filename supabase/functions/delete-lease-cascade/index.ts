@@ -5,21 +5,23 @@ import { assertPageAccess, getUserOrgId, verifyUser } from "../_shared/supabase.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function validatePayload(body: Record<string, unknown> = {}) {
-  const leaseId = String(body.lease_id || "").trim();
+  const rawLeaseId = String(body.lease_id || "").trim();
   const rawIds = Array.isArray(body.lease_ids)
     ? body.lease_ids.map((id) => String(id).trim())
+    : Array.isArray(body.lease_id)
+    ? body.lease_id.map((id) => String(id).trim())
     : [];
 
   const validIds = [
-    ...(UUID_RE.test(leaseId) ? [leaseId] : []),
+    ...(UUID_RE.test(rawLeaseId) ? [rawLeaseId] : []),
     ...rawIds.filter((id) => UUID_RE.test(id)),
   ];
   const uniqueIds = [...new Set(validIds)];
 
   if (uniqueIds.length === 0) {
-    throw new Error("lease_id or lease_ids is required and must be valid UUID(s)");
+    throw new Error("lease_id is required and must be a valid UUID");
   }
-  return { leaseIds: uniqueIds, singleMode: uniqueIds.length === 1 && Boolean(leaseId) };
+  return { leaseIds: uniqueIds, singleMode: uniqueIds.length === 1 && Boolean(rawLeaseId) };
 }
 
 function errorStatus(message: string) {
