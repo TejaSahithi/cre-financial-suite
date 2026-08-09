@@ -13,16 +13,13 @@ import {
   Download,
   ClipboardCheck,
   MoreVertical,
-  Check,
   X,
-  CircleDollarSign,
-  HelpCircle,
+  Info,
   FileUp,
   PenLine,
 } from "lucide-react";
 import { toast } from "sonner";
 
-import PipelineActions, { EXPENSE_ACTIONS } from "@/components/PipelineActions";
 import ModuleLink from "@/components/ModuleLink";
 import RoleGuard from "@/components/RoleGuard";
 import AuditTrailPanel from "@/components/AuditTrailPanel";
@@ -33,7 +30,6 @@ import useOrgQuery from "@/hooks/useOrgQuery";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { ExpenseService } from "@/services/api";
 import { expenseService } from "@/services/expenseService";
-import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -60,7 +56,21 @@ import { createPageUrl, downloadCSV } from "@/utils";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { resolveTenantForExpense } from "@/lib/tenantResolver";
 import { approvedLeaseFieldValue } from "@/lib/approvedLeaseSnapshot";
-import { getEffectiveApprovalStatus } from "@/lib/ruleStatus";
+import {
+  PRIMARY_FILTERS,
+  RECOVERY_FILTERS,
+  expenseNeedsClassification,
+  getAccountingStatus,
+  getCanonicalCategoryLabel,
+  getRecoveryStatusFromClassification,
+} from "@/components/expenses/utils/actualExpensesUiContract";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 
 function normalizeExpenseDate(value) {
   if (!value) return null;
@@ -139,11 +149,121 @@ function resolveDisplayLeaseForExpense(expense, leases = [], unitsById = new Map
   return candidates.length === 1 ? candidates[0] : candidates[0] || null;
 }
 
+const STATUS_TONE = {
+  amber: "bg-amber-100 text-amber-800",
+  blue: "bg-blue-100 text-blue-700",
+  emerald: "bg-emerald-100 text-emerald-700",
+  red: "bg-red-100 text-red-700",
+  slate: "bg-slate-100 text-slate-700",
+};
+
+function formatCurrency(value) {
+  const amount = Number(value || 0);
+  return `$${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatDate(value) {
+  if (!value) return "-";
+  const parsed = normalizeExpenseDate(value);
+  return parsed ? parsed.toLocaleDateString() : String(value);
+}
+
+function humanize(value) {
+  return String(value || "-").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function DetailField({ label, value }) {
+  return (
+    <div className="space-y-1">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="text-sm text-slate-800">{value || "-"}</p>
+    </div>
+  );
+}
+
+function ActualExpenseDetailDrawer({ expense, open, onOpenChange }) {
+  const classification = expense?._classificationRecord || null;
+  const propertyPath = [expense?._property?.name, expense?._building?.name, expense?._unit?.unit_number || expense?._unit?.unit_id_code]
+    .filter(Boolean)
+    .join(" / ") || "-";
+  const servicePeriod = [expense?.service_period_start || expense?.billing_period_start, expense?.service_period_end || expense?.billing_period_end]
+    .filter(Boolean)
+    .map(formatDate)
+    .join(" - ") || "-";
+  const transactionDate = expense?.transaction_date || expense?.expense_date || expense?.date;
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
+        <SheetHeader>
+          <SheetTitle>{expense?.vendor_name || expense?.vendor || "Actual expense"}</SheetTitle>
+          <SheetDescription>Accounting source record and read-only classification context.</SheetDescription>
+        </SheetHeader>
+
+        <div className="mt-6 space-y-6">
+          <section className="grid grid-cols-2 gap-4">
+            <DetailField label="Invoice Number" value={expense?.invoice_number} />
+            <DetailField label="Transaction Date" value={formatDate(transactionDate)} />
+            <DetailField label="Service Period" value={servicePeriod} />
+            <DetailField label="Amount" value={formatCurrency(expense?.amount)} />
+          </section>
+
+          <section className="grid grid-cols-2 gap-4">
+            <DetailField label="Canonical Category" value={expense?._categoryLabel?.label} />
+            <DetailField label="Subcategory" value={expense?._categoryLabel?.subcategory || expense?.expense_subcategory || expense?.subcategory} />
+            <DetailField label="Raw Source Category" value={expense?.category || expense?.raw_category || expense?.imported_category} />
+            <DetailField label="GL Code" value={expense?.gl_code || expense?.account_code} />
+          </section>
+
+          <section className="grid grid-cols-2 gap-4">
+            <DetailField label="Vendor Details" value={expense?._vendorRecord?.name || expense?.vendor_name || expense?.vendor} />
+            <DetailField label="Property / Building / Unit" value={propertyPath} />
+            <DetailField label="Tenant / Lease Context" value={expense?._tenantLeaseLabel} />
+            <DetailField label="Source" value={humanize(expense?.source_type || expense?.source)} />
+          </section>
+
+          <section className="space-y-3 rounded border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Attachments</p>
+            {expense?.attachment_url ? (
+              <a href={expense.attachment_url} target="_blank" rel="noreferrer" className="text-sm text-blue-600 underline">Open attachment</a>
+            ) : (
+              <p className="text-sm text-slate-500">No attachment linked.</p>
+            )}
+          </section>
+
+          <section className="space-y-3 rounded border border-slate-200 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Approval Audit</p>
+            <div className="grid grid-cols-2 gap-4">
+              <DetailField label="Accounting Status" value={expense?._accountingStatus?.label} />
+              <DetailField label="Approved At" value={formatDate(expense?.approved_at)} />
+              <DetailField label="Approved By" value={expense?.approved_by} />
+              <DetailField label="Notes" value={expense?.notes} />
+            </div>
+          </section>
+
+          <section className="space-y-3 rounded border border-slate-200 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Classification History</p>
+            <div className="grid grid-cols-2 gap-4">
+              <DetailField label="Recovery Status" value={expense?._recoveryStatus?.label} />
+              <DetailField label="Classification Status" value={humanize(classification?.classification_status)} />
+              <DetailField label="Rule Source" value={humanize(classification?.rule_source)} />
+              <DetailField label="Classified At" value={formatDate(classification?.classified_at)} />
+              <DetailField label="Recovery Reason" value={classification?.recovery_reason || classification?.notes} />
+              <DetailField label="CAM Status" value={humanize(classification?.cam_status)} />
+            </div>
+          </section>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 export default function Expenses() {
   const location = useLocation();
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
+  const [recoveryFilter, setRecoveryFilter] = useState("all");
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
   const [scopeUnit, setScopeUnit] = useState("all");
@@ -151,6 +271,7 @@ export default function Expenses() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const [showAddExpenseMethod, setShowAddExpenseMethod] = useState(false);
+  const [detailExpense, setDetailExpense] = useState(null);
   const queryClient = useQueryClient();
 
   const { data: expenses = [], isLoading } = useOrgQuery("Expense");
@@ -162,6 +283,7 @@ export default function Expenses() {
   const { data: allUnits = [] } = useOrgQuery("Unit");
   const { data: vendors = [] } = useOrgQuery("Vendor");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
+  const { data: expenseCategories = [] } = useOrgQuery("ExpenseCategory");
 
   const scope = useMemo(
     () =>
@@ -199,19 +321,15 @@ export default function Expenses() {
     })
   );
 
-  // Pick up an optional ?lease_id= from the URL so links from Lease
-  // Review / Expense Classification land on this page already filtered
-  // to the relevant lease. Without this, scope was being lost during
-  // cross-page navigation (audit Pass 5 finding).
-  const leaseIdParam = useMemo(
-    () => new URLSearchParams(location.search).get("lease_id") || null,
-    [location.search],
-  );
+  const leaseIdParam = useMemo(() => new URLSearchParams(location.search).get("lease_id") || null, [location.search]);
   const highlightedExpenseId = useMemo(
     () => new URLSearchParams(location.search).get("expense_id") || new URLSearchParams(location.search).get("highlight") || null,
-    [location.search],
+    [location.search]
   );
-  const selectorScopedAllExpenses = scopedAllExpenses.filter((expense) => {
+
+  const selectorScopedExpenses = scopedAllExpenses.filter((expense) => {
+    const isLeaseImport = expense.source_type === "lease_import" || expense.source === "lease_import";
+    if (isLeaseImport && expense.lease_id !== null) return false;
     if (scopeProperty !== "all" && expense.property_id !== scopeProperty) return false;
     if (scopeBuilding !== "all" && expense.building_id !== scopeBuilding) return false;
     if (scopeUnit !== "all" && expense.unit_id !== scopeUnit) return false;
@@ -219,81 +337,9 @@ export default function Expenses() {
     return true;
   });
 
-  const selectorScopedExpenses = selectorScopedAllExpenses.filter(
-    (expense) => {
-      const isLeaseImport = expense.source_type === "lease_import" || expense.source === "lease_import";
-      // Hide lease imports only if they are actively attached to a lease.
-      // Orphaned imports should be visible so they can be bulk deleted.
-      return !isLeaseImport || expense.lease_id === null;
-    }
-  );
   const selectorScopedExpenseIds = useMemo(
     () => selectorScopedExpenses.map((expense) => expense.id).filter(Boolean),
     [selectorScopedExpenses]
-  );
-
-  const updateScopeParams = ({ property = scopeProperty, building = scopeBuilding, unit = scopeUnit }) => {
-    const params = new URLSearchParams(location.search);
-    if (property && property !== "all") params.set("property", property);
-    else params.delete("property");
-
-    if (building && building !== "all") params.set("building", building);
-    else params.delete("building");
-
-    if (unit && unit !== "all") params.set("unit", unit);
-    else params.delete("unit");
-
-    navigate({
-      pathname: location.pathname,
-      search: params.toString() ? `?${params.toString()}` : "",
-    }, { replace: true });
-  };
-
-  const handleScopePropertyChange = (value) => {
-    setScopeProperty(value);
-    setScopeBuilding("all");
-    setScopeUnit("all");
-    updateScopeParams({ property: value, building: "all", unit: "all" });
-  };
-
-  const handleScopeBuildingChange = (value) => {
-    setScopeBuilding(value);
-    setScopeUnit("all");
-    updateScopeParams({ property: scopeProperty, building: value, unit: "all" });
-  };
-
-  const handleScopeUnitChange = (value) => {
-    setScopeUnit(value);
-    updateScopeParams({ property: scopeProperty, building: scopeBuilding, unit: value });
-  };
-  const selectedPropertyId = scopeProperty !== "all" ? scopeProperty : scope.propertyId || null;
-  const selectorScopedLeases = leases.filter((lease) => {
-    if (
-      !matchesHierarchyScope(lease, scope, {
-        portfolioKey: "portfolio_id",
-        propertyKey: "property_id",
-        buildingKey: "building_id",
-        unitKey: "unit_id",
-      })
-    ) {
-      return false;
-    }
-
-    if (scopeProperty !== "all" && lease.property_id !== scopeProperty) return false;
-
-    if (scopeBuilding !== "all") {
-      const leaseUnit = lease.unit_id ? scope.unitById.get(lease.unit_id) ?? null : null;
-      const leaseBuildingId = lease.building_id || leaseUnit?.building_id || null;
-      if (leaseBuildingId !== scopeBuilding) return false;
-    }
-
-    if (scopeUnit !== "all" && lease.unit_id !== scopeUnit) return false;
-    return true;
-  });
-
-  const selectorScopedLeaseIds = useMemo(
-    () => selectorScopedLeases.map((lease) => lease.id).filter(Boolean),
-    [selectorScopedLeases]
   );
 
   const { data: selectorScopedClassifications = [] } = useQuery({
@@ -303,136 +349,112 @@ export default function Expenses() {
   });
 
   const classificationByExpenseId = useMemo(
-    () =>
-      new Map(
-        selectorScopedClassifications
-          .map((classification) => [classification.expense_id || classification.actual_expense_id, classification])
-          .filter(([expenseId]) => Boolean(expenseId))
-      ),
+    () => new Map(
+      selectorScopedClassifications
+        .map((classification) => [classification.expense_id || classification.actual_expense_id, classification])
+        .filter(([expenseId]) => Boolean(expenseId))
+    ),
     [selectorScopedClassifications]
   );
 
-  const tenantById = useMemo(
-    () => new Map((tenants || []).map((tenant) => [tenant.id, tenant])),
-    [tenants]
-  );
-  const unitById = useMemo(
-    () => new Map((allUnits || []).map((unit) => [unit.id, unit])),
-    [allUnits]
-  );
+  const tenantById = useMemo(() => new Map((tenants || []).map((tenant) => [tenant.id, tenant])), [tenants]);
+  const unitById = useMemo(() => new Map((allUnits || []).map((unit) => [unit.id, unit])), [allUnits]);
+  const categoryById = useMemo(() => new Map((expenseCategories || []).map((category) => [category.id, category])), [expenseCategories]);
 
   const displayedExpenses = useMemo(() => {
     return selectorScopedExpenses.map((expense) => {
       const unit = expense.unit_id ? unitById.get(expense.unit_id) || null : null;
+      const building = expense.building_id
+        ? scope.buildingById.get(expense.building_id) || null
+        : unit?.building_id
+          ? scope.buildingById.get(unit.building_id) || null
+          : null;
+      const property = expense.property_id
+        ? scope.propertyById.get(expense.property_id) || null
+        : building?.property_id
+          ? scope.propertyById.get(building.property_id) || null
+          : null;
       const matchedLease = resolveDisplayLeaseForExpense(expense, leases, unitById);
-      const directTenant =
-        tenantById.get(expense.tenant_id) ||
-        tenantById.get(matchedLease?.tenant_id) ||
-        tenantById.get(unit?.tenant_id) ||
-        null;
-      const linkedExpense = matchedLease
-        ? {
-            ...expense,
-            lease_id: expense.lease_id || matchedLease.id || null,
-            tenant_id: expense.tenant_id || matchedLease.tenant_id || unit?.tenant_id || null,
-            tenant_name:
-              expense.tenant_name ||
-              matchedLease.tenant_name ||
-              approvedLeaseFieldValue(matchedLease, ["tenant_name", "tenant", "tenant_legal_name", "lessee"]) ||
-              directTenant?.tenant_name ||
-              directTenant?.name ||
-              null,
-            property_id: expense.property_id || matchedLease.property_id || null,
-            building_id: expense.building_id || matchedLease.building_id || null,
-            unit_id: expense.unit_id || matchedLease.unit_id || null,
-          }
-        : {
-            ...expense,
-            tenant_id: expense.tenant_id || unit?.tenant_id || null,
-            tenant_name:
-              expense.tenant_name ||
-              directTenant?.tenant_name ||
-              directTenant?.name ||
-              null,
-          };
-      const classification = classificationByExpenseId.get(expense.id);
-      if (!classification) return linkedExpense;
-
-      const expenseWorkflowUpdatedAt = Date.parse(
-        linkedExpense.classification_updated_at || linkedExpense.updated_at || ""
-      );
-      const classificationUpdatedAt = Date.parse(
-        classification.updated_at ||
-        classification.classified_at ||
-        classification.reviewed_at ||
-        classification.approved_at ||
-        classification.finalized_at ||
-        ""
-      );
-      const preferBaseWorkflow =
-        Number.isFinite(expenseWorkflowUpdatedAt) &&
-        (!Number.isFinite(classificationUpdatedAt) || expenseWorkflowUpdatedAt > classificationUpdatedAt);
-
-      const effectiveRecovery =
-        (preferBaseWorkflow
-          ? (linkedExpense.recoverability_result || linkedExpense.recovery_status || linkedExpense.classification)
-          : (classification.recoverability_result || classification.recovery_status)) ||
-        linkedExpense.recovery_status ||
-        linkedExpense.classification ||
-        "needs_review";
+      const tenantResolution = resolveTenantForExpense(expense, { leases, leaseById: undefined, unitById, tenantById });
+      const directTenant = tenantResolution.tenant || tenantById.get(expense.tenant_id) || tenantById.get(matchedLease?.tenant_id) || tenantById.get(unit?.tenant_id) || null;
+      const tenantName =
+        expense.tenant_name ||
+        directTenant?.tenant_name ||
+        directTenant?.name ||
+        matchedLease?.tenant_name ||
+        approvedLeaseFieldValue(matchedLease, ["tenant_name", "tenant", "tenant_legal_name", "lessee"]);
+      const classification = classificationByExpenseId.get(expense.id) || null;
+      const categoryLabel = getCanonicalCategoryLabel(expense, categoryById);
+      const accountingStatus = getAccountingStatus(expense);
+      const recoveryStatus = getRecoveryStatusFromClassification(classification);
+      const matchedVendor = vendors.find(
+        (vendor) => vendor.name?.toLowerCase() === expense.vendor?.toLowerCase() || vendor.id === expense.vendor_id
+      ) || null;
+      const leaseLabel = matchedLease?.id ? matchedLease.lease_name || matchedLease.name || "Lease #" + String(matchedLease.id).slice(0, 8) : null;
+      const tenantLeaseLabel = tenantName ? [tenantName, leaseLabel].filter(Boolean).join(" / ") : "Shared property expense";
 
       return {
-        ...linkedExpense,
-        recovery_status: preferBaseWorkflow
-          ? (linkedExpense.recovery_status || linkedExpense.recoverability_result || effectiveRecovery)
-          : (classification.recovery_status || effectiveRecovery),
-        recoverability_result: preferBaseWorkflow
-          ? (linkedExpense.recoverability_result || linkedExpense.recovery_status || effectiveRecovery)
-          : (classification.recoverability_result || effectiveRecovery),
-        classification: effectiveRecovery === "excluded" ? "non_recoverable" : effectiveRecovery,
-        approval_status: preferBaseWorkflow
-          ? (getEffectiveApprovalStatus(linkedExpense) || getEffectiveApprovalStatus(classification))
-          : (getEffectiveApprovalStatus(classification) || getEffectiveApprovalStatus(linkedExpense)),
-        approved_status: preferBaseWorkflow
-          ? (getEffectiveApprovalStatus(linkedExpense) || getEffectiveApprovalStatus(classification))
-          : (getEffectiveApprovalStatus(classification) || getEffectiveApprovalStatus(linkedExpense)),
-        rule_source: preferBaseWorkflow
-          ? (linkedExpense.rule_source || classification.rule_source)
-          : (classification.rule_source || linkedExpense.rule_source),
-        classification_status: preferBaseWorkflow
-          ? (linkedExpense.classification_status || classification.classification_status)
-          : (classification.classification_status || linkedExpense.classification_status),
-        confidence_score: preferBaseWorkflow
-          ? (linkedExpense.confidence_score ?? classification.confidence_score)
-          : (classification.confidence_score ?? linkedExpense.confidence_score),
-        recovery_reason: preferBaseWorkflow
-          ? (linkedExpense.recovery_reason || classification.recovery_reason)
-          : (classification.recovery_reason || linkedExpense.recovery_reason),
-        cam_eligible: preferBaseWorkflow
-          ? (linkedExpense.cam_eligible || classification.cam_eligible)
-          : (classification.cam_eligible || linkedExpense.cam_eligible),
-        recovery_method: preferBaseWorkflow
-          ? (linkedExpense.recovery_method || classification.recovery_method)
-          : (classification.recovery_method || linkedExpense.recovery_method),
-        approved_at: preferBaseWorkflow
-          ? (linkedExpense.approved_at || classification.approved_at)
-          : (classification.approved_at || linkedExpense.approved_at),
-        reviewed_at: preferBaseWorkflow
-          ? (linkedExpense.reviewed_at || classification.reviewed_at)
-          : (classification.reviewed_at || linkedExpense.reviewed_at),
-        finalized_at: preferBaseWorkflow
-          ? (linkedExpense.finalized_at || classification.finalized_at)
-          : (classification.finalized_at || linkedExpense.finalized_at),
+        ...expense,
+        _property: property,
+        _building: building,
+        _unit: unit,
+        _displayLease: matchedLease || null,
+        _displayTenant: directTenant || null,
+        _tenantName: tenantName || null,
+        _tenantResolution: tenantResolution,
+        _tenantLeaseLabel: tenantLeaseLabel,
+        _classificationRecord: classification,
+        _categoryLabel: categoryLabel,
+        _accountingStatus: accountingStatus,
+        _recoveryStatus: recoveryStatus,
+        _needsClassification: expenseNeedsClassification(expense, classification),
+        _vendorRecord: matchedVendor,
       };
     });
-  }, [classificationByExpenseId, leases, selectorScopedExpenses, tenantById, unitById]);
+  }, [categoryById, classificationByExpenseId, leases, scope.buildingById, scope.propertyById, selectorScopedExpenses, tenantById, unitById, vendors]);
 
-  const displayedExpenseById = useMemo(
-    () => new Map(displayedExpenses.map((expense) => [expense.id, expense])),
-    [displayedExpenses]
-  );
+  const filtered = displayedExpenses.filter((expense) => {
+    const matchSearch =
+      !search ||
+      [
+        expense._categoryLabel?.label,
+        expense.expense_subcategory,
+        expense.category,
+        expense.vendor_name,
+        expense.vendor,
+        expense._property?.name,
+        expense._building?.name,
+        expense._unit?.unit_number,
+        expense._tenantLeaseLabel,
+        expense.description,
+        expense.gl_code,
+        expense.invoice_number,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(search.toLowerCase()));
 
-  const invalidateExpenseWorkflowQueries = () => {
+    const accountingStatus = expense._accountingStatus?.value;
+    const recoveryStatus = expense._recoveryStatus?.value;
+    const matchPrimary =
+      filter === "all" ||
+      (filter === "pending_approval" && accountingStatus === "pending") ||
+      (filter === "approved" && accountingStatus === "approved") ||
+      (filter === "rejected" && accountingStatus === "rejected") ||
+      (filter === "needs_classification" && expense._needsClassification);
+    const matchRecovery = recoveryFilter === "all" || recoveryStatus === recoveryFilter;
+    return matchSearch && matchPrimary && matchRecovery;
+  });
+
+  const subtitleScope = getScopeSubtitle(scope, {
+    default: `${displayedExpenses.length} actual expense records`,
+    portfolio: (portfolio) => `${displayedExpenses.length} actual expense records in ${portfolio.name}`,
+    property: (property) => `${displayedExpenses.length} actual expense records for ${property.name}`,
+    building: (building) => `${displayedExpenses.length} actual expense records for ${building.name}`,
+    unit: (unit) => `${displayedExpenses.length} actual expense records for ${unit.unit_number || unit.unit_id_code || "selected unit"}`,
+    org: () => `${displayedExpenses.length} actual expense records in selected organization`,
+  });
+
+  const invalidateExpenseQueries = () => {
     queryClient.invalidateQueries({ queryKey: ["Expense"] });
     queryClient.invalidateQueries({ queryKey: ["expense-dashboard-classifications"] });
     queryClient.invalidateQueries({ queryKey: ["lease-expense-classifications"] });
@@ -440,78 +462,44 @@ export default function Expenses() {
     queryClient.invalidateQueries({ queryKey: ["expense-projection-finalized"] });
   };
 
-  const { data: selectorScopedRuleSets = [] } = useQuery({
-    queryKey: ["expense-dashboard-rule-sets", selectorScopedLeaseIds.join("|")],
-    queryFn: () => leaseExpenseRuleService.loadRuleSets(selectorScopedLeaseIds),
-    enabled: selectorScopedLeaseIds.length > 0,
+  const updateExpenseMutation = useMutation({
+    mutationFn: async ({ id, patch }) => {
+      const updated = await ExpenseService.update(id, patch);
+      if (!updated) throw new Error("Update failed");
+      return updated;
+    },
+    onSuccess: invalidateExpenseQueries,
+    onError: (err) => toast.error(`Could not update expense: ${err?.message || "Unknown error"}`),
   });
 
-  const classColors = {
-    recoverable: "bg-emerald-100 text-emerald-700",
-    non_recoverable: "bg-red-100 text-red-700",
-    conditional: "bg-amber-100 text-amber-700",
-    excluded: "bg-slate-200 text-slate-700",
-    needs_review: "bg-amber-100 text-amber-700",
+  const approveExpense = (expense) => {
+    updateExpenseMutation.mutate(
+      {
+        id: expense.id,
+        patch: {
+          approval_status: "approved",
+          approved_status: "approved",
+          review_status: "approved",
+          approved_at: new Date().toISOString(),
+        },
+      },
+      { onSuccess: () => toast.success("Expense approved") },
+    );
   };
 
-  const scopedRuleSummary = useMemo(() => {
-    const allRules = selectorScopedRuleSets.flatMap((entry) => entry.rules || []);
-    const groupedRules = leaseExpenseRuleService.groupRulesByRecoveryStatus(allRules);
-    const approvedRuleLeaseIds = new Set(
-      allRules
-        .filter((rule) => {
-          const approval = String(rule?.approval_status || "").trim().toLowerCase();
-          const review = String(rule?.review_status || "").trim().toLowerCase();
-          const status = String(rule?.status || "").trim().toLowerCase();
-          const rowStatus = String(rule?.row_status || "").trim().toLowerCase();
-          return (
-            approval === "approved" ||
-            review === "approved" ||
-            review === "reviewed" ||
-            status === "approved" ||
-            rowStatus === "mapped" ||
-            rowStatus === "manually_added"
-          );
-        })
-        .map((rule) => rule.lease_id || rule.rule_set?.lease_id)
-        .filter(Boolean)
+  const rejectExpense = (expense) => {
+    updateExpenseMutation.mutate(
+      {
+        id: expense.id,
+        patch: {
+          approval_status: "rejected",
+          approved_status: "rejected",
+          review_status: "rejected",
+        },
+      },
+      { onSuccess: () => toast.success("Expense rejected") },
     );
-    return {
-      total: allRules.length,
-      approvedRuleSets: approvedRuleLeaseIds.size,
-      draftRuleSets: Math.max(selectorScopedLeaseIds.length - approvedRuleLeaseIds.size, 0),
-      recoverable: groupedRules.recoverable.length,
-      nonRecoverable: groupedRules.nonRecoverable.length,
-      conditional: groupedRules.conditional.length,
-      needsReview: groupedRules.needsReview.length,
-    };
-  }, [selectorScopedLeaseIds.length, selectorScopedRuleSets]);
-
-  const filtered = displayedExpenses.filter((expense) => {
-    const property = expense.property_id ? scope.propertyById.get(expense.property_id) ?? null : null;
-    const building = expense.building_id ? scope.buildingById.get(expense.building_id) ?? null : null;
-    const unit = expense.unit_id ? scope.unitById.get(expense.unit_id) ?? null : null;
-
-    const matchSearch =
-      !search ||
-      [expense.category, expense.vendor, property?.name, building?.name, unit?.unit_number, expense.description]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(search.toLowerCase()));
-    const matchFilter =
-      filter === "all" ||
-      expense.classification === filter ||
-      expense.recovery_status === filter;
-    return matchSearch && matchFilter;
-  });
-
-  const subtitleScope = getScopeSubtitle(scope, {
-    default: `${displayedExpenses.length} expense records · Classification and recovery tracking`,
-    portfolio: (portfolio) => `${displayedExpenses.length} expense records in ${portfolio.name}`,
-    property: (property) => `${displayedExpenses.length} expense records for ${property.name}`,
-    building: (building) => `${displayedExpenses.length} expense records for ${building.name}`,
-    unit: (unit) => `${displayedExpenses.length} expense records for ${unit.unit_number || unit.unit_id_code || "selected unit"}`,
-    org: () => `${displayedExpenses.length} expense records in selected organization`,
-  });
+  };
 
   const deleteMutation = useMutation({
     mutationFn: async (id) => {
@@ -524,9 +512,28 @@ export default function Expenses() {
       setSelectedExpenseIds((prev) => prev.filter((selectedId) => selectedId !== id));
       toast.success("Expense deleted successfully");
     },
-    onError: (err) => {
-      toast.error(`Failed to delete expense: ${err?.message || "Unknown error"}`);
+    onError: (err) => toast.error(`Failed to delete expense: ${err?.message || "Unknown error"}`),
+  });
+
+  const bulkApproveMutation = useMutation({
+    mutationFn: async (ids) => {
+      const approvedAt = new Date().toISOString();
+      await Promise.all(
+        ids.map((id) => ExpenseService.update(id, {
+          approval_status: "approved",
+          approved_status: "approved",
+          review_status: "approved",
+          approved_at: approvedAt,
+        })),
+      );
+      return ids.length;
     },
+    onSuccess: (count) => {
+      invalidateExpenseQueries();
+      setSelectedExpenseIds([]);
+      toast.success(`${count} expense${count === 1 ? "" : "s"} approved.`);
+    },
+    onError: (err) => toast.error(`Bulk approve failed: ${err?.message || "Unknown error"}`),
   });
 
   const bulkDeleteMutation = useMutation({
@@ -540,127 +547,14 @@ export default function Expenses() {
       setShowBulkDelete(false);
       toast.success(`${count} expense record${count === 1 ? "" : "s"} deleted successfully`);
     },
-    onError: (err) => {
-      toast.error(`Failed to delete selected expenses: ${err?.message || "Unknown error"}`);
-    },
-  });
-
-  // ── Inline edit mutations (recovery / approval / amount) ───────────────
-  // Lets the reviewer set recovery_status + approved_status from the row
-  // dropdown without leaving the page. Approved actuals are what flow into
-  // Expense Classification's "Run Classification" step alongside approved
-  // lease_expense_rules.
-  const updateExpenseMutation = useMutation({
-    mutationFn: async ({ expense, id, patch }) => {
-      const hasReviewFields =
-        patch &&
-        (patch.recovery_status !== undefined || patch.approved_status !== undefined);
-      const hasAmountUpdate = patch && patch.amount !== undefined;
-      const updated = hasReviewFields
-        ? await expenseService.reviewExpense(expense || id, {
-            recoveryStatus: patch.recovery_status,
-            approvedStatus: patch.approved_status,
-            ruleSource: patch.rule_source || "manual",
-            reason: patch.recovery_reason || "Manual review update from Actual Expenses",
-          })
-        : hasAmountUpdate
-          ? await expenseService.updateExpenseAmount(id, patch.amount, {
-              reason: patch.recovery_reason || "Manual amount correction from Actual Expenses",
-            })
-          : await ExpenseService.update(id, patch);
-      if (!updated) throw new Error("Update failed");
-      return updated;
-    },
-    onSuccess: () => {
-      invalidateExpenseWorkflowQueries();
-    },
-    onError: (err) => {
-      toast.error(`Could not update expense: ${err?.message || "Unknown error"}`);
-    },
-  });
-
-  // Single-row helpers
-  const setRecoveryStatus = (expense, recoveryStatus) => {
-    const classification = recoveryStatus === "excluded" ? "non_recoverable" : recoveryStatus;
-    updateExpenseMutation.mutate(
-      {
-        id: expense.id,
-        expense,
-        patch: {
-          recovery_status: recoveryStatus,
-          classification,
-          approved_status: getEffectiveApprovalStatus(expense) === "approved" ? "approved" : undefined,
-          rule_source: "manual",
-          recovery_reason: "Manual review update from Actual Expenses",
-        },
-      },
-      { onSuccess: () => toast.success(`Marked ${String(recoveryStatus).replace("_", " ")}`) },
-    );
-  };
-
-  const approveExpense = (expense) => {
-    updateExpenseMutation.mutate(
-      {
-        id: expense.id,
-        expense,
-        patch: {
-          recovery_status: expense.recovery_status || expense.recoverability_result || expense.classification || "needs_review",
-          approved_status: "approved",
-          rule_source: expense.rule_source || "manual",
-          recovery_reason: expense.recovery_reason || "Manually approved from Actual Expenses",
-        },
-      },
-      { onSuccess: () => toast.success("Expense approved") },
-    );
-  };
-
-  const promptForAmount = (expense) => {
-    const input = window.prompt(
-      `Enter amount for ${expense.vendor || expense.category || "this expense"}:`,
-      expense.amount != null ? String(expense.amount) : "",
-    );
-    if (input == null) return;
-    const cleaned = String(input).replace(/[$,\s]/g, "");
-    const amount = Number(cleaned);
-    if (!Number.isFinite(amount) || amount < 0) {
-      toast.error("Invalid amount");
-      return;
-    }
-    updateExpenseMutation.mutate(
-      { id: expense.id, patch: { amount } },
-      { onSuccess: () => toast.success(`Amount set to $${amount.toLocaleString()}`) },
-    );
-  };
-
-  // Bulk approve for selected rows
-  const bulkApproveMutation = useMutation({
-    mutationFn: async (ids) => {
-      await Promise.all(
-        ids.map((id) =>
-          expenseService.reviewExpense(displayedExpenseById.get(id) || id, {
-            approvedStatus: "approved",
-            ruleSource: (displayedExpenseById.get(id)?.rule_source || "manual"),
-            reason: "Bulk approved from Actual Expenses",
-          })
-        ),
-      );
-      return ids.length;
-    },
-    onSuccess: (count) => {
-      invalidateExpenseWorkflowQueries();
-      setSelectedExpenseIds([]);
-      toast.success(`${count} expense${count === 1 ? "" : "s"} approved.`);
-    },
-    onError: (err) => toast.error(`Bulk approve failed: ${err?.message || "Unknown error"}`),
+    onError: (err) => toast.error(`Failed to delete selected expenses: ${err?.message || "Unknown error"}`),
   });
 
   const allFilteredSelected = filtered.length > 0 && filtered.every((expense) => selectedExpenseIds.includes(expense.id));
 
   const toggleExpenseSelection = (expenseId) => {
     setSelectedExpenseIds((prev) =>
-      prev.includes(expenseId)
-        ? prev.filter((id) => id !== expenseId)
-        : [...prev, expenseId]
+      prev.includes(expenseId) ? prev.filter((id) => id !== expenseId) : [...prev, expenseId]
     );
   };
 
@@ -672,7 +566,6 @@ export default function Expenses() {
     const filteredIds = new Set(filtered.map((expense) => expense.id));
     setSelectedExpenseIds((prev) => prev.filter((id) => !filteredIds.has(id)));
   };
-
   return (
     <div className="p-4 lg:p-6 space-y-5">
       <PageHeader icon={Receipt} title="Actual Expenses" subtitle={subtitleScope} iconColor="from-red-500 to-rose-600">
@@ -738,20 +631,8 @@ export default function Expenses() {
       </Dialog>
 
       <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-        <span className="font-medium">Actual Expenses</span> come from invoices, bulk imports, and
-        vendor bills.{" "}
-        <Link to={createPageUrl("LeaseExpenseRules")} className="underline">
-          Lease Expense Rules
-        </Link>{" "}
-        (responsibility / recovery method / caps) are extracted from approved lease documents and
-        live on a separate page. Approved expense rows feed CAM and Budget.
+        Actual Expenses record real landlord costs from invoices, GL imports, and manual entries. Accounting approval confirms that the expense is valid. Expense Classification determines whether an approved expense is recoverable, direct, excluded, or eligible for CAM. Approved historical expenses also support budgeting and forecasting.
       </div>
-
-      {selectedPropertyId ? (
-        <PipelineActions propertyId={selectedPropertyId} fiscalYear={new Date().getFullYear()} actions={EXPENSE_ACTIONS} />
-      ) : (
-        <div className="text-xs text-slate-500">Select a property scope to run expense compute/export actions.</div>
-      )}
 
       <ScopeSelector
         properties={scope.scopedProperties}
@@ -782,48 +663,53 @@ export default function Expenses() {
         </TabsList>
 
         <TabsContent value="expenses" className="space-y-4">
-          <div className="flex gap-3 items-center flex-wrap">
-            <div className="relative flex-1 max-w-sm">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-              <Input placeholder="Search category, vendor, property..." className="pl-9 h-9 text-sm" value={search} onChange={(event) => setSearch(event.target.value)} />
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative min-w-[240px] flex-1 max-w-sm">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Input placeholder="Search expenses..." className="h-9 pl-9 text-sm" value={search} onChange={(event) => setSearch(event.target.value)} />
             </div>
-            <div className="flex gap-1">
-              {["all", "recoverable", "non_recoverable", "conditional", "excluded", "needs_review"].map((value) => (
+            <div className="flex flex-wrap gap-1">
+              {PRIMARY_FILTERS.map((item) => (
                 <Button
-                  key={value}
-                  variant={filter === value ? "default" : "outline"}
+                  key={item.value}
+                  variant={filter === item.value ? "default" : "outline"}
                   size="sm"
-                  onClick={() => setFilter(value)}
-                  className={`text-xs capitalize ${filter === value ? "bg-blue-600" : ""}`}
+                  onClick={() => setFilter(item.value)}
+                  className={`text-xs ${filter === item.value ? "bg-blue-600" : ""}`}
                 >
-                  {value === "all" ? "All" : value.replaceAll("_", "-")}
+                  {item.label}
+                </Button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-1 border-l border-slate-200 pl-3">
+              {RECOVERY_FILTERS.map((item) => (
+                <Button
+                  key={item.value}
+                  variant={recoveryFilter === item.value ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setRecoveryFilter(item.value)}
+                  className={`text-xs ${recoveryFilter === item.value ? "bg-slate-700" : ""}`}
+                >
+                  {item.label}
                 </Button>
               ))}
             </div>
             {selectedExpenseIds.length > 0 && (
               <>
-                <span className="text-xs font-medium text-slate-500">
-                  {selectedExpenseIds.length} selected
-                </span>
-                <Button variant="outline" size="sm" onClick={() => setSelectedExpenseIds([])}>
-                  Clear
-                </Button>
+                <span className="text-xs font-medium text-slate-500">{selectedExpenseIds.length} selected</span>
+                <Button variant="outline" size="sm" onClick={() => setSelectedExpenseIds([])}>Clear</Button>
                 <Button
                   size="sm"
                   className="bg-emerald-600 text-white hover:bg-emerald-700"
                   onClick={() => bulkApproveMutation.mutate(selectedExpenseIds)}
                   disabled={bulkApproveMutation.isPending}
-                  title="Mark selected expenses as approved so they flow into Expense Classification"
+                  title="Approve selected accounting expense records"
                 >
-                  <ClipboardCheck className="w-4 h-4 mr-1" />
-                  {bulkApproveMutation.isPending ? "Approving…" : `Approve ${selectedExpenseIds.length}`}
+                  <ClipboardCheck className="mr-1 h-4 w-4" />
+                  {bulkApproveMutation.isPending ? "Approving..." : `Approve ${selectedExpenseIds.length}`}
                 </Button>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  onClick={() => setShowBulkDelete(true)}
-                >
-                  <Trash2 className="w-4 h-4 mr-1" />
+                <Button size="sm" variant="destructive" onClick={() => setShowBulkDelete(true)}>
+                  <Trash2 className="mr-1 h-4 w-4" />
                   Delete Selected
                 </Button>
               </>
@@ -831,190 +717,154 @@ export default function Expenses() {
           </div>
 
           <Card className="overflow-hidden border-slate-200/80">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-gradient-to-r from-slate-50 to-slate-100/50">
-                  <TableHead className="w-10">
-                    <Checkbox
-                      checked={allFilteredSelected}
-                      onCheckedChange={toggleSelectAllFiltered}
-                      aria-label="Select all filtered expenses"
-                    />
-                  </TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">DATE</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">PROPERTY</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">BUILDING</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">UNIT</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">TENANT</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">CATEGORY</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">SUBCATEGORY</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">GL CODE</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">VENDOR</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider text-right">AMOUNT</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">RECOVERY</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">APPROVAL</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">SOURCE</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider w-20"></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {isLoading ? (
-                  <TableRow>
-                      <TableCell colSpan={15} className="text-center py-12">
-                        <Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" />
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-gradient-to-r from-slate-50 to-slate-100/50">
+                    <TableHead className="text-[10px] font-bold tracking-wider">Date</TableHead>
+                    <TableHead className="text-[10px] font-bold tracking-wider">Vendor</TableHead>
+                    <TableHead className="text-[10px] font-bold tracking-wider">Property / Building / Unit</TableHead>
+                    <TableHead className="text-[10px] font-bold tracking-wider">Tenant / Lease</TableHead>
+                    <TableHead className="text-[10px] font-bold tracking-wider">Category</TableHead>
+                    <TableHead className="text-[10px] font-bold tracking-wider">GL Code</TableHead>
+                    <TableHead className="text-right text-[10px] font-bold tracking-wider">Amount</TableHead>
+                    <TableHead className="text-[10px] font-bold tracking-wider">Accounting Status</TableHead>
+                    <TableHead className="text-[10px] font-bold tracking-wider">Recovery Status</TableHead>
+                    <TableHead className="text-[10px] font-bold tracking-wider">Source</TableHead>
+                    <TableHead className="text-[10px] font-bold tracking-wider">
+                      <div className="flex items-center justify-end gap-2">
+                        <span>Actions</span>
+                        <Checkbox
+                          checked={allFilteredSelected}
+                          onCheckedChange={toggleSelectAllFiltered}
+                          aria-label="Select all filtered expenses"
+                        />
+                      </div>
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {isLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={11} className="py-12 text-center">
+                        <Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" />
                       </TableCell>
                     </TableRow>
                   ) : filtered.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={15} className="text-center py-12 text-sm text-slate-400">
-                        {scopedRuleSummary.total > 0
-                          ? "No expense rows found yet. Lease rules are ready above; upload actual expenses or review the extracted rule set."
-                          : "No expenses found"}
-                      </TableCell>
+                      <TableCell colSpan={11} className="py-12 text-center text-sm text-slate-400">No expenses found</TableCell>
                     </TableRow>
-                ) : (
-                  filtered.map((expense) => {
-                    const property = expense.property_id ? scope.propertyById.get(expense.property_id) ?? null : null;
-                    const building = expense.building_id ? scope.buildingById.get(expense.building_id) ?? null : null;
-                    const unit = expense.unit_id ? scope.unitById.get(expense.unit_id) ?? null : null;
-                    const matchedVendor = vendors.find(
-                      (vendor) => vendor.name?.toLowerCase() === expense.vendor?.toLowerCase() || vendor.id === expense.vendor_id
-                    );
-                    // Centralized tenant resolver. Use the page's already-built
-                    // index maps for cheaper lookup.
-                    const tenantResolution = resolveTenantForExpense(expense, {
-                      leases,
-                      leaseById: undefined, // resolver builds its own from `leases`
-                      unitById,
-                      tenantById,
-                    });
+                  ) : (
+                    filtered.map((expense) => {
+                      const accountingStatus = expense._accountingStatus;
+                      const recoveryStatus = expense._recoveryStatus;
+                      const propertyPath = [expense._property?.name || getPropertyName(expense.property_id), expense._building?.name, expense._unit?.unit_number || expense._unit?.unit_id_code]
+                        .filter(Boolean)
+                        .join(" / ");
 
-                    return (
-                      <TableRow key={expense.id} className={expense.id === highlightedExpenseId ? "bg-amber-50 ring-1 ring-amber-300" : "hover:bg-slate-50"}>
-                        <TableCell>
-                          <Checkbox
-                            checked={selectedExpenseIds.includes(expense.id)}
-                            onCheckedChange={() => toggleExpenseSelection(expense.id)}
-                            aria-label={`Select expense ${expense.category || expense.id}`}
-                          />
-                        </TableCell>
-                        <TableCell className="text-xs whitespace-nowrap">
-                          {expense.date || (expense.fiscal_year ? `FY${expense.fiscal_year}${expense.month ? `-M${expense.month}` : ""}` : "—")}
-                        </TableCell>
-                        <TableCell className="text-xs font-medium text-slate-800">{property?.name || getPropertyName(expense.property_id)}</TableCell>
-                        <TableCell className="text-xs text-slate-600">{building?.name || "—"}</TableCell>
-                        <TableCell className="text-xs text-slate-600">{unit?.unit_number || unit?.unit_id_code || "—"}</TableCell>
-                        <TableCell className="text-xs text-slate-600">
-                          {tenantResolution.tenant?.name ? (
-                            <span
-                              title={`Resolved via ${tenantResolution.source}`}
-                              className="text-slate-700"
-                            >
-                              {tenantResolution.tenant.name}
-                            </span>
-                          ) : (
-                            <span
-                              className="inline-flex items-center gap-1 text-slate-400"
-                              title={
-                                tenantResolution.reasonText
-                                  ? `No tenant linked: ${tenantResolution.reasonText}`
-                                  : "No tenant linked"
-                              }
-                            >
-                              —
-                              <HelpCircle className="h-3 w-3 text-amber-500" aria-label="tenant unresolved" />
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-xs font-medium capitalize">{expense.category?.replace(/_/g, " ")}</TableCell>
-                        <TableCell className="text-xs text-slate-600">{expense.expense_subcategory || "—"}</TableCell>
-                        <TableCell className="text-[10px] font-mono text-slate-500">{expense.gl_code || "—"}</TableCell>
-                        <TableCell className="text-xs">
-                          {(expense.vendor_name || expense.vendor) ? (
-                            matchedVendor ? (
-                              <Link to={`/VendorProfile?id=${matchedVendor.id}`} className="text-blue-600 hover:underline font-medium" onClick={(event) => event.stopPropagation()}>
-                                {expense.vendor_name || expense.vendor}
-                              </Link>
+                      return (
+                        <TableRow key={expense.id} className={expense.id === highlightedExpenseId ? "bg-amber-50 ring-1 ring-amber-300" : "hover:bg-slate-50"}>
+                          <TableCell className="whitespace-nowrap text-xs">
+                            {formatDate(expense.expense_date || expense.date || expense.service_period_start)}
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {(expense.vendor_name || expense.vendor) ? (
+                              expense._vendorRecord ? (
+                                <Link to={`/VendorProfile?id=${expense._vendorRecord.id}`} className="font-medium text-blue-600 hover:underline" onClick={(event) => event.stopPropagation()}>
+                                  {expense.vendor_name || expense.vendor}
+                                </Link>
+                              ) : (
+                                <span>{expense.vendor_name || expense.vendor}</span>
+                              )
                             ) : (
-                              <span>{expense.vendor_name || expense.vendor}</span>
-                            )
-                          ) : (
-                            "—"
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right text-xs font-mono font-semibold tabular-nums">${(expense.amount || 0).toLocaleString()}</TableCell>
-                        <TableCell>
-                          <Badge className={`${classColors[expense.recovery_status || expense.classification] || "bg-slate-100 text-slate-700"} text-[8px] uppercase`}>
-                            {(expense.recovery_status || expense.classification || "needs_review").replace("_", "-")}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-[10px] text-slate-500">{getEffectiveApprovalStatus(expense) || "draft"}</TableCell>
-
-                        <TableCell className="text-[10px] text-slate-400 capitalize">{expense.source_type || expense.source}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[10px]" title="Actions">
-                                  <MoreVertical className="h-3 w-3" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end" className="w-56">
-                                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-slate-500">
-                                  Set recovery
-                                </DropdownMenuLabel>
-                                <DropdownMenuItem onClick={() => setRecoveryStatus(expense, "recoverable")}>
-                                  <Check className="mr-2 h-3.5 w-3.5 text-emerald-600" /> Recoverable
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setRecoveryStatus(expense, "non_recoverable")}>
-                                  <X className="mr-2 h-3.5 w-3.5 text-rose-600" /> Non-Recoverable
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setRecoveryStatus(expense, "conditional")}>
-                                  <HelpCircle className="mr-2 h-3.5 w-3.5 text-amber-600" /> Conditional
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setRecoveryStatus(expense, "excluded")}>
-                                  <X className="mr-2 h-3.5 w-3.5 text-slate-500" /> Excluded
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setRecoveryStatus(expense, "needs_review")}>
-                                  <HelpCircle className="mr-2 h-3.5 w-3.5 text-slate-500" /> Needs Review
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  onClick={() => approveExpense(expense)}
-                                  disabled={getEffectiveApprovalStatus(expense) === "approved"}
-                                  className="text-emerald-700 focus:text-emerald-800"
-                                >
-                                  <ClipboardCheck className="mr-2 h-3.5 w-3.5" />
-                                  {getEffectiveApprovalStatus(expense) === "approved" ? "Already approved" : "Approve expense"}
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => promptForAmount(expense)}>
-                                  <CircleDollarSign className="mr-2 h-3.5 w-3.5" />
-                                  {expense.amount ? "Edit amount" : "Set amount"}
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem asChild>
-                                  <Link to={createPageUrl("AddExpense", { id: expense.id }) + location.search.replace("?", "&")}>
-                                    <Pencil className="mr-2 h-3.5 w-3.5" /> Edit details
-                                  </Link>
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => setDeleteTarget(expense)}
-                                  className="text-red-600 focus:text-red-700"
-                                >
-                                  <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
+                              "-"
+                            )}
+                          </TableCell>
+                          <TableCell className="max-w-[220px] text-xs text-slate-700">{propertyPath || "-"}</TableCell>
+                          <TableCell className="max-w-[190px] text-xs text-slate-700">
+                            {expense._tenantName ? (
+                              <span title={`Resolved via ${expense._tenantResolution?.source || "record"}`}>{expense._tenantLeaseLabel}</span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-slate-500" title="Shared property expense; no tenant or lease required">
+                                Shared property expense
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="max-w-[180px] text-xs">
+                            <div className={expense._categoryLabel?.value === "needs_category" ? "font-semibold text-amber-700" : "font-medium text-slate-900"}>
+                              {expense._categoryLabel?.label}
+                            </div>
+                            {(expense._categoryLabel?.subcategory || expense.expense_subcategory) && (
+                              <div className="mt-0.5 text-[11px] text-slate-500">
+                                {expense._categoryLabel?.subcategory || expense.expense_subcategory}
+                              </div>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-[10px] font-mono text-slate-500">{expense.gl_code || expense.account_code || "-"}</TableCell>
+                          <TableCell className="text-right text-xs font-mono font-semibold tabular-nums">{formatCurrency(expense.amount)}</TableCell>
+                          <TableCell>
+                            <Badge className={`text-[10px] ${STATUS_TONE[accountingStatus.tone] || STATUS_TONE.slate}`}>{accountingStatus.label}</Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge className={`text-[10px] ${STATUS_TONE[recoveryStatus.tone] || STATUS_TONE.slate}`}>{recoveryStatus.label}</Badge>
+                          </TableCell>
+                          <TableCell className="text-[10px] capitalize text-slate-500">{humanize(expense.source_type || expense.source)}</TableCell>
+                          <TableCell>
+                            <div className="flex items-center justify-end gap-1">
+                              <Checkbox
+                                checked={selectedExpenseIds.includes(expense.id)}
+                                onCheckedChange={() => toggleExpenseSelection(expense.id)}
+                                aria-label={`Select expense ${expense.id}`}
+                              />
+                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setDetailExpense(expense)} aria-label="View expense details">
+                                <Info className="h-3.5 w-3.5 text-slate-500" />
+                              </Button>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0" title="Actions">
+                                    <MoreVertical className="h-3.5 w-3.5" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-52">
+                                  <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-slate-500">Accounting</DropdownMenuLabel>
+                                  <DropdownMenuItem
+                                    onClick={() => approveExpense(expense)}
+                                    disabled={accountingStatus.value === "approved" || updateExpenseMutation.isPending}
+                                    className="text-emerald-700 focus:text-emerald-800"
+                                  >
+                                    <ClipboardCheck className="mr-2 h-3.5 w-3.5" />
+                                    {accountingStatus.value === "approved" ? "Already approved" : "Approve expense"}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => rejectExpense(expense)}
+                                    disabled={accountingStatus.value === "rejected" || updateExpenseMutation.isPending}
+                                    className="text-red-700 focus:text-red-800"
+                                  >
+                                    <X className="mr-2 h-3.5 w-3.5" />
+                                    {accountingStatus.value === "rejected" ? "Already rejected" : "Reject expense"}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem asChild>
+                                    <Link to={createPageUrl("AddExpense", { id: expense.id }) + location.search.replace("?", "&")}>
+                                      <Pencil className="mr-2 h-3.5 w-3.5" /> Edit details
+                                    </Link>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => setDeleteTarget(expense)} className="text-red-600 focus:text-red-700">
+                                    <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           </Card>
-          <div className="text-xs text-slate-400 text-right">
+          <div className="text-right text-xs text-slate-400">
             {filtered.length} of {displayedExpenses.length} expenses
           </div>
         </TabsContent>
@@ -1027,6 +877,12 @@ export default function Expenses() {
           <AuditTrailPanel entityType="Expense" />
         </TabsContent>
       </Tabs>
+
+      <ActualExpenseDetailDrawer
+        expense={detailExpense}
+        open={Boolean(detailExpense)}
+        onOpenChange={(open) => { if (!open) setDetailExpense(null); }}
+      />
 
       <DeleteConfirmDialog
         open={!!deleteTarget}
