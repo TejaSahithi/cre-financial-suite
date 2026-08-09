@@ -153,7 +153,7 @@ async function fetchNotificationContext(orgId) {
   ] = await Promise.all([
     safeSelect(supabase
       .from('memberships')
-      .select('user_id, org_id, role, status, phone, custom_role, assigned_portfolios, capabilities, module_permissions, page_permissions, profiles:user_id(email, full_name, phone)')
+      .select('user_id, org_id, role, status, phone, custom_role, assigned_portfolios, capabilities, module_permissions, page_permissions')
       .eq('org_id', orgId), [], 'memberships'),
     safeSelect(supabase
       .from('user_access')
@@ -170,11 +170,19 @@ async function fetchNotificationContext(orgId) {
       .eq('org_id', orgId), [], 'notification_preferences'),
   ]);
 
+  const profileRows = memberships.length > 0
+    ? await safeSelect(supabase
+      .from('profiles')
+      .select('id, email, full_name, phone')
+      .in('id', memberships.map((membership) => membership.user_id).filter(Boolean)), [], 'profiles')
+    : [];
+  const profilesByUserId = Object.fromEntries(profileRows.map((profile) => [profile.id, profile]));
+
   const normalizedMemberships = memberships.map((membership) => ({
     ...membership,
-    email: membership.profiles?.email,
-    full_name: membership.profiles?.full_name,
-    phone: membership.phone || membership.profiles?.phone,
+    email: profilesByUserId[membership.user_id]?.email,
+    full_name: profilesByUserId[membership.user_id]?.full_name,
+    phone: membership.phone || profilesByUserId[membership.user_id]?.phone,
   }));
 
   return {
@@ -182,7 +190,7 @@ async function fetchNotificationContext(orgId) {
     userAccess,
     stakeholders,
     notificationPreferences,
-    profilesByUserId: Object.fromEntries(normalizedMemberships.map((membership) => [membership.user_id, membership.profiles || {}])),
+    profilesByUserId,
   };
 }
 

@@ -85,7 +85,14 @@ export async function getCurrentOrgId(options = {}) {
 }
 
 const ACCESS_CACHE_PREFIX = '__access_scope__';
-const WRITE_PERMISSION_EXEMPT_ENTITIES = new Set(['AccessRequest', 'DemoRequest', 'AuditLog', 'Notification']);
+const WRITE_PERMISSION_EXEMPT_ENTITIES = new Set([
+  'AccessRequest',
+  'DemoRequest',
+  'AuditLog',
+  'Notification',
+  'NotificationDelivery',
+  'NotificationPreference',
+]);
 const ENTITY_WRITE_PAGES = {
   Portfolio: ['Portfolios'],
   Property: ['Properties'],
