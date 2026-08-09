@@ -176,6 +176,10 @@ verify_jwt = true
 enabled = true
 verify_jwt = false
 
+[functions.send-sms]
+enabled = true
+verify_jwt = true
+
 [functions.reset-mfa]
 enabled = true
 verify_jwt = true

@@ -1,13 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  getNotificationPreferences,
   markNotificationRead,
   notificationService,
-  upsertNotificationPreferences,
 } from "@/services/notificationService";
-import { useAuth } from "@/lib/AuthContext";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -68,35 +65,7 @@ function isRead(notification) {
 
 export default function Notifications() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
   const { data: notifications = [], orgId } = useOrgQuery("Notification");
-  const [preferences, setPreferences] = useState({ email_enabled: true, sms_enabled: true });
-  const [preferencesLoading, setPreferencesLoading] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function loadPreferences() {
-      if (!user?.id || !orgId || orgId === "__none__") return;
-      setPreferencesLoading(true);
-      try {
-        const row = await getNotificationPreferences(user.id, orgId);
-        if (!cancelled && row) {
-          setPreferences({
-            email_enabled: row.email_enabled !== false,
-            sms_enabled: row.sms_enabled !== false,
-          });
-        }
-      } catch (error) {
-        console.warn("[Notifications] preferences unavailable:", error?.message || error);
-      } finally {
-        if (!cancelled) setPreferencesLoading(false);
-      }
-    }
-    loadPreferences();
-    return () => {
-      cancelled = true;
-    };
-  }, [orgId, user?.id]);
 
   const stats = useMemo(() => {
     const unread = notifications.filter((notification) => !isRead(notification)).length;
@@ -130,29 +99,6 @@ export default function Notifications() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["Notification", orgId] }),
   });
 
-  const savePreference = useMutation({
-    mutationFn: (nextPreferences) => upsertNotificationPreferences({
-      userId: user.id,
-      orgId,
-      emailEnabled: nextPreferences.email_enabled,
-      smsEnabled: nextPreferences.sms_enabled,
-    }),
-    onSuccess: (row) => {
-      setPreferences({
-        email_enabled: row.email_enabled !== false,
-        sms_enabled: row.sms_enabled !== false,
-      });
-    },
-  });
-
-  const updatePreference = (key, value) => {
-    const nextPreferences = { ...preferences, [key]: value };
-    setPreferences(nextPreferences);
-    if (user?.id && orgId && orgId !== "__none__") {
-      savePreference.mutate(nextPreferences);
-    }
-  };
-
   return (
     <div className="p-6 space-y-6 bg-[var(--bg)] min-h-screen">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -170,25 +116,23 @@ export default function Notifications() {
           <CardContent className="p-4 flex flex-col gap-3 sm:flex-row sm:items-center">
             <div className="flex items-center gap-2 text-sm font-semibold text-[var(--ink)]">
               <ShieldCheck className="h-4 w-4 text-[var(--accent)]" />
-              Delivery Preferences
+              Mandatory Delivery
             </div>
             <div className="flex items-center gap-5">
               <label className="flex items-center gap-2 text-xs font-semibold text-[var(--muted)]">
                 <Mail className="h-4 w-4" />
                 Email
                 <Switch
-                  checked={preferences.email_enabled}
-                  disabled={preferencesLoading || savePreference.isPending}
-                  onCheckedChange={(checked) => updatePreference("email_enabled", checked)}
+                  checked
+                  disabled
                 />
               </label>
               <label className="flex items-center gap-2 text-xs font-semibold text-[var(--muted)]">
                 <MessageSquare className="h-4 w-4" />
                 SMS
                 <Switch
-                  checked={preferences.sms_enabled}
-                  disabled={preferencesLoading || savePreference.isPending}
-                  onCheckedChange={(checked) => updatePreference("sms_enabled", checked)}
+                  checked
+                  disabled
                 />
               </label>
             </div>
@@ -296,4 +240,3 @@ export default function Notifications() {
     </div>
   );
 }
-

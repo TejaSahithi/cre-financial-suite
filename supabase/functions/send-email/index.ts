@@ -173,8 +173,10 @@ function getTemplateData(templateId: string, variables: any) {
         from: fromDefault,
         subject: `CRE Platform Notification: ${variables.subject || 'Update'}`,
         html: `
-          <h1>Platform Notification</h1>
+          <h1>${variables.subject || 'Platform Notification'}</h1>
           <p>${variables.message || 'You have a new notification.'}</p>
+          ${variables.action_url ? `<p style="margin: 24px 0 0;"><a href="${variables.action_url}" style="display: inline-block; padding: 12px 18px; border-radius: 10px; background: #1d4ed8; color: #ffffff; text-decoration: none; font-weight: 600;">Open in CRE Platform</a></p>` : ''}
+          ${variables.module || variables.notification_type ? `<p style="margin-top: 24px; color: #94a3b8; font-size: 12px;">${variables.module || 'notification'} · ${variables.notification_type || variables.event_type || 'update'}</p>` : ''}
         `
       };
     default:
@@ -286,17 +288,6 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: 'Missing required field: to' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
-    }
-
-    // For generic_internal_notification, enforce strict recipient domains
-    if (templateId === 'generic_internal_notification') {
-      const toAddresses = Array.isArray(finalTo) ? finalTo : [finalTo];
-      const allInternal = toAddresses.every((email: string) => email.endsWith('@cresuite.com') || email.endsWith('@cresuite.org'));
-      if (!allInternal) {
-        return new Response(JSON.stringify({ error: 'Internal notifications must be sent to internal domains.' }), {
-          status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
     }
 
     // ── 3. Send via Resend ──
