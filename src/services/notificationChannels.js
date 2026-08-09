@@ -11,8 +11,11 @@ function compactSms(message, actionUrl) {
 
 export function buildEmailPayload(notification, recipient) {
   const actionUrl = notification.action_url || notification.link || "";
+  const orgId = recipient.orgId || notification.org_id || notification.organization_id || "";
   return {
-    to: recipient.email,
+    to: recipient.email || undefined,
+    recipientUserId: recipient.userId || null,
+    orgId,
     templateId: "generic_internal_notification",
     variables: {
       subject: notification.title,
@@ -25,26 +28,33 @@ export function buildEmailPayload(notification, recipient) {
       module: notification.module,
       event_type: notification.event_type || notification.type,
       recipient_name: recipient.displayName || recipient.email,
+      recipient_user_id: recipient.userId || null,
+      org_id: orgId,
     },
   };
 }
 
 export function buildSmsPayload(notification, recipient) {
   const actionUrl = notification.action_url || notification.link || "";
+  const orgId = recipient.orgId || notification.org_id || notification.organization_id || "";
   return {
-    to: recipient.phone,
+    to: recipient.phone || undefined,
+    recipientUserId: recipient.userId || null,
+    orgId,
     message: compactSms(notification.message || notification.title, actionUrl),
     metadata: {
       notification_id: notification.id,
       event_type: notification.event_type || notification.type,
       module: notification.module,
+      recipient_user_id: recipient.userId || null,
+      org_id: orgId,
     },
   };
 }
 
 export async function dispatchEmailNotification(notification, recipient) {
-  if (!recipient.email) {
-    return { status: "skipped", error_message: "Recipient has no email address" };
+  if (!recipient.email && !recipient.userId) {
+    return { status: "skipped", error_message: "Recipient has no email address or user id" };
   }
 
   try {
@@ -64,8 +74,8 @@ export async function dispatchEmailNotification(notification, recipient) {
 }
 
 export async function dispatchSmsNotification(notification, recipient) {
-  if (!recipient.phone) {
-    return { status: "skipped", error_message: "Recipient has no phone number" };
+  if (!recipient.phone && !recipient.userId) {
+    return { status: "skipped", error_message: "Recipient has no phone number or user id" };
   }
 
   const smsFunctionName = import.meta.env?.VITE_SMS_EDGE_FUNCTION_NAME || "send-sms";

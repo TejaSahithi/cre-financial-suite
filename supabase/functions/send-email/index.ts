@@ -12,6 +12,8 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.40.0";
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
 const getCorsHeaders = (origin: string | null) => {
   return {
@@ -69,6 +71,90 @@ const AUTHENTICATED_TEMPLATES = [
   'lease_review_summary',
   'generic_internal_notification'
 ];
+
+function normalizeId(value: unknown) {
+  const text = String(value || '').trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text) ? text : '';
+}
+
+function isActiveMembershipStatus(value: unknown) {
+  const status = String(value || 'active').toLowerCase();
+  return ['active', 'owner', 'approved'].includes(status);
+}
+
+function createAdminClient() {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return null;
+  return createClient(
+    SUPABASE_URL,
+    SUPABASE_SERVICE_ROLE_KEY,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+}
+
+async function resolveInternalRecipientEmail({ supabaseAdmin, user, orgId, recipientUserId }: any) {
+  const normalizedOrgId = normalizeId(orgId);
+  const normalizedRecipientUserId = normalizeId(recipientUserId);
+
+  if (!supabaseAdmin || !user?.id || !normalizedOrgId || !normalizedRecipientUserId) {
+    return { email: '', error: 'Missing notification recipient resolution context' };
+  }
+
+  const { data: callerMembership, error: callerError } = await supabaseAdmin
+    .from('memberships')
+    .select('user_id, org_id, role, status')
+    .eq('org_id', normalizedOrgId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (callerError) {
+    console.error('[send-email] caller membership lookup failed:', callerError.message);
+    return { email: '', error: 'Could not verify notification sender access' };
+  }
+
+  if (!callerMembership || !isActiveMembershipStatus(callerMembership.status)) {
+    return { email: '', error: 'Notification sender is not active in this organization' };
+  }
+
+  const { data: targetMembership, error: targetError } = await supabaseAdmin
+    .from('memberships')
+    .select('user_id, org_id, status')
+    .eq('org_id', normalizedOrgId)
+    .eq('user_id', normalizedRecipientUserId)
+    .maybeSingle();
+
+  if (targetError) {
+    console.error('[send-email] recipient membership lookup failed:', targetError.message);
+    return { email: '', error: 'Could not verify notification recipient access' };
+  }
+
+  if (!targetMembership || !isActiveMembershipStatus(targetMembership.status)) {
+    return { email: '', error: 'Notification recipient is not active in this organization' };
+  }
+
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from('profiles')
+    .select('email')
+    .eq('id', normalizedRecipientUserId)
+    .maybeSingle();
+
+  if (profileError) {
+    console.error('[send-email] recipient profile lookup failed:', profileError.message);
+    return { email: '', error: 'Could not resolve notification recipient profile' };
+  }
+
+  if (profile?.email) return { email: profile.email, error: '' };
+
+  const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.getUserById(normalizedRecipientUserId);
+  if (authError) {
+    console.error('[send-email] auth recipient lookup failed:', authError.message);
+    return { email: '', error: 'Could not resolve notification recipient auth record' };
+  }
+
+  return {
+    email: authUser?.user?.email || '',
+    error: authUser?.user?.email ? '' : 'Notification recipient has no email address',
+  };
+}
 
 function getTemplateData(templateId: string, variables: any) {
   const adminEmail = 'support@cresuite.org';
@@ -206,6 +292,8 @@ Deno.serve(async (req) => {
     let isAnon = true;
     let user = null;
 
+    const supabaseAdmin = createAdminClient();
+
     if (token) {
       try {
         const tokenData = JSON.parse(atob(token.split('.')[1] || ""));
@@ -213,17 +301,13 @@ Deno.serve(async (req) => {
       } catch (e) {
         // ignore parsing error
       }
-
-      const supabaseAdmin = createClient(
-        Deno.env.get('SUPABASE_URL') ?? '',
-        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
-        { auth: { autoRefreshToken: false, persistSession: false } }
-      );
       
-      const { data: authData } = await supabaseAdmin.auth.getUser(token);
-      if (authData?.user) {
-        user = authData.user;
-        isAnon = false; // Override anon if getUser succeeds
+      if (supabaseAdmin) {
+        const { data: authData } = await supabaseAdmin.auth.getUser(token);
+        if (authData?.user) {
+          user = authData.user;
+          isAnon = false; // Override anon if getUser succeeds
+        }
       }
     } else {
       isAnon = true;
@@ -283,7 +367,22 @@ Deno.serve(async (req) => {
     }
 
     // If template specifies a 'to' address (e.g., admin notifications), use it. Otherwise use the client's 'to'.
-    const finalTo = templateData.to || to;
+    let finalTo = templateData.to || to;
+    if (!finalTo && templateId === 'generic_internal_notification') {
+      const resolvedRecipient = await resolveInternalRecipientEmail({
+        supabaseAdmin,
+        user,
+        orgId: body.orgId || variables.org_id,
+        recipientUserId: body.recipientUserId || variables.recipient_user_id,
+      });
+
+      if (resolvedRecipient.error) {
+        console.error('[send-email] recipient resolution failed:', resolvedRecipient.error);
+      }
+
+      finalTo = resolvedRecipient.email;
+    }
+
     if (!finalTo) {
       return new Response(JSON.stringify({ error: 'Missing required field: to' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
