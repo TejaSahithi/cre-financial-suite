@@ -911,16 +911,6 @@ export default function LeaseExpenseRules() {
           <Table>
             <TableHeader>
               <TableRow className="bg-slate-50">
-                <TableHead className="w-10 text-center">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                    checked={allVisibleSelectableSelected}
-                    disabled={selectableRuleIds.length === 0 || bulkApproveRulesMutation.isPending}
-                    onChange={(event) => toggleAllVisibleRules(event.target.checked)}
-                    aria-label="Select all visible lease expense rules"
-                  />
-                </TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Tenant / Lease</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Category</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Treatment</TableHead>
@@ -930,19 +920,31 @@ export default function LeaseExpenseRules() {
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Landlord Expense Expected</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Contract Status</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Evidence</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actions</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">
+                  <div className="flex items-center justify-end gap-2">
+                    <span>Actions</span>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      checked={allVisibleSelectableSelected}
+                      disabled={selectableRuleIds.length === 0 || bulkApproveRulesMutation.isPending}
+                      onChange={(event) => toggleAllVisibleRules(event.target.checked)}
+                      aria-label="Select all visible lease expense rules"
+                    />
+                  </div>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={11} className="py-12 text-center">
+                  <TableCell colSpan={10} className="py-12 text-center">
                     <Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" />
                   </TableCell>
                 </TableRow>
               ) : filteredRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={11} className="py-12 text-center text-sm text-slate-400">
+                  <TableCell colSpan={10} className="py-12 text-center text-sm text-slate-400">
                     <div className="mx-auto flex max-w-2xl flex-col items-center gap-3">
                       {ruleSetLoadError ? (
                         <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-left text-red-700">

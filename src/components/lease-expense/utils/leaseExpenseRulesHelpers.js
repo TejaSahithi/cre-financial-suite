@@ -448,31 +448,8 @@ export function getDisplayCamPublishStatus(rule, validation, displayMode) {
 //   Pending    -- no policy exists yet, but the lease does have premises --
 //                 materialization is expected to catch up (e.g. via Prepare
 //                 CAM Automatically), just hasn't run yet for this rule.
-// The rule's own approval-lifecycle status (distinct from resolveCamPolicyStatus,
-// which only describes whether an already-approved rule has a materialized CAM
-// recovery policy). Reuses the canonical deriveRuleDecision/isRuleSuperseded
-// engine (ruleDecisionEngine.js) instead of reading rule.approval_status
-// directly, so "not_applicable" (structurally excluded rules) and superseded
-// rules render as such rather than falling through to a generic Approved/Pending
-// badge.
-const RULE_APPROVAL_STATUS_DISPLAY = {
-  approved: { label: "Approved", tone: "emerald" },
-  rejected: { label: "Rejected", tone: "red" },
-  not_applicable: { label: "Not Applicable", tone: "slate" },
-  needs_review: { label: "Needs Review", tone: "amber" },
-};
-
 export function resolveRuleApprovalStatusDisplay(rule) {
-  // Two independent "superseded" signals exist in this codebase: isRuleSuperseded
-  // (row_status/status/extraction_status -- duplicate-clause/draft-version
-  // detection) and approval_status='superseded' (set directly by the
-  // supersede-duplicate-lease cascade, 20269900000036). Either means the same
-  // thing to a reviewer: this rule's terms are no longer the active ones.
-  if (isRuleSuperseded(rule) || normalizeRuleToken(rule?.approval_status) === "superseded") {
-    return { label: "Superseded", tone: "slate" };
-  }
-  const status = deriveRuleDecision(rule).status;
-  return RULE_APPROVAL_STATUS_DISPLAY[status] || { label: "Draft", tone: "slate" };
+  return getContractStatus(rule);
 }
 
 export function resolveCamPolicyStatus(rule, policies = [], leaseHasPremises = false) {
@@ -490,20 +467,17 @@ export function resolveCamPolicyStatus(rule, policies = [], leaseHasPremises = f
 }
 
 // ---------------------------------------------------------------------------
-// Simplified-view derivations for the main Lease Expense Rules table.
+// Lease Expense Rules UI Contract: FROZEN V1.
 //
-// These are presentation-only groupings on top of the existing
-// deriveNormalizedContractModel()/deriveRuleDecision() engine
-// (ruleDecisionEngine.js) â€” no financial/approval logic lives here. The
-// model's own recovery_treatment / cam_participation / actual_expense_expected
-// vocabularies were already an exact 1:1 fit for the simplified Treatment /
-// CAM / Landlord Expense Expected columns, so this just labels and (for Contract
-// Status) folds a couple of adjacent states together for a
-// single badge instead of the previous two-or-three-badge stack.
+// This is a presentation contract only. Backend financial semantics still come
+// from deriveNormalizedContractModel()/deriveRuleDecision(); this layer clamps
+// whatever those engines return into the V1 table vocabularies so new lease
+// fixtures cannot create new columns, statuses, or page structure by accident.
 // ---------------------------------------------------------------------------
 
+export const LEASE_EXPENSE_RULES_UI_CONTRACT_VERSION = "lease_expense_rules_ui_v1";
+
 export const TREATMENT_LABELS = {
-  landlord_recoverable: "Landlord Recoverable",
   pooled_recovery: "Pooled Recovery",
   direct_recovery: "Direct Recovery",
   direct_bill: "Direct Bill",
@@ -528,20 +502,29 @@ export const LANDLORD_EXPENSE_LABELS = {
 };
 
 export const CONTRACT_STATUS_LABELS = {
+  needs_review: "Needs Review",
   approved: "Approved",
   rejected: "Rejected",
-  needs_review: "Needs Review",
   superseded: "Superseded",
 };
 
-// Treatments where nothing is ever pooled/published to CAM â€” a landlord
-// recovery policy is structurally not a thing for these, not merely absent.
 const NON_CAM_PARTICIPATING_TREATMENTS = new Set([
-  "tenant_direct", "included_in_rent", "compliance_only", "direct_bill", "nonrecoverable",
+  "tenant_direct",
+  "included_in_rent",
+  "compliance_only",
+  "direct_bill",
+  "nonrecoverable",
+]);
+
+const CAM_PARTICIPATING_TREATMENTS = new Set([
+  "pooled_recovery",
+  "direct_recovery",
+  "conditional",
 ]);
 
 const HARD_CAM_BLOCKER_PATTERNS = [
   /allocation/i,
+  /basis/i,
   /premises?/i,
   /\barea\b/i,
   /square\s*foot/i,
@@ -551,6 +534,18 @@ const HARD_CAM_BLOCKER_PATTERNS = [
   /policy\s+conflict/i,
   /conflicting\s+policy/i,
 ];
+
+const UNRESOLVED_ALLOCATION_TOKENS = new Set([
+  "",
+  "none",
+  "unknown",
+  "not_applicable",
+  "not applicable",
+  "needs_review",
+  "manual_review",
+  "unresolved",
+  "missing",
+]);
 
 function compactText(value) {
   return String(value || "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
@@ -579,6 +574,66 @@ function formatMoneyAmount(value) {
   return `$${numeric.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 }
 
+function frozenTreatmentKey(value) {
+  const key = normalizeDisplayKey(value);
+  if (["pooled_recovery", "landlord_recoverable", "landlord_recovery", "reimbursable", "pass_through"].includes(key)) return "pooled_recovery";
+  if (["direct_recovery", "direct_reimbursement", "actual_usage", "tenant_reimbursement"].includes(key)) return "direct_recovery";
+  if (["direct_bill", "fee_charge", "fee", "charge", "separately_billed"].includes(key)) return "direct_bill";
+  if (["tenant_direct", "tenant_direct_contract"].includes(key)) return "tenant_direct";
+  if (["included_in_rent", "included_in_base_rent"].includes(key)) return "included_in_rent";
+  if (key === "compliance_only") return "compliance_only";
+  if (["nonrecoverable", "non_recoverable", "not_recoverable", "excluded"].includes(key)) return "nonrecoverable";
+  return "conditional";
+}
+
+function frozenLandlordExpenseKey(value) {
+  const key = normalizeDisplayKey(value);
+  if (["yes", "true", "expected"].includes(key)) return "yes";
+  if (["no", "false", "not_expected"].includes(key)) return "no";
+  return "conditional";
+}
+
+function rawAllocationValue(rule) {
+  return compactText(
+    rule?.allocation_basis ??
+    rule?.allocation_method ??
+    rule?.pro_rata_share_type ??
+    "",
+  ).toLowerCase();
+}
+
+function hasExplicitFormulaValue(rule, model) {
+  return Boolean(firstNonBlank(
+    rule?.amount_formula,
+    rule?.formula,
+    rule?.calculation_formula,
+    rule?.rate_formula,
+    rule?.amount_description,
+    rule?.pricing_summary,
+    rule?.fixed_amount,
+    rule?.monthly_amount,
+    model?.share,
+    rule?.tenant_share_percent,
+    rule?.tenant_pro_rata_share,
+    rule?.cap_percent,
+    rule?.cam_cap_rate,
+    model?.cap,
+    model?.expense_stop,
+    rule?.expense_stop_amount,
+    model?.base_year,
+    rule?.base_year,
+    rule?.coverage_requirement_amount,
+    rule?.insurance_coverage_amount,
+  ));
+}
+
+function allocationRequiredButUnresolved(rule, model, treatment) {
+  if (!CAM_PARTICIPATING_TREATMENTS.has(treatment)) return false;
+  if (hasExplicitFormulaValue(rule, model)) return false;
+  if (treatment === "pooled_recovery") return UNRESOLVED_ALLOCATION_TOKENS.has(rawAllocationValue(rule));
+  return getHardCamBlockerReason(rule, deriveRuleDecision(rule)).toLowerCase().includes("allocation") && UNRESOLVED_ALLOCATION_TOKENS.has(rawAllocationValue(rule));
+}
+
 export function getAppliesWhenLabel(rule) {
   const model = deriveNormalizedContractModel(rule);
   const explicit = firstNonBlank(
@@ -605,6 +660,7 @@ export function getAppliesWhenLabel(rule) {
 
 export function getAmountFormulaLabel(rule) {
   const model = deriveNormalizedContractModel(rule);
+  const treatment = frozenTreatmentKey(model.recovery_treatment);
   const explicit = firstNonBlank(
     rule?.amount_formula,
     rule?.formula,
@@ -640,17 +696,17 @@ export function getAmountFormulaLabel(rule) {
   const coverage = formatMoneyAmount(rule?.coverage_requirement_amount ?? rule?.insurance_coverage_amount);
   if (coverage) return `${coverage} Coverage Requirement`;
 
-  const allocation = compactText(model.allocation_method || rule?.allocation_basis).toLowerCase();
+  const allocation = rawAllocationValue(rule);
+  if (allocationRequiredButUnresolved(rule, model, treatment)) return "Needs Allocation Review";
   if (allocation.includes("usage")) return "Actual Usage";
   if (allocation.includes("rsf") || allocation.includes("square footage") || allocation.includes("pro rata")) return "Tenant RSF / Building RSF";
 
-  if (model.recovery_treatment === "tenant_direct") return "Tenant pays vendor";
-  if (model.recovery_treatment === "direct_recovery") return "100% of Actual Cost";
-  if (["landlord_recoverable", "pooled_recovery"].includes(model.recovery_treatment)) return "Landlord-Determined Share";
+  if (treatment === "tenant_direct") return "Tenant pays vendor";
+  if (treatment === "direct_recovery") return "100% of Actual Cost";
   return "Not Specified";
 }
 
-function hasHardCamBlocker(rule, decision) {
+function getHardCamBlockerReason(rule, decision) {
   const blockers = [
     ...(Array.isArray(decision?.blockingReasons) ? decision.blockingReasons : []),
     rule?.cam_blocker,
@@ -660,59 +716,47 @@ function hasHardCamBlocker(rule, decision) {
     rule?.materialization_blocker,
     rule?.readiness_reason,
   ].map(compactText).filter(Boolean);
-  return blockers.some((blocker) => HARD_CAM_BLOCKER_PATTERNS.some((pattern) => pattern.test(blocker)));
+  return blockers.find((blocker) => HARD_CAM_BLOCKER_PATTERNS.some((pattern) => pattern.test(blocker))) || "Required CAM setup information is missing or conflicting.";
 }
 
-function getBusinessCamStatus(rule, model, decision) {
-  const treatment = normalizeDisplayKey(model.recovery_treatment);
-  if (NON_CAM_PARTICIPATING_TREATMENTS.has(treatment)) return "not_applicable";
-  if (normalizeDisplayKey(rule?.cam_participation) === "blocked" && hasHardCamBlocker(rule, decision)) return "blocked";
-  if (decision?.camEligibility === "conditional" || treatment === "conditional") return "conditional";
+function getBusinessCamStatus(rule, model, decision, treatment) {
+  if (NON_CAM_PARTICIPATING_TREATMENTS.has(treatment)) return { value: "not_applicable", reason: null };
+  if (normalizeDisplayKey(rule?.cam_participation) === "blocked") {
+    return { value: "blocked", reason: getHardCamBlockerReason(rule, decision) };
+  }
+  if (allocationRequiredButUnresolved(rule, model, treatment)) {
+    return { value: "blocked", reason: "Allocation basis is required before CAM recovery can proceed." };
+  }
+  if (decision?.camEligibility === "conditional" || treatment === "conditional") return { value: "conditional", reason: null };
   if (decision?.camEligibility === "eligible") {
     const appliesWhen = getAppliesWhenLabel(rule);
-    return ["Always", "During lease term"].includes(appliesWhen) ? "eligible" : "conditional";
+    return { value: ["Always", "During lease term"].includes(appliesWhen) ? "eligible" : "conditional", reason: null };
   }
-  if (normalizeDisplayKey(rule?.cam_participation) === "blocked") return "conditional";
-  return "not_applicable";
+  return { value: "not_applicable", reason: null };
 }
 
-/** Treatment + CAM + Landlord Expense Expected - one label each, straight off the existing contract model. */
+/** Frozen V1 table projection: one business answer per primary column. */
 export function getSimplifiedRuleView(rule) {
   const model = deriveNormalizedContractModel(rule);
   const decision = deriveRuleDecision(rule);
-  const cam = getBusinessCamStatus(rule, model, decision);
+  const treatment = frozenTreatmentKey(model.recovery_treatment);
+  const cam = getBusinessCamStatus(rule, model, decision, treatment);
+  const actualExpense = frozenLandlordExpenseKey(model.actual_expense_expected);
   return {
-    treatment: model.recovery_treatment,
-    treatmentLabel: TREATMENT_LABELS[model.recovery_treatment] || humanizeToken(model.recovery_treatment),
-    cam,
-    camLabel: CAM_STATUS_LABELS[cam] || humanizeToken(cam),
-    actualExpense: model.actual_expense_expected,
-    actualExpenseLabel: LANDLORD_EXPENSE_LABELS[model.actual_expense_expected] || humanizeToken(model.actual_expense_expected),
+    treatment,
+    treatmentLabel: TREATMENT_LABELS[treatment],
+    cam: cam.value,
+    camLabel: CAM_STATUS_LABELS[cam.value],
+    camReason: cam.reason,
+    actualExpense,
+    actualExpenseLabel: LANDLORD_EXPENSE_LABELS[actualExpense],
     model,
   };
 }
 
-/**
- * Single Contract Status badge (Needs Review / Approved / Rejected /
- * Superseded), replacing the previous duplicate approval badges. `superseded` is checked ahead of deriveRuleDecision
- * because the decision engine folds it into "draft" (see
- * ruleDecisionEngine.js's deriveRuleStatus). `draft` (not yet reviewed)
- * folds into Needs Review.
- *
- * `not_applicable` needs its own disambiguation: deriveRuleStatus returns it
- * for a structurally-excluded rule (tenant-direct, included-in-rent, etc.)
- * *whenever its raw approval_status is either 'approved' or 'rejected'* â€”
- * i.e. it can mean "a human approved this as correctly out-of-scope" just as
- * often as "a human rejected this." Falling back to the raw field (rather
- * than always labeling it Rejected) is what keeps an approved tenant-direct
- * or included-in-rent rule from reading as if something were wrong with it â€”
- * Treatment/CAM already show it doesn't participate in recovery. It can also
- * arise pre-review (row_status flagged not-applicable during extraction,
- * approval_status still draft/needs_review) â€” that case has no human
- * decision to report yet, so it stays Needs Review.
- */
+/** Single Contract Status badge: Needs Review / Approved / Rejected / Superseded. */
 export function getContractStatus(rule) {
-  if (isRuleSuperseded(rule)) {
+  if (isRuleSuperseded(rule) || normalizeRuleToken(rule?.approval_status) === "superseded") {
     return { value: "superseded", label: CONTRACT_STATUS_LABELS.superseded, tone: "slate" };
   }
   const { status } = deriveRuleDecision(rule);
@@ -720,25 +764,20 @@ export function getContractStatus(rule) {
   if (status === "not_applicable") {
     const raw = String(rule?.approval_status || rule?.review_status || "").trim().toLowerCase();
     value = raw === "rejected" ? "rejected" : raw === "approved" ? "approved" : "needs_review";
+  } else if (status === "approved" || status === "rejected") {
+    value = status;
   } else {
-    value = status === "draft" ? "needs_review" : status;
+    value = "needs_review";
   }
-  const tone = value === "approved" ? "emerald" : value === "rejected" ? "red" : "amber";
-  return { value, label: CONTRACT_STATUS_LABELS[value] || humanizeToken(value), tone };
+  const tone = value === "approved" ? "emerald" : value === "rejected" ? "red" : value === "superseded" ? "slate" : "amber";
+  return { value, label: CONTRACT_STATUS_LABELS[value], tone };
 }
 
-/**
- * CAM recovery-policy materialization status, gated by treatment first:
- * non-participating treatments always read "Not Required" regardless of
- * what resolveCamPolicyStatus would otherwise compute (there is nothing to
- * materialize for a tenant-direct or included-in-rent term). Otherwise
- * defers to the existing resolveCamPolicyStatus (Approved/Pending/
- * Blocked/Superseded, only meaningful once the rule itself is approved),
- * and attaches a human reason to a Blocked result so it's never shown bare.
- */
+/** Secondary drawer-only CAM recovery-policy materialization status. */
 export function getPolicyStatus(rule, policies = [], leaseHasPremises = false) {
   const model = deriveNormalizedContractModel(rule);
-  if (NON_CAM_PARTICIPATING_TREATMENTS.has(model.recovery_treatment)) {
+  const treatment = frozenTreatmentKey(model.recovery_treatment);
+  if (NON_CAM_PARTICIPATING_TREATMENTS.has(treatment)) {
     return { label: "Not Required", tone: "slate", reason: null };
   }
   const base = resolveCamPolicyStatus(rule, policies, leaseHasPremises);
@@ -751,7 +790,6 @@ export function getPolicyStatus(rule, policies = [], leaseHasPremises = false) {
     : "The materialized recovery policy for this rule was rejected.";
   return { ...base, reason };
 }
-
 // Read-only match status for an actual-expense classification row (matched_
 // classification / actual_missing_rule rowType only -- coverage-gap rows
 // have no expense to match against and return null). Describes the OUTCOME

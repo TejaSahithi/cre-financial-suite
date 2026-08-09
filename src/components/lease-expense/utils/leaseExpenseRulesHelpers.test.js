@@ -142,14 +142,14 @@ describe('leaseExpenseRulesHelpers', () => {
       expect(resolveRuleApprovalStatusDisplay({ approval_status: 'superseded' }).label).toBe('Superseded');
     });
 
-    it('labels a structurally not-applicable rule as Not Applicable even if approval_status says approved', () => {
+    it('keeps structurally excluded approved rules inside the frozen V1 vocabulary', () => {
       const rule = {
         approval_status: 'approved',
         is_excluded: true,
         recoverable_from_tenant: 'no',
         cam_eligible: 'no',
       };
-      expect(resolveRuleApprovalStatusDisplay(rule).label).toBe('Not Applicable');
+      expect(resolveRuleApprovalStatusDisplay(rule).label).toBe('Approved');
     });
 
     it('labels a rejected rule as Rejected', () => {

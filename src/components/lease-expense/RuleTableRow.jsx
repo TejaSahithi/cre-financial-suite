@@ -63,7 +63,7 @@ const LANDLORD_EXPENSE_TONE = { yes: "emerald", conditional: "amber", no: "slate
  * now lives in the detail drawer (onOpenDetail). Presentation only: the
  * badges below are straight labels over getSimplifiedRuleView()/
  * getContractStatus(), which themselves sit on top of the existing
- * deriveNormalizedContractModel()/deriveRuleDecision() engine — no
+ * deriveNormalizedContractModel()/deriveRuleDecision() engine; no
  * financial or approval logic changed.
  */
 export default function RuleTableRow({
@@ -104,17 +104,6 @@ export default function RuleTableRow({
 
   return (
     <TableRow className={isHighlighted ? "align-top bg-amber-50 ring-1 ring-amber-300" : "align-top hover:bg-slate-50"}>
-      <TableCell className="text-center align-middle">
-        <input
-          type="checkbox"
-          className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
-          checked={isSelected}
-          disabled={!canSelect || isUpdating}
-          onChange={(event) => onSelectChange?.(event.target.checked)}
-          aria-label="Select lease expense rule"
-        />
-      </TableCell>
-
       {/* 1. Tenant / Lease */}
       <TableCell className="text-sm font-medium text-slate-900">
         {lease ? (
@@ -161,10 +150,13 @@ export default function RuleTableRow({
       </TableCell>
 
       {/* 6. CAM */}
-      <TableCell>
+      <TableCell className="max-w-[170px]">
         <Badge className={`text-[10px] ${TONE_CLASS[CAM_TONE[view.cam]] || TONE_CLASS.slate}`}>
           {view.camLabel}
         </Badge>
+        {view.cam === "blocked" && view.camReason ? (
+          <p className="mt-1 text-[11px] leading-snug text-red-700">{view.camReason}</p>
+        ) : null}
       </TableCell>
 
       {/* 7. Landlord Expense Expected */}
@@ -189,7 +181,15 @@ export default function RuleTableRow({
 
       {/* 10. Actions */}
       <TableCell>
-        <div className="flex items-center gap-0.5">
+        <div className="flex items-center justify-end gap-0.5">
+          <input
+            type="checkbox"
+            className="mr-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+            checked={isSelected}
+            disabled={!canSelect || isUpdating}
+            onChange={(event) => onSelectChange?.(event.target.checked)}
+            aria-label="Select lease expense rule"
+          />
           <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={openDetail} aria-label="View rule details">
             <Info className="h-3.5 w-3.5 text-slate-500" />
           </Button>
