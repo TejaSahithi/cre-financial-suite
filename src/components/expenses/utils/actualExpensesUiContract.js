@@ -43,6 +43,48 @@ function normalizeToken(value) {
   return String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
 }
 
+function classificationTimestamp(classification = {}) {
+  const value = Date.parse(classification.finalized_at || classification.reviewed_at || classification.classified_at || classification.updated_at || "");
+  return Number.isFinite(value) ? value : 0;
+}
+
+function classificationPriority(classification = {}) {
+  const status = normalizeToken(classification.classification_status);
+  const approved = normalizeToken(classification.approved_status);
+  const sent = classification.sent_to_cam === true || normalizeToken(classification.cam_status) === "published" ? 20 : 0;
+  const finalized = status === "finalized" ? 100 : 0;
+  const approvedScore = approved === "approved" ? 10 : 0;
+  const exceptionPenalty = ["exception", "unmatched", "conditional"].includes(status) ? -20 : 0;
+  return finalized + approvedScore + sent + exceptionPenalty;
+}
+
+export function selectCanonicalExpenseClassification(classifications = []) {
+  const rows = (Array.isArray(classifications) ? classifications : [classifications]).filter(Boolean);
+  if (rows.length <= 1) return rows[0] || null;
+  return [...rows].sort((left, right) => {
+    const priorityDelta = classificationPriority(right) - classificationPriority(left);
+    if (priorityDelta !== 0) return priorityDelta;
+    return classificationTimestamp(right) - classificationTimestamp(left);
+  })[0] || null;
+}
+
+function routeText(classification = {}) {
+  return [
+    classification.financial_route,
+    classification.classification_decision,
+    classification.recovery_treatment,
+    classification.recovery_method,
+    classification.payment_treatment,
+    classification.recovery_status,
+    classification.recoverability_result,
+    classification.next_step,
+    classification.recovery_reason,
+    classification.notes,
+  ]
+    .filter(Boolean)
+    .map((value) => normalizeToken(value))
+    .join(" ");
+}
 export function getAccountingStatus(expense = {}) {
   const status = normalizeToken(expense.approval_status || expense.approved_status || expense.review_status);
   if (status === "approved") return { value: "approved", label: ACCOUNTING_STATUS_LABELS.approved, tone: "emerald" };
@@ -85,7 +127,21 @@ export function getRecoveryStatusFromClassification(classification = null) {
     return { value: "published_to_cam", label: RECOVERY_STATUS_LABELS.published_to_cam, tone: "emerald" };
   }
 
+  const text = routeText(classification);
   const method = normalizeToken(classification.recovery_method || classification.recovery_treatment || classification.payment_treatment);
+  if (text.includes("route_to_billing")) {
+    return { value: "direct_bill", label: RECOVERY_STATUS_LABELS.direct_bill, tone: "blue" };
+  }
+  if (text.includes("tenant_pays_vendor") || text.includes("tenant_direct")) {
+    return { value: "tenant_direct", label: RECOVERY_STATUS_LABELS.tenant_direct, tone: "slate" };
+  }
+  if (text.includes("no_separate_recovery") || text.includes("included_in_rent") || text.includes("included_in_base_rent")) {
+    return { value: "included_in_rent", label: RECOVERY_STATUS_LABELS.included_in_rent, tone: "slate" };
+  }
+  if (text.includes("accounting_only") || text.includes("nonrecoverable") || text.includes("non_recoverable") || text.includes("not_recoverable")) {
+    return { value: "nonrecoverable", label: RECOVERY_STATUS_LABELS.nonrecoverable, tone: "red" };
+  }
+
   if (["direct_recovery", "actual_usage", "tenant_reimbursement"].includes(method)) {
     return { value: "direct_recovery", label: RECOVERY_STATUS_LABELS.direct_recovery, tone: "blue" };
   }

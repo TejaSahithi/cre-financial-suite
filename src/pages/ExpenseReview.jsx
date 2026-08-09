@@ -50,8 +50,12 @@ function formatCurrency(value, options = {}) {
 
 function formatDate(value) {
   if (!value) return "-";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return String(value);
+  const text = String(value);
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  const parsed = dateOnly
+    ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+    : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return text;
   return parsed.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 }
 
@@ -154,6 +158,7 @@ export default function ExpenseReview() {
   const { data: allUnits = [] } = useOrgQuery("Unit");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
   const { data: tenants = [] } = useOrgQuery("Tenant");
+  const { data: actualExpenseRecords = [] } = useOrgQuery("Expense");
 
   const scope = useMemo(
     () => buildHierarchyScope({ search: location.search, portfolios, properties, buildings: allBuildings, units: allUnits }),
@@ -194,34 +199,55 @@ export default function ExpenseReview() {
     queryFn: () => expenseService.listExpenseClassificationsForScope(classificationScope),
   });
 
+  const actualExpenseById = useMemo(
+    () => new Map((actualExpenseRecords || []).map((expense) => [expense.id, expense])),
+    [actualExpenseRecords]
+  );
+
   const reviewRows = useMemo(() => scopedClassifications
     .filter((row) => (row.actual_expense_id || row.expense_id) && row.row_type !== "rule_missing_actual")
     .map((row) => {
       const expenseId = row.actual_expense_id || row.expense_id;
-      const property = row.property_id ? scope.propertyById.get(row.property_id) ?? null : null;
-      const building = row.building_id ? scope.buildingById.get(row.building_id) ?? null : null;
-      const unit = row.unit_id ? scope.unitById.get(row.unit_id) ?? null : null;
-      const tenantResolution = resolveTenantForExpense(row, { leases, units: allUnits, tenants });
+      const actualExpense = actualExpenseById.get(expenseId) || {};
+      const effectiveRow = {
+        ...actualExpense,
+        ...row,
+        property_id: row.property_id || actualExpense.property_id || null,
+        building_id: row.building_id || actualExpense.building_id || null,
+        unit_id: row.unit_id || actualExpense.unit_id || null,
+        lease_id: row.lease_id || actualExpense.lease_id || null,
+        tenant_id: row.tenant_id || actualExpense.tenant_id || null,
+      };
+      const property = effectiveRow.property_id ? scope.propertyById.get(effectiveRow.property_id) ?? null : null;
+      const building = effectiveRow.building_id ? scope.buildingById.get(effectiveRow.building_id) ?? null : null;
+      const unit = effectiveRow.unit_id ? scope.unitById.get(effectiveRow.unit_id) ?? null : null;
+      const tenantResolution = resolveTenantForExpense(effectiveRow, { leases, units: allUnits, tenants });
       return {
         ...row,
         id: row.id,
         expense_id: expenseId,
         actual_expense_id: expenseId,
-        amount: Number(row.amount ?? 0),
-        category: row.category || null,
-        expense_subcategory: row.subcategory || null,
-        property_name: property?.name || row.property_name || null,
-        building_name: building?.name || row.building_name || null,
-        unit_name: unit?.unit_number || unit?.unit_id_code || row.unit_name || null,
-        tenant_name: row.tenant_name || tenantResolution.tenant?.name || null,
-        vendor_name: row.vendor_name || null,
-        vendor: row.vendor || null,
-        lease_id: row.lease_id || tenantResolution.lease?.id || null,
-        tenant_id: row.tenant_id || tenantResolution.tenant?.id || null,
+        amount: Number(row.amount ?? actualExpense.amount ?? 0),
+        category: row.category || actualExpense.category || null,
+        expense_subcategory: row.subcategory || actualExpense.subcategory || actualExpense.expense_subcategory || null,
+        description: row.description || actualExpense.description || null,
+        service_period_start: row.service_period_start || actualExpense.service_period_start || actualExpense.expense_date || actualExpense.date || null,
+        service_period_end: row.service_period_end || actualExpense.service_period_end || actualExpense.expense_date || actualExpense.date || null,
+        property_id: effectiveRow.property_id,
+        building_id: effectiveRow.building_id,
+        unit_id: effectiveRow.unit_id,
+        property_name: property?.name || row.property_name || actualExpense.property_name || null,
+        building_name: building?.name || row.building_name || actualExpense.building_name || null,
+        unit_name: unit?.unit_number || unit?.unit_id_code || row.unit_name || actualExpense.unit_name || null,
+        tenant_name: row.tenant_name || actualExpense.tenant_name || tenantResolution.tenant?.name || null,
+        vendor_name: row.vendor_name || actualExpense.vendor_name || actualExpense.vendor || null,
+        vendor: row.vendor || actualExpense.vendor || actualExpense.vendor_name || null,
+        lease_id: effectiveRow.lease_id || tenantResolution.lease?.id || null,
+        tenant_id: effectiveRow.tenant_id || tenantResolution.tenant?.id || null,
         recovery_rule_id: row.lease_expense_rule_id || row.recovery_rule_id || null,
         evidence_text: row.evidence_text || row.recovery_reason || row.notes || null,
       };
-    }), [scopedClassifications, scope.propertyById, scope.buildingById, scope.unitById, leases, allUnits, tenants]);
+    }), [scopedClassifications, actualExpenseById, scope.propertyById, scope.buildingById, scope.unitById, leases, allUnits, tenants]);
 
   const finalizedBaseRows = useMemo(() => reviewRows.filter((row) => isExpenseReviewFinalized(row)), [reviewRows]);
   const finalizedClassificationIds = useMemo(() => finalizedBaseRows.map((expense) => expense.id).filter(Boolean), [finalizedBaseRows]);

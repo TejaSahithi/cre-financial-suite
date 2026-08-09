@@ -94,4 +94,19 @@ describe("expenseReviewUiContract", () => {
     expect(outsideRows).toHaveLength(1);
     expect(buildExpenseReviewReportRows(outsideRows)[0].Decision).toBe("Included in Rent");
   });
+  it("honors persisted outside-CAM next steps over generic recoverable fields", () => {
+    const row = buildExpenseReviewUiRow({
+      ...baseFinalized,
+      id: "tenant-step",
+      cam_eligible: "yes",
+      recoverability_result: "recoverable",
+      rule_source: "manual",
+      next_step: "No CAM - Tenant Pays Vendor",
+    });
+
+    expect(row.v1Decision.label).toBe("Tenant Direct");
+    expect(row.v1CamStatus.label).toBe("N/A");
+    expect(row.v1PolicyEvidence.label).toBe("No Policy Required");
+    expect(canSendExpenseReviewRowToCam(row)).toBe(false);
+  });
 });

@@ -63,6 +63,7 @@ import {
   getAccountingStatus,
   getCanonicalCategoryLabel,
   getRecoveryStatusFromClassification,
+  selectCanonicalExpenseClassification,
 } from "@/components/expenses/utils/actualExpensesUiContract";
 import {
   Sheet,
@@ -386,14 +387,21 @@ export default function Expenses() {
     enabled: selectorScopedExpenseIds.length > 0,
   });
 
-  const classificationByExpenseId = useMemo(
-    () => new Map(
-      selectorScopedClassifications
-        .map((classification) => [classification.expense_id || classification.actual_expense_id, classification])
-        .filter(([expenseId]) => Boolean(expenseId))
-    ),
-    [selectorScopedClassifications]
-  );
+  const classificationByExpenseId = useMemo(() => {
+    const grouped = new Map();
+    for (const classification of selectorScopedClassifications) {
+      const expenseId = classification.expense_id || classification.actual_expense_id;
+      if (!expenseId) continue;
+      if (!grouped.has(expenseId)) grouped.set(expenseId, []);
+      grouped.get(expenseId).push(classification);
+    }
+    return new Map(
+      [...grouped.entries()].map(([expenseId, classifications]) => [
+        expenseId,
+        selectCanonicalExpenseClassification(classifications),
+      ])
+    );
+  }, [selectorScopedClassifications]);
 
   const tenantById = useMemo(() => new Map((tenants || []).map((tenant) => [tenant.id, tenant])), [tenants]);
   const unitById = useMemo(() => new Map((allUnits || []).map((unit) => [unit.id, unit])), [allUnits]);

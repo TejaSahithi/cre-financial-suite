@@ -116,6 +116,7 @@ function fieldText(row = {}) {
     row.cam_status,
     row.cam_input_type,
     row.rule_source,
+    row.next_step,
     row.recovery_reason,
     row.notes,
   ]
@@ -184,10 +185,10 @@ export function deriveExpenseReviewDecision(row = {}) {
   const text = fieldText(row);
   const camEligible = squish(row.cam_eligible);
 
-  if (text.includes("direct_bill")) return buildDecision("direct_bill");
+  if (text.includes("direct_bill") || text.includes("route_to_billing")) return buildDecision("direct_bill");
   if (text.includes("tenant_direct") || text.includes("tenant_pays_vendor")) return buildDecision("tenant_direct");
-  if (text.includes("included_in_rent") || text.includes("included_in_base_rent")) return buildDecision("included_in_rent");
-  if (text.includes("non_recoverable") || text.includes("nonrecoverable") || text.includes("excluded") || text.includes("not_recoverable")) return buildDecision("nonrecoverable");
+  if (text.includes("included_in_rent") || text.includes("included_in_base_rent") || text.includes("no_separate_recovery")) return buildDecision("included_in_rent");
+  if (text.includes("non_recoverable") || text.includes("nonrecoverable") || text.includes("excluded") || text.includes("not_recoverable") || text.includes("accounting_only")) return buildDecision("nonrecoverable");
   if (text.includes("direct_recovery") || text.includes("direct_recover") || text.includes("direct_tenant")) return buildDecision("direct_recovery");
   if (text.includes("pooled_cam") || text.includes("pooled_recovery") || text.includes("cam_pool")) return buildDecision("pooled_cam");
   if (camEligible === "no" || camEligible === "false") return buildDecision("nonrecoverable");
@@ -257,8 +258,9 @@ export function isExpenseReviewFinalized(row = {}) {
 export function deriveExpenseReviewPolicyEvidence(row = {}, decision = deriveExpenseReviewDecision(row)) {
   const source = squish(row.rule_source);
   const hasRule = hasValue(row.lease_expense_rule_id) || hasValue(row.recovery_rule_id);
-  if (row.manual_cam_reviewed || source.includes("manual") || source.includes("override")) return evidence("Reviewed Override", "amber");
+  if (row.manual_cam_reviewed || source.includes("override")) return evidence("Reviewed Override", "amber");
   if (decision.value === "direct_recovery" || decision.value === "direct_bill") return evidence("Direct Policy", "blue");
+  if (["tenant_direct", "included_in_rent", "nonrecoverable"].includes(decision.value)) return evidence("No Policy Required", "slate");
   if (decision.value === "pooled_cam" || hasRule) return evidence("Recovery Policy", "emerald");
   return evidence("No Policy Required", "slate");
 }

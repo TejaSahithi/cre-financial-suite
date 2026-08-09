@@ -8,6 +8,7 @@ import {
   getAccountingStatus,
   getCanonicalCategoryLabel,
   getRecoveryStatusFromClassification,
+  selectCanonicalExpenseClassification,
 } from "../actualExpensesUiContract";
 
 describe("Actual Expenses V1 UI contract", () => {
@@ -52,5 +53,39 @@ describe("Actual Expenses V1 UI contract", () => {
     expect(expenseNeedsClassification({ expense_category_id: null }, { recovery_status: "non_recoverable" })).toBe(true);
     expect(expenseNeedsClassification({ expense_category_id: "cat-1" }, null)).toBe(true);
     expect(expenseNeedsClassification({ expense_category_id: "cat-1" }, { recovery_status: "non_recoverable" })).toBe(false);
+  });
+  it("honors outside-CAM route breadcrumbs over generic recoverable CAM fields", () => {
+    const status = getRecoveryStatusFromClassification({
+      classification_status: "finalized",
+      recoverability_result: "recoverable",
+      cam_eligible: "yes",
+      rule_source: "manual",
+      next_step: "No CAM - Tenant Pays Vendor",
+    });
+
+    expect(status.label).toBe("Tenant Direct");
+  });
+
+  it("selects the finalized canonical classification when multiple rows exist for an expense", () => {
+    const selected = selectCanonicalExpenseClassification([
+      {
+        id: "old",
+        classification_status: "matched",
+        recoverability_result: "recoverable",
+        cam_eligible: "yes",
+        classified_at: "2026-08-01T00:00:00Z",
+      },
+      {
+        id: "current",
+        classification_status: "finalized",
+        recoverability_result: "recoverable",
+        cam_eligible: "yes",
+        next_step: "No CAM - Tenant Pays Vendor",
+        finalized_at: "2026-08-07T00:00:00Z",
+      },
+    ]);
+
+    expect(selected.id).toBe("current");
+    expect(getRecoveryStatusFromClassification(selected).label).toBe("Tenant Direct");
   });
 });
