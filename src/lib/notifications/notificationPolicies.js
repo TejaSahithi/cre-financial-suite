@@ -1,5 +1,6 @@
 import {
   NOTIFICATION_MODULES,
+  NOTIFICATION_CHANNELS,
   NOTIFICATION_SCOPES,
   NOTIFICATION_TYPES,
   ROLE_KEYS,
@@ -522,6 +523,7 @@ export const NOTIFICATION_EVENT_PERMISSIONS = Object.freeze(
         permission: policy.permission,
         notificationType: policy.recipients?.[0]?.notificationType || NOTIFICATION_TYPES.INFORMATIONAL,
         finalOrgOwnerApproval: Boolean(policy.finalOrgOwnerApproval),
+        mandatoryChannels: [NOTIFICATION_CHANNELS.EMAIL, NOTIFICATION_CHANNELS.SMS],
       },
     ])
   )

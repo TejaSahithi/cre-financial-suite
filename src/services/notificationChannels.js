@@ -10,6 +10,7 @@ function compactSms(message, actionUrl) {
 }
 
 export function buildEmailPayload(notification, recipient) {
+  const actionUrl = notification.action_url || notification.link || "";
   return {
     to: recipient.email,
     templateId: "generic_internal_notification",
@@ -17,22 +18,25 @@ export function buildEmailPayload(notification, recipient) {
       subject: notification.title,
       message: [
         notification.message,
-        notification.action_url ? `Action: ${notification.action_url}` : "",
+        actionUrl ? `Action: ${actionUrl}` : "",
       ].filter(Boolean).join("\n\n"),
-      action_url: notification.action_url || "",
+      action_url: actionUrl,
       notification_type: notification.notification_type,
       module: notification.module,
+      event_type: notification.event_type || notification.type,
+      recipient_name: recipient.displayName || recipient.email,
     },
   };
 }
 
 export function buildSmsPayload(notification, recipient) {
+  const actionUrl = notification.action_url || notification.link || "";
   return {
     to: recipient.phone,
-    message: compactSms(notification.message || notification.title, notification.action_url),
+    message: compactSms(notification.message || notification.title, actionUrl),
     metadata: {
       notification_id: notification.id,
-      event_type: notification.event_type,
+      event_type: notification.event_type || notification.type,
       module: notification.module,
     },
   };
@@ -64,13 +68,7 @@ export async function dispatchSmsNotification(notification, recipient) {
     return { status: "skipped", error_message: "Recipient has no phone number" };
   }
 
-  const smsFunctionName = import.meta.env?.VITE_SMS_EDGE_FUNCTION_NAME || "";
-  if (!smsFunctionName) {
-    return {
-      status: "provider_unconfigured",
-      error_message: "SMS provider is not configured. Set VITE_SMS_EDGE_FUNCTION_NAME to enable SMS delivery.",
-    };
-  }
+  const smsFunctionName = import.meta.env?.VITE_SMS_EDGE_FUNCTION_NAME || "send-sms";
 
   try {
     const result = await invokeEdgeFunction(smsFunctionName, buildSmsPayload(notification, recipient));
@@ -93,4 +91,3 @@ export async function dispatchNotificationChannel(notification, recipient, chann
   if (channel === NOTIFICATION_CHANNELS.SMS) return dispatchSmsNotification(notification, recipient);
   return { status: "skipped", error_message: `Unsupported notification channel: ${channel}` };
 }
-

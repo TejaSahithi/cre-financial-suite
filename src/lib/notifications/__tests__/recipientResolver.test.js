@@ -3,6 +3,7 @@ import {
   canApproveWorkflow,
   resolveNotificationRecipients,
 } from "@/lib/notifications/recipientResolver";
+import { NOTIFICATION_EVENT_POLICIES } from "@/lib/notifications/notificationPolicies";
 
 const orgId = "org-1";
 const portfolioA = "portfolio-a";
@@ -170,6 +171,61 @@ describe("role-based notification recipient resolver", () => {
     expect(recipients).toHaveLength(1);
     expect(recipients[0].channels).toEqual(["email", "sms"]);
     expect(recipients[0].matchingReasons.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("keeps email and sms mandatory even when preferences are disabled", () => {
+    const result = resolveNotificationRecipients(
+      {
+        org_id: orgId,
+        event_type: "budget.review_required",
+        portfolio_id: portfolioA,
+        property_id: propertyA,
+      },
+      {
+        memberships: [membership({ user_id: "finance-user", role: "finance" })],
+        notificationPreferences: [
+          { user_id: "finance-user", email_enabled: false, sms_enabled: false },
+        ],
+      }
+    );
+
+    const recipient = result.recipients.find((item) => item.userId === "finance-user");
+    expect(recipient.channels).toEqual(["email", "sms"]);
+  });
+
+  it("defines mandatory email and sms delivery channels for every notification policy event", () => {
+    Object.keys(NOTIFICATION_EVENT_POLICIES).forEach((eventType) => {
+      const result = resolveNotificationRecipients(
+        {
+          org_id: orgId,
+          event_type: eventType,
+          portfolio_id: portfolioA,
+          property_id: propertyA,
+          tenant_id: "tenant-a",
+          published_to_tenant: true,
+          audit_required: true,
+        },
+        {
+          memberships: [
+            membership({ user_id: "owner-user", role: "owner", status: "owner" }),
+            membership({ user_id: "admin-user", role: "org_admin" }),
+            membership({ user_id: "pm-user", role: "property_manager" }),
+            membership({ user_id: "finance-user", role: "finance" }),
+            membership({ user_id: "accounting-user", role: "accounting" }),
+            membership({ user_id: "auditor-user", role: "auditor" }),
+          ],
+          userAccess: [portfolioGrant("pm-user", portfolioA)],
+          stakeholders: [
+            { id: "asset-owner-a", org_id: orgId, role: "asset_owner", property_id: propertyA, email: "asset@example.com", phone: "+15551234567" },
+            { id: "tenant-a", tenant_id: "tenant-a", org_id: orgId, role: "tenant", property_id: propertyA, email: "tenant@example.com", phone: "+15557654321" },
+          ],
+        }
+      );
+
+      result.recipients.forEach((recipient) => {
+        expect(recipient.channels, eventType).toEqual(["email", "sms"]);
+      });
+    });
   });
 
   it("requires org owner action for final expense approval", () => {

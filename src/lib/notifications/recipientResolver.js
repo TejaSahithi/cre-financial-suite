@@ -298,23 +298,8 @@ function requiredPermissionForRule(rule, policy) {
   return policy?.module ? `${policy.module}.${action}` : null;
 }
 
-function getPreference(preferences, recipientKey) {
-  return preferences.find((preference) =>
-    preference.user_id === recipientKey ||
-    preference.recipient_key === recipientKey ||
-    preference.email === recipientKey
-  ) || {};
-}
-
-function resolveChannels(recipient, preferences) {
-  const preference = getPreference(preferences, recipient.preferenceKey || recipient.userId || recipient.email);
-  const emailEnabled = preference.email_enabled !== false;
-  const smsEnabled = preference.sms_enabled !== false;
-  const channels = [];
-
-  if (emailEnabled && recipient.email) channels.push(NOTIFICATION_CHANNELS.EMAIL);
-  if (smsEnabled && recipient.phone) channels.push(NOTIFICATION_CHANNELS.SMS);
-  return channels;
+function resolveChannels() {
+  return [NOTIFICATION_CHANNELS.EMAIL, NOTIFICATION_CHANNELS.SMS];
 }
 
 function notificationTitle(event, rule) {
@@ -488,10 +473,9 @@ export function resolveNotificationRecipients(event, context = {}) {
     resolveExternalRecipients(normalizedEvent, policy, rule, context, recipientsByKey);
   });
 
-  const preferences = context.notificationPreferences || context.preferences || [];
   const recipients = Array.from(recipientsByKey.values()).map((recipient) => ({
     ...recipient,
-    channels: resolveChannels(recipient, preferences),
+    channels: resolveChannels(),
   }));
 
   return {
