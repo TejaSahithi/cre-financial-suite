@@ -555,18 +555,33 @@ export function getSimplifiedRuleView(rule) {
  * Superseded), replacing the previous "Approved" + "Approved Contractual
  * Rule" double badge. `superseded` is checked ahead of deriveRuleDecision
  * because the decision engine folds it into "draft" (see
- * ruleDecisionEngine.js's deriveRuleStatus). `draft` (not yet reviewed) and
- * `not_applicable` (reviewed, determined to be a non-recoverable/no-action
- * term) both fold into the nearest of the four requested values — Needs
- * Review and Rejected respectively — since this table intentionally exposes
- * only four contract-status values.
+ * ruleDecisionEngine.js's deriveRuleStatus). `draft` (not yet reviewed)
+ * folds into Needs Review.
+ *
+ * `not_applicable` needs its own disambiguation: deriveRuleStatus returns it
+ * for a structurally-excluded rule (tenant-direct, included-in-rent, etc.)
+ * *whenever its raw approval_status is either 'approved' or 'rejected'* —
+ * i.e. it can mean "a human approved this as correctly out-of-scope" just as
+ * often as "a human rejected this." Falling back to the raw field (rather
+ * than always labeling it Rejected) is what keeps an approved tenant-direct
+ * or included-in-rent rule from reading as if something were wrong with it —
+ * Treatment/CAM already show it doesn't participate in recovery. It can also
+ * arise pre-review (row_status flagged not-applicable during extraction,
+ * approval_status still draft/needs_review) — that case has no human
+ * decision to report yet, so it stays Needs Review.
  */
 export function getContractStatus(rule) {
   if (isRuleSuperseded(rule)) {
     return { value: "superseded", label: CONTRACT_STATUS_LABELS.superseded, tone: "slate" };
   }
   const { status } = deriveRuleDecision(rule);
-  const value = status === "draft" ? "needs_review" : status === "not_applicable" ? "rejected" : status;
+  let value;
+  if (status === "not_applicable") {
+    const raw = String(rule?.approval_status || rule?.review_status || "").trim().toLowerCase();
+    value = raw === "rejected" ? "rejected" : raw === "approved" ? "approved" : "needs_review";
+  } else {
+    value = status === "draft" ? "needs_review" : status;
+  }
   const tone = value === "approved" ? "emerald" : value === "rejected" ? "red" : "amber";
   return { value, label: CONTRACT_STATUS_LABELS[value] || humanizeToken(value), tone };
 }

@@ -23,7 +23,7 @@ function Field({ label, value }) {
   return (
     <div>
       <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</p>
-      <p className="mt-0.5 text-sm text-slate-800">{value === "" || value === null || value === undefined ? "-" : value}</p>
+      <div className="mt-0.5 text-sm text-slate-800">{value === "" || value === null || value === undefined ? "-" : value}</div>
     </div>
   );
 }
