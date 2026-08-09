@@ -598,6 +598,261 @@ const EVENT_POLICIES = Object.freeze({
   },
 });
 
+const EVENT_EMAIL_TEMPLATES = Object.freeze({
+  "portfolio.created": {
+    title: "Portfolio Created",
+    summary: "A new portfolio has been created and is now available for organizational tracking, property assignment, budgeting, CAM workflows, and reporting.",
+    impact: "Portfolio-level access, ownership visibility, and downstream property setup can now begin.",
+    nextStep: "Review the portfolio record, confirm ownership and manager assignments, and add the required property details before financial workflows begin.",
+    actionLabel: "Open Portfolio",
+  },
+  "portfolio.manager_assigned": {
+    title: "Portfolio Manager Assigned",
+    summary: "Portfolio responsibility has been assigned or updated.",
+    impact: "The assigned manager is now expected to maintain portfolio data quality, coordinate property setup, and monitor related workflow activity.",
+    nextStep: "Review the portfolio assignment and confirm that the responsible manager has the correct access and operating context.",
+    actionLabel: "Review Assignment",
+  },
+  "property.created": {
+    title: "Property Created",
+    summary: "A new property has been added to the organization.",
+    impact: "Property facts such as rentable area, ownership, address, CAM setup, and building/unit structure are required before reliable budgets or allocations can be produced.",
+    nextStep: "Complete the property profile and confirm hierarchy, square footage, and operating assumptions.",
+    actionLabel: "Open Property",
+  },
+  "building.created": {
+    title: "Building Created",
+    summary: "A new building has been added under a property.",
+    impact: "Building-level setup can affect rentable square footage, unit allocation, recoverability analysis, and CAM charge calculations.",
+    nextStep: "Verify building details, rentable area, unit structure, and any property-level allocation assumptions.",
+    actionLabel: "Open Building",
+  },
+  "property.manager_assigned": {
+    title: "Property Manager Assigned",
+    summary: "Property management responsibility has been assigned or updated.",
+    impact: "The assigned manager is now accountable for property data quality and operating workflow follow-up.",
+    nextStep: "Review the assignment and confirm the manager has the required access to property, lease, expense, CAM, and budget workflows.",
+    actionLabel: "Review Property",
+  },
+  "property.bulk_import_completed": {
+    title: "Property Import Completed",
+    summary: "A property master-data import has completed.",
+    impact: "Imported data should be reviewed before it is used in lease, expense, budget, CAM, or reporting workflows.",
+    nextStep: "Review imported records, confirm rejected or skipped rows, and validate required property hierarchy fields.",
+    actionLabel: "Review Import",
+  },
+  "property.bulk_import_failed": {
+    title: "Property Import Failed",
+    summary: "A property master-data import could not be completed successfully.",
+    impact: "Missing or failed master-data imports can block property setup, lease linking, square-footage validation, budgeting, and CAM allocation.",
+    nextStep: "Open the import results, correct the rejected rows or file format, and rerun the import.",
+    actionLabel: "Review Import Errors",
+  },
+  "lease.uploaded": {
+    title: "Lease Uploaded",
+    summary: "A lease document has been uploaded and is ready for intake processing.",
+    impact: "The lease cannot feed critical dates, rent schedules, budgets, CAM rules, or reporting until extraction and review are completed.",
+    nextStep: "Monitor processing status and review the extracted lease when it becomes available.",
+    actionLabel: "Open Lease Upload",
+  },
+  "lease.extraction_completed": {
+    title: "Lease Extraction Completed",
+    summary: "Lease extraction has completed and extracted terms are available for review.",
+    impact: "Extracted lease facts should be validated before they become the approved system of record.",
+    nextStep: "Review required fields, confidence, source evidence, rent terms, recovery obligations, and approval readiness.",
+    actionLabel: "Review Lease",
+  },
+  "lease.review_required": {
+    title: "Lease Review Required",
+    summary: "A lease requires reviewer attention before it can be approved.",
+    impact: "Approval blockers, missing evidence, low-confidence fields, or manual review items may prevent downstream budget and CAM workflows.",
+    nextStep: "Open the lease review queue, resolve required blockers, and confirm source-backed values before approval.",
+    actionLabel: "Open Lease Review",
+  },
+  "lease.ready_for_approval": {
+    title: "Lease Ready for Approval",
+    summary: "A lease has reached the approval stage and requires final review.",
+    impact: "Once approved, lease terms may drive rent projections, critical dates, expense rules, budgets, CAM setup, and reporting.",
+    nextStep: "Review the approval summary and approve only after required terms and supporting evidence are complete.",
+    actionLabel: "Approve Lease",
+  },
+  "lease.pm_approved": {
+    title: "Lease Manager Approval Completed",
+    summary: "The property manager review step has been completed.",
+    impact: "The lease may now require asset owner or organization owner review before becoming final.",
+    nextStep: "Review the approval status and complete any remaining approval steps.",
+    actionLabel: "Review Lease Status",
+  },
+  "lease.asset_owner_approval_required": {
+    title: "Asset Owner Lease Approval Required",
+    summary: "A lease requires asset owner approval.",
+    impact: "Commercial terms, obligations, and recovery provisions should be approved before downstream finance workflows use this lease.",
+    nextStep: "Review the lease abstract, source evidence, and approval summary, then approve or send back for correction.",
+    actionLabel: "Review Approval",
+  },
+  "lease.org_owner_approval_required": {
+    title: "Organization Owner Lease Approval Required",
+    summary: "A lease requires final organization owner approval.",
+    impact: "This approval establishes the lease as an authoritative source for financial operations and controls.",
+    nextStep: "Review the final approval package and approve only when the lease abstract is complete and audit-ready.",
+    actionLabel: "Open Final Approval",
+  },
+  "lease.approved": {
+    title: "Lease Approved",
+    summary: "The lease abstract has been approved and is available for downstream workflows.",
+    impact: "Approved lease facts may now support rent projection, critical dates, expense rules, budgets, CAM, and reporting.",
+    nextStep: "Confirm that post-approval outputs such as rent schedules, critical dates, and expense rules completed successfully.",
+    actionLabel: "Open Approved Lease",
+  },
+  "lease.rejected": {
+    title: "Lease Rejected",
+    summary: "A lease approval was rejected or sent back.",
+    impact: "The lease cannot be used as an approved source for budgets, CAM, rent projections, or reporting until corrections are completed.",
+    nextStep: "Review the rejection reason, correct the lease abstract or source evidence, and resubmit for approval.",
+    actionLabel: "Review Rejection",
+  },
+  "lease.correction_required": {
+    title: "Lease Correction Required",
+    summary: "A lease requires correction before the workflow can continue.",
+    impact: "Unresolved lease corrections can block approval and downstream financial workflows.",
+    nextStep: "Open the lease, address the required correction items, and resubmit for review.",
+    actionLabel: "Correct Lease",
+  },
+  "expense.submitted": {
+    title: "Expense Submitted",
+    summary: "An expense has been submitted for review.",
+    impact: "Expense approval and classification determine whether the amount can flow into CAM, budgets, reporting, and reconciliation.",
+    nextStep: "Review the expense details, coding, property scope, vendor, amount, and recoverability context.",
+    actionLabel: "Review Expense",
+  },
+  "expense.review_required": {
+    title: "Expense Review Required",
+    summary: "An expense requires reviewer attention.",
+    impact: "Unmatched, conditional, low-confidence, or incomplete classifications can affect recoverability and CAM charges.",
+    nextStep: "Open the expense review queue, resolve classification issues, and approve or reject the expense treatment.",
+    actionLabel: "Open Expense Review",
+  },
+  "expense.final_approval_required": {
+    title: "Expense Final Approval Required",
+    summary: "An expense requires final approval before it can be treated as approved actuals.",
+    impact: "Final approval controls whether the expense can support CAM, budget variance, and accounting workflows.",
+    nextStep: "Review the expense amount, vendor, period, property scope, recoverability, and supporting evidence before approval.",
+    actionLabel: "Approve Expense",
+  },
+  "expense.approved": {
+    title: "Expense Approved",
+    summary: "An expense has been approved.",
+    impact: "The approved expense may now be available for classification, CAM, budget variance, reporting, and reconciliation workflows.",
+    nextStep: "Confirm any downstream classification or CAM handoff that depends on this expense.",
+    actionLabel: "Open Expense",
+  },
+  "expense.rejected": {
+    title: "Expense Rejected",
+    summary: "An expense has been rejected or sent back for correction.",
+    impact: "Rejected expenses will not be used as approved actuals for CAM, budgets, or reconciliation until corrected and approved.",
+    nextStep: "Review the rejection reason, correct the record if appropriate, and resubmit for review.",
+    actionLabel: "Review Expense",
+  },
+  "cam.eligible": {
+    title: "CAM Item Eligible for Review",
+    summary: "A CAM-related item is eligible for review or handoff.",
+    impact: "Eligible inputs should be reviewed before they affect tenant recoveries or CAM charge calculations.",
+    nextStep: "Review the eligible item and confirm it is ready for CAM processing.",
+    actionLabel: "Review CAM Item",
+  },
+  "cam.calculation_generated": {
+    title: "CAM Calculation Generated",
+    summary: "A CAM calculation snapshot has been generated.",
+    impact: "The snapshot may be used for review, export, tenant charges, and reconciliation support.",
+    nextStep: "Review calculation inputs, exceptions, tenant shares, caps, and any material variances before final approval or export.",
+    actionLabel: "Open CAM Calculation",
+  },
+  "cam.review_required": {
+    title: "CAM Review Required",
+    summary: "A CAM workflow item requires review.",
+    impact: "Review may be required because of missing prerequisites, exceptions, stale inputs, or calculation items requiring approval.",
+    nextStep: "Open the CAM review queue and resolve blockers before approving or exporting charges.",
+    actionLabel: "Open CAM Review",
+  },
+  "cam.final_approval_required": {
+    title: "CAM Final Approval Required",
+    summary: "A CAM calculation or reconciliation package requires final approval.",
+    impact: "Final approval may authorize tenant billing, statement generation, or official CAM reporting.",
+    nextStep: "Review tenant shares, caps, gross-ups, exclusions, variances, and supporting inputs before approval.",
+    actionLabel: "Approve CAM Package",
+  },
+  "cam.approved": {
+    title: "CAM Approved",
+    summary: "A CAM workflow item has been approved.",
+    impact: "Approved CAM outputs may now support billing, exports, reporting, or reconciliation workflows.",
+    nextStep: "Confirm the next billing or reporting step and retain the approved snapshot for audit traceability.",
+    actionLabel: "Open CAM",
+  },
+  "cam.reconciliation_ready": {
+    title: "CAM Reconciliation Ready",
+    summary: "CAM reconciliation output is ready for review or tenant communication.",
+    impact: "True-up balances, refunds, charges, and material exceptions should be reviewed before statements are sent.",
+    nextStep: "Review tenant-level reconciliation results, variance thresholds, and statement readiness.",
+    actionLabel: "Open Reconciliation",
+  },
+  "budget.generated": {
+    title: "Budget Generated",
+    summary: "A budget draft has been generated.",
+    impact: "The budget should be reviewed against lease, expense, CAM, and prior-period assumptions before submission.",
+    nextStep: "Review budget assumptions, variance drivers, and required supporting inputs.",
+    actionLabel: "Open Budget",
+  },
+  "budget.review_required": {
+    title: "Budget Review Required",
+    summary: "A budget has been submitted for review.",
+    impact: "Budget review controls the financial baseline used for forecasting, CAM comparisons, and reporting.",
+    nextStep: "Review the budget package, key assumptions, variance explanations, and stakeholder comments.",
+    actionLabel: "Review Budget",
+  },
+  "budget.final_approval_required": {
+    title: "Budget Final Approval Required",
+    summary: "A budget requires final approval.",
+    impact: "Final approval may establish the official budget baseline for the organization, property, or fiscal year.",
+    nextStep: "Review final budget totals, major variances, supporting assumptions, and any open rework comments before approval.",
+    actionLabel: "Approve Budget",
+  },
+  "budget.approved": {
+    title: "Budget Approved",
+    summary: "A budget has been approved.",
+    impact: "The approved budget can now be used as the financial baseline for variance analysis, CAM comparison, and reporting.",
+    nextStep: "Confirm that downstream reporting and budget dashboard views reflect the approved baseline.",
+    actionLabel: "Open Budget Dashboard",
+  },
+  "budget.rejected": {
+    title: "Budget Sent Back for Rework",
+    summary: "A budget has been rejected or returned for updates.",
+    impact: "The budget cannot be treated as an approved financial baseline until the requested changes are completed and approved.",
+    nextStep: "Review the rework comments, update the budget assumptions or line items, and resubmit for review.",
+    actionLabel: "Review Budget Rework",
+  },
+  "critical_date.due_soon": {
+    title: "Critical Date Due Soon",
+    summary: "A critical date is approaching.",
+    impact: "Missed lease, renewal, option, insurance, or compliance dates can create legal, operational, or financial risk.",
+    nextStep: "Review the date, confirm ownership, and complete or update the required follow-up action.",
+    actionLabel: "Open Critical Date",
+  },
+  "critical_date.due_today": {
+    title: "Critical Date Due Today",
+    summary: "A critical date is due today.",
+    impact: "Immediate action may be required to prevent a missed deadline or operational escalation.",
+    nextStep: "Complete the required action today or update the responsible owner and status.",
+    actionLabel: "Open Critical Date",
+  },
+  "critical_date.overdue": {
+    title: "Critical Date Overdue",
+    summary: "A critical date is overdue.",
+    impact: "Overdue critical dates require prompt escalation because they may represent missed legal, financial, or compliance obligations.",
+    nextStep: "Review the overdue item, assign ownership if needed, record the resolution plan, and close the item when complete.",
+    actionLabel: "Resolve Overdue Item",
+  },
+});
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function jsonResponse(body: unknown, status = 200) {
@@ -780,19 +1035,73 @@ function requiredPermission(rule: any, policy: any) {
   return rule.permission || policy.permission || null;
 }
 
+function humanize(value: unknown) {
+  return String(value || "")
+    .replace(/[_-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function templateFor(event: any) {
+  return EVENT_EMAIL_TEMPLATES[event.event_type] || {
+    title: humanize(event.event_type || "Notification"),
+    summary: "A workflow notification was generated in CRE Platform.",
+    impact: "Review the record to confirm whether action is required.",
+    nextStep: "Open the related record and complete any assigned follow-up.",
+    actionLabel: "Open in CRE Platform",
+  };
+}
+
+function metadataValue(event: any, keys: string[]) {
+  const metadata = normalizeObject(event.metadata);
+  for (const key of keys) {
+    const value = event?.[key] ?? metadata?.[key];
+    if (value !== undefined && value !== null && String(value).trim() !== "") return value;
+  }
+  return "";
+}
+
+function formatCurrency(value: unknown) {
+  if (value === undefined || value === null || value === "") return "";
+  const amount = Number(String(value).replace(/[$,]/g, ""));
+  if (!Number.isFinite(amount)) return String(value);
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(amount);
+}
+
+function formatPercent(value: unknown) {
+  if (value === undefined || value === null || value === "") return "";
+  const numeric = Number(String(value).replace(/[%]/g, ""));
+  if (!Number.isFinite(numeric)) return String(value);
+  return `${numeric}${String(value).includes("%") ? "" : "%"}`;
+}
+
+function roleLabel(recipient: any) {
+  const role = recipient?.matching_reasons?.[0]?.role || recipient?.externalType || "";
+  return role ? humanize(role) : "";
+}
+
+function notificationTypeLabel(value: unknown) {
+  return humanize(String(value || "").toLowerCase());
+}
+
 function titleFor(event: any, rule: any) {
   if (event.title) return event.title;
-  const base = String(event.event_type || "Notification").replace(/\./g, " ");
-  if (rule.notificationType === TYPES.APPROVAL_REQUIRED) return `${base} requires approval`;
-  if (rule.notificationType === TYPES.ACTION_REQUIRED) return `${base} requires action`;
-  return base.replace(/\b\w/g, (char) => char.toUpperCase());
+  return templateFor(event).title;
 }
 
 function messageFor(event: any, rule: any) {
   if (event.message) return event.message;
-  if (rule.notificationType === TYPES.APPROVAL_REQUIRED) return `${event.entity_label || event.entity_type || "This item"} requires your approval.`;
-  if (rule.notificationType === TYPES.CORRECTION_REQUIRED) return `${event.entity_label || event.entity_type || "This item"} requires correction before the workflow can continue.`;
-  return `${event.entity_label || event.entity_type || "A workflow item"} has an update.`;
+  const template = templateFor(event);
+  const label = event.entity_label || metadataValue(event, ["record_name", "name", "portfolio_name", "property_name", "lease_name", "tenant_name"]);
+  const actionContext = rule.notificationType === TYPES.APPROVAL_REQUIRED
+    ? " Approval is required."
+    : rule.notificationType === TYPES.ACTION_REQUIRED
+      ? " Action is required."
+      : rule.notificationType === TYPES.CORRECTION_REQUIRED
+        ? " Correction is required."
+        : "";
+  return `${label ? `${label}: ` : ""}${template.summary}${actionContext}`;
 }
 
 function addRecipient(map: Map<string, any>, event: any, policy: any, rule: any, recipient: any, reason: any) {
@@ -949,32 +1258,103 @@ function escapeHtml(value: unknown) {
     .replace(/'/g, "&#039;");
 }
 
-function emailHtml(title: string, message: string, actionUrl: string) {
+function emailDetailRows(event: any, recipient: any) {
+  const rows = [
+    ["Record", event.entity_label || metadataValue(event, ["record_name", "name", "title"])],
+    ["Portfolio", metadataValue(event, ["portfolio_name", "portfolioName"])],
+    ["Property", metadataValue(event, ["property_name", "propertyName"])],
+    ["Building", metadataValue(event, ["building_name", "buildingName"])],
+    ["Unit", metadataValue(event, ["unit_name", "unitName", "unit_number", "unitNumber"])],
+    ["Lease", metadataValue(event, ["lease_name", "leaseName", "lease_number", "leaseNumber"])],
+    ["Tenant", metadataValue(event, ["tenant_name", "tenantName"])],
+    ["Vendor", metadataValue(event, ["vendor_name", "vendorName"])],
+    ["Fiscal Year", metadataValue(event, ["fiscal_year", "fiscalYear", "year"])],
+    ["Amount", formatCurrency(metadataValue(event, ["amount", "total_amount", "expense_amount", "budget_amount", "variance_amount"]))],
+    ["Variance", formatPercent(metadataValue(event, ["variance_pct", "variancePercent", "variance_percent"]))],
+    ["Due Date", metadataValue(event, ["due_date", "dueDate", "deadline"])],
+    ["Current Status", notificationTypeLabel(metadataValue(event, ["status", "workflow_status", "approval_status"]))],
+    ["Recipient Role", roleLabel(recipient)],
+    ["Notification Type", notificationTypeLabel(recipient.notification_type)],
+  ];
+  return rows.filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== "");
+}
+
+function emailText(model: any) {
+  const details = model.details.map(([label, value]: any[]) => `${label}: ${value}`).join("\n");
+  return [
+    model.title,
+    "",
+    model.summary,
+    "",
+    `Why this matters: ${model.impact}`,
+    `Next step: ${model.nextStep}`,
+    details ? `\nDetails\n${details}` : "",
+    model.actionUrl ? `\nOpen in CRE Platform: ${model.actionUrl}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function buildEmailModel(event: any, recipient: any) {
+  const template = templateFor(event);
+  const record = event.entity_label || metadataValue(event, ["record_name", "name", "title", "portfolio_name", "property_name", "lease_name"]) || "";
+  const title = recipient.title || template.title;
+  const summary = recipient.message || messageFor(event, { notificationType: recipient.notification_type });
+  const actionRequired = Boolean(recipient.requires_action);
+  return {
+    title,
+    subject: record ? `${title}: ${record}` : title,
+    preheader: `${template.summary} ${actionRequired ? "Action may be required." : "Review for awareness."}`,
+    summary,
+    impact: template.impact,
+    nextStep: template.nextStep,
+    actionLabel: template.actionLabel || "Open in CRE Platform",
+    actionUrl: recipient.action_url || event.action_url || "",
+    eventType: event.event_type,
+    module: humanize(recipient.module || event.entity_type || ""),
+    badge: actionRequired ? "Action Required" : notificationTypeLabel(recipient.notification_type || TYPES.INFORMATIONAL),
+    details: emailDetailRows(event, recipient),
+  };
+}
+
+function emailHtml(model: any) {
+  const detailRows = model.details.map(([label, value]: any[]) => `
+          <tr>
+            <td style="padding: 10px 12px; border-bottom: 1px solid #e5e7eb; color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; width: 34%;">${escapeHtml(label)}</td>
+            <td style="padding: 10px 12px; border-bottom: 1px solid #e5e7eb; color: #0f172a; font-size: 14px; font-weight: 600;">${escapeHtml(value)}</td>
+          </tr>`).join("");
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CRE Platform</title>
-  <style>
-    body { margin: 0; padding: 0; background: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-    .wrapper { max-width: 600px; margin: 40px auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; }
-    .header { padding: 28px 36px; background: linear-gradient(135deg, #1a2744 0%, #2d4a8a 100%); color: #ffffff; font-size: 18px; font-weight: 700; }
-    .body { padding: 32px 36px; color: #475569; line-height: 1.6; font-size: 15px; }
-    .body h1 { color: #0f172a; margin: 0 0 12px; font-size: 24px; }
-    .button { display: inline-block; margin-top: 20px; padding: 12px 18px; border-radius: 10px; background: #1d4ed8; color: #ffffff; text-decoration: none; font-weight: 600; }
-    .footer { border-top: 1px solid #e2e8f0; background: #f8fafc; padding: 18px 36px; text-align: center; color: #94a3b8; font-size: 12px; }
-  </style>
+  <title>${escapeHtml(model.subject)}</title>
 </head>
-<body>
-  <div class="wrapper">
-    <div class="header">CRE Platform</div>
-    <div class="body">
-      <h1>${escapeHtml(title)}</h1>
-      <p>${escapeHtml(message)}</p>
-      ${actionUrl ? `<a class="button" href="${escapeHtml(actionUrl)}">Open in CRE Platform</a>` : ""}
+<body style="margin: 0; padding: 0; background: #f4f7fb; font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+  <div style="display: none; max-height: 0; overflow: hidden; opacity: 0; color: transparent;">${escapeHtml(model.preheader)}</div>
+  <div style="max-width: 680px; margin: 36px auto; background: #ffffff; border: 1px solid #dbe3ee; border-radius: 18px; overflow: hidden;">
+    <div style="padding: 28px 36px; background: linear-gradient(135deg, #0f2a44 0%, #173b5c 100%); color: #ffffff;">
+      <div style="font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #bfdbfe;">CRE Platform</div>
+      <div style="margin-top: 8px; font-size: 22px; line-height: 1.2; font-weight: 750;">${escapeHtml(model.module || "Workflow Notification")}</div>
     </div>
-    <div class="footer">CRE Platform · support@cresuite.org</div>
+    <div style="padding: 34px 36px 30px; color: #334155; line-height: 1.6;">
+      <div style="display: inline-block; margin-bottom: 16px; padding: 5px 10px; border-radius: 999px; background: #eef4ff; color: #1d4ed8; font-size: 12px; font-weight: 700;">${escapeHtml(model.badge)}</div>
+      <h1 style="margin: 0 0 14px; color: #0f172a; font-size: 28px; line-height: 1.15; font-weight: 760;">${escapeHtml(model.title)}</h1>
+      <p style="margin: 0 0 22px; color: #475569; font-size: 15px;">${escapeHtml(model.summary)}</p>
+      <div style="margin: 0 0 20px; padding: 16px 18px; border-left: 4px solid #b8893a; background: #fffbeb; border-radius: 10px;">
+        <div style="color: #78350f; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;">Why this matters</div>
+        <div style="margin-top: 6px; color: #334155; font-size: 14px;">${escapeHtml(model.impact)}</div>
+      </div>
+      <div style="margin: 0 0 24px; padding: 16px 18px; border: 1px solid #dbe3ee; background: #f8fafc; border-radius: 10px;">
+        <div style="color: #0f2a44; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;">Next step</div>
+        <div style="margin-top: 6px; color: #0f172a; font-size: 14px; font-weight: 600;">${escapeHtml(model.nextStep)}</div>
+      </div>
+      ${detailRows ? `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin: 0 0 26px; border-collapse: collapse; border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden;">${detailRows}</table>` : ""}
+      ${model.actionUrl ? `<a href="${escapeHtml(model.actionUrl)}" style="display: inline-block; padding: 13px 18px; border-radius: 10px; background: #173b5c; color: #ffffff; text-decoration: none; font-size: 14px; font-weight: 750;">${escapeHtml(model.actionLabel)}</a>` : ""}
+    </div>
+    <div style="border-top: 1px solid #e2e8f0; background: #f8fafc; padding: 18px 36px; color: #64748b; font-size: 12px; line-height: 1.5;">
+      This notification was generated by CRE Platform based on your role, assignment, or workflow responsibility.
+      <br />CRE Platform &middot; support@cresuite.org
+    </div>
   </div>
 </body>
 </html>`;
@@ -991,9 +1371,10 @@ async function resolveRecipientEmail(supabaseAdmin: any, recipient: any) {
   return data?.user?.email || "";
 }
 
-async function sendEmail(to: string, title: string, message: string, actionUrl: string) {
+async function sendEmail(to: string, event: any, recipient: any) {
   if (!RESEND_API_KEY) return { status: "failed", error_message: "RESEND_API_KEY is not configured" };
   if (!to) return { status: "skipped", error_message: "Recipient has no email address" };
+  const model = buildEmailModel(event, recipient);
 
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -1001,8 +1382,9 @@ async function sendEmail(to: string, title: string, message: string, actionUrl: 
     body: JSON.stringify({
       from: "CRE Platform <support@cresuite.org>",
       to: [to],
-      subject: `CRE Platform Notification: ${title}`,
-      html: emailHtml(title, message, actionUrl),
+      subject: `CRE Platform: ${model.subject}`,
+      html: emailHtml(model),
+      text: emailText(model),
     }),
   });
 
@@ -1183,7 +1565,7 @@ async function dispatchBusinessEvent(req: Request, body: any) {
     const notification = await createNotification(supabaseAdmin, event, recipient);
     const email = await resolveRecipientEmail(supabaseAdmin, recipient);
     const phone = normalizePhone(recipient.phone);
-    const emailResult = await sendEmail(email, recipient.title, recipient.message, recipient.action_url);
+    const emailResult = await sendEmail(email, event, recipient);
     const smsResult = await sendSms(phone, recipient.message);
 
     await createDelivery(supabaseAdmin, notification.id, CHANNELS.EMAIL, email, emailResult);
