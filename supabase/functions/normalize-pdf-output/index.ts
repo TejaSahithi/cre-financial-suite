@@ -3127,7 +3127,24 @@ async function handleBoundedEnrichStage(args: {
     stage,
     generationId,
     status: "completed",
-    data: (isEnrichEvidenceDomainStage(stage) || isExpensesAndCamEvidenceSubstage(stage) || stage === "enrich_truth_assembly")
+    // Only enrich_truth_assembly's own result is compacted to a count --
+    // its real payload is stored separately as ui_review_payload, so
+    // duplicating it here really would just be wasted bytes (see the
+    // enrich_truth_assembly persist branch below). Every evidence-domain
+    // stage and every Expenses/CAM sub-stage MUST keep its real array:
+    // - combineExpensesAndCamSubstageData() (enrich_evidence_expenses_and_cam)
+    //   reads each of the 5 sub-stages' .data back and concatenates them --
+    //   a {count:N} marker fails its Array.isArray() check, so the reducer
+    //   failed with PRIOR_STAGE_MISSING unconditionally, for every document.
+    // - enrich_truth_assembly's own evidenceByDomain step (further below)
+    //   only null-checks its 5 domain inputs (including this reducer's own
+    //   output) before .flat()-ing them into the final field list -- a
+    //   {count:N} marker passes that null-check silently and would corrupt
+    //   the assembled lease with junk count objects instead of real fields,
+    //   rather than erroring visibly like the reducer case above.
+    // Previously this branch compacted both, which is why the compaction
+    // itself was the outage: the two consumers above never saw real data.
+    data: stage === "enrich_truth_assembly"
       ? { count: Array.isArray(stageData) ? stageData.length : 1 }
       : stageData,
   });
