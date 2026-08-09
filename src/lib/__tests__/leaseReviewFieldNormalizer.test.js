@@ -1702,4 +1702,26 @@ describe("Phase 5F reviewer projection authority", () => {
     expect(expirationRow.extractionMode).toBe(EXTRACTION_MODES.CALCULATED);
     expect(expirationRow.validationMessage).toMatch(/calculated/i);
   });
+
+  it('rolls forward expiration_date for Year to Year recurring lease terms to active current period', () => {
+    const termSourceText = "(a) Lease Term: Year to Year";
+    const lease = {
+      extraction_data: {
+        fields: {
+          commencement_date: { value: "2024-02-01", source_text: "(b) Commencement Date: February 1, 2024" },
+          lease_term: { value: "Year to Year", source_text: termSourceText },
+        },
+        field_evidence: {
+          commencement_date: { source_text: "(b) Commencement Date: February 1, 2024", source_page: 1 },
+          lease_term: { source_text: termSourceText, source_page: 1 },
+        },
+      },
+    };
+
+    const expirationRow = normalizeStandardFields(lease).find((r) => r.canonicalKey === "expiration_date");
+
+    // Start 2024-02-01: Y1 (2024-02-01 to 2025-01-31), Y2 (2025-02-01 to 2026-01-31), Y3 (2026-02-01 to 2027-01-31)
+    expect(expirationRow.value).toBe("2027-01-31");
+    expect(expirationRow.extractionMode).toBe(EXTRACTION_MODES.CALCULATED);
+  });
 });

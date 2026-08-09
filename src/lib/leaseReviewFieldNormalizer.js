@@ -385,20 +385,37 @@ function parseLeaseTermMonths(value) {
   return null;
 }
 
-function addMonthsInclusiveEnd(startIso, months) {
+function addMonthsInclusiveEnd(startIso, months, isRecurring = false) {
   if (!startIso || !Number.isFinite(months) || months <= 0) return null;
   const start = new Date(`${startIso}T00:00:00Z`);
   if (Number.isNaN(start.getTime())) return null;
-  const targetIndex = start.getUTCMonth() + Math.round(months);
-  const targetYear = start.getUTCFullYear() + Math.floor(targetIndex / 12);
-  const targetMonth = ((targetIndex % 12) + 12) % 12;
-  const targetDay = Math.min(
+  let targetIndex = start.getUTCMonth() + Math.round(months);
+  let targetYear = start.getUTCFullYear() + Math.floor(targetIndex / 12);
+  let targetMonth = ((targetIndex % 12) + 12) % 12;
+  let targetDay = Math.min(
     start.getUTCDate(),
     new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate(),
   );
-  const end = new Date(Date.UTC(targetYear, targetMonth, targetDay));
+  let end = new Date(Date.UTC(targetYear, targetMonth, targetDay));
   end.setUTCDate(end.getUTCDate() - 1);
-  return Number.isNaN(end.getTime()) ? null : end.toISOString().slice(0, 10);
+  if (Number.isNaN(end.getTime())) return null;
+
+  if (isRecurring) {
+    const today = new Date();
+    while (end < today) {
+      targetIndex += Math.round(months);
+      targetYear = start.getUTCFullYear() + Math.floor(targetIndex / 12);
+      targetMonth = ((targetIndex % 12) + 12) % 12;
+      targetDay = Math.min(
+        start.getUTCDate(),
+        new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate(),
+      );
+      end = new Date(Date.UTC(targetYear, targetMonth, targetDay));
+      end.setUTCDate(end.getUTCDate() - 1);
+    }
+  }
+
+  return end.toISOString().slice(0, 10);
 }
 
 function deriveTermMonthsFromDates(startIso, endIso) {
@@ -505,7 +522,7 @@ function findSecurityDepositFallback(lease) {
     if (!totalMatch) continue;
     const value = moneyNumber(totalMatch[1]);
     if (value == null) continue;
-    const snippet = sourceSnippet(page.text, totalMatch.index ?? 0, 560);
+    const snippet = page.text.length <= 1200 ? page.text : sourceSnippet(page.text, Math.max(0, (totalMatch.index ?? 0) - 350), 600);
     const amountCount = (snippet?.match(/\$[\d,]+(?:\.\d{2})?/g) || []).length;
     return {
       value,
@@ -517,8 +534,12 @@ function findSecurityDepositFallback(lease) {
       evidence: {
         value,
         rawValue: moneyDisplay(value),
+        raw_value: moneyDisplay(value),
         sourcePage: page.page,
+        source_page: page.page,
+        page_number: page.page,
         sourceText: snippet,
+        source_text: snippet,
         extractionStatus: EXTRACTION_STATUSES.EXTRACTED,
         evidenceType: "extracted",
         sourceTextQuality: SOURCE_TEXT_QUALITIES.PARTIAL,
@@ -748,8 +769,9 @@ function deriveLeaseTermContext(lease) {
   // value is null) - duplicating that gate here would just make the
   // commencement+term calculation unavailable as a rescue fallback for a
   // rejected raw value, which is exactly the case this needs to cover.
+  const isRecurringYearToYear = /\byear\s*(?:to|over|-)\s*year\b|\bannual(?:ly)?\s*renew\b|\bauto(?:matic(?:ally)?)?\s*renew\b/i.test(termText);
   const derivedExpiration = commencement && existingTermMonths
-    ? addMonthsInclusiveEnd(commencement, existingTermMonths)
+    ? addMonthsInclusiveEnd(commencement, existingTermMonths, isRecurringYearToYear)
     : null;
   const derivedTermMonths = commencement && existingExpiration
     ? deriveTermMonthsFromDates(commencement, existingExpiration)

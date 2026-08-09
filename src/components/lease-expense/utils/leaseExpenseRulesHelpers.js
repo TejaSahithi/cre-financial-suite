@@ -1,6 +1,6 @@
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { normalizeLeaseExpenseRule } from "@/services/utils/leaseExpenseRuleTaxonomy";
-import { deriveRuleDecision, isRuleSuperseded } from "@/services/utils/ruleDecisionEngine";
+import { deriveRuleDecision, isRuleSuperseded, deriveNormalizedContractModel } from "@/services/utils/ruleDecisionEngine";
 
 export const ROW_STATUS_STYLE = {
   mapped: "bg-emerald-100 text-emerald-700",
@@ -484,6 +484,116 @@ export function resolveCamPolicyStatus(rule, policies = [], leaseHasPremises = f
   if (current.status === "superseded") return { label: "CAM Policy Superseded", tone: "slate" };
   if (current.status === "rejected") return { label: "CAM Policy Blocked", tone: "red" };
   return { label: "CAM Policy Pending", tone: "amber" };
+}
+
+// ---------------------------------------------------------------------------
+// Simplified-view derivations for the main Lease Expense Rules table.
+//
+// These are presentation-only groupings on top of the existing
+// deriveNormalizedContractModel()/deriveRuleDecision() engine
+// (ruleDecisionEngine.js) — no financial/approval logic lives here. The
+// model's own recovery_treatment / cam_participation / actual_expense_expected
+// vocabularies were already an exact 1:1 fit for the simplified Treatment /
+// CAM / Actual Expense columns, so this just labels and (for Contract
+// Status / Policy Status) folds a couple of adjacent states together for a
+// single badge instead of the previous two-or-three-badge stack.
+// ---------------------------------------------------------------------------
+
+export const TREATMENT_LABELS = {
+  pooled_recovery: "Landlord Recoverable",
+  direct_recovery: "Direct Recovery",
+  direct_bill: "Direct Bill",
+  tenant_direct: "Tenant Direct",
+  included_in_rent: "Included in Rent",
+  compliance_only: "Compliance Only",
+  nonrecoverable: "Nonrecoverable",
+  conditional: "Conditional",
+};
+
+export const CAM_STATUS_LABELS = {
+  eligible: "Eligible",
+  conditional: "Conditional",
+  not_applicable: "N/A",
+  blocked: "Blocked",
+};
+
+export const ACTUAL_EXPENSE_LABELS = {
+  yes: "Expected",
+  no: "Not Expected",
+  conditional: "Conditional",
+};
+
+export const CONTRACT_STATUS_LABELS = {
+  approved: "Approved",
+  rejected: "Rejected",
+  needs_review: "Needs Review",
+  superseded: "Superseded",
+};
+
+// Treatments where nothing is ever pooled/published to CAM — a landlord
+// recovery policy is structurally not a thing for these, not merely absent.
+const NON_CAM_PARTICIPATING_TREATMENTS = new Set([
+  "tenant_direct", "included_in_rent", "compliance_only", "direct_bill", "nonrecoverable",
+]);
+
+/** Treatment + CAM + Actual Expense — one label each, straight off the existing contract model. */
+export function getSimplifiedRuleView(rule) {
+  const model = deriveNormalizedContractModel(rule);
+  return {
+    treatment: model.recovery_treatment,
+    treatmentLabel: TREATMENT_LABELS[model.recovery_treatment] || humanizeToken(model.recovery_treatment),
+    cam: model.cam_participation,
+    camLabel: CAM_STATUS_LABELS[model.cam_participation] || humanizeToken(model.cam_participation),
+    actualExpense: model.actual_expense_expected,
+    actualExpenseLabel: ACTUAL_EXPENSE_LABELS[model.actual_expense_expected] || humanizeToken(model.actual_expense_expected),
+    model,
+  };
+}
+
+/**
+ * Single Contract Status badge (Needs Review / Approved / Rejected /
+ * Superseded), replacing the previous "Approved" + "Approved Contractual
+ * Rule" double badge. `superseded` is checked ahead of deriveRuleDecision
+ * because the decision engine folds it into "draft" (see
+ * ruleDecisionEngine.js's deriveRuleStatus). `draft` (not yet reviewed) and
+ * `not_applicable` (reviewed, determined to be a non-recoverable/no-action
+ * term) both fold into the nearest of the four requested values — Needs
+ * Review and Rejected respectively — since this table intentionally exposes
+ * only four contract-status values.
+ */
+export function getContractStatus(rule) {
+  if (isRuleSuperseded(rule)) {
+    return { value: "superseded", label: CONTRACT_STATUS_LABELS.superseded, tone: "slate" };
+  }
+  const { status } = deriveRuleDecision(rule);
+  const value = status === "draft" ? "needs_review" : status === "not_applicable" ? "rejected" : status;
+  const tone = value === "approved" ? "emerald" : value === "rejected" ? "red" : "amber";
+  return { value, label: CONTRACT_STATUS_LABELS[value] || humanizeToken(value), tone };
+}
+
+/**
+ * CAM recovery-policy materialization status, gated by treatment first:
+ * non-participating treatments always read "Not Required" regardless of
+ * what resolveCamPolicyStatus would otherwise compute (there is nothing to
+ * materialize for a tenant-direct or included-in-rent term). Otherwise
+ * defers to the existing resolveCamPolicyStatus (Ready/Pending/
+ * Blocked/Superseded, only meaningful once the rule itself is approved),
+ * and attaches a human reason to a Blocked result so it's never shown bare.
+ */
+export function getPolicyStatus(rule, policies = [], leaseHasPremises = false) {
+  const model = deriveNormalizedContractModel(rule);
+  if (NON_CAM_PARTICIPATING_TREATMENTS.has(model.recovery_treatment)) {
+    return { label: "Not Required", tone: "slate", reason: null };
+  }
+  const base = resolveCamPolicyStatus(rule, policies, leaseHasPremises);
+  if (!base) return null;
+  if (base.label !== "CAM Policy Blocked") return { ...base, reason: null };
+  const reason = policies.length === 0
+    ? (leaseHasPremises
+      ? "No recovery policy has been materialized for this approved rule yet."
+      : "Lease has no premises/area on file — required before a recovery policy can be materialized.")
+    : "The materialized recovery policy for this rule was rejected.";
+  return { ...base, reason };
 }
 
 // Read-only match status for an actual-expense classification row (matched_

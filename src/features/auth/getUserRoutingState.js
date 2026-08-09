@@ -24,7 +24,8 @@ export function getUserRoutingState(u, p, org, members) {
 
 
   // WELCOME ABOARD
-  if (org?.status === 'active' && p.status === 'active' && !p.dashboard_viewed) {
+  const hasViewedDashboard = p?.dashboard_viewed || (typeof window !== 'undefined' && localStorage.getItem('dashboard_viewed') === 'true');
+  if (org?.status === 'active' && p.status === 'active' && !hasViewedDashboard) {
     return 'WelcomeAboard';
   }
 

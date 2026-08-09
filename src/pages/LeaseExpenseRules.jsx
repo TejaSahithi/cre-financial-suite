@@ -15,6 +15,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import EditRuleModal from "@/components/lease-expense/EditRuleModal";
+import RuleDetailDrawer from "@/components/lease-expense/RuleDetailDrawer";
 import RuleTableRow from "@/components/lease-expense/RuleTableRow";
 import StatCard from "@/components/lease-expense/StatCard";
 import PageHeader from "@/components/PageHeader";
@@ -80,7 +81,7 @@ import {
   fromBooleanString,
   buildRuleEditForm,
   isApprovedRule,
-  resolveCamPolicyStatus,
+  getPolicyStatus,
   needsReviewRule,
   getRecoverableDecision,
   isLeaseDerivedRule,
@@ -121,6 +122,7 @@ export default function LeaseExpenseRules() {
   const leaseIdParam = useMemo(() => new URLSearchParams(location.search).get("lease_id") || null, [location.search]);
   const highlightedRuleId = useMemo(() => new URLSearchParams(location.search).get("rule_id") || null, [location.search]);
   const [editingRuleContext, setEditingRuleContext] = useState(null);
+  const [detailContext, setDetailContext] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const [selectedRuleIds, setSelectedRuleIds] = useState(() => new Set());
 
@@ -928,31 +930,27 @@ export default function LeaseExpenseRules() {
                     aria-label="Select all visible lease expense rules"
                   />
                 </TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Tenant</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Property</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Tenant / Lease</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Category</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Rule Summary</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Responsibility</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Recoverable</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">CAM Eligible</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actual Expected</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Method / Allocation</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Amount / Cap / Share</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Billing</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Status / Evidence</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Treatment</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Recovery Method</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">CAM</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actual Expense</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Contract Status</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Evidence</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={14} className="py-12 text-center">
+                  <TableCell colSpan={10} className="py-12 text-center">
                     <Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" />
                   </TableCell>
                 </TableRow>
               ) : filteredRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={14} className="py-12 text-center text-sm text-slate-400">
+                  <TableCell colSpan={10} className="py-12 text-center text-sm text-slate-400">
                     <div className="mx-auto flex max-w-2xl flex-col items-center gap-3">
                       {ruleSetLoadError ? (
                         <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-left text-red-700">
@@ -998,13 +996,14 @@ export default function LeaseExpenseRules() {
                     isUpdating={updateRuleMutation.isPending || bulkApproveRulesMutation.isPending}
                     isSelected={selectedRuleIds.has(rule.id)}
                     canSelect={isUuid(rule?.id) && !isApprovedRule(rule)}
-                    camPolicyStatus={rule?._findingOnly ? null : resolveCamPolicyStatus(rule, policiesBySourceRuleId.get(rule.id) || [], leasesWithPremises.has(lease?.id))}
+                    camPolicyStatus={rule?._findingOnly ? null : getPolicyStatus(rule, policiesBySourceRuleId.get(rule.id) || [], leasesWithPremises.has(lease?.id))}
                     isHighlighted={rule.id === highlightedRuleId}
                     onSelectChange={(checked) => toggleRuleSelection(rule.id, checked)}
                     onApprove={(r, l) => approveRule(r, l)}
                     onReject={(r, l) => rejectRule(r, l)}
                     onMarkNA={(r, l) => markNARule(r, l)}
                     onEdit={(context) => openRuleEditor(context)}
+                    onOpenDetail={(context) => setDetailContext(context)}
                   />
                 ))
               )}
@@ -1025,6 +1024,11 @@ export default function LeaseExpenseRules() {
         isSaving={updateRuleMutation.isPending}
         onClose={closeRuleEditor}
         onSave={saveRuleEdits}
+      />
+
+      <RuleDetailDrawer
+        context={detailContext}
+        onOpenChange={() => setDetailContext(null)}
       />
     </div>
   );

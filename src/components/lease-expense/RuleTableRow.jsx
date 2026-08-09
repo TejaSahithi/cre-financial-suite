@@ -2,6 +2,7 @@ import React from "react";
 import { Link } from "react-router-dom";
 import {
   Check,
+  Info,
   MinusCircle,
   MoreVertical,
   Pencil,
@@ -22,35 +23,48 @@ import {
 import { approvedLeaseFieldValue } from "@/lib/approvedLeaseSnapshot";
 import { createPageUrl } from "@/utils";
 import {
-  getRuleValidation,
-  getOperationalResponsibility,
   getSourcePage,
   getRuleSourceText,
   getExactSourceText,
   getCoverageGapLabel,
   humanizeToken,
-  formatTriState,
-  formatConfidence,
   truncate,
-  getDisplayCamPublishStatus,
-  resolveRuleApprovalStatusDisplay,
+  getSimplifiedRuleView,
+  getContractStatus,
 } from "./utils/leaseExpenseRulesHelpers";
-import { deriveFindingCoverageDecision } from "./utils/expenseFindingCoverage";
 
-function coverageBadgeClass(value, kind) {
-  const normalized = String(value || "").toLowerCase();
-  if (kind === "actual") {
-    if (normalized === "yes") return "bg-emerald-100 text-emerald-700";
-    if (normalized === "conditional") return "bg-amber-100 text-amber-800";
-    return "bg-slate-100 text-slate-600";
-  }
-  if (normalized.includes("not eligible")) return "bg-slate-100 text-slate-600";
-  if (normalized.includes("eligible") || normalized.includes("approved")) return "bg-emerald-100 text-emerald-700";
-  if (normalized.includes("conditional") || normalized.includes("direct recovery")) return "bg-amber-100 text-amber-800";
-  if (normalized.includes("evidence")) return "bg-blue-100 text-blue-700";
-  return "bg-slate-100 text-slate-600";
-}
+const TONE_CLASS = {
+  emerald: "bg-emerald-100 text-emerald-700",
+  red: "bg-red-100 text-red-700",
+  amber: "bg-amber-100 text-amber-800",
+  sky: "bg-sky-100 text-sky-700",
+  slate: "bg-slate-100 text-slate-600",
+};
 
+const TREATMENT_TONE = {
+  pooled_recovery: "emerald",
+  direct_recovery: "emerald",
+  direct_bill: "sky",
+  tenant_direct: "slate",
+  included_in_rent: "slate",
+  compliance_only: "slate",
+  nonrecoverable: "slate",
+  conditional: "amber",
+};
+
+const CAM_TONE = { eligible: "emerald", conditional: "amber", not_applicable: "slate", blocked: "red" };
+const ACTUAL_EXPENSE_TONE = { yes: "emerald", conditional: "amber", no: "slate" };
+
+/**
+ * Nine business columns only (checkbox + Actions aside) — every technical
+ * field that used to live here (responsibility, cap, share, base year,
+ * billing frequency, scope, policy version, full evidence, audit history)
+ * now lives in the detail drawer (onOpenDetail). Presentation only: the
+ * badges below are straight labels over getSimplifiedRuleView()/
+ * getContractStatus(), which themselves sit on top of the existing
+ * deriveNormalizedContractModel()/deriveRuleDecision() engine — no
+ * financial or approval logic changed.
+ */
 export default function RuleTableRow({
   rule,
   ruleSet,
@@ -68,44 +82,12 @@ export default function RuleTableRow({
   onReject,
   onMarkNA,
   onEdit,
+  onOpenDetail,
 }) {
-  const validation = getRuleValidation(rule);
-  const coverage = rule?._coverage || deriveFindingCoverageDecision(rule);
-  const recoverableDecision = validation.recoverableFromTenant;
-  const camEligibleDecision = validation.camEligible;
-  const paymentTreatment = validation.paymentTreatment;
-  const responsibility = getOperationalResponsibility(rule);
-  const recoveryMethod = validation.recoveryMethod;
-  const allocationBasis = validation.allocationBasis;
-  const capDisplay = rule.is_subject_to_cap || rule.cap_percent != null || rule.cap_type || rule.cap_amount != null
-    ? [
-        rule.cap_type || "",
-        rule.cap_percent != null ? `${rule.cap_percent}%` : null,
-        rule.cap_amount != null ? `$${Number(rule.cap_amount).toLocaleString()}` : null,
-        rule.cap_value != null && rule.cap_amount == null ? String(rule.cap_value) : null,
-      ].filter(Boolean).join(" ") || "-"
-    : "-";
+  const view = getSimplifiedRuleView(rule);
+  const contractStatus = getContractStatus(rule);
   const sourcePage = getSourcePage(rule);
   const sourceText = getRuleSourceText(rule) || getExactSourceText(rule) || "-";
-  const amountSummary = [
-    rule.estimated_annual_amount != null ? `$${Number(rule.estimated_annual_amount).toLocaleString()}/yr` : null,
-    rule.estimated_monthly_amount != null ? `$${Number(rule.estimated_monthly_amount).toLocaleString()}/mo` : null,
-    rule.tenant_share_percent != null ? `${rule.tenant_share_percent}% share` : null,
-    capDisplay !== "-" ? `Cap: ${capDisplay}` : null,
-    rule.admin_fee_applicable ? `Admin: ${rule.admin_fee_percent ? `${rule.admin_fee_percent}%` : "yes"}` : null,
-    rule.gross_up_applicable || rule.gross_up_percent != null
-      ? `Gross-up: ${rule.gross_up_percent != null ? `${rule.gross_up_percent}%` : "yes"}`
-      : null,
-  ].filter(Boolean).join(" · ");
-  const billingSummary = [
-    rule.billing_frequency || rule.frequency || null,
-    rule.reconciliation_required ? "Reconcile" : "No reconcile",
-  ].filter(Boolean).join(" · ");
-  const statusSummary = [
-    humanizeToken(rule.review_status || "Pending"),
-    humanizeToken(rule.approval_status || rule.row_status || "Needs Review"),
-    formatConfidence(rule.confidence_score),
-  ].filter(Boolean).join(" · ");
 
   const tenantDisplayName =
     approvedLeaseFieldValue(lease, ["tenant_name", "tenant", "tenant_legal_name", "lessee"]) ||
@@ -114,6 +96,8 @@ export default function RuleTableRow({
     lease?.approved_fields?.tenant_name?.value ||
     lease?.tenant_legal_name ||
     (lease?.id ? `Lease #${lease.id.slice(0, 8)}` : "-");
+
+  const openDetail = () => onOpenDetail?.({ rule, ruleSet, lease, property, category, camPolicyStatus });
 
   return (
     <TableRow className={isHighlighted ? "align-top bg-amber-50 ring-1 ring-amber-300" : "align-top hover:bg-slate-50"}>
@@ -127,219 +111,124 @@ export default function RuleTableRow({
           aria-label="Select lease expense rule"
         />
       </TableCell>
+
+      {/* 1. Tenant / Lease */}
       <TableCell className="text-sm font-medium text-slate-900">
         {lease ? (
-          <Link
-            to={createPageUrl("LeaseReview", { id: lease.id })}
-            className="text-blue-600 hover:text-blue-700 font-semibold"
-          >
+          <Link to={createPageUrl("LeaseReview", { id: lease.id })} className="text-blue-600 hover:text-blue-700 font-semibold">
             {tenantDisplayName}
           </Link>
         ) : (
           "-"
         )}
-        <p className="text-[10px] text-slate-400">
-          {rule?._findingOnly ? "Raw finding - not materialized" : `Rule set v${ruleSet?.version} - ${ruleSet?.status}`}
-        </p>
-        {displayMode === "gaps" && (
-          <Badge className="bg-amber-100 text-amber-800 text-[9px] px-1 py-0 h-4 mt-1">
-            {rule?._findingOnly ? "Not materialized" : getCoverageGapLabel(rule)}
-          </Badge>
+        {property?.name && <p className="mt-0.5 text-[11px] text-slate-400">{property.name}</p>}
+        {rule?._findingOnly && (
+          <Badge className="bg-amber-100 text-amber-800 text-[9px] px-1 py-0 h-4 mt-1">Not materialized</Badge>
         )}
-        {rule._is_fallback && (
-          <Badge className="bg-amber-100 text-amber-800 text-[9px] px-1 py-0 h-4 mt-1">
-            Not persisted
-          </Badge>
+        {displayMode === "gaps" && !rule?._findingOnly && (
+          <Badge className="bg-amber-100 text-amber-800 text-[9px] px-1 py-0 h-4 mt-1">{getCoverageGapLabel(rule)}</Badge>
         )}
       </TableCell>
-      <TableCell className="text-sm text-slate-600">{property?.name || "-"}</TableCell>
+
+      {/* 2. Category */}
       <TableCell className="text-sm">
         <div className="font-medium text-slate-900">
           {rule.category_name || rule.expense_category || category?.category_name || "-"}
         </div>
         <div className="mt-1 text-[11px] text-slate-500">
-          {rule.expense_subcategory || rule.subcategory_name || category?.subcategory_name || humanizeToken(rule.rule_type) || "General"}
+          {rule.expense_subcategory || rule.subcategory_name || category?.subcategory_name || "General"}
         </div>
       </TableCell>
-      <TableCell className="max-w-[280px] text-xs text-slate-700">
-        <div>{humanizeToken(paymentTreatment)}</div>
-        <div className="mt-1 text-slate-500">
-          {validation.includedInBaseRent ? "Included in rent" : "Separate charge / obligation"}
-        </div>
-        <Badge className={`mt-2 text-[10px] ${coverageBadgeClass(coverage.expenseTreatment)}`}>
-          {coverage.expenseTreatment}
-        </Badge>
-      </TableCell>
-      <TableCell className="text-sm text-slate-700">{humanizeToken(responsibility)}</TableCell>
+
+      {/* 3. Treatment */}
       <TableCell>
-        <Badge className={`text-[10px] ${["yes", "conditional"].includes(recoverableDecision) && !rule.is_excluded ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-          {formatTriState(recoverableDecision)}
+        <Badge className={`text-[10px] ${TONE_CLASS[TREATMENT_TONE[view.treatment]] || TONE_CLASS.slate}`}>
+          {view.treatmentLabel}
         </Badge>
       </TableCell>
-      <TableCell>
-        <Badge className={`text-[10px] ${["yes", "conditional"].includes(camEligibleDecision) ? "bg-sky-100 text-sky-700" : "bg-slate-100 text-slate-600"}`}>
-          {formatTriState(camEligibleDecision)}
-        </Badge>
-        <Badge className={`mt-1 block w-fit text-[10px] ${coverageBadgeClass(coverage.camParticipation)}`}>
-          {coverage.camParticipation}
-        </Badge>
-      </TableCell>
-      <TableCell>
-        <Badge className={`text-[10px] ${coverageBadgeClass(coverage.actualExpenseExpected, "actual")}`}>
-          {humanizeToken(coverage.actualExpenseExpected)}
-        </Badge>
-      </TableCell>
+
+      {/* 4. Recovery Method */}
       <TableCell className="text-sm text-slate-700">
-        <div>{humanizeToken(recoveryMethod)}</div>
-        <div className="mt-1 text-[11px] text-slate-500">{allocationBasis ? humanizeToken(allocationBasis) : "-"}</div>
+        {humanizeToken(rule.recovery_method) || "-"}
       </TableCell>
-      <TableCell className="max-w-[260px] text-sm text-slate-700">
-        {amountSummary || "-"}
-      </TableCell>
-      <TableCell className="text-sm text-slate-700">{billingSummary || "-"}</TableCell>
-      <TableCell className="max-w-[320px]">
-        <div className="mb-1 flex flex-wrap gap-1">
-          {(() => {
-            const approvalDisplay = resolveRuleApprovalStatusDisplay(rule);
-            const toneClass =
-              approvalDisplay.tone === "emerald" ? "bg-emerald-100 text-emerald-700"
-              : approvalDisplay.tone === "red" ? "bg-red-100 text-red-700"
-              : approvalDisplay.tone === "amber" ? "bg-amber-100 text-amber-800"
-              : "bg-slate-100 text-slate-600";
-            return (
-              <Badge className={`text-[10px] ${toneClass}`} title={statusSummary}>
-                {approvalDisplay.label}
-              </Badge>
-            );
-          })()}
-        </div>
-        {(() => {
-          const camPublishStatus = getDisplayCamPublishStatus(rule, validation, displayMode);
-          const toneClass =
-            camPublishStatus.tone === "emerald" ? "bg-emerald-100 text-emerald-700"
-            : camPublishStatus.tone === "amber" ? "bg-amber-100 text-amber-800"
-            : "bg-slate-100 text-slate-600";
-          return (
-            <Badge
-              className={`text-[10px] whitespace-normal text-left leading-tight ${toneClass}`}
-              title={camPublishStatus.label}
-            >
-              {camPublishStatus.label}
-            </Badge>
-          );
-        })()}
-        {(() => {
-          const treatment = rule?.recovery_treatment || rule?.normalizedContractModel?.recovery_treatment;
-          const isOutsideCam = ["tenant_direct", "included_in_rent", "compliance_only", "direct_bill", "nonrecoverable"].includes(treatment);
-          if (isOutsideCam) {
-            return (
-              <Badge className="mt-1 text-[10px] bg-slate-100 text-slate-600 whitespace-normal text-left leading-tight">
-                CAM N/A (Outside CAM)
-              </Badge>
-            );
-          }
-          if (camPolicyStatus) {
-            return (
-              <Badge
-                className={`mt-1 text-[10px] whitespace-normal text-left leading-tight ${
-                  camPolicyStatus.tone === "emerald" ? "bg-emerald-100 text-emerald-700"
-                  : camPolicyStatus.tone === "amber" ? "bg-amber-100 text-amber-800"
-                  : camPolicyStatus.tone === "red" ? "bg-red-100 text-red-700"
-                  : "bg-slate-100 text-slate-600"
-                }`}
-                title="Whether this approved rule has a materialized CAM recovery policy"
-              >
-                {camPolicyStatus.label}
-              </Badge>
-            );
-          }
-          return null;
-        })()}
-        <div className="mt-2 text-xs text-slate-600">
-          {sourcePage ? <span className="mr-2 font-medium">p. {sourcePage}</span> : null}
-          {sourceText && sourceText !== "-" ? <span className="italic">"{truncate(sourceText)}"</span> : "-"}
-        </div>
-        <div className="mt-2 flex flex-wrap gap-1">
-          <Badge className={`text-[10px] ${coverageBadgeClass(coverage.contractStatus)}`}>
-            {coverage.contractStatus}
-          </Badge>
-          <Badge className={`text-[10px] ${coverageBadgeClass(coverage.materialization)}`} title={coverage.reason}>
-            {coverage.materialization}
-          </Badge>
-        </div>
-      </TableCell>
+
+      {/* 5. CAM */}
       <TableCell>
-        {rule?._findingOnly ? (
-          <span className="text-xs text-slate-500" title={coverage.reason}>
-            Evidence only
-          </span>
-        ) : (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 w-7 p-0"
-              disabled={isUpdating}
-              aria-label="Rule actions"
-            >
-              <MoreVertical className="h-3.5 w-3.5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-52">
-            <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-slate-500">
-              Review
-            </DropdownMenuLabel>
-            <DropdownMenuItem
-              onSelect={(event) => {
-                event.preventDefault();
-                onApprove(rule, lease);
-              }}
-              className="text-emerald-700 focus:text-emerald-800"
-            >
-              <Check className="mr-2 h-3.5 w-3.5" />
-              Approve rule
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={(event) => {
-                event.preventDefault();
-                onReject(rule, lease);
-              }}
-              className="text-red-700 focus:text-red-800"
-            >
-              <X className="mr-2 h-3.5 w-3.5" />
-              Reject rule
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={(event) => {
-                event.preventDefault();
-                onMarkNA(rule, lease);
-              }}
-              className="text-slate-700"
-            >
-              <MinusCircle className="mr-2 h-3.5 w-3.5" />
-              Mark N/A
-            </DropdownMenuItem>
-            {lease ? (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-slate-500">
-                  Edit
-                </DropdownMenuLabel>
+        <Badge className={`text-[10px] ${TONE_CLASS[CAM_TONE[view.cam]] || TONE_CLASS.slate}`}>
+          {view.camLabel}
+        </Badge>
+      </TableCell>
+
+      {/* 6. Actual Expense */}
+      <TableCell>
+        <Badge className={`text-[10px] ${TONE_CLASS[ACTUAL_EXPENSE_TONE[view.actualExpense]] || TONE_CLASS.slate}`}>
+          {view.actualExpenseLabel}
+        </Badge>
+      </TableCell>
+
+      {/* 7. Contract Status */}
+      <TableCell>
+        <Badge className={`text-[10px] ${TONE_CLASS[contractStatus.tone] || TONE_CLASS.slate}`}>
+          {contractStatus.label}
+        </Badge>
+      </TableCell>
+
+      {/* 8. Evidence */}
+      <TableCell className="max-w-[260px] text-xs text-slate-600">
+        {sourcePage ? <span className="mr-2 font-medium">p. {sourcePage}</span> : null}
+        {sourceText && sourceText !== "-" ? <span className="italic">&ldquo;{truncate(sourceText, 100)}&rdquo;</span> : "-"}
+      </TableCell>
+
+      {/* 9. Actions */}
+      <TableCell>
+        <div className="flex items-center gap-0.5">
+          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={openDetail} aria-label="View rule details">
+            <Info className="h-3.5 w-3.5 text-slate-500" />
+          </Button>
+          {rule?._findingOnly ? null : (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="ghost" className="h-7 w-7 p-0" disabled={isUpdating} aria-label="Rule actions">
+                  <MoreVertical className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-slate-500">Review</DropdownMenuLabel>
                 <DropdownMenuItem
-                  onSelect={(event) => {
-                    event.preventDefault();
-                    onEdit({ rule, lease, property, category, ruleSet });
-                  }}
+                  onSelect={(event) => { event.preventDefault(); onApprove(rule, lease); }}
+                  className="text-emerald-700 focus:text-emerald-800"
                 >
-                  <Pencil className="mr-2 h-3.5 w-3.5" />
-                  Edit rule details
+                  <Check className="mr-2 h-3.5 w-3.5" />
+                  Approve rule
                 </DropdownMenuItem>
-              </>
-            ) : null}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        )}
+                <DropdownMenuItem
+                  onSelect={(event) => { event.preventDefault(); onReject(rule, lease); }}
+                  className="text-red-700 focus:text-red-800"
+                >
+                  <X className="mr-2 h-3.5 w-3.5" />
+                  Reject rule
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={(event) => { event.preventDefault(); onMarkNA(rule, lease); }}
+                  className="text-slate-700"
+                >
+                  <MinusCircle className="mr-2 h-3.5 w-3.5" />
+                  Mark N/A
+                </DropdownMenuItem>
+                {lease ? (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-slate-500">Edit</DropdownMenuLabel>
+                    <DropdownMenuItem onSelect={(event) => { event.preventDefault(); onEdit({ rule, lease, property, category, ruleSet }); }}>
+                      <Pencil className="mr-2 h-3.5 w-3.5" />
+                      Edit rule details
+                    </DropdownMenuItem>
+                  </>
+                ) : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
       </TableCell>
     </TableRow>
   );

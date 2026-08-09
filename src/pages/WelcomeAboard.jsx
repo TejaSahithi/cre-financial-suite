@@ -185,6 +185,9 @@ export default function WelcomeAboard() {
 
   const handleGoToDashboard = async () => {
     setLoading(true);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("dashboard_viewed", "true");
+    }
     try {
       await updateProfile({ onboarding_complete: true, first_login: false, dashboard_viewed: true });
       await refreshProfile(false);
