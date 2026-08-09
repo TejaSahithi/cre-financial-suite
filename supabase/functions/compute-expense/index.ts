@@ -40,16 +40,34 @@ Deno.serve(async (req: Request) => {
     if (expErr) throw new Error(`Failed to fetch expenses: ${expErr.message}`);
 
     // ---------------------------------------------------------------
-    // 2. Fetch all active leases for the property
+    // 2. Fetch leases with an approved abstract, then keep only the ones
+    //    whose term overlaps fiscal_year. `status` is a legacy column
+    //    (draft/approved/rejected), never the approval signal, and nothing
+    //    in the current pipeline writes status='active' — abstract_status
+    //    is what approve_lease_workflow actually sets. start_date/end_date
+    //    are kept in sync with commencement_date/expiration_date by the
+    //    sync_approved_lease_canonical_dates trigger on approval
+    //    (20269900000041_approved_lease_canonical_dates.sql), so they're
+    //    the correct fields for the overlap check below — no new date
+    //    field or fallback needed.
     // ---------------------------------------------------------------
-    const { data: leases, error: leaseErr } = await supabaseAdmin
+    const { data: allApprovedLeases, error: leaseErr } = await supabaseAdmin
       .from("leases")
       .select("*")
       .eq("org_id", orgId)
       .eq("property_id", property_id)
-      .eq("status", "active");
+      .eq("abstract_status", "approved");
 
     if (leaseErr) throw new Error(`Failed to fetch leases: ${leaseErr.message}`);
+
+    const fyStart = new Date(fiscal_year, 0, 1);
+    const fyEnd = new Date(fiscal_year, 11, 31);
+    const leases = (allApprovedLeases ?? []).filter((lease: any) => {
+      if (!lease.start_date) return false;
+      const leaseStart = new Date(lease.start_date);
+      const leaseEnd = lease.end_date ? new Date(lease.end_date) : fyEnd;
+      return leaseStart <= fyEnd && leaseEnd >= fyStart;
+    });
 
     // ---------------------------------------------------------------
     // 3. Fetch property total_sqft

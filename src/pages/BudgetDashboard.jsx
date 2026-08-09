@@ -18,6 +18,7 @@ import {
 } from "recharts";
 
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { generateApprovedBudgetWorkbook } from "@/services/approvedBudgetWorkbookGenerator";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useSnapshotQuery } from "@/hooks/useSnapshotQuery";
@@ -337,7 +338,7 @@ export default function BudgetDashboard() {
   const updateMutation = useMutation({
     // budget_id is the primary identifier (hardening PR) — scope fields
     // travel alongside it as a cross-check against stale client state.
-    mutationFn: ({ action, budget, fiscalYear }) =>
+    mutationFn: ({ action, budget, fiscalYear, expected_updated_at, approval_comment }) =>
       invokeEdgeFunction("compute-budget", {
         action,
         budget_id: budget?.id,
@@ -347,6 +348,8 @@ export default function BudgetDashboard() {
         building_id: budget?.building_id || undefined,
         unit_id: budget?.unit_id || undefined,
         fiscal_year: fiscalYear,
+        expected_updated_at: expected_updated_at || budget?.updated_at || undefined,
+        approval_comment: approval_comment || undefined,
       }),
     onSuccess: async () => {
       await invalidateBudgetCaches(queryClient);
@@ -368,28 +371,7 @@ export default function BudgetDashboard() {
 
   const handleDetailedExport = async (budget) => {
     if (!budget) return;
-
-    const toastId = toast.loading("Preparing detailed financial export...");
-    try {
-      // budget_id is the primary identifier (hardening PR) — property_id
-      // alone can no longer disambiguate which budget to export now that a
-      // property/building/unit budget can coexist for the same year.
-      const data = await invokeFunctionWithFreshSession("export-data", {
-        export_type: "budget",
-        budget_id: budget.id,
-        format: "csv",
-      });
-
-      if (!data?.download_url) {
-        throw new Error("Download URL not received");
-      }
-
-      window.open(data.download_url, "_blank", "noopener");
-      toast.success("Detailed export ready", { id: toastId });
-    } catch (err) {
-      console.error("[BudgetDashboard] Detailed export failed:", err);
-      toast.error(`Export failed: ${err.message}`, { id: toastId });
-    }
+    await generateApprovedBudgetWorkbook({ budgetId: budget.id });
   };
 
   const scope = useMemo(
@@ -417,7 +399,17 @@ export default function BudgetDashboard() {
     reviewed: "bg-amber-100 text-amber-700",
     approved: "bg-emerald-100 text-emerald-700",
     signed: "bg-green-100 text-green-700",
-    locked: "bg-slate-800 text-white",
+    locked: "bg-emerald-800 text-white font-semibold",
+  };
+
+  const statusLabels = {
+    draft: "Draft",
+    ai_generated: "AI Generated",
+    under_review: "Under Review",
+    reviewed: "Reviewed",
+    approved: "Approved",
+    signed: "Signed",
+    locked: "Approved & Locked",
   };
 
   const scopedBudgets = budgets.filter((budget) =>
@@ -680,18 +672,67 @@ export default function BudgetDashboard() {
                       </Button>
                     )}
                     {selectedBudget.status === "reviewed" && (
-                      <Button
-                        className="flex-1 bg-emerald-600 hover:bg-emerald-700"
-                        onClick={() => handleStatusChange(selectedBudget, "approve")}
-                        disabled={updateMutation.isPending}
-                      >
-                        {updateMutation.isPending ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <CheckCircle2 className="mr-2 h-4 w-4" />
-                        )}
-                        Approve Budget
-                      </Button>
+                      <Dialog>
+                        <DialogTrigger asChild>
+                          <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold">
+                            <CheckCircle2 className="mr-2 h-4 w-4" />
+                            Approve & Sign Budget
+                          </Button>
+                        </DialogTrigger>
+                        <DialogContent className="sm:max-w-lg">
+                          <DialogHeader>
+                            <DialogTitle className="text-lg font-bold text-slate-900">
+                              Approve & Executive Sign-Off
+                            </DialogTitle>
+                            <DialogDescription>
+                              Final annual property budget approval for {selectedBudget.name} (FY {getBudgetYear(selectedBudget)}).
+                            </DialogDescription>
+                          </DialogHeader>
+
+                          <div className="space-y-4 py-3">
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-2 text-xs">
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Total Revenue:</span>
+                                <span className="font-bold text-slate-900 font-mono">{formatCurrency(selectedBudget.total_revenue)}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Operating Expenses:</span>
+                                <span className="font-bold text-red-600 font-mono">{formatCurrency(selectedBudget.total_expenses)}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Estimated CAM Recovery:</span>
+                                <span className="font-bold text-blue-600 font-mono">{formatCurrency(selectedBudget.cam_total)}</span>
+                              </div>
+                              <div className="flex justify-between pt-1 border-t border-slate-200 text-sm">
+                                <span className="font-bold text-slate-700">Net Operating Income (NOI):</span>
+                                <span className="font-bold text-emerald-700 font-mono">{formatCurrency(selectedBudget.noi)}</span>
+                              </div>
+                            </div>
+
+                            <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+                              "By approving, you confirm this FY{getBudgetYear(selectedBudget)} budget and its underlying planning
+                              assumptions as the authorized final approver. The approved version will be locked from financial regeneration."
+                            </div>
+                          </div>
+
+                          <DialogFooter>
+                            <Button
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold w-full"
+                              onClick={() => {
+                                handleStatusChange(selectedBudget, "approve");
+                              }}
+                              disabled={updateMutation.isPending}
+                            >
+                              {updateMutation.isPending ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              ) : (
+                                <Lock className="mr-2 h-4 w-4" />
+                              )}
+                              Confirm Executive Approval & Lock
+                            </Button>
+                          </DialogFooter>
+                        </DialogContent>
+                      </Dialog>
                     )}
                     {selectedBudget.status === "approved" && (
                       <Button

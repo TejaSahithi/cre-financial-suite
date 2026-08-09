@@ -59,6 +59,20 @@ Deno.serve(async (req: Request) => {
       readiness_snapshot,
       ai_insights,
       reason,
+      // Phase 4B true stale-version protection & snapshot lineage validation
+      expected_updated_at,
+      approval_comment,
+      expected_basis_snapshot_id,
+      expected_cam_snapshot_id,
+      expected_revenue_snapshot_id,
+      // Phase 4A planning-source mode: explicit snapshot IDs from the UI's
+      // BudgetPlanningPanel. When all three are supplied, compute-budget
+      // assembles totals from these frozen snapshots instead of re-reading
+      // the target fiscal year's raw expense/revenue tables (which normally
+      // don't exist yet for a next-year planning budget).
+      budget_basis_snapshot_id,
+      budget_cam_estimate_snapshot_id,
+      revenue_snapshot_id,
     } = body;
 
     await assertPageAccess(req, orgId, ["BudgetDashboard", "CreateBudget"], "write");
@@ -99,6 +113,27 @@ Deno.serve(async (req: Request) => {
         await assertPortfolioAccess(req, resolvedScope.portfolio_id);
       } else {
         await assertPropertyAccess(req, resolvedScope.property_id);
+      }
+
+      // ---------------------------------------------------------------
+      // Phase 4A planning-source mode: all three explicit snapshot IDs
+      // are present → assemble from frozen planning snapshots, bypassing
+      // the legacy target-year raw expense/revenue re-reads entirely.
+      // ---------------------------------------------------------------
+      const isPlanningMode = !!(budget_basis_snapshot_id && budget_cam_estimate_snapshot_id && revenue_snapshot_id);
+      if (isPlanningMode) {
+        return await handleGeneratePlanning(
+          supabaseAdmin,
+          orgId,
+          user.id,
+          resolvedScope,
+          period,
+          fiscal_year,
+          budget_basis_snapshot_id,
+          budget_cam_estimate_snapshot_id,
+          revenue_snapshot_id,
+          typeof ai_insights === "string" ? ai_insights : null,
+        );
       }
 
       return await handleGenerate(supabaseAdmin, orgId, user.id, resolvedScope, period, fiscal_year, allow_generate_without_cam === true, readiness_snapshot ?? null, typeof ai_insights === "string" ? ai_insights : null);
@@ -146,12 +181,18 @@ Deno.serve(async (req: Request) => {
     // ---------------------------------------------------------------
     switch (resolvedAction) {
       case "approve":
-        // CreateBudget.jsx's UI only ever offers "Approve" once a budget has
-        // been marked "reviewed" (a CreateBudget-specific intermediate step
-        // compute-budget itself has no concept of) — accept either status so
-        // the one enforced approval gate matches how the UI actually drives
-        // it, instead of a precondition the UI could never satisfy.
-        return await handleStatusTransition(supabaseAdmin, orgId, user.id, resolvedBudget, ["under_review", "reviewed"], "approved", "Budget approved successfully");
+        // Phase 4B: Atomic Approve + Sign + Lock via transactional RPC
+        return await handleApproveAndLock(
+          supabaseAdmin,
+          orgId,
+          user.id,
+          resolvedBudget,
+          expected_updated_at ?? null,
+          typeof approval_comment === "string" ? approval_comment : typeof reason === "string" ? reason : null,
+          expected_basis_snapshot_id ?? null,
+          expected_cam_snapshot_id ?? null,
+          expected_revenue_snapshot_id ?? null,
+        );
       case "mark_reviewed":
         // Matches CreateBudget.jsx's "Mark as Reviewed" button, which is
         // offered from draft/ai_generated/under_review.
@@ -335,13 +376,24 @@ async function handleGenerate(
   // 2. Calculate total projected revenue from trusted snapshots + stored detail
   // ---------------------------------------------------------------
 
-  // 2a. Base rent from active leases
+  // 2a. Base rent from leases with an approved abstract that overlaps this
+  // fiscal year. `status` is a legacy column (draft/approved/rejected) —
+  // it is never the approval signal. `abstract_status` is: it's set to
+  // 'approved' together with status by approve_lease_workflow
+  // (20260602170000_lease_approval_workflow.sql), but nothing in the
+  // current pipeline ever writes status='active', so filtering on that
+  // value silently excluded every real approved lease. start_date/end_date
+  // remain the correct fields to read for the overlap math below — they're
+  // kept in sync with commencement_date/expiration_date by the
+  // sync_approved_lease_canonical_dates trigger on approval
+  // (20269900000041_approved_lease_canonical_dates.sql), so no new date
+  // field or fallback is needed here.
   let leaseQuery = supabaseAdmin
     .from("leases")
-    .select("id, monthly_rent, start_date, end_date, status")
+    .select("id, monthly_rent, start_date, end_date, abstract_status")
     .eq("property_id", propertyId)
     .eq("org_id", orgId)
-    .eq("status", "active");
+    .eq("abstract_status", "approved");
   leaseQuery = applyBudgetScopeRowFilter(leaseQuery, resolvedScope, buildingUnitIds);
   const { data: leases, error: leaseErr } = await leaseQuery;
 
@@ -912,6 +964,44 @@ async function handleReject(
 }
 
 // =================================================================
+// Action: approve (Phase 4B Atomic Approve + Sign + Lock)
+// =================================================================
+async function handleApproveAndLock(
+  supabaseAdmin: any,
+  orgId: string,
+  userId: string,
+  resolvedBudget: ResolvedBudget,
+  expectedUpdatedAt: string | null,
+  approvalComment: string | null,
+  expectedBasisId: string | null,
+  expectedCamId: string | null,
+  expectedRevenueId: string | null,
+) {
+  const budget = resolvedBudget;
+
+  // Execute single transactional SECURITY DEFINER RPC
+  const { data: rpcResult, error: rpcErr } = await supabaseAdmin.rpc("approve_and_lock_budget", {
+    p_budget_id: budget.id,
+    p_org_id: orgId,
+    p_user_id: userId,
+    p_expected_updated_at: expectedUpdatedAt || budget.updated_at || null,
+    p_approval_comment: approvalComment,
+    p_expected_basis_snapshot_id: expectedBasisId,
+    p_expected_cam_snapshot_id: expectedCamId,
+    p_expected_revenue_snapshot_id: expectedRevenueId,
+  });
+
+  if (rpcErr) {
+    throw new Error(rpcErr.message || "Failed to approve and lock budget");
+  }
+
+  return new Response(
+    JSON.stringify(rpcResult),
+    { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+  );
+}
+
+// =================================================================
 // Action: lock
 // =================================================================
 async function handleLock(
@@ -1019,6 +1109,451 @@ async function handleLock(
       message: "Budget locked successfully",
     }),
     { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+  );
+}
+
+// =================================================================
+// Action: generate (planning-source mode)
+// =================================================================
+/**
+ * Phase 4A planning-source generate: assembles a draft budget entirely from
+ * three pre-validated computation snapshots — Phase 3A expense basis,
+ * Phase 3B CAM estimate, and the revenue engine snapshot — without re-reading
+ * any target-year raw expense/revenue rows.
+ *
+ * Immutability: once persisted, the budget_line_items rows and the budgets
+ * row reflect a frozen point-in-time view of the three planning snapshots.
+ * Future re-runs that produce newer snapshots do NOT silently alter these
+ * historical dollar amounts.
+ */
+async function handleGeneratePlanning(
+  supabaseAdmin: any,
+  orgId: string,
+  userId: string,
+  resolvedScope: ResolvedBudgetScope,
+  period: "annual",
+  fiscalYear: number,
+  budgetBasisSnapshotId: string,
+  budgetCamEstimateSnapshotId: string,
+  revenueSnapshotId: string,
+  aiInsights: string | null,
+) {
+  // Portfolio scope is not supported in planning mode for the same reason
+  // it is blocked in legacy generate: no portfolio-level calculation engine.
+  if (resolvedScope.scope === "portfolio") {
+    throw new Error(
+      "Portfolio-level planning budget generation is not supported. " +
+      "Generate property/building/unit planning budgets individually.",
+    );
+  }
+
+  const propertyId = resolvedScope.property_id;
+
+  // ---------------------------------------------------------------
+  // 1. Load + validate all three planning snapshots.
+  //    Six server-side checks per snapshot (org, property, fiscal_year,
+  //    status=completed, engine_type match) — all fail-closed.
+  // ---------------------------------------------------------------
+  async function loadAndValidateSnapshot(
+    id: string,
+    expectedEngineType: string,
+    label: string,
+  ): Promise<any> {
+    const { data: snap, error } = await supabaseAdmin
+      .from("computation_snapshots")
+      .select("id, org_id, property_id, fiscal_year, status, engine_type, inputs, outputs, computed_at")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) throw new Error(`[planning] Failed to load ${label} snapshot: ${error.message}`);
+    if (!snap) throw new Error(`[planning] ${label} snapshot not found: ${id}`);
+    if (snap.org_id !== orgId)
+      throw new Error(`[planning] ${label} snapshot belongs to a different organization.`);
+    if (snap.property_id !== propertyId)
+      throw new Error(`[planning] ${label} snapshot property_id does not match the requested property.`);
+    if (Number(snap.fiscal_year) !== fiscalYear)
+      throw new Error(`[planning] ${label} snapshot fiscal_year (${snap.fiscal_year}) does not match requested fiscal_year (${fiscalYear}).`);
+    if (snap.status !== "completed")
+      throw new Error(`[planning] ${label} snapshot status is "${snap.status}"; only completed snapshots may be used for planning budget assembly.`);
+    if (snap.engine_type !== expectedEngineType)
+      throw new Error(`[planning] ${label} snapshot engine_type is "${snap.engine_type}"; expected "${expectedEngineType}".`);
+    return snap;
+  }
+
+  const [basisSnap, camEstSnap, revenueSnap] = await Promise.all([
+    loadAndValidateSnapshot(budgetBasisSnapshotId, "budget_basis", "Expense Basis (Phase 3A)"),
+    loadAndValidateSnapshot(budgetCamEstimateSnapshotId, "budget_cam_estimate", "CAM Estimate (Phase 3B)"),
+    loadAndValidateSnapshot(revenueSnapshotId, "revenue", "Revenue"),
+  ]);
+
+  // ---------------------------------------------------------------
+  // 2. Phase 3B lineage check: the CAM estimate must have been derived
+  //    from exactly the same Phase 3A basis snapshot being used here.
+  //    The budget_cam_estimate edge function already persists this id
+  //    in both snapshotInputs and snapshotOutputs (verified by audit).
+  // ---------------------------------------------------------------
+  const recordedBasisId =
+    camEstSnap.inputs?.budget_basis_snapshot_id ||
+    camEstSnap.outputs?.budget_basis_snapshot_id;
+  if (recordedBasisId && recordedBasisId !== budgetBasisSnapshotId) {
+    throw new Error(
+      `[planning] Lineage mismatch: the selected CAM Estimate snapshot was derived from ` +
+      `expense basis snapshot "${recordedBasisId}", not from the selected basis snapshot ` +
+      `"${budgetBasisSnapshotId}". Re-run Phase 3B using the selected Phase 3A basis before ` +
+      `assembling a planning budget.`,
+    );
+  }
+
+  // ---------------------------------------------------------------
+  // 3. Extract authoritative planning totals from validated snapshots.
+  //    compute-revenue includes a cam_recovery component built from
+  //    posted actual CAM runs (confirmed by audit of compute-revenue
+  //    lines 245-278). We MUST NOT use revenue_snapshot.annual_total
+  //    or cam_recovery — those would double-count against Phase 3B.
+  //    Use only base_rent + other_income from the revenue snapshot.
+  // ---------------------------------------------------------------
+  const basisOutputs = basisSnap.outputs ?? {};
+  const camEstOutputs = camEstSnap.outputs ?? {};
+  const revenueOutputs = revenueSnap.outputs ?? {};
+
+  const baseRent = round2(Number(revenueOutputs.summary?.revenue_by_type?.base_rent ?? 0));
+  const otherIncome = round2(Number(revenueOutputs.summary?.revenue_by_type?.other_income ?? 0));
+  // Phase 3B estimated tenant recoveries — the sole CAM figure used here.
+  const estimatedCamRecovery = round2(
+    Number(camEstOutputs.property_summary?.estimated_tenant_recoveries ?? 0),
+  );
+
+  const totalRevenue = round2(baseRent + estimatedCamRecovery + otherIncome);
+
+  // Phase 3A annual budget total — the sole expense figure used here.
+  const totalExpenses = round2(Number(basisOutputs.totals?.annual_budget_total ?? 0));
+  if (totalExpenses === 0 && (!basisOutputs.totals || basisOutputs.categories?.length === 0)) {
+    throw new Error(
+      "[planning] Phase 3A expense basis snapshot has no expense categories. " +
+      "Re-run compute-budget-basis with historical expense data before generating a planning budget.",
+    );
+  }
+
+  const noi = round2(totalRevenue - totalExpenses);
+
+  // ---------------------------------------------------------------
+  // 4. Reconciliation assertions — hard guards, not logged warnings.
+  //    If any fails, no budget row is persisted.
+  // ---------------------------------------------------------------
+  const revenueLines: Record<string, number> = {
+    base_rent: baseRent,
+    cam_recovery: estimatedCamRecovery,
+    other_income: otherIncome,
+    total: totalRevenue,
+  };
+
+  // Per-category expense lines from Phase 3A
+  const categoryExpenseLines: Record<string, number> = {};
+  let categoryExpenseSum = 0;
+  for (const cat of basisOutputs.categories ?? []) {
+    const label = String(cat.category_label || cat.normalized_key || cat.expense_category_id || "other").toLowerCase();
+    const amt = round2(Number(cat.annual_budget) || 0);
+    categoryExpenseLines[label] = (categoryExpenseLines[label] || 0) + amt;
+    categoryExpenseSum = round2(categoryExpenseSum + amt);
+  }
+
+  const revenueLineSum = round2(baseRent + estimatedCamRecovery + otherIncome);
+  if (Math.abs(revenueLineSum - totalRevenue) > 0.02) {
+    throw new Error(
+      `[planning] Reconciliation failed: revenue line sum ($${revenueLineSum}) does not equal ` +
+      `totalRevenue ($${totalRevenue}).`,
+    );
+  }
+  if (Math.abs(categoryExpenseSum - totalExpenses) > 0.02) {
+    throw new Error(
+      `[planning] Reconciliation failed: sum of Phase 3A category annual budgets ` +
+      `($${categoryExpenseSum}) does not equal basis totals.annual_budget_total ($${totalExpenses}).`,
+    );
+  }
+  if (Math.abs(noi - (totalRevenue - totalExpenses)) > 0.01) {
+    throw new Error(
+      `[planning] Reconciliation failed: NOI ($${noi}) !== totalRevenue ($${totalRevenue}) - totalExpenses ($${totalExpenses}).`,
+    );
+  }
+
+  // ---------------------------------------------------------------
+  // 5. Fetch scope entity name for budget name label.
+  // ---------------------------------------------------------------
+  const { data: property } = await supabaseAdmin
+    .from("properties")
+    .select("name")
+    .eq("id", propertyId)
+    .eq("org_id", orgId)
+    .single();
+  let scopeEntityName = property?.name ?? propertyId;
+  if (resolvedScope.scope === "building" && resolvedScope.building_id) {
+    const { data: building } = await supabaseAdmin
+      .from("buildings")
+      .select("name")
+      .eq("id", resolvedScope.building_id)
+      .eq("org_id", orgId)
+      .single();
+    scopeEntityName = `${scopeEntityName} / ${building?.name ?? resolvedScope.building_id}`;
+  } else if (resolvedScope.scope === "unit" && resolvedScope.unit_id) {
+    const { data: unit } = await supabaseAdmin
+      .from("units")
+      .select("unit_number")
+      .eq("id", resolvedScope.unit_id)
+      .eq("org_id", orgId)
+      .single();
+    scopeEntityName = `${scopeEntityName} / Unit ${unit?.unit_number ?? resolvedScope.unit_id}`;
+  }
+
+  // ---------------------------------------------------------------
+  // 6. Upsert budgets row with generation_method='planning'.
+  //    A locked budget cannot be overwritten.
+  // ---------------------------------------------------------------
+  const { data: existingBudget } = await applyBudgetRowFilter(
+    supabaseAdmin.from("budgets").select("id, status"),
+    orgId,
+    resolvedScope,
+    fiscalYear,
+  ).limit(1);
+  if (existingBudget && existingBudget.length > 0 && existingBudget[0].status === "locked") {
+    throw new Error("Cannot overwrite a locked budget. Create a new version instead.");
+  }
+  if (existingBudget && existingBudget.length > 0 && existingBudget[0].status === "approved") {
+    throw new Error("Cannot overwrite an approved budget. Reject it first or lock and create a new version.");
+  }
+
+  const lineItems = {
+    schema_version: BUDGET_LINE_ITEMS_SCHEMA_VERSION,
+    revenue: revenueLines,
+    expenses: { ...categoryExpenseLines, total: totalExpenses },
+    noi,
+  };
+
+  const budgetName = `${scopeEntityName} - FY ${fiscalYear} Budget (Planning)`;
+  const { data: upsertData, error: upsertErr } = await supabaseAdmin
+    .from("budgets")
+    .upsert({
+      org_id: orgId,
+      scope: resolvedScope.scope,
+      scope_id: resolvedScope.scope_id,
+      portfolio_id: resolvedScope.portfolio_id,
+      property_id: resolvedScope.property_id,
+      building_id: resolvedScope.building_id,
+      unit_id: resolvedScope.unit_id,
+      name: budgetName,
+      budget_year: fiscalYear,
+      total_revenue: totalRevenue,
+      total_expenses: totalExpenses,
+      noi,
+      cam_total: estimatedCamRecovery,
+      generation_method: "planning",
+      period,
+      status: "draft",
+      updated_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      ...(aiInsights ? { ai_insights: aiInsights } : {}),
+    }, { onConflict: "org_id,scope,scope_id,budget_year" })
+    .select("id")
+    .single();
+  if (upsertErr) throw new Error(`[planning] Failed to save budget: ${upsertErr.message}`);
+  const budgetId = upsertData.id;
+
+  // ---------------------------------------------------------------
+  // 7. Materialize frozen budget_line_items (expense lines from Phase 3A,
+  //    revenue summary lines from revenue + Phase 3B snapshots).
+  //    DELETE first so a re-generate does not accumulate stale rows.
+  // ---------------------------------------------------------------
+  const { error: delErr } = await supabaseAdmin
+    .from("budget_line_items")
+    .delete()
+    .eq("budget_id", budgetId)
+    .eq("org_id", orgId);
+  if (delErr) {
+    console.error("[planning] budget_line_items delete error (non-fatal):", delErr.message);
+  }
+
+  // Expense lines — one row per Phase 3A category
+  const expenseLineRows = (basisOutputs.categories ?? []).map((cat: any, idx: number) => ({
+    org_id: orgId,
+    budget_id: budgetId,
+    property_id: propertyId,
+    building_id: resolvedScope.building_id ?? null,
+    unit_id: resolvedScope.unit_id ?? null,
+    lease_id: null,
+    category: String(cat.category_label || cat.normalized_key || cat.expense_category_id || "other"),
+    subcategory: cat.normalized_key ?? null,
+    line_type: "expense",
+    amount: round2(Number(cat.annual_budget) || 0),
+    source_type: "planning_basis",
+    source_snapshot_id: budgetBasisSnapshotId,
+    notes: cat.source_basis_explanation ?? null,
+    metadata: {
+      expense_category_id: cat.expense_category_id ?? null,
+      baseline_type: cat.baseline_type ?? null,
+      prior_year_actual: cat.prior_year_actual ?? null,
+      current_year_ytd_actual: cat.current_year_ytd_actual ?? null,
+      current_year_forecast: cat.current_year_forecast ?? null,
+      assumption: cat.assumption ?? null,
+      override: cat.override ?? null,
+    },
+    sort_order: idx,
+  }));
+
+  // Revenue summary lines — three rows from revenue + Phase 3B snapshots
+  const revLineRows = [
+    {
+      org_id: orgId,
+      budget_id: budgetId,
+      property_id: propertyId,
+      building_id: resolvedScope.building_id ?? null,
+      unit_id: resolvedScope.unit_id ?? null,
+      lease_id: null,
+      category: "base_rent",
+      subcategory: null,
+      line_type: "revenue",
+      amount: baseRent,
+      source_type: "planning_revenue",
+      source_snapshot_id: revenueSnapshotId,
+      notes: "Base rent from approved lease abstracts (non-CAM portion of revenue snapshot)",
+      metadata: { revenue_snapshot_id: revenueSnapshotId },
+      sort_order: 0,
+    },
+    {
+      org_id: orgId,
+      budget_id: budgetId,
+      property_id: propertyId,
+      building_id: resolvedScope.building_id ?? null,
+      unit_id: resolvedScope.unit_id ?? null,
+      lease_id: null,
+      category: "cam_recovery",
+      subcategory: null,
+      line_type: "revenue",
+      amount: estimatedCamRecovery,
+      source_type: "planning_cam_estimate",
+      source_snapshot_id: budgetCamEstimateSnapshotId,
+      notes: "Estimated tenant CAM recoveries from Phase 3B planning engine",
+      metadata: {
+        budget_cam_estimate_snapshot_id: budgetCamEstimateSnapshotId,
+        budget_basis_snapshot_id: budgetBasisSnapshotId,
+        budgeted_recoverable_expense_basis: camEstOutputs.property_summary?.budgeted_recoverable_expense_basis ?? null,
+        budgeted_operating_expenses: camEstOutputs.property_summary?.budgeted_operating_expenses ?? null,
+        estimated_owner_nonrecoverable_share: camEstOutputs.property_summary?.estimated_owner_nonrecoverable_share ?? null,
+      },
+      sort_order: 1,
+    },
+    {
+      org_id: orgId,
+      budget_id: budgetId,
+      property_id: propertyId,
+      building_id: resolvedScope.building_id ?? null,
+      unit_id: resolvedScope.unit_id ?? null,
+      lease_id: null,
+      category: "other_income",
+      subcategory: null,
+      line_type: "revenue",
+      amount: otherIncome,
+      source_type: "planning_revenue",
+      source_snapshot_id: revenueSnapshotId,
+      notes: "Other income from revenues table (revenue snapshot, non-base-rent / non-CAM)",
+      metadata: { revenue_snapshot_id: revenueSnapshotId },
+      sort_order: 2,
+    },
+  ];
+
+  const allLineRows = [...revLineRows, ...expenseLineRows];
+  if (allLineRows.length > 0) {
+    const { error: lineErr } = await supabaseAdmin.from("budget_line_items").insert(allLineRows);
+    if (lineErr) {
+      console.error("[planning] budget_line_items insert error (non-fatal):", lineErr.message);
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // 8. Save computation_snapshot with full planning lineage.
+  // ---------------------------------------------------------------
+  const newSnapshotId = await saveSnapshot(supabaseAdmin, {
+    org_id: orgId,
+    property_id: propertyId,
+    engine_type: "budget",
+    fiscal_year: fiscalYear,
+    computed_by: userId,
+    engine_version: ENGINE_VERSION,
+    inputs: {
+      scope_level: resolvedScope.scope,
+      scope_id: resolvedScope.scope_id,
+      fiscal_year: fiscalYear,
+      period,
+      generation_method: "planning",
+      _compute: {
+        page_scope: ["BudgetDashboard", "CreateBudget"],
+        source_tables: ["budgets", "budget_line_items", "computation_snapshots"],
+        source_snapshot_ids: {
+          budget_basis: budgetBasisSnapshotId,
+          budget_cam_estimate: budgetCamEstimateSnapshotId,
+          revenue: revenueSnapshotId,
+        },
+        trigger_type: "manual",
+      },
+    },
+    outputs: {
+      budget_id: budgetId,
+      status: "draft",
+      generation_method: "planning",
+      line_items: lineItems,
+    },
+  });
+
+  // ---------------------------------------------------------------
+  // 9. Audit log
+  // ---------------------------------------------------------------
+  try {
+    await supabaseAdmin.from("audit_logs").insert({
+      org_id: orgId,
+      property_id: propertyId,
+      entity_type: "computation_snapshots",
+      entity_id: newSnapshotId ?? null,
+      action: "budget_generated",
+      actor_user_id: userId,
+      source: "edge_function",
+      severity: "info",
+      metadata: {
+        fiscal_year: fiscalYear,
+        scope: resolvedScope.scope,
+        scope_id: resolvedScope.scope_id,
+        engine_type: "budget",
+        engine_version: ENGINE_VERSION,
+        generation_method: "planning",
+        snapshot_id: newSnapshotId ?? null,
+        budget_id: budgetId,
+        total_revenue: totalRevenue,
+        total_expenses: totalExpenses,
+        noi,
+        source_snapshot_ids: {
+          budget_basis: budgetBasisSnapshotId,
+          budget_cam_estimate: budgetCamEstimateSnapshotId,
+          revenue: revenueSnapshotId,
+        },
+      },
+    });
+  } catch (auditErr) {
+    console.error("[planning] audit_log insert error:", auditErr?.message || auditErr);
+  }
+
+  return new Response(
+    JSON.stringify({
+      error: false,
+      scope: resolvedScope.scope,
+      scope_id: resolvedScope.scope_id,
+      portfolio_id: resolvedScope.portfolio_id,
+      property_id: propertyId,
+      building_id: resolvedScope.building_id,
+      unit_id: resolvedScope.unit_id,
+      fiscal_year: fiscalYear,
+      period,
+      budget_id: budgetId,
+      status: "draft",
+      generation_method: "planning",
+      line_items: lineItems,
+    }),
+    { headers: { ...corsHeaders, "Content-Type": "application/json" } },
   );
 }
 

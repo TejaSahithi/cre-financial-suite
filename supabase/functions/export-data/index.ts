@@ -18,6 +18,7 @@ const VALID_EXPORT_TYPES = [
   "revenue",
   "cam_packet",
   "budget_book",
+  "approved_budget_workbook",
 ] as const;
 
 type ExportType = typeof VALID_EXPORT_TYPES[number];
@@ -31,6 +32,7 @@ const ENGINE_TYPE_MAP: Record<ExportType, string> = {
   revenue: "revenue",
   cam_packet: "cam",
   budget_book: "budget",
+  approved_budget_workbook: "budget",
 };
 
 const EXPORT_PAGE_MAP: Record<ExportType, string[]> = {
@@ -42,6 +44,7 @@ const EXPORT_PAGE_MAP: Record<ExportType, string[]> = {
   revenue: ["Revenue"],
   cam_packet: ["CAMCalculation", "CAMDashboard"],
   budget_book: ["BudgetReview"],
+  approved_budget_workbook: ["BudgetDashboard", "CreateBudget", "BudgetReview"],
 };
 
 const SNAPSHOT_BACKED_EXPORTS = new Set<ExportType>([
@@ -64,6 +67,7 @@ const FALLBACK_TABLE_MAP: Record<ExportType, string> = {
   expenses: "expenses",
   revenue: "revenues",
   budget_book: "budgets",
+  approved_budget_workbook: "budgets",
 };
 
 const HEADER_MAPPINGS: Record<string, Record<string, string>> = {
@@ -936,12 +940,10 @@ Deno.serve(async (req: Request) => {
     // cam_runs/cam_run_pool_results/cam_run_lease_results instead, never
     // computation_snapshots). Retired rather than reimplemented: the packet's
     // field set (total_cam, cam_per_sf, raw_share_before_caps,
-    // base_year_adjustment, cap_adjustment, gross_up_applied, cap_applied,
-    // ...) has no one-to-one column in the CAM V2 result tables, and
-    // approximating them would silently translate a write into invented
-    // figures rather than real ones. Both export types are unreachable from
-    // the live UI today (PipelineActions.jsx's CAM_ACTIONS is unused;
-    // cam_packet has no frontend caller at all).
+    if (format && format !== "csv" && format !== "json") {
+      throw new Error('Only "csv" and "json" formats are currently supported');
+    }
+
     if (export_type === "cam_calculation" || export_type === "cam_packet") {
       throw new Error(
         `LEGACY_CAM_ENGINE_RETIRED: The "${export_type}" export is retired along with compute-cam. Use posted cam_run_statements / cam_charge_exports (see CAM Runs > Statements & Export) for authoritative CAM output.`,
@@ -1047,6 +1049,26 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     let rows: Record<string, any>[] = [];
+
+    if (export_type === "approved_budget_workbook" || (req.headers.get("accept") === "application/json" && export_type === "budget_book")) {
+      const payload = await buildApprovedBudgetWorkbookPayload({
+        supabaseAdmin,
+        orgId,
+        propertyId: resolvedPropertyId,
+        fiscalYear: resolvedFiscalYear,
+        propertyName,
+        budget: resolvedBudget,
+      });
+
+      return new Response(
+        JSON.stringify({
+          error: false,
+          export_type: "approved_budget_workbook",
+          payload,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     if (export_type === "budget") {
       rows = await buildBudgetExportRows({

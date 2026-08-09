@@ -9,7 +9,17 @@ export async function checkBudgetReadiness(supabase, { propertyId, fiscalYear, o
     camSnapshotResult,
   ] = await Promise.all([
     supabase.from("properties").select("id, name, total_sqft").eq("id", propertyId).single(),
-    supabase.from("leases").select("id, abstract_status").eq("property_id", propertyId).eq("status", "active"),
+    // `status` is a legacy lease column (draft/approved/rejected) — it is
+    // never the approval signal, and nothing in the current approval
+    // pipeline writes status='active'. abstract_status is what
+    // approve_lease_workflow actually sets. Fetch every lease for the
+    // property (no status filter) and let the overlap/approval check below
+    // decide which ones are relevant to this fiscal year — start_date/
+    // end_date are kept in sync with commencement_date/expiration_date by
+    // the sync_approved_lease_canonical_dates trigger on approval
+    // (20269900000041_approved_lease_canonical_dates.sql), so they're the
+    // correct fields to read here, not a new date field or fallback.
+    supabase.from("leases").select("id, abstract_status, start_date, end_date").eq("property_id", propertyId),
     supabase.from("lease_expense_rule_sets").select("id").eq("property_id", propertyId).eq("status", "approved"),
     supabase.from("expense_classifications").select("id, classification_status").eq("property_id", propertyId).eq("org_id", orgId),
     // Scope-aware CAM snapshots: a property can now have multiple completed "cam" snapshots
@@ -30,14 +40,27 @@ export async function checkBudgetReadiness(supabase, { propertyId, fiscalYear, o
   ]);
 
   const property = propertyResult.data;
-  const activeLeases = leasesResult.data ?? [];
+  const allLeases = leasesResult.data ?? [];
   const approvedRuleSets = ruleSetResult.data ?? [];
   const expenseClasses = expenseClassResult.data ?? [];
   const camSnapshot = camSnapshotResult.data ?? null;
 
+  // Leases relevant to this budget year: term overlaps fiscalYear (same
+  // Jan 1 - Dec 31 convention compute-budget uses), split into approved
+  // (abstract_status — the real approval signal) vs. still pending.
+  const fyStart = new Date(fiscalYear, 0, 1);
+  const fyEnd = new Date(fiscalYear, 11, 31);
+  const leasesInFiscalYear = allLeases.filter((lease) => {
+    if (!lease.start_date) return false;
+    const leaseStart = new Date(lease.start_date);
+    const leaseEnd = lease.end_date ? new Date(lease.end_date) : fyEnd;
+    return leaseStart <= fyEnd && leaseEnd >= fyStart;
+  });
+  const activeLeases = leasesInFiscalYear.filter((l) => l.abstract_status === "approved");
+
   const hasSqft = property && Number(property.total_sqft) > 0;
   const hasActiveLeases = activeLeases.length > 0;
-  const unapprovedCount = activeLeases.filter((l) => l.abstract_status !== "approved").length;
+  const unapprovedCount = leasesInFiscalYear.length - activeLeases.length;
   const hasApprovedRules = approvedRuleSets.length > 0;
   const terminalCount = expenseClasses.filter((e) => TERMINAL_STATUSES.includes(e.classification_status)).length;
   const classificationPct = expenseClasses.length > 0 ? terminalCount / expenseClasses.length : null;

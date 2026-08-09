@@ -12,6 +12,7 @@ import FileUploader from "@/components/FileUploader";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { toast } from "sonner";
 import BudgetPreviewTabs from "@/components/budget/BudgetPreviewTabs";
+import BudgetPlanningPanel from "@/components/budget/BudgetPlanningPanel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -447,6 +448,7 @@ export default function CreateBudget() {
           <TabsTrigger value="preview">Preview from Approved Data</TabsTrigger>
           <TabsTrigger value="manage">Manage Budgets ({budgets.length})</TabsTrigger>
           <TabsTrigger value="scenarios">Scenario Planning</TabsTrigger>
+          <TabsTrigger value="planning">Next-Year Plan</TabsTrigger>
         </TabsList>
 
         <TabsContent value="preview" className="mt-4">
@@ -848,6 +850,16 @@ export default function CreateBudget() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+        </TabsContent>
+
+        {/* Phase 4A: Next-Year Planning Budget — assembles Phase 3A expense
+            basis + Phase 3B CAM estimate + revenue baseline into a draft
+            budget via planning_source mode on compute-budget. */}
+        <TabsContent value="planning" className="mt-4">
+          <BudgetPlanningPanel
+            propertyId={form.property_id || scope.propertyId || null}
+            fiscalYear={form.budget_year}
+          />
         </TabsContent>
       </Tabs>
     </div>
