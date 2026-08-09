@@ -16,6 +16,7 @@ import {
   Info,
 } from "lucide-react";
 import { PortfolioService } from "@/services/api";
+import { createNotificationsForEvent } from "@/services/notificationService";
 import { supabase } from "@/services/supabaseClient";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useAuth } from "@/lib/AuthContext";
@@ -181,6 +182,23 @@ export default function Portfolios() {
         portfolioId: created?.id,
         orgId: created?.org_id || writableOrgId,
         user,
+      });
+
+      createNotificationsForEvent({
+        org_id: created?.org_id || writableOrgId,
+        event_type: "portfolio.created",
+        entity_type: "portfolio",
+        entity_id: created?.id,
+        portfolio_id: created?.id,
+        title: "Portfolio Created",
+        message: `Portfolio "${created?.name || data.name}" was created.`,
+        action_url: createPageUrl("Portfolios"),
+        created_by: user?.id,
+        metadata: {
+          source: "portfolio_create",
+        },
+      }).catch((error) => {
+        console.warn("[Portfolios] notification event failed:", error?.message || error);
       });
 
       return created;

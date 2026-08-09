@@ -8,6 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Building2, Loader2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { BuildingService } from "@/services/api";
+import { createNotificationsForEvent } from "@/services/notificationService";
+import { createPageUrl } from "@/utils";
 import { toast } from "sonner";
 
 export default function CreateBuildingModal({ isOpen, onClose, properties = [] }) {
@@ -49,7 +51,29 @@ export default function CreateBuildingModal({ isOpen, onClose, properties = [] }
   }, [isOpen, properties]);
 
   const createMutation = useMutation({
-    mutationFn: (data) => BuildingService.create(data),
+    mutationFn: async (data) => {
+      const created = await BuildingService.create(data);
+      const property = properties.find((item) => item.id === (created?.property_id || data.property_id));
+
+      createNotificationsForEvent({
+        org_id: created?.org_id || property?.org_id || data.org_id,
+        event_type: "building.created",
+        entity_type: "building",
+        entity_id: created?.id,
+        portfolio_id: property?.portfolio_id || null,
+        property_id: created?.property_id || data.property_id,
+        title: "Building Added",
+        message: `Building "${created?.name || data.name}" was added${property?.name ? ` to ${property.name}` : ""}.`,
+        action_url: createPageUrl("BuildingsUnits"),
+        metadata: {
+          source: "building_create_modal",
+        },
+      }).catch((error) => {
+        console.warn("[CreateBuildingModal] notification event failed:", error?.message || error);
+      });
+
+      return created;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bu-buildings"] });
       toast.success("Building created successfully.");

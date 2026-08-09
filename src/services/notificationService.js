@@ -11,6 +11,39 @@ export const notificationService = createEntityService('Notification');
 const notificationDeliveryService = createEntityService('NotificationDelivery');
 const notificationPreferenceService = createEntityService('NotificationPreference');
 
+function isMissingNotificationSchema(error) {
+  const text = [error?.message, error?.details, error?.hint].filter(Boolean).join(' ');
+  return (
+    error?.code === 'PGRST205' ||
+    error?.code === '42P01' ||
+    error?.code === 'PGRST204' ||
+    error?.code === '42703' ||
+    /schema cache|does not exist|Could not find the table|Could not find .* column/i.test(text)
+  );
+}
+
+function defaultNotificationPreferences(userId, orgId) {
+  return {
+    user_id: userId,
+    org_id: orgId,
+    email_enabled: true,
+    sms_enabled: true,
+    _schemaMissing: true,
+  };
+}
+
+async function safeSelect(query, fallback, label) {
+  const { data, error } = await query;
+  if (error) {
+    if (isMissingNotificationSchema(error)) {
+      console.warn(`[notificationService] ${label} unavailable until notification migrations are applied:`, error?.message || error);
+      return fallback;
+    }
+    throw error;
+  }
+  return data || fallback;
+}
+
 function normalizeEvent(event) {
   return {
     ...event,
@@ -75,6 +108,32 @@ async function safeCreateDelivery(payload) {
   }
 }
 
+async function createNotificationRecord(payload) {
+  try {
+    return await notificationService.create(payload);
+  } catch (error) {
+    if (!supabase || !isMissingNotificationSchema(error)) throw error;
+
+    console.warn('[notificationService] falling back to legacy notification insert until migrations are applied:', error?.message || error);
+    const { data, error: legacyError } = await supabase
+      .from('notifications')
+      .insert({
+        org_id: payload.org_id || payload.organization_id,
+        type: payload.type || payload.event_type || 'info',
+        title: payload.title,
+        message: payload.message,
+        link: payload.link || payload.action_url || '',
+        priority: payload.priority || 'normal',
+        is_read: false,
+      })
+      .select()
+      .single();
+
+    if (legacyError) throw legacyError;
+    return data;
+  }
+}
+
 async function fetchNotificationContext(orgId) {
   if (!supabase || !orgId) {
     return {
@@ -87,31 +146,31 @@ async function fetchNotificationContext(orgId) {
   }
 
   const [
-    membershipsResult,
-    accessResult,
-    stakeholdersResult,
-    preferencesResult,
+    memberships,
+    userAccess,
+    stakeholders,
+    notificationPreferences,
   ] = await Promise.all([
-    supabase
+    safeSelect(supabase
       .from('memberships')
       .select('user_id, org_id, role, status, phone, custom_role, assigned_portfolios, capabilities, module_permissions, page_permissions, profiles:user_id(email, full_name, phone)')
-      .eq('org_id', orgId),
-    supabase
+      .eq('org_id', orgId), [], 'memberships'),
+    safeSelect(supabase
       .from('user_access')
       .select('user_id, org_id, scope, scope_id, role, is_active, expires_at')
       .eq('org_id', orgId)
-      .eq('is_active', true),
-    supabase
+      .eq('is_active', true), [], 'user_access'),
+    safeSelect(supabase
       .from('stakeholders')
       .select('id, org_id, property_id, portfolio_id, tenant_id, name, email, phone, role')
-      .eq('org_id', orgId),
-    supabase
+      .eq('org_id', orgId), [], 'stakeholders'),
+    safeSelect(supabase
       .from('notification_preferences')
       .select('user_id, email_enabled, sms_enabled')
-      .eq('org_id', orgId),
+      .eq('org_id', orgId), [], 'notification_preferences'),
   ]);
 
-  const memberships = (membershipsResult.data || []).map((membership) => ({
+  const normalizedMemberships = memberships.map((membership) => ({
     ...membership,
     email: membership.profiles?.email,
     full_name: membership.profiles?.full_name,
@@ -119,11 +178,11 @@ async function fetchNotificationContext(orgId) {
   }));
 
   return {
-    memberships,
-    userAccess: accessResult.data || [],
-    stakeholders: stakeholdersResult.data || [],
-    notificationPreferences: preferencesResult.data || [],
-    profilesByUserId: Object.fromEntries(memberships.map((membership) => [membership.user_id, membership.profiles || {}])),
+    memberships: normalizedMemberships,
+    userAccess,
+    stakeholders,
+    notificationPreferences,
+    profilesByUserId: Object.fromEntries(normalizedMemberships.map((membership) => [membership.user_id, membership.profiles || {}])),
   };
 }
 
@@ -153,7 +212,7 @@ export async function createNotificationsForEvent(event, options = {}) {
 
   for (const recipient of resolution.recipients) {
     const notificationPayload = logicalNotificationPayload(normalizedEvent, recipient);
-    const notification = await notificationService.create(notificationPayload);
+    const notification = await createNotificationRecord(notificationPayload);
     created.push(notification || notificationPayload);
 
     await logAudit({
@@ -202,8 +261,16 @@ export async function createNotificationsForEvent(event, options = {}) {
 
 export async function getNotificationPreferences(userId, orgId) {
   if (!userId || !orgId) return null;
-  const rows = await notificationPreferenceService.filter({ user_id: userId, org_id: orgId });
-  return rows?.[0] || null;
+  try {
+    const rows = await notificationPreferenceService.filter({ user_id: userId, org_id: orgId });
+    return rows?.[0] || null;
+  } catch (error) {
+    if (isMissingNotificationSchema(error)) {
+      console.warn('[notificationService] notification preferences unavailable until migrations are applied:', error?.message || error);
+      return defaultNotificationPreferences(userId, orgId);
+    }
+    throw error;
+  }
 }
 
 export async function upsertNotificationPreferences({ userId, orgId, emailEnabled = true, smsEnabled = true }) {
@@ -221,7 +288,13 @@ export async function upsertNotificationPreferences({ userId, orgId, emailEnable
       }, { onConflict: 'user_id,org_id' })
       .select()
       .single();
-    if (error) throw error;
+    if (error) {
+      if (isMissingNotificationSchema(error)) {
+        console.warn('[notificationService] notification preferences cannot be saved until migrations are applied:', error?.message || error);
+        return defaultNotificationPreferences(userId, orgId);
+      }
+      throw error;
+    }
     await logAudit({
       action: 'notification_preferences_updated',
       entityType: 'NotificationPreference',

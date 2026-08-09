@@ -16,6 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { toast } from "sonner";
 
 import { PropertyService, LeaseService, ExpenseService, UnitService, BuildingService, StakeholderService } from "@/services/api";
+import { createNotificationsForEvent } from "@/services/notificationService";
 import { createPageUrl } from "@/utils";
 import { useModuleAccess } from "@/lib/ModuleAccessContext";
 import { useAuth } from "@/lib/AuthContext";
@@ -109,9 +110,29 @@ export default function PropertyDetail() {
   });
 
   const createBuildingMutation = useMutation({
-    mutationFn: (data) => {
+    mutationFn: async (data) => {
       assertCanWritePage(user, "Buildings", "add buildings");
-      return BuildingService.create(data);
+      const created = await BuildingService.create(data);
+
+      createNotificationsForEvent({
+        org_id: created?.org_id || property?.org_id || data.org_id,
+        event_type: "building.created",
+        entity_type: "building",
+        entity_id: created?.id,
+        portfolio_id: property?.portfolio_id || null,
+        property_id: created?.property_id || propertyId,
+        title: "Building Added",
+        message: `Building "${created?.name || data.name}" was added${property?.name ? ` to ${property.name}` : ""}.`,
+        action_url: `${createPageUrl("PropertyDetail")}?id=${propertyId}`,
+        created_by: user?.id,
+        metadata: {
+          source: "property_detail_building_create",
+        },
+      }).catch((error) => {
+        console.warn("[PropertyDetail] notification event failed:", error?.message || error);
+      });
+
+      return created;
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['buildings', propertyId] }); setShowAddBuilding(false); setBuildingForm({ name: "", total_sf: "", floors: 1 }); },
     onError: (err) => toast.error(isPagePermissionError(err) ? err.message : `Failed to create building: ${err?.message || "Unknown error"}`),

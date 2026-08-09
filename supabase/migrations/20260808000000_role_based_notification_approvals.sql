@@ -83,6 +83,7 @@ VALUES
   ('portfolio.created', 'portfolio', 'portfolio.view', 'INFORMATIONAL', FALSE),
   ('portfolio.manager_assigned', 'portfolio', 'portfolio.manage', 'ACTION_REQUIRED', FALSE),
   ('property.created', 'property', 'property.view', 'INFORMATIONAL', FALSE),
+  ('building.created', 'property', 'property.view', 'INFORMATIONAL', FALSE),
   ('property.manager_assigned', 'property', 'property.manage', 'ACTION_REQUIRED', FALSE),
   ('property.bulk_import_completed', 'property', 'property.view', 'INFORMATIONAL', FALSE),
   ('property.bulk_import_failed', 'property', 'property.manage', 'ACTION_REQUIRED', FALSE),
