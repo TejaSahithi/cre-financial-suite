@@ -180,6 +180,10 @@ verify_jwt = false
 enabled = true
 verify_jwt = true
 
+[functions.notification-dispatch-v9]
+enabled = true
+verify_jwt = true
+
 [functions.reset-mfa]
 enabled = true
 verify_jwt = true

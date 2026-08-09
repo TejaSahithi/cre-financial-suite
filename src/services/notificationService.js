@@ -1,6 +1,7 @@
 import { createEntityService } from '@/services/api';
 import { logAudit } from '@/services/audit';
 import { supabase } from '@/services/supabaseClient';
+import { invokeEdgeFunction } from '@/services/edgeFunctions';
 import { dispatchNotificationChannel } from '@/services/notificationChannels';
 import { NOTIFICATION_CHANNELS } from '@/lib/notifications/notificationConstants';
 import { NOTIFICATION_EVENT_PERMISSIONS, NOTIFICATION_EVENT_POLICIES } from '@/lib/notifications/notificationPolicies';
@@ -71,6 +72,8 @@ function logicalNotificationPayload(event, recipient) {
     message: recipient.message,
     action_url: recipient.actionUrl,
     link: recipient.actionUrl || recipient.entityId || '',
+    is_read: false,
+    read_at: null,
     requires_action: recipient.requiresAction,
     priority: recipient.requiresAction ? 'high' : 'normal',
     metadata: {
@@ -265,6 +268,29 @@ export async function createNotificationsForEvent(event, options = {}) {
     notifications: created,
     deliveries,
   };
+}
+
+function absoluteActionUrl(actionUrl) {
+  if (!actionUrl || /^https?:\/\//i.test(actionUrl)) return actionUrl || '';
+  if (typeof window === 'undefined' || !window.location?.origin) return actionUrl;
+  return new URL(actionUrl, window.location.origin).toString();
+}
+
+export async function dispatchPortfolioCreatedNotification(event) {
+  const normalizedEvent = normalizeEvent(event);
+  return invokeEdgeFunction('notification-dispatch-v9', {
+    org_id: normalizedEvent.org_id,
+    event_type: 'portfolio.created',
+    entity_type: 'portfolio',
+    entity_id: normalizedEvent.entity_id || normalizedEvent.portfolio_id,
+    portfolio_id: normalizedEvent.portfolio_id || normalizedEvent.entity_id,
+    entity_label: normalizedEvent.portfolio_name || normalizedEvent.entity_label || normalizedEvent.metadata?.portfolio_name,
+    action_url: absoluteActionUrl(normalizedEvent.action_url || normalizedEvent.actionUrl || normalizedEvent.link),
+    metadata: {
+      ...(normalizedEvent.metadata || {}),
+      source: 'portfolio_create',
+    },
+  });
 }
 
 export async function getNotificationPreferences(userId, orgId) {
