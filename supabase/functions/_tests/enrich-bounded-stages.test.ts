@@ -1265,10 +1265,10 @@ Deno.test("enrich-bounded-stages: Expenses/CAM reducer combines five smaller sub
 
   const prematureReducer = await callStage("enrich_evidence_expenses_and_cam");
   assertEquals(prematureReducer.status, 422);
-  assertEquals(
-    (await prematureReducer.json()).error_code,
-    "PRIOR_STAGE_MISSING",
-  );
+  const prematureReducerBody = await prematureReducer.json();
+  assertEquals(prematureReducerBody.error_code, "PRIOR_STAGE_MISSING");
+  assertEquals(prematureReducerBody.retryable, true);
+  assertEquals(prematureReducerBody.missing_substages, [...EXPENSES_AND_CAM_EVIDENCE_SUBSTAGES]);
 
   const schema = getSchema("lease");
   const allSchemaEntries = Object.entries(schema).filter(([, def]) =>

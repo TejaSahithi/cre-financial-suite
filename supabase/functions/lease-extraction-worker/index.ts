@@ -2336,6 +2336,66 @@ Deno.serve(async (req: Request) => {
         const message = stageResult.error || `Bounded enrich stage ${currentStage} failed`;
         const errorCode = stageResult.error_code || stageResult.data?.error_code || "ENRICH_STAGE_FAILED";
         const limitExceeded = errorCode === "BOUNDED_STAGE_LIMIT_EXCEEDED" || !!stageResult.data?.limit_exceeded;
+        if (errorCode === "PRIOR_STAGE_MISSING" && stageResult.data?.retryable) {
+          const missingSubstages = Array.isArray(stageResult.data?.missing_substages) ? stageResult.data.missing_substages : [];
+          for (const missingStage of missingSubstages) {
+            const { data: missingJob } = await supabaseAdmin
+              .from("pipeline_jobs")
+              .select("id, status, metadata")
+              .eq("uploaded_file_id", fileId)
+              .eq("job_type", "lease_extraction")
+              .eq("stage", missingStage)
+              .eq("generation_id", job.generation_id)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            if (missingJob?.status === "completed") {
+              await supabaseAdmin.from("pipeline_jobs").update({
+                status: "queued",
+                error_code: null,
+                error_message: null,
+                updated_at: new Date().toISOString(),
+                metadata: {
+                  ...(missingJob.metadata || {}),
+                  requeued_for_missing_bounded_result: true,
+                  blocked_reducer_stage: currentStage,
+                },
+              }).eq("id", missingJob.id);
+            }
+            if (!missingJob || ["queued", "running", "completed"].includes(String(missingJob.status))) {
+              await enqueueBoundedEnrichStage({
+                supabaseAdmin, orgId, fileId, stage: missingStage,
+                generationId: job.generation_id ?? null, moduleType: fileRecord.module_type, logger,
+              });
+            }
+          }
+          await resetJobForRetryableReconciliation(supabaseAdmin, job, fileId, "bounded_prior_stage_missing", {
+            delayMs: NORMALIZE_RETRY_DELAY_MS,
+            metadata: {
+              bounded_stage_retry: true,
+              blocked_stage: currentStage,
+              missing_substages: missingSubstages,
+            },
+          });
+          await logger.event(currentStage, "retry_queued", {
+            error_code: errorCode,
+            error_message: message,
+            metadata: {
+              job_id: job.id,
+              missing_substages: missingSubstages,
+            },
+          });
+          return jsonResponse({
+            error: true,
+            error_code: "BOUNDED_STAGE_RETRY_QUEUED",
+            original_error_code: errorCode,
+            retryable: true,
+            job_id: job.id,
+            stage: currentStage,
+            missing_substages: missingSubstages,
+            message,
+          }, 200);
+        }
         // Deliberately NOT routed through any "review-ready transport
         // failure" warning path the way the old monolithic "enrich" branch
         // below does -- per the explicit requirement, 546/DOWNSTREAM_FUNCTION_FAILED/

@@ -2781,14 +2781,21 @@ function handleEnrichEvidenceFieldGroupStage(args: {
   });
 }
 
-function combineExpensesAndCamSubstageData(results: Record<string, BoundedStageResultEntry>): any[] | null {
+function combineExpensesAndCamSubstageData(results: Record<string, BoundedStageResultEntry>): {
+  combined: any[];
+  missingSubstages: string[];
+} {
   const combined: any[] = [];
+  const missingSubstages: string[] = [];
   for (const substage of EXPENSES_AND_CAM_EVIDENCE_SUBSTAGES) {
     const stageData = getCompletedStageData(results, substage as EnrichBoundedStageName);
-    if (!Array.isArray(stageData)) return null;
+    if (!Array.isArray(stageData)) {
+      missingSubstages.push(substage);
+      continue;
+    }
     combined.push(...stageData);
   }
-  return combined;
+  return { combined, missingSubstages };
 }
 async function handleBoundedEnrichStage(args: {
   supabaseAdmin: any;
@@ -2947,8 +2954,16 @@ async function handleBoundedEnrichStage(args: {
         truthAssemblyCanonicalFields, fileRecord, normalizedOutput,
       });
     } else if (stage === "enrich_evidence_expenses_and_cam") {
-      const combined = combineExpensesAndCamSubstageData(boundedResults);
-      if (!combined) return jsonResponse({ error: true, error_code: "PRIOR_STAGE_MISSING", message: "all Expenses/CAM evidence sub-stages must complete before the Expenses/CAM reducer" }, 422);
+      const { combined, missingSubstages } = combineExpensesAndCamSubstageData(boundedResults);
+      if (missingSubstages.length > 0) {
+        return jsonResponse({
+          error: true,
+          error_code: "PRIOR_STAGE_MISSING",
+          retryable: true,
+          missing_substages: missingSubstages,
+          message: `all Expenses/CAM evidence sub-stages must complete before the Expenses/CAM reducer (missing: ${missingSubstages.join(", ")})`,
+        }, 422);
+      }
       const schema = getSchema(extractionModuleType);
       const allSchemaEntries = Object.entries(schema).filter(([, def]) => !(def as any).derived);
       const domainEntries = getSchemaEntriesForDomain(allSchemaEntries, "expenses_and_cam" as any);

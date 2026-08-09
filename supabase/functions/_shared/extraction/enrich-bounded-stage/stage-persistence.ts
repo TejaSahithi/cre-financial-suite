@@ -30,7 +30,7 @@ export type BoundedStageStatus = "completed" | "failed" | "incomplete";
  * treated as not-yet-completed (recomputed), the same way a stored result
  * for the wrong generation_id is.
  */
-export const STAGE_RESULT_VERSION = "v1";
+export const STAGE_RESULT_VERSION = "v2";
 
 export interface BoundedStageResultEntry {
   status: BoundedStageStatus;
