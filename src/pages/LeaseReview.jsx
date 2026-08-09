@@ -192,9 +192,11 @@ function readReviewExtractionSummary(uploadedFile) {
   };
 }
 
-function hasLeaseArchitectureMismatch(extractionSummary) {
+function hasLeaseArchitectureMismatch(extractionSummary, hasFields = false) {
   if (!extractionSummary) return false;
   if (extractionSummary.fallbackUsed) return false;
+  if (hasFields) return false;
+  if (!extractionSummary.extractionMode || extractionSummary.extractionMode === "unknown") return false;
   return extractionSummary.extractionMode !== "whole_document_llm_v2";
 }
 
@@ -1137,7 +1139,7 @@ export default function LeaseReview() {
     () => readReviewExtractionSummary(uploadedFile),
     [uploadedFile],
   );
-  const leaseArchitectureMismatch = hasLeaseArchitectureMismatch(extractionSummary);
+  const leaseArchitectureMismatch = hasLeaseArchitectureMismatch(extractionSummary, hasDisplayableExtractedFields);
 
   // Evidence-first contract: if raw parsed_data/normalized_output exists
   // before ui_review_payload lands, show a status warning only. Do not render
