@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ClipboardCheck, FileText, Loader2, Search, ShieldAlert } from "lucide-react";
+import { ArrowRightCircle, CheckCircle2, ChevronDown, ClipboardCheck, Download, Eye, FileText, Loader2, MoreHorizontal, RefreshCw, Search, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 
 import MetricCard from "@/components/MetricCard";
@@ -9,99 +9,154 @@ import PageHeader from "@/components/PageHeader";
 import ScopeSelector from "@/components/ScopeSelector";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
-import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
+import { resolveTenantForExpense } from "@/lib/tenantResolver";
 import { expenseService } from "@/services/expenseService";
-import { reviewExpenseClassification } from "@/services/expenseClassificationWorkflowService";
+import { resolveExpenseClassificationCondition } from "@/services/expenseClassificationWorkflowService";
+import { supabase } from "@/services/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { createPageUrl } from "@/utils";
-import { resolveTenantForExpense } from "@/lib/tenantResolver";
-import { supabase } from "@/services/supabaseClient";
-import { getClassificationRecoveryBucket } from "@/components/lease-expense/utils/buildClassificationRows";
+import {
+  buildExpenseReviewReportRows,
+  buildExpenseReviewUiRow,
+  calculateExpenseReviewTieOut,
+  canSendExpenseReviewRowToCam,
+  filterFinalizedExpenseReviewRows,
+  getExpenseReviewExceptionCounts,
+  isExpenseReviewException,
+  isExpenseReviewFinalized,
+} from "@/components/expense-review/utils/expenseReviewUiContract";
 
-function normalizeBucket(expense) {
-  return getClassificationRecoveryBucket(expense);
+const FINALIZED_FILTERS = [
+  { value: "all", label: "All Finalized" },
+  { value: "ready_for_cam", label: "Ready for CAM" },
+  { value: "published", label: "Published" },
+  { value: "outside_cam", label: "Outside CAM" },
+];
+
+function formatCurrency(value, options = {}) {
+  return Number(value || 0).toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: options.compact ? 0 : 2,
+    maximumFractionDigits: options.compact ? 0 : 2,
+  });
 }
 
-function toAmount(expense) {
-  return Number(expense?.amount || 0);
+function formatDate(value) {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 }
 
-function getRecoveryTone(bucket) {
-  if (bucket === "recoverable") return "bg-emerald-100 text-emerald-700";
-  if (bucket === "non_recoverable") return "bg-rose-100 text-rose-700";
-  if (bucket === "excluded") return "bg-slate-200 text-slate-700";
-  if (bucket === "conditional") return "bg-amber-100 text-amber-800";
-  return "bg-slate-100 text-slate-700";
+function compactScope(parts) {
+  return parts.filter((part) => part && part !== "-").join(" / ") || "Unscoped";
 }
 
-function camInputAmount(row) {
-  return Number(row?.eligible_amount ?? row?.actual_amount ?? row?.amount ?? 0) || 0;
+function v1BadgeClassName(tone) {
+  if (tone === "emerald") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (tone === "blue") return "border-blue-200 bg-blue-50 text-blue-700";
+  if (tone === "indigo") return "border-indigo-200 bg-indigo-50 text-indigo-700";
+  if (tone === "amber") return "border-amber-200 bg-amber-50 text-amber-800";
+  if (tone === "red") return "border-red-200 bg-red-50 text-red-700";
+  return "border-slate-200 bg-slate-50 text-slate-700";
 }
 
-function getCamHandoffState(expense, publishedCamInput) {
-  if (publishedCamInput) {
-    return {
-      label: "published",
-      tone: "bg-blue-100 text-blue-700",
-      title: "Published cam_expense_inputs row exists and can be consumed by CAM.",
-    };
-  }
+function downloadBlob(content, filename, type) {
+  const blob = content instanceof Blob ? content : new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
 
-  const recovery = normalizeBucket(expense);
-  const eligible = String(expense?.cam_eligible || "").toLowerCase();
-  const finalized = String(expense?.classification_status || "").toLowerCase() === "finalized";
-  if (recovery === "recoverable" && eligible === "yes" && finalized) {
-    return {
-      label: "candidate",
-      tone: "bg-amber-100 text-amber-800",
-      title: "Classification is finalized, recoverable, and CAM eligible, but no published cam_expense_inputs row exists yet.",
-    };
-  }
-  if (eligible === "no" || recovery === "non_recoverable" || recovery === "excluded") {
-    return {
-      label: "not eligible",
-      tone: "bg-slate-200 text-slate-700",
-      title: "The authoritative expense classification marks this row as not CAM eligible.",
-    };
-  }
-  return {
-    label: "needs review",
-    tone: "bg-amber-100 text-amber-800",
-    title: "CAM eligibility has not been resolved for publication.",
-  };
+function buildReportFilename(extension) {
+  return `expense-review-v1-${new Date().toISOString().slice(0, 10)}.${extension}`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+async function exportExcel(rows) {
+  const reportRows = buildExpenseReviewReportRows(rows);
+  if (!reportRows.length) return toast.info("No finalized expenses to export.");
+  const XLSX = await import("xlsx");
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(reportRows), "Finalized Expenses");
+  XLSX.writeFile(workbook, buildReportFilename("xlsx"));
+}
+
+async function exportPdf(rows, tieOut) {
+  const reportRows = buildExpenseReviewReportRows(rows);
+  if (!reportRows.length) return toast.info("No finalized expenses to export.");
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
+  let y = 36;
+  doc.setFontSize(14);
+  doc.text("Expense Review V1 - Finalized Expenses", 36, y);
+  y += 22;
+  doc.setFontSize(9);
+  doc.text(`Total Finalized: ${formatCurrency(tieOut.totalFinalized)}   Rows: ${tieOut.rows}   Ready for CAM: ${formatCurrency(tieOut.readyForCam)}   Published CAM: ${formatCurrency(tieOut.publishedCam)}`, 36, y);
+  y += 20;
+  const columns = ["Date", "Vendor", "Property", "Tenant", "Category", "Amount", "Decision", "CAM Status"];
+  const widths = [62, 110, 120, 110, 105, 70, 92, 92];
+  doc.setFontSize(7);
+  columns.forEach((column, index) => doc.text(column, 36 + widths.slice(0, index).reduce((sum, width) => sum + width, 0), y));
+  y += 12;
+  reportRows.slice(0, 120).forEach((row) => {
+    if (y > 560) {
+      doc.addPage();
+      y = 36;
+    }
+    const values = [row.Date, row.Vendor, row.Property, row.Tenant, row.Category, formatCurrency(row.Amount, { compact: true }), row.Decision, row["CAM Status"]];
+    values.forEach((value, index) => {
+      const x = 36 + widths.slice(0, index).reduce((sum, width) => sum + width, 0);
+      doc.text(String(value || "-").slice(0, index === 4 ? 20 : 24), x, y, { maxWidth: widths[index] - 6 });
+    });
+    y += 12;
+  });
+  doc.save(buildReportFilename("pdf"));
+}
+
+function exportWord(rows, tieOut) {
+  const reportRows = buildExpenseReviewReportRows(rows);
+  if (!reportRows.length) return toast.info("No finalized expenses to export.");
+  const headers = Object.keys(reportRows[0]);
+  const htmlRows = reportRows.map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(row[header])}</td>`).join("")}</tr>`).join("");
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Expense Review V1</title><style>body{font-family:Arial,sans-serif;color:#111827}table{border-collapse:collapse;width:100%;font-size:10pt}th,td{border:1px solid #cbd5e1;padding:5px;text-align:left}th{background:#f1f5f9}</style></head><body><h1>Expense Review V1 - Finalized Expenses</h1><p>Total Finalized: ${formatCurrency(tieOut.totalFinalized)} | Rows: ${tieOut.rows} | Ready for CAM: ${formatCurrency(tieOut.readyForCam)} | Published CAM: ${formatCurrency(tieOut.publishedCam)}</p><table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${htmlRows}</tbody></table></body></html>`;
+  downloadBlob(html, buildReportFilename("doc"), "application/msword;charset=utf-8");
 }
 
 export default function ExpenseReview() {
   const location = useLocation();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
+  const [finalizedFilter, setFinalizedFilter] = useState("all");
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
   const [scopeUnit, setScopeUnit] = useState("all");
+  const [detailRow, setDetailRow] = useState(null);
 
   const { data: leases = [] } = useOrgQuery("Lease");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: allBuildings = [] } = useOrgQuery("Building");
   const { data: allUnits = [] } = useOrgQuery("Unit");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
-  // Tenants are loaded only for the centralized tenant resolver
-  // (src/lib/tenantResolver.js) - used for the diagnostic tooltip when a
-  // review row has no tenant_name on it.
   const { data: tenants = [] } = useOrgQuery("Tenant");
 
   const scope = useMemo(
-    () =>
-      buildHierarchyScope({
-        search: location.search,
-        portfolios,
-        properties,
-        buildings: allBuildings,
-        units: allUnits,
-      }),
+    () => buildHierarchyScope({ search: location.search, portfolios, properties, buildings: allBuildings, units: allUnits }),
     [location.search, portfolios, properties, allBuildings, allUnits]
   );
 
@@ -111,98 +166,65 @@ export default function ExpenseReview() {
     setScopeUnit(scope.unitId || "all");
   }, [scope.propertyId, scope.buildingId, scope.unitId]);
 
-  const scopedLeases = leases.filter((lease) => {
-    if (
-      !matchesHierarchyScope(lease, scope, {
-        portfolioKey: "portfolio_id",
-        propertyKey: "property_id",
-        buildingKey: "building_id",
-        unitKey: "unit_id",
-      })
-    ) {
-      return false;
-    }
-
+  const scopedLeases = useMemo(() => leases.filter((lease) => {
+    if (!matchesHierarchyScope(lease, scope, { portfolioKey: "portfolio_id", propertyKey: "property_id", buildingKey: "building_id", unitKey: "unit_id" })) return false;
     if (scopeProperty !== "all" && lease.property_id !== scopeProperty) return false;
     if (scopeBuilding !== "all" && lease.building_id && lease.building_id !== scopeBuilding) return false;
     if (scopeUnit !== "all" && lease.unit_id && lease.unit_id !== scopeUnit) return false;
     return true;
-  });
+  }), [leases, scope, scopeProperty, scopeBuilding, scopeUnit]);
 
-  const scopedLeaseIds = useMemo(
-    () => scopedLeases.map((lease) => lease.id).filter(Boolean),
-    [scopedLeases]
-  );
+  const classificationScope = useMemo(() => ({
+    property_id: scopeProperty !== "all" ? scopeProperty : "all",
+    building_id: scopeBuilding !== "all" ? scopeBuilding : "all",
+    unit_id: scopeUnit !== "all" ? scopeUnit : "all",
+  }), [scopeProperty, scopeBuilding, scopeUnit]);
 
-  const { data: scopedRuleSets = [], isLoading: isLoadingRuleSets } = useQuery({
-    queryKey: ["expense-review-rule-sets", scopedLeaseIds.join("|")],
-    queryFn: () => leaseExpenseRuleService.loadRuleSets(scopedLeaseIds),
-    enabled: scopedLeaseIds.length > 0,
-  });
-
-  const { data: workflowSummary } = useQuery({
-    queryKey: ["expense-review-workflow-summary", scopeProperty, scopeBuilding, scopeUnit],
-    queryFn: () =>
-      expenseService.getWorkflowSummary({
-        propertyId: scopeProperty !== "all" ? scopeProperty : scope.propertyId || null,
-        buildingId: scopeBuilding !== "all" ? scopeBuilding : scope.buildingId || null,
-        unitId: scopeUnit !== "all" ? scopeUnit : scope.unitId || null,
-        fiscalYear: new Date().getFullYear(),
-      }),
-    enabled: true,
-  });
-
-  const classificationScope = useMemo(
-    () => ({
-      property_id: scopeProperty !== "all" ? scopeProperty : "all",
-      building_id: scopeBuilding !== "all" ? scopeBuilding : "all",
-      unit_id: scopeUnit !== "all" ? scopeUnit : "all",
-    }),
-    [scopeProperty, scopeBuilding, scopeUnit]
-  );
+  const resolverScope = useMemo(() => ({
+    property_id: scopeProperty,
+    building_id: scopeBuilding,
+    unit_id: scopeUnit,
+    lease_id: "all",
+    tenant_id: "all",
+    fiscal_year: new Date().getFullYear(),
+  }), [scopeProperty, scopeBuilding, scopeUnit]);
 
   const { data: scopedClassifications = [], isLoading: isLoadingClassifications } = useQuery({
     queryKey: ["expense-review-classifications", scopeProperty, scopeBuilding, scopeUnit],
     queryFn: () => expenseService.listExpenseClassificationsForScope(classificationScope),
   });
 
-  const reviewRows = useMemo(() => {
-    return scopedClassifications
-      .filter((row) => (row.actual_expense_id || row.expense_id) && row.row_type !== "rule_missing_actual")
-      .map((row) => {
-        const expenseId = row.actual_expense_id || row.expense_id;
-        return {
-          ...row,
-          id: row.id,
-          expense_id: expenseId,
-          actual_expense_id: expenseId,
-          amount: Number(row.amount ?? 0),
-          category: row.category || null,
-          expense_subcategory: row.subcategory || null,
-          tenant_name: row.tenant_name || null,
-          vendor_name: row.vendor_name || null,
-          vendor: row.vendor || null,
-          lease_id: row.lease_id || null,
-          property_id: row.property_id || null,
-          building_id: row.building_id || null,
-          unit_id: row.unit_id || null,
-          recovery_rule_id: row.lease_expense_rule_id || row.recovery_rule_id || null,
-          evidence_text: row.evidence_text || row.recovery_reason || row.notes || null,
-          classification: row.recoverability_result || row.recovery_status,
-          recovery_status: row.recoverability_result || row.recovery_status,
-        };
-      });
-  }, [scopedClassifications]);
+  const reviewRows = useMemo(() => scopedClassifications
+    .filter((row) => (row.actual_expense_id || row.expense_id) && row.row_type !== "rule_missing_actual")
+    .map((row) => {
+      const expenseId = row.actual_expense_id || row.expense_id;
+      const property = row.property_id ? scope.propertyById.get(row.property_id) ?? null : null;
+      const building = row.building_id ? scope.buildingById.get(row.building_id) ?? null : null;
+      const unit = row.unit_id ? scope.unitById.get(row.unit_id) ?? null : null;
+      const tenantResolution = resolveTenantForExpense(row, { leases, units: allUnits, tenants });
+      return {
+        ...row,
+        id: row.id,
+        expense_id: expenseId,
+        actual_expense_id: expenseId,
+        amount: Number(row.amount ?? 0),
+        category: row.category || null,
+        expense_subcategory: row.subcategory || null,
+        property_name: property?.name || row.property_name || null,
+        building_name: building?.name || row.building_name || null,
+        unit_name: unit?.unit_number || unit?.unit_id_code || row.unit_name || null,
+        tenant_name: row.tenant_name || tenantResolution.tenant?.name || null,
+        vendor_name: row.vendor_name || null,
+        vendor: row.vendor || null,
+        lease_id: row.lease_id || tenantResolution.lease?.id || null,
+        tenant_id: row.tenant_id || tenantResolution.tenant?.id || null,
+        recovery_rule_id: row.lease_expense_rule_id || row.recovery_rule_id || null,
+        evidence_text: row.evidence_text || row.recovery_reason || row.notes || null,
+      };
+    }), [scopedClassifications, scope.propertyById, scope.buildingById, scope.unitById, leases, allUnits, tenants]);
 
-  const actualExpenses = reviewRows.filter((expense) => Boolean(expense.actual_expense_id));
-  const finalizedRows = useMemo(
-    () => reviewRows.filter((expense) => String(expense?.classification_status || "").toLowerCase() === "finalized"),
-    [reviewRows]
-  );
-  const finalizedClassificationIds = useMemo(
-    () => finalizedRows.map((expense) => expense.id).filter(Boolean),
-    [finalizedRows]
-  );
+  const finalizedBaseRows = useMemo(() => reviewRows.filter((row) => isExpenseReviewFinalized(row)), [reviewRows]);
+  const finalizedClassificationIds = useMemo(() => finalizedBaseRows.map((expense) => expense.id).filter(Boolean), [finalizedBaseRows]);
 
   const { data: publishedCamInputs = [], isLoading: isLoadingCamInputs } = useQuery({
     queryKey: ["expense-review-published-cam-inputs", finalizedClassificationIds.join("|")],
@@ -210,7 +232,7 @@ export default function ExpenseReview() {
       if (finalizedClassificationIds.length === 0) return [];
       const { data, error } = await supabase
         .from("cam_expense_inputs")
-        .select("id, classification_result_id, actual_expense_id, amount, status, publication_status, sent_to_cam_at")
+        .select("id, classification_result_id, actual_expense_id, amount, eligible_amount, actual_amount, status, publication_status, sent_to_cam_at, recovery_method, cam_input_type, input_type, allocation_basis")
         .in("classification_result_id", finalizedClassificationIds)
         .eq("publication_status", "published");
       if (error) {
@@ -230,199 +252,90 @@ export default function ExpenseReview() {
     return map;
   }, [publishedCamInputs]);
 
-  const finalizedSummary = useMemo(() => {
-    return finalizedRows.reduce((summary, expense) => {
-      const amount = toAmount(expense);
-      summary.total += amount;
-      summary.count += 1;
-      const bucket = normalizeBucket(expense);
-      summary.byBucket[bucket] = (summary.byBucket[bucket] || 0) + amount;
-      if (publishedCamInputByClassificationId.has(expense.id)) {
-        summary.publishedToCam += camInputAmount(publishedCamInputByClassificationId.get(expense.id));
-      } else if (bucket === "recoverable" && String(expense?.cam_eligible || "").toLowerCase() === "yes") {
-        summary.camCandidates += amount;
-      }
-      return summary;
-    }, {
-      total: 0,
-      count: 0,
-      publishedToCam: 0,
-      camCandidates: 0,
-      byBucket: {
-        recoverable: 0,
-        non_recoverable: 0,
-        conditional: 0,
-        excluded: 0,
-        needs_review: 0,
-      },
-    });
-  }, [finalizedRows, publishedCamInputByClassificationId]);
+  const exceptionRows = useMemo(() => reviewRows.filter((row) => isExpenseReviewException(row)).map((row) => buildExpenseReviewUiRow(row)), [reviewRows]);
+  const finalizedRows = useMemo(() => finalizedBaseRows.map((row) => buildExpenseReviewUiRow(row, { publishedInput: publishedCamInputByClassificationId.get(row.id) })), [finalizedBaseRows, publishedCamInputByClassificationId]);
+  const exceptionCounts = useMemo(() => getExpenseReviewExceptionCounts(exceptionRows), [exceptionRows]);
+  const finalizedSummary = useMemo(() => calculateExpenseReviewTieOut(finalizedRows, publishedCamInputByClassificationId), [finalizedRows, publishedCamInputByClassificationId]);
 
-  const ruleSummary = useMemo(() => {
-    const allRules = scopedRuleSets.flatMap((entry) => entry.rules || []);
-    const grouped = leaseExpenseRuleService.groupRulesByRecoveryStatus(allRules);
-    const approvedRuleLeaseIds = new Set(
-      allRules
-        .filter((rule) => expenseService.isApprovedLeaseRule(rule))
-        .map((rule) => rule.lease_id || rule.rule_set?.lease_id)
-        .filter(Boolean)
-    );
-    return {
-      approvedLeaseCount: approvedRuleLeaseIds.size,
-      draftLeaseCount: Math.max(scopedLeases.length - approvedRuleLeaseIds.size, 0),
-      recoverableCount: grouped.recoverable.length,
-      nonRecoverableCount: grouped.nonRecoverable.length,
-      conditionalCount: grouped.conditional.length,
-      needsReviewCount: grouped.needsReview.length,
-    };
-  }, [scopedLeases.length, scopedRuleSets]);
-
-  const filteredFinalizedRows = useMemo(() => {
-    if (!search) return finalizedRows;
-    const needle = search.toLowerCase();
-    return finalizedRows.filter((expense) => {
-      const haystack = [
-        expense.property_name,
-        expense.tenant_name,
-        expense.vendor_name,
-        expense.vendor,
-        expense.category,
-        expense.expense_subcategory,
-        expense.description,
-        expense.evidence_text,
-        expense.recovery_reason,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(needle);
-    });
-  }, [finalizedRows, search]);
-
-  // Exception Queue
-  // Per spec: Expense Review's primary job is resolving classification
-  // exceptions, NOT browsing every classified row. The Exception Queue
-  // pulls from expense_classifications WHERE classification_status is
-  // 'unmatched'/'exception'/'conditional' OR exception_type is non-null.
-  // Each row is one decision the reviewer must make.
-  const exceptionRows = useMemo(() => {
-    return scopedClassifications.filter((row) => {
-      if (row.row_type === "rule_missing_actual") return false;
-      const status = String(row?.classification_status || "").toLowerCase();
-      const recoverability = String(row?.recoverability_result || row?.recovery_status || "").toLowerCase();
-      const exceptionType = String(row?.exception_type || "").toLowerCase();
-      return (
-        ["unmatched", "exception", "conditional"].includes(status) ||
-        recoverability === "needs_review" ||
-        (exceptionType && exceptionType !== "none" && exceptionType !== "null")
-      );
-    });
-  }, [scopedClassifications]);
-  const isLoadingExceptions = isLoadingClassifications;
-
-  // Join in actual expense details (vendor, date) for each exception so the
-  // queue can show "Vendor X, invoice $Y, dated Z" without a separate fetch.
-  const enrichedExceptions = useMemo(() => {
-    return exceptionRows.map((row) => {
-      const expenseId = row.expense_id || row.actual_expense_id;
-      return {
-        ...row,
-        expense_id: expenseId,
-        expense_vendor: row.vendor || row.vendor_name || null,
-        expense_date: row.service_period_start || row.service_period_end || row.classified_at || null,
-        expense_amount: row.amount,
-        expense_category: row.category,
-        expense_description: row.description || row.recovery_reason || row.notes,
-        expense_invoice_number: row.invoice_number,
-      };
-    });
-  }, [exceptionRows]);
-
-  const exceptionCounts = useMemo(() => ({
-    unmatched: enrichedExceptions.filter((e) => e.classification_status === "unmatched").length,
-    low_confidence: enrichedExceptions.filter((e) => e.exception_type === "low_confidence").length,
-    conditional: enrichedExceptions.filter((e) => e.classification_status === "conditional").length,
-    other_exception: enrichedExceptions.filter((e) => e.classification_status === "exception" && e.exception_type !== "low_confidence").length,
-    total: enrichedExceptions.length,
-  }), [enrichedExceptions]);
-
-  const exceptionMutation = useMutation({
-    mutationFn: async ({ classificationId, action }) => {
-      // Server-owned as of review_expense_classification (20260710000000,
-      // extended 20260711000000) - each action below is now one audited RPC
-      // call instead of a direct, unaudited expense_classifications write.
-      if (action === "approve") {
-        const row = scopedClassifications.find((item) => item.id === classificationId);
-        await reviewExpenseClassification({
-          classificationId,
-          action: "approve",
-          recoveryStatus: row?.recoverability_result || row?.recovery_status || "recoverable",
-          approvedStatus: "approved",
-        });
-        return { classificationId, action };
-      }
-      if (action === "reject" || action === "mark_na" || action === "resolve") {
-        await reviewExpenseClassification({ classificationId, action });
-        return { classificationId, action };
-      }
-      throw new Error(`Unknown exception queue action: ${action}`);
-    },
-    onSuccess: ({ action }) => {
-      const label = {
-        approve: "Approved", reject: "Rejected", mark_na: "Marked N/A", resolve: "Resolved",
-      }[action] || "Updated";
-      toast.success(`${label}.`);
-      queryClient.invalidateQueries({ queryKey: ["expense-review-exceptions"] });
-      queryClient.invalidateQueries({ queryKey: ["expense-review-classifications"] });
-      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
-      queryClient.invalidateQueries({ queryKey: ["expense-projection-finalized"] });
-    },
-    onError: (err) => {
-      toast.error(err?.message || "Could not update classification");
-    },
-  });
+  const visibleFinalizedRows = useMemo(() => {
+    const filtered = filterFinalizedExpenseReviewRows(finalizedRows, finalizedFilter);
+    if (!search.trim()) return filtered;
+    const needle = search.trim().toLowerCase();
+    return filtered.filter((expense) => [
+      expense.property_name, expense.building_name, expense.unit_name, expense.tenant_name,
+      expense.vendor_name, expense.vendor, expense.category, expense.expense_subcategory,
+      expense.description, expense.evidence_text, expense.v1Decision?.label, expense.v1CamStatus?.label,
+    ].filter(Boolean).join(" ").toLowerCase().includes(needle));
+  }, [finalizedRows, finalizedFilter, search]);
 
   const subtitle = getScopeSubtitle(scope, {
-    default: `${finalizedSummary.count} finalized expense rows totaling $${finalizedSummary.total.toLocaleString()} in scope`,
-    portfolio: (portfolio) => `${finalizedSummary.count} finalized expense rows totaling $${finalizedSummary.total.toLocaleString()} in ${portfolio.name}`,
-    property: (property) => `${finalizedSummary.count} finalized expense rows totaling $${finalizedSummary.total.toLocaleString()} for ${property.name}`,
-    building: (building) => `${finalizedSummary.count} finalized expense rows totaling $${finalizedSummary.total.toLocaleString()} for ${building.name}`,
-    unit: (unit) => `${finalizedSummary.count} finalized expense rows totaling $${finalizedSummary.total.toLocaleString()} for ${unit.unit_number || unit.unit_id_code || "selected unit"}`,
-    org: () => `${finalizedSummary.count} finalized expense rows totaling $${finalizedSummary.total.toLocaleString()} across the organization`,
+    default: `${finalizedSummary.rows} finalized expense classifications totaling ${formatCurrency(finalizedSummary.totalFinalized)} in scope`,
+    portfolio: (portfolio) => `${finalizedSummary.rows} finalized expense classifications totaling ${formatCurrency(finalizedSummary.totalFinalized)} in ${portfolio.name}`,
+    property: (property) => `${finalizedSummary.rows} finalized expense classifications totaling ${formatCurrency(finalizedSummary.totalFinalized)} for ${property.name}`,
+    building: (building) => `${finalizedSummary.rows} finalized expense classifications totaling ${formatCurrency(finalizedSummary.totalFinalized)} for ${building.name}`,
+    unit: (unit) => `${finalizedSummary.rows} finalized expense classifications totaling ${formatCurrency(finalizedSummary.totalFinalized)} for ${unit.unit_number || unit.unit_id_code || "selected unit"}`,
+    org: () => `${finalizedSummary.rows} finalized expense classifications totaling ${formatCurrency(finalizedSummary.totalFinalized)} across the organization`,
   });
 
-  const scopedParams = Object.fromEntries(
-    Object.entries({
-      property: scopeProperty !== "all" ? scopeProperty : undefined,
-      building: scopeBuilding !== "all" ? scopeBuilding : undefined,
-      unit: scopeUnit !== "all" ? scopeUnit : undefined,
-    }).filter(([, value]) => value)
-  );
-  const classificationUrl = scopedLeaseIds[0]
-    ? createPageUrl("LeaseExpenseClassification", { id: scopedLeaseIds[0] })
-    : createPageUrl("LeaseExpenseClassification");
+  const invalidateReviewQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["expense-review-classifications"] });
+    queryClient.invalidateQueries({ queryKey: ["expense-review-published-cam-inputs"] });
+    queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+    queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
+    queryClient.invalidateQueries({ queryKey: ["Expense"] });
+    queryClient.invalidateQueries({ queryKey: ["cam-overview-expenses"] });
+    queryClient.invalidateQueries({ queryKey: ["cam_expense_inputs_published"] });
+  };
 
-  const isLoading = isLoadingRuleSets || isLoadingClassifications || isLoadingCamInputs;
+  const runClassificationMutation = useMutation({
+    mutationFn: () => expenseService.runExpenseClassification(resolverScope),
+    onSuccess: () => {
+      toast.success("Classification resolver refreshed");
+      invalidateReviewQueries();
+    },
+    onError: (error) => toast.error(error?.message || "Classification run failed"),
+  });
+
+  const resolveConditionMutation = useMutation({
+    mutationFn: async (row) => {
+      const wantsRecoverable = window.confirm(`Resolve the condition on "${row.vendor_name || row.vendor || row.category || "this expense"}".\n\nOK = Recoverable\nCancel = Nonrecoverable`);
+      const resolution = wantsRecoverable ? "recoverable" : "non_recoverable";
+      const reason = window.prompt(`Reason for marking this expense ${resolution.replace("_", " ")}:`);
+      if (!reason || !reason.trim()) throw new Error("A reason is required to resolve a conditional expense.");
+      return resolveExpenseClassificationCondition({ classificationId: row.id, resolution, reason: reason.trim() });
+    },
+    onSuccess: () => {
+      toast.success("Condition resolved. Rerun Classification to refresh the route if needed.");
+      invalidateReviewQueries();
+    },
+    onError: (error) => toast.error(error?.message || "Could not resolve condition"),
+  });
+
+  const sendToCamMutation = useMutation({
+    mutationFn: async (row) => {
+      const publishedInput = publishedCamInputByClassificationId.get(row.id);
+      if (!canSendExpenseReviewRowToCam(row, publishedInput)) throw new Error("Only finalized Pooled CAM and Direct Recovery rows that are ready to publish can be sent to CAM.");
+      const reason = window.prompt("Reason for publishing this finalized classification to CAM:", "Published from Expense Review V1 after finalized classification");
+      if (!reason || !reason.trim()) throw new Error("A reason is required to send an expense to CAM.");
+      return expenseService.sendClassificationToCam(row, { reason: reason.trim() });
+    },
+    onSuccess: () => {
+      toast.success("Sent to CAM using the existing publication workflow");
+      invalidateReviewQueries();
+    },
+    onError: (error) => toast.error(error?.message || "Could not send to CAM"),
+  });
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
-      <PageHeader
-        icon={ClipboardCheck}
-        title="Expense Review"
-        subtitle={subtitle}
-        iconColor="from-slate-900 to-slate-700"
-      >
-        <div className="flex gap-2">
-          <Link to={classificationUrl}>
-            <Button variant="outline" size="sm">
-              <FileText className="mr-2 h-4 w-4" />
-              Expense Classification
-            </Button>
-          </Link>
-          <Link to={createPageUrl("ExpenseProjection", scopedParams)}>
-            <Button size="sm" className="bg-blue-600 hover:bg-blue-700">
-              Continue to Projection
-            </Button>
+      <PageHeader icon={ClipboardCheck} title="Expense Review" subtitle={subtitle} iconColor="from-slate-900 to-slate-700">
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={() => runClassificationMutation.mutate()} disabled={runClassificationMutation.isPending}>
+            {runClassificationMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+            Run Classification
+          </Button>
+          <Link to={createPageUrl("LeaseExpenseClassification")}>
+            <Button variant="outline" size="sm"><FileText className="mr-2 h-4 w-4" />Expense Classification</Button>
           </Link>
         </div>
       </PageHeader>
@@ -439,209 +352,51 @@ export default function ExpenseReview() {
         onUnitChange={setScopeUnit}
       />
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <MetricCard label="Finalized Total" value={`$${finalizedSummary.total.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub={`${finalizedSummary.count} finalized rows`} />
-        <MetricCard label="Recoverable Finalized" value={`$${finalizedSummary.byBucket.recoverable.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub="tenant recoverable" />
-        <MetricCard label="Non-Recoverable / Excluded" value={`$${(finalizedSummary.byBucket.non_recoverable + finalizedSummary.byBucket.excluded).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub="landlord or excluded" />
-        <MetricCard label="Published to CAM" value={`$${finalizedSummary.publishedToCam.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub={`$${finalizedSummary.camCandidates.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })} candidate waiting`} />
-        <MetricCard label="Exceptions" value={`${exceptionCounts.total}`} sub="need human decision" />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <MetricCard label="Total Finalized" value={formatCurrency(finalizedSummary.totalFinalized)} sub="accepted routes only" />
+        <MetricCard label="Rows" value={finalizedSummary.rows} sub="finalized classifications" />
+        <MetricCard label="Ready for CAM" value={formatCurrency(finalizedSummary.readyForCam)} sub={`${finalizedSummary.readyForCamRows} rows`} />
+        <MetricCard label="Published CAM" value={formatCurrency(finalizedSummary.publishedCam)} sub={`${finalizedSummary.publishedCamRows} active inputs`} />
+        <MetricCard label="Outside CAM" value={formatCurrency(finalizedSummary.outsideCam)} sub={`${finalizedSummary.outsideCamRows} rows`} />
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-6">
-        <Card className="border-blue-200 bg-blue-50/60">
-          <CardHeader>
-            <CardTitle className="text-base">Lease Rule Readiness</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm text-slate-700">
-            <div className="flex flex-wrap gap-2">
-              <Badge className="bg-emerald-100 text-emerald-700">{ruleSummary.recoverableCount} recoverable rules</Badge>
-              <Badge className="bg-rose-100 text-rose-700">{ruleSummary.nonRecoverableCount} non-recoverable rules</Badge>
-              <Badge className="bg-amber-100 text-amber-800">{ruleSummary.conditionalCount} conditional rules</Badge>
-              <Badge className="bg-slate-100 text-slate-700">{ruleSummary.needsReviewCount} still need review</Badge>
+      <Card className={finalizedSummary.tieOutOk ? "border-emerald-200 bg-emerald-50/60" : "border-red-200 bg-red-50/70"}>
+        <CardContent className="flex flex-col gap-2 py-4 text-sm lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-2">
+            {finalizedSummary.tieOutOk ? <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" /> : <ShieldAlert className="mt-0.5 h-4 w-4 text-red-600" />}
+            <div>
+              <p className={finalizedSummary.tieOutOk ? "font-semibold text-emerald-800" : "font-semibold text-red-800"}>{finalizedSummary.tieOutOk ? "Financial Tie-Out Complete" : "Financial Tie-Out Mismatch"}</p>
+              <p className="text-xs text-slate-600">Total Finalized Expense Amount = Pooled CAM + Direct Recovery + Direct Bill + Tenant Direct + Included in Rent + Nonrecoverable.</p>
             </div>
-            <p>
-              Approved lease rule sets: <span className="font-semibold">{ruleSummary.approvedLeaseCount}</span>
-              {" "}of {scopedLeases.length || 0} scoped leases.
-            </p>
-            <p>
-              Draft-only rule sets: <span className="font-semibold">{ruleSummary.draftLeaseCount}</span>.
-              These still need yes/no/value review before CAM can rely on them.
-            </p>
-          </CardContent>
-        </Card>
+          </div>
+          <div className="text-xs text-slate-600 lg:text-right">
+            <div>Route total: {formatCurrency(finalizedSummary.routeTotal)}</div>
+            <div>Exception queue dollars are separate: {formatCurrency(exceptionCounts.amount)}</div>
+          </div>
+        </CardContent>
+      </Card>
 
-        <Card className={actualExpenses.length > 0 ? "border-emerald-200 bg-emerald-50/60" : "border-amber-200 bg-amber-50/70"}>
-          <CardHeader>
-            <CardTitle className="text-base">CAM Input Readiness</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm text-slate-700">
-            {actualExpenses.length === 0 ? (
-              <div className="rounded-lg border border-amber-200 bg-white px-4 py-3 text-amber-800">
-                No classified actual expense rows found. Run Expense Classification after adding or importing expenses.
-              </div>
-            ) : (
-              <div className="rounded-lg border border-emerald-200 bg-white px-4 py-3 text-emerald-800">
-                {actualExpenses.length} actual expense row(s) are available for review before CAM calculation.
-              </div>
-            )}
-            <p>Workflow checks:</p>
-            <div className="flex flex-wrap gap-2">
-              <Badge className={workflowSummary?.approvedLeaseCount > 0 ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-700"}>
-                {workflowSummary?.approvedLeaseCount || 0} approved leases
-              </Badge>
-              <Badge className={workflowSummary?.approvedRuleLeaseCount > 0 ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-700"}>
-                {workflowSummary?.approvedRuleLeaseCount || 0} approved rule sets
-              </Badge>
-              <Badge className={workflowSummary?.needsReviewCount > 0 ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-700"}>
-                {workflowSummary?.needsReviewCount || 0} expenses need review
-              </Badge>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Exception Queue (primary review surface, per spec) */}
       <Card className="border-amber-200">
         <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
           <div>
-            <CardTitle className="text-base flex items-center gap-2">
-              <ShieldAlert className="h-4 w-4 text-amber-600" />
-              Exception Queue
-            </CardTitle>
-            <p className="mt-1 text-xs text-slate-500">
-              Classifications that need a human decision before they're finalized. Approving here promotes the row to <code>finalized</code> and lets it flow into Projection / CAM / Budget.
-            </p>
+            <CardTitle className="flex items-center gap-2 text-base"><ShieldAlert className="h-4 w-4 text-amber-600" />Exception Queue</CardTitle>
+            <p className="mt-1 text-xs text-slate-500">Expenses that require a human decision before classification can be finalized. Resolve the missing information or policy condition below. Finalizing does not automatically publish an expense to CAM.</p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Badge className="bg-rose-100 text-rose-800 text-[10px] uppercase">
-              {exceptionCounts.unmatched} unmatched
-            </Badge>
-            <Badge className="bg-amber-100 text-amber-800 text-[10px] uppercase">
-              {exceptionCounts.low_confidence} low-confidence
-            </Badge>
-            <Badge className="bg-amber-100 text-amber-800 text-[10px] uppercase">
-              {exceptionCounts.conditional} conditional
-            </Badge>
-            <Badge className="bg-slate-200 text-slate-700 text-[10px] uppercase">
-              {exceptionCounts.other_exception} other
-            </Badge>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Badge className="bg-amber-100 text-amber-800 text-[10px] uppercase">{exceptionCounts.missingInformation} Missing Information</Badge>
+            <Badge className="bg-amber-100 text-amber-800 text-[10px] uppercase">{exceptionCounts.conditional} Conditional</Badge>
+            <Badge className="bg-red-100 text-red-700 text-[10px] uppercase">{exceptionCounts.policyConflict} Policy Conflict</Badge>
+            <Badge className="bg-slate-200 text-slate-700 text-[10px] uppercase">{exceptionCounts.otherReview} Other Review</Badge>
           </div>
         </CardHeader>
         <CardContent>
-          {exceptionCounts.conditional > 0 && (
-            <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-              <span>
-                <strong>{exceptionCounts.conditional} conditional expense{exceptionCounts.conditional !== 1 ? "s" : ""}</strong> cannot be included in CAM until reviewed.
-                Approve to mark recoverable, or reject to exclude.
-              </span>
-            </div>
-          )}
-          {isLoadingExceptions ? (
-            <div className="flex items-center gap-2 py-6 text-sm text-slate-500">
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading exceptions...
-            </div>
-          ) : enrichedExceptions.length === 0 ? (
-            <div className="rounded-md border border-dashed border-emerald-200 bg-emerald-50 px-4 py-6 text-center text-sm text-emerald-800">
-              <CheckCircle2 className="mx-auto mb-2 h-5 w-5" />
-              No exceptions in this scope. Run classification on Expense Classification if you've added new actual expenses.
-            </div>
-          ) : (
-            <div className="overflow-x-auto rounded-md border border-slate-200">
-              <Table>
-                <TableHeader className="bg-slate-50">
-                  <TableRow>
-                    <TableHead className="text-[10px] uppercase">Exception</TableHead>
-                    <TableHead className="text-[10px] uppercase">Vendor / Invoice</TableHead>
-                    <TableHead className="text-[10px] uppercase">Category</TableHead>
-                    <TableHead className="text-[10px] uppercase text-right">Amount</TableHead>
-                    <TableHead className="text-[10px] uppercase">Reason</TableHead>
-                    <TableHead className="text-[10px] uppercase">Confidence</TableHead>
-                    <TableHead className="text-[10px] uppercase text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {enrichedExceptions.map((row) => {
-                    const exceptionTone =
-                      row.classification_status === "unmatched" ? "bg-rose-100 text-rose-800"
-                      : row.exception_type === "low_confidence" ? "bg-amber-100 text-amber-800"
-                      : row.classification_status === "conditional" ? "bg-amber-100 text-amber-800"
-                      : "bg-slate-200 text-slate-700";
-                    const exceptionLabel = row.exception_type || row.classification_status;
-                    const confidencePct = Number.isFinite(Number(row.confidence_score))
-                      ? `${Math.round((Number(row.confidence_score) <= 1 ? Number(row.confidence_score) * 100 : Number(row.confidence_score)))}%`
-                      : "-";
-                    return (
-                      <TableRow key={row.id} className="hover:bg-slate-50">
-                        <TableCell>
-                          <Badge className={`${exceptionTone} text-[10px] uppercase`}>
-                            {String(exceptionLabel || "-").replace(/_/g, " ")}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-sm">
-                          <div className="font-medium text-slate-900">{row.expense_vendor || "-"}</div>
-                          <div className="text-[10px] text-slate-500">
-                            {row.expense_invoice_number ? `#${row.expense_invoice_number} - ` : ""}{row.expense_date || ""}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-sm text-slate-700">{row.expense_category || "-"}</TableCell>
-                        <TableCell className="text-sm text-right font-mono">
-                          {Number.isFinite(Number(row.expense_amount)) ? `$${Math.round(Number(row.expense_amount)).toLocaleString()}` : "-"}
-                        </TableCell>
-                        <TableCell className="text-xs text-slate-600 max-w-[260px] truncate" title={row.recovery_reason || row.evidence_text || ""}>
-                          {row.recovery_reason || row.evidence_text || "-"}
-                        </TableCell>
-                        <TableCell className="text-xs">{confidencePct}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center justify-end gap-1">
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-7 px-2 text-xs text-emerald-700 hover:text-emerald-800"
-                              onClick={() => exceptionMutation.mutate({ classificationId: row.id, action: "approve" })}
-                              disabled={exceptionMutation.isPending}
-                              title="Promote to finalized - row flows into Projection / CAM"
-                            >
-                              Approve
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-7 px-2 text-xs text-rose-700 hover:text-rose-800"
-                              onClick={() => exceptionMutation.mutate({ classificationId: row.id, action: "reject" })}
-                              disabled={exceptionMutation.isPending}
-                              title="Reject as not recoverable / excluded"
-                            >
-                              Reject
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-7 px-2 text-xs text-slate-600"
-                              onClick={() => exceptionMutation.mutate({ classificationId: row.id, action: "mark_na" })}
-                              disabled={exceptionMutation.isPending}
-                              title="Mark non-recoverable but keep in the books"
-                            >
-                              N/A
-                            </Button>
-                            {row.lease_id && (
-                              <Link
-                                to={createPageUrl("LeaseExpenseClassification", { id: row.lease_id })}
-                                className="text-[10px] text-blue-600 underline"
-                                title="Open the per-lease classification view"
-                              >
-                                Open
-                              </Link>
-                            )}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+          <ExceptionQueueTable
+            rows={exceptionRows}
+            isLoading={isLoadingClassifications}
+            onOpenDetail={setDetailRow}
+            onResolveCondition={(row) => resolveConditionMutation.mutate(row)}
+            isResolving={resolveConditionMutation.isPending}
+          />
         </CardContent>
       </Card>
 
@@ -650,146 +405,279 @@ export default function ExpenseReview() {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <CardTitle className="text-base">Finalized Expenses</CardTitle>
-              <p className="mt-1 text-xs text-slate-500">
-                Read-only total expenses for the selected scope. Finalized rows already flowed through classification; actions stay in the Exception Queue above.
-              </p>
+              <p className="mt-1 text-xs text-slate-500">Finalized classifications for the selected scope. These rows show the authoritative financial route for each approved actual expense. CAM-eligible rows must still be separately published to CAM.</p>
             </div>
-            <div className="grid grid-cols-2 gap-2 text-right sm:grid-cols-4">
-              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                <p className="text-[10px] font-bold uppercase text-slate-500">Total</p>
-                <p className="text-sm font-bold text-slate-900">${finalizedSummary.total.toLocaleString()}</p>
-              </div>
-              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                <p className="text-[10px] font-bold uppercase text-slate-500">Rows</p>
-                <p className="text-sm font-bold text-slate-900">{finalizedSummary.count}</p>
-              </div>
-              <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2">
-                <p className="text-[10px] font-bold uppercase text-emerald-700">Recoverable</p>
-                <p className="text-sm font-bold text-emerald-900">${finalizedSummary.byBucket.recoverable.toLocaleString()}</p>
-              </div>
-              <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2">
-                <p className="text-[10px] font-bold uppercase text-blue-700">Published CAM</p>
-                <p className="text-sm font-bold text-blue-900">${finalizedSummary.publishedToCam.toLocaleString()}</p>
-              </div>
-            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" disabled={visibleFinalizedRows.length === 0}><Download className="mr-2 h-4 w-4" />Export Report<ChevronDown className="ml-2 h-4 w-4" /></Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-slate-500">Finalized rows only</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => exportExcel(visibleFinalizedRows)}>Excel</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => exportPdf(visibleFinalizedRows, finalizedSummary)}>PDF</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => exportWord(visibleFinalizedRows, finalizedSummary)}>Word</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="relative max-w-sm">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search finalized expenses..."
-              className="pl-9"
-            />
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-wrap gap-2">
+              {FINALIZED_FILTERS.map((filter) => (
+                <Button key={filter.value} type="button" variant={finalizedFilter === filter.value ? "default" : "outline"} size="sm" className={finalizedFilter === filter.value ? "bg-slate-900 hover:bg-slate-800" : ""} onClick={() => setFinalizedFilter(filter.value)}>
+                  {filter.label}
+                </Button>
+              ))}
+            </div>
+            <div className="relative w-full max-w-sm">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search finalized expenses..." className="pl-9" />
+            </div>
           </div>
-
-          <FinalizedExpensesTable
-            expenses={filteredFinalizedRows}
-            totalAmount={finalizedSummary.total}
-            scope={scope}
-            leases={leases}
-            units={allUnits}
-            tenants={tenants}
-            publishedCamInputByClassificationId={publishedCamInputByClassificationId}
-            isLoading={isLoading}
-          />
+          <FinalizedExpensesTable rows={visibleFinalizedRows} isLoading={isLoadingClassifications || isLoadingCamInputs} filter={finalizedFilter} onOpenDetail={setDetailRow} onSendToCam={(row) => sendToCamMutation.mutate(row)} isSendingToCam={sendToCamMutation.isPending} />
         </CardContent>
       </Card>
+
+      <ExpenseReviewDetailDrawer row={detailRow} open={Boolean(detailRow)} onOpenChange={(open) => !open && setDetailRow(null)} />
     </div>
   );
 }
 
-function FinalizedExpensesTable({ expenses, totalAmount, scope, leases = [], units = [], tenants = [], publishedCamInputByClassificationId = new Map(), isLoading }) {
+function ExceptionQueueTable({ rows, isLoading, onOpenDetail, onResolveCondition, isResolving }) {
+  if (isLoading) return <LoadingState label="Loading exceptions..." />;
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed border-emerald-200 bg-emerald-50 px-4 py-6 text-center text-sm text-emerald-800">
+        <CheckCircle2 className="mx-auto mb-2 h-5 w-5" />
+        <div className="font-medium">No classification exceptions for this scope.</div>
+        <div className="mt-1 text-xs text-emerald-700">New exceptions will appear here when an approved expense requires missing information, conditional review, or policy resolution.</div>
+      </div>
+    );
+  }
+
   return (
-    <Card className="border-slate-200/80">
+    <div className="overflow-x-auto rounded-md border border-slate-200">
       <Table>
-        <TableHeader>
-          <TableRow className="bg-slate-50">
-            <TableHead className="text-[10px] font-bold tracking-wider">EXPENSE</TableHead>
-            <TableHead className="text-[10px] font-bold tracking-wider">SCOPE</TableHead>
-            <TableHead className="text-[10px] font-bold tracking-wider">TENANT / VENDOR</TableHead>
-            <TableHead className="text-[10px] font-bold tracking-wider">MATCHED RULE</TableHead>
-            <TableHead className="text-[10px] font-bold tracking-wider">RECOVERY</TableHead>
-            <TableHead className="text-[10px] font-bold tracking-wider">CAM</TableHead>
-            <TableHead className="text-[10px] font-bold tracking-wider text-right">AMOUNT</TableHead>
+        <TableHeader className="bg-slate-50">
+          <TableRow>
+            <TableHead className="text-[10px] uppercase">Expense</TableHead>
+            <TableHead className="text-[10px] uppercase">Scope</TableHead>
+            <TableHead className="text-[10px] uppercase text-right">Amount</TableHead>
+            <TableHead className="text-[10px] uppercase">Issue</TableHead>
+            <TableHead className="text-[10px] uppercase">Policy Evidence</TableHead>
+            <TableHead className="text-[10px] uppercase">Required Decision</TableHead>
+            <TableHead className="text-[10px] uppercase text-right">Action</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {isLoading ? (
-            <TableRow>
-              <TableCell colSpan={7} className="py-10 text-center">
-                <Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" />
+          {rows.map((row) => (
+            <TableRow key={row.id} className="hover:bg-slate-50">
+              <TableCell className="min-w-[210px] text-xs">
+                <div className="font-medium text-slate-900">{row.category || "Needs Category"}</div>
+                <div className="mt-1 text-slate-500">{formatDate(row.service_period_start || row.service_period_end || row.classified_at)}</div>
+                <div className="text-slate-500">{row.vendor_name || row.vendor || "Vendor not specified"}</div>
               </TableCell>
-            </TableRow>
-          ) : expenses.length === 0 ? (
-            <TableRow>
-              <TableCell colSpan={7} className="py-10 text-center text-sm text-slate-400">
-                No finalized expenses in this scope yet.
+              <TableCell className="min-w-[220px] text-xs text-slate-600">
+                <div>{compactScope([row.property_name, row.building_name, row.unit_name])}</div>
+                {row.tenant_name && <div className="mt-1 text-slate-500">{row.tenant_name}</div>}
               </TableCell>
+              <TableCell className="text-right text-xs font-semibold tabular-nums">{formatCurrency(row.amount)}</TableCell>
+              <TableCell><Badge variant="outline" className={`text-[10px] font-semibold ${v1BadgeClassName(row.v1Issue?.tone)}`}>{row.v1Issue?.label || "Review required"}</Badge></TableCell>
+              <TableCell><Badge variant="outline" className={`text-[10px] font-semibold ${v1BadgeClassName(row.v1PolicyEvidence?.tone)}`}>{row.v1PolicyEvidence?.label || "Reviewed Override"}</Badge></TableCell>
+              <TableCell className="text-xs font-medium text-slate-700">{row.v1Issue?.requiredDecision || "Review Classification"}</TableCell>
+              <TableCell className="text-right"><ExceptionAction row={row} onOpenDetail={onOpenDetail} onResolveCondition={onResolveCondition} isResolving={isResolving} /></TableCell>
             </TableRow>
-          ) : (
-            expenses.map((expense) => {
-              const property = expense.property_id ? scope.propertyById.get(expense.property_id) ?? null : null;
-              const building = expense.building_id ? scope.buildingById.get(expense.building_id) ?? null : null;
-              const unit = expense.unit_id ? scope.unitById.get(expense.unit_id) ?? null : null;
-              const reviewStatus = normalizeBucket(expense);
-              const publishedCamInput = publishedCamInputByClassificationId.get(expense.id);
-              const camHandoff = getCamHandoffState(expense, publishedCamInput);
-              const tenantResolution = resolveTenantForExpense(expense, {
-                leases,
-                units,
-                tenants,
-              });
-              const tenantOrVendor = tenantResolution.tenant?.name || expense.tenant_name || expense.vendor_name || expense.vendor || "-";
-
-              return (
-                <TableRow key={expense.id}>
-                  <TableCell className="text-xs">
-                    <div className="font-medium text-slate-900">{expense.description || expense.category || "Expense"}</div>
-                    <div className="mt-1 text-slate-500">{expense.service_period_start || expense.expense_date || expense.classified_at || "-"}</div>
-                  </TableCell>
-                  <TableCell className="text-xs text-slate-600">
-                    {[property?.name, building?.name, unit?.unit_number || unit?.unit_id_code].filter(Boolean).join(" / ") || "Unscoped"}
-                  </TableCell>
-                  <TableCell className="text-xs text-slate-600" title={tenantResolution.reasonText || ""}>
-                    {tenantOrVendor}
-                  </TableCell>
-                  <TableCell className="text-xs text-slate-600">
-                    {expense.recovery_rule_id ? (
-                      <Link to={createPageUrl("LeaseExpenseClassification", { id: expense.lease_id })} className="text-blue-600 hover:underline">
-                        {expense.rule_source || "lease"} rule
-                      </Link>
-                    ) : (
-                      "Default / manual"
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Badge className={getRecoveryTone(reviewStatus)}>
-                      {reviewStatus.replaceAll("_", "-")}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge className={camHandoff.tone} title={camHandoff.title}>
-                      {camHandoff.label}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right text-xs font-semibold tabular-nums">
-                    ${(expense.amount || 0).toLocaleString()}
-                  </TableCell>
-                </TableRow>
-              );
-            })
-          )}
-          {!isLoading && expenses.length > 0 && (
-            <TableRow className="bg-slate-50 font-bold">
-              <TableCell colSpan={6} className="text-right text-xs uppercase text-slate-500">Total finalized expense amount</TableCell>
-              <TableCell className="text-right text-sm tabular-nums text-slate-900">${totalAmount.toLocaleString()}</TableCell>
-            </TableRow>
-          )}
+          ))}
         </TableBody>
       </Table>
-    </Card>
+    </div>
+  );
+}
+
+function ExceptionAction({ row, onOpenDetail, onResolveCondition, isResolving }) {
+  const issue = row.v1Issue?.decision;
+  if (["needs_category", "needs_scope", "needs_service_period", "needs_tenant_lease"].includes(issue)) {
+    return (
+      <div className="flex items-center justify-end gap-1">
+        <Link to={createPageUrl("Expenses", { expense_id: row.actual_expense_id || row.expense_id })}>
+          <Button size="sm" variant="outline" className="h-8 text-xs">{row.v1Issue.requiredDecision}</Button>
+        </Link>
+        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => onOpenDetail(row)} title="View details"><Eye className="h-4 w-4" /></Button>
+      </div>
+    );
+  }
+  if (issue === "conditional_review") {
+    return (
+      <div className="flex items-center justify-end gap-1">
+        <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => onResolveCondition(row)} disabled={isResolving}>{isResolving ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}Resolve Condition</Button>
+        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => onOpenDetail(row)} title="View details"><Eye className="h-4 w-4" /></Button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center justify-end gap-1">
+      <Link to={createPageUrl("LeaseExpenseClassification", { expense_id: row.actual_expense_id || row.expense_id, lease_id: row.lease_id })}>
+        <Button size="sm" variant="outline" className="h-8 text-xs">{row.v1Issue?.requiredDecision || "Review Classification"}</Button>
+      </Link>
+      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => onOpenDetail(row)} title="View details"><Eye className="h-4 w-4" /></Button>
+    </div>
+  );
+}
+
+function FinalizedExpensesTable({ rows, isLoading, filter, onOpenDetail, onSendToCam, isSendingToCam }) {
+  if (isLoading) return <LoadingState label="Loading finalized expenses..." />;
+  if (rows.length === 0) return <FinalizedEmptyState filter={filter} />;
+
+  return (
+    <div className="overflow-x-auto rounded-md border border-slate-200">
+      <Table>
+        <TableHeader className="bg-slate-50">
+          <TableRow>
+            <TableHead className="text-[10px] uppercase">Expense</TableHead>
+            <TableHead className="text-[10px] uppercase">Scope</TableHead>
+            <TableHead className="text-[10px] uppercase">Vendor / Tenant</TableHead>
+            <TableHead className="text-[10px] uppercase text-right">Amount</TableHead>
+            <TableHead className="text-[10px] uppercase">Decision</TableHead>
+            <TableHead className="text-[10px] uppercase">CAM Status</TableHead>
+            <TableHead className="text-[10px] uppercase">Finalized</TableHead>
+            <TableHead className="text-[10px] uppercase">Source / Evidence</TableHead>
+            <TableHead className="text-[10px] uppercase text-right">Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((row) => (
+            <TableRow key={row.id} className="hover:bg-slate-50">
+              <TableCell className="min-w-[190px] text-xs"><div className="font-medium text-slate-900">{row.category || "Expense"}</div><div className="mt-1 text-slate-500">{formatDate(row.service_period_start || row.service_period_end || row.classified_at)}</div></TableCell>
+              <TableCell className="min-w-[190px] text-xs text-slate-600">{compactScope([row.property_name, row.building_name, row.unit_name])}</TableCell>
+              <TableCell className="min-w-[160px] text-xs text-slate-600"><div>{row.vendor_name || row.vendor || "Vendor not specified"}</div>{row.tenant_name && <div className="mt-1 text-slate-500">{row.tenant_name}</div>}</TableCell>
+              <TableCell className="text-right text-xs font-semibold tabular-nums">{formatCurrency(row.amount)}</TableCell>
+              <TableCell><Badge variant="outline" className={`text-[10px] font-semibold ${v1BadgeClassName(row.v1Decision?.tone)}`}>{row.v1Decision?.label}</Badge></TableCell>
+              <TableCell className="max-w-[170px]" title={row.v1CamStatus?.reason || ""}>
+                <Badge variant="outline" className={`text-[10px] font-semibold ${v1BadgeClassName(row.v1CamStatus?.tone)}`}>{row.v1CamStatus?.label}</Badge>
+                {row.v1CamStatus?.label === "Blocked" && <div className="mt-1 text-[10px] text-red-700">{row.v1CamStatus.reason}</div>}
+              </TableCell>
+              <TableCell className="text-xs text-slate-600">{formatDate(row.finalized_at || row.reviewed_at || row.updated_at)}</TableCell>
+              <TableCell className="max-w-[220px] text-xs text-slate-600"><Badge variant="outline" className={`mb-1 text-[10px] font-semibold ${v1BadgeClassName(row.v1PolicyEvidence?.tone)}`}>{row.v1PolicyEvidence?.label}</Badge><div className="truncate" title={row.evidence_text || row.recovery_reason || ""}>{row.evidence_text || row.recovery_reason || "-"}</div></TableCell>
+              <TableCell className="text-right"><FinalizedActions row={row} onOpenDetail={onOpenDetail} onSendToCam={onSendToCam} isSendingToCam={isSendingToCam} /></TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+function FinalizedActions({ row, onOpenDetail, onSendToCam, isSendingToCam }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-slate-100"><MoreHorizontal className="h-4 w-4 text-slate-500" /></Button></DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-52">
+        <DropdownMenuItem onClick={() => onOpenDetail(row)}><Eye className="mr-2 h-4 w-4 text-slate-500" />Details</DropdownMenuItem>
+        <DropdownMenuItem asChild><Link to={createPageUrl("Expenses", { expense_id: row.actual_expense_id || row.expense_id })}><FileText className="mr-2 h-4 w-4 text-slate-500" />View Actual Expense</Link></DropdownMenuItem>
+        {row.v1CanSendToCam && <><DropdownMenuSeparator /><DropdownMenuItem onClick={() => onSendToCam(row)} disabled={isSendingToCam}><ArrowRightCircle className="mr-2 h-4 w-4 text-blue-600" />Send to CAM</DropdownMenuItem></>}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function LoadingState({ label }) {
+  return <div className="flex items-center justify-center gap-2 rounded-md border border-slate-200 py-10 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" />{label}</div>;
+}
+
+function FinalizedEmptyState({ filter }) {
+  const message = filter === "ready_for_cam"
+    ? "No finalized expenses are currently ready to publish to CAM."
+    : filter === "outside_cam"
+      ? "No finalized outside-CAM expenses for this scope."
+      : "No finalized expense classifications for this scope.";
+  return <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">{message}</div>;
+}
+
+function ExpenseReviewDetailDrawer({ row, open, onOpenChange }) {
+  if (!row) return null;
+  const diagnostics = {
+    resolver_code: row.exception_type || row.classification_status || null,
+    policy_ids: { lease_expense_rule_id: row.lease_expense_rule_id || null, recovery_rule_id: row.recovery_rule_id || null },
+    condition_evaluation: { condition_resolved: row.condition_resolved ?? null, condition_result: row.condition_result || null },
+    match_score: row.confidence_score ?? null,
+    scope_evaluation: { property_id: row.property_id || null, building_id: row.building_id || null, unit_id: row.unit_id || null, lease_id: row.lease_id || null, tenant_id: row.tenant_id || null },
+    classification_version: row.classification_key || null,
+    publication_id: row.sent_to_cam_at ? row.id : null,
+  };
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-2xl">
+        <SheetHeader>
+          <SheetTitle>{row.category || row.vendor_name || row.vendor || "Expense classification"}</SheetTitle>
+          <SheetDescription>Expense Review V1 details, evidence, CAM state, and audit context.</SheetDescription>
+        </SheetHeader>
+        <div className="mt-6 space-y-5">
+          <DetailSection title="Expense" items={[
+            ["Date", formatDate(row.service_period_start || row.service_period_end || row.classified_at)],
+            ["Vendor", row.vendor_name || row.vendor || "-"],
+            ["Category", row.category || "Needs Category"],
+            ["Subcategory", row.expense_subcategory || "-"],
+            ["Amount", formatCurrency(row.amount)],
+            ["Description", row.description || "-"],
+          ]} />
+          <DetailSection title="Classification" items={[
+            ["Decision", row.v1Decision?.label || "-"],
+            ["CAM Status", row.v1CamStatus?.label || "-"],
+            ["CAM Blocking Reason", row.v1CamStatus?.label === "Blocked" ? row.v1CamStatus.reason : "-"],
+            ["Policy Evidence", row.v1PolicyEvidence?.label || "-"],
+            ["Issue", row.v1Issue?.decision !== "resolved" ? row.v1Issue?.label : "-"],
+            ["Required Decision", row.v1Issue?.decision !== "resolved" ? row.v1Issue?.requiredDecision : "-"],
+          ]} />
+          <DetailSection title="Scope" items={[
+            ["Property", row.property_name || row.property_id || "-"],
+            ["Building / Unit", compactScope([row.building_name, row.unit_name])],
+            ["Tenant / Lease", compactScope([row.tenant_name, row.lease_id])],
+            ["Service Period", compactScope([formatDate(row.service_period_start), formatDate(row.service_period_end)])],
+          ]} />
+          <DetailSection title="Policy And CAM" items={[
+            ["Recovery Policy ID", row.lease_expense_rule_id || row.recovery_rule_id || "-"],
+            ["Rule Source", row.rule_source || "-"],
+            ["CAM Eligible", row.cam_eligible || "-"],
+            ["CAM Source", row.cam_source || "-"],
+            ["CAM Input Type", row.cam_input_type || "-"],
+            ["Sent To CAM", row.sent_to_cam ? "Yes" : "No"],
+            ["Sent To CAM At", formatDate(row.sent_to_cam_at)],
+          ]} />
+          <DetailSection title="Evidence" items={[
+            ["Evidence", row.evidence_text || "-"],
+            ["Recovery Reason", row.recovery_reason || "-"],
+            ["Notes", row.notes || "-"],
+          ]} />
+          <DetailSection title="Audit" items={[
+            ["Classified", formatDate(row.classified_at)],
+            ["Reviewed", formatDate(row.reviewed_at)],
+            ["Finalized", formatDate(row.finalized_at)],
+            ["Updated", formatDate(row.updated_at)],
+            ["Accounting Status", row.approved_status || "-"],
+          ]} />
+          <details className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs">
+            <summary className="cursor-pointer font-semibold text-slate-700">Show classification diagnostics</summary>
+            <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-white p-3 text-[11px] text-slate-700">{JSON.stringify(diagnostics, null, 2)}</pre>
+          </details>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function DetailSection({ title, items }) {
+  return (
+    <section className="space-y-2">
+      <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">{title}</h3>
+      <div className="rounded-md border border-slate-200">
+        {items.map(([label, value]) => (
+          <div key={label} className="grid grid-cols-[150px_1fr] gap-3 border-b border-slate-100 px-3 py-2 text-xs last:border-b-0">
+            <div className="font-medium text-slate-500">{label}</div>
+            <div className="break-words text-slate-800">{value || "-"}</div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }

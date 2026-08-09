@@ -3,13 +3,11 @@ import { expenseService } from "@/services/expenseService";
 import { resolveTenantForExpense, ruleRequiresPerTenantAllocation } from "@/lib/tenantResolver";
 import { approvedLeaseFieldValue } from "@/lib/approvedLeaseSnapshot";
 import {
-  deriveOperationalResponsibility,
   derivePaymentTreatment,
   deriveRuleDecision,
   deriveNormalizedContractModel,
   getRuleCamExclusionReason,
 } from "@/services/utils/ruleDecisionEngine";
-import { classifyExpense, CLASSIFICATION_STATUSES } from "@/services/utils/classificationResolver";
 
 export function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
