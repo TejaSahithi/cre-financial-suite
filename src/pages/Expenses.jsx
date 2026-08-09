@@ -303,7 +303,45 @@ export default function Expenses() {
     setScopeUnit(scope.unitId || "all");
   }, [scope.propertyId, scope.buildingId, scope.unitId]);
 
-  const getPropertyName = (propertyId) => scope.propertyById.get(propertyId)?.name || "—";
+  const getPropertyName = (propertyId) => scope.propertyById.get(propertyId)?.name || "-";
+
+  const updateScopeParams = ({ property = scopeProperty, building = scopeBuilding, unit = scopeUnit }) => {
+    const params = new URLSearchParams(location.search);
+    if (property && property !== "all") params.set("property", property);
+    else params.delete("property");
+
+    if (building && building !== "all") params.set("building", building);
+    else params.delete("building");
+
+    if (unit && unit !== "all") params.set("unit", unit);
+    else params.delete("unit");
+
+    navigate(
+      {
+        pathname: location.pathname,
+        search: params.toString() ? `?${params.toString()}` : "",
+      },
+      { replace: true }
+    );
+  };
+
+  const handleScopePropertyChange = (value) => {
+    setScopeProperty(value);
+    setScopeBuilding("all");
+    setScopeUnit("all");
+    updateScopeParams({ property: value, building: "all", unit: "all" });
+  };
+
+  const handleScopeBuildingChange = (value) => {
+    setScopeBuilding(value);
+    setScopeUnit("all");
+    updateScopeParams({ property: scopeProperty, building: value, unit: "all" });
+  };
+
+  const handleScopeUnitChange = (value) => {
+    setScopeUnit(value);
+    updateScopeParams({ property: scopeProperty, building: scopeBuilding, unit: value });
+  };
 
   const openAddExpense = (mode) => {
     const params = new URLSearchParams(location.search);
