@@ -262,7 +262,7 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
               const statusMeta = STATUS_META[row.status] || STATUS_META.pending;
               const extractionModeMeta = EXTRACTION_MODE_META[row.extractionMode] || EXTRACTION_MODE_META.unknown;
               const confidence = row.confidencePercent ?? normalizeConfidence(row.confidence);
-              const canFieldAction = row.rowType === "standard" && row.editable !== false;
+              const canFieldAction = row.editable !== false && row.rowType !== "read_only_reference";
               const canRuleAction = row.rowType === "expense_rule" || row.rowType === "cam_rule";
               const hasSourceEvidence = Boolean(row.sourceText || row.source_text || row.sourcePage || row.source_page || row.page_number);
               const viewSource = () => {
