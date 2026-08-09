@@ -6,8 +6,10 @@ import {
   deriveOperationalResponsibility,
   derivePaymentTreatment,
   deriveRuleDecision,
+  deriveNormalizedContractModel,
   getRuleCamExclusionReason,
 } from "@/services/utils/ruleDecisionEngine";
+import { classifyExpense, CLASSIFICATION_STATUSES } from "@/services/utils/classificationResolver";
 
 export function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
@@ -154,9 +156,7 @@ export function isAutomaticCamReadyRow(row) {
 }
 
 export function ruleExpectsLandlordActualExpense(rule = {}) {
-  const decision = deriveRuleDecision(rule);
-  const responsibility = deriveOperationalResponsibility(rule);
-  const paymentTreatment = derivePaymentTreatment(rule);
+  const model = deriveNormalizedContractModel(rule);
   const explicitStatus = normalizeText(
     rule?.approval_status ||
     rule?.approved_status ||
@@ -164,19 +164,15 @@ export function ruleExpectsLandlordActualExpense(rule = {}) {
     rule?.status ||
     rule?.rule_status
   );
-  const approvedEnoughForGapAnalysis =
-    decision.status === "approved" ||
+  const approvedEnough =
     rule?.published_to_cam === true ||
+    model.approval_status === "approved" ||
     ["approved", "finalized", "active", "executed"].includes(explicitStatus);
 
   return Boolean(
-    approvedEnoughForGapAnalysis &&
-    !["rejected", "not_applicable"].includes(decision.status) &&
-    decision.recoverability === "recoverable" &&
-    ["eligible", "conditional"].includes(decision.camEligibility) &&
-    !["tenant", "unknown"].includes(responsibility) &&
-    !["tenant_direct_contract", "included_in_base_rent", "not_applicable"].includes(paymentTreatment) &&
-    decision.exclusion === "included"
+    approvedEnough &&
+    model.actual_expense_expected === "yes" &&
+    !["tenant_direct", "included_in_rent", "compliance_only"].includes(model.recovery_treatment)
   );
 }
 

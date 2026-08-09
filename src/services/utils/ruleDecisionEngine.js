@@ -276,7 +276,7 @@ function deriveRuleStatus(rule = {}) {
   if (isRuleSuperseded(rule)) return "draft";
   if (deriveExclusionDecision(rule) === "not_applicable") return "not_applicable";
   if (approvalStatus === "rejected" || rawReviewStatus === "rejected" || rowStatus === "rejected") return "rejected";
-  if (approvalStatus === "approved" && reviewStatus === "approved") return "approved";
+  if (approvalStatus === "approved" || reviewStatus === "approved" || rawReviewStatus === "approved" || rowStatus === "approved" || rule?.published_to_cam === true) return "approved";
   if (
     approvalStatus === "needs_review" ||
     rawReviewStatus === "needs_review" ||
@@ -380,12 +380,100 @@ function getRuleCamExclusionReason(rule = {}, options = {}) {
   return null;
 }
 
+function deriveNormalizedContractModel(rule = {}) {
+  const costBearer = deriveOperationalResponsibility(rule);
+  const paymentTreatment = derivePaymentTreatment(rule);
+  const recoverability = deriveRecoverabilityDecision(rule);
+  const camElig = deriveCamEligibility(rule);
+
+  let recoveryTreatment = rule?.recovery_treatment || null;
+  if (!recoveryTreatment) {
+    if (deriveIncludedInBaseRent(rule) || paymentTreatment === "included_in_base_rent") {
+      recoveryTreatment = "included_in_rent";
+    } else if (normalizeToken(rule?.rule_classification) === "compliance_only" || normalizeToken(rule?.recovery_method) === "compliance_only") {
+      recoveryTreatment = "compliance_only";
+    } else if (paymentTreatment === "tenant_direct_contract" || rule?.is_excluded === true) {
+      recoveryTreatment = "tenant_direct";
+    } else if (normalizeToken(rule?.billing_treatment) === "direct_bill" || normalizeToken(rule?.recovery_method) === "direct_bill") {
+      recoveryTreatment = "direct_bill";
+    } else if (normalizeToken(rule?.recovery_method) === "direct_recovery" || rule?.direct_tenant_charge === true) {
+      recoveryTreatment = "direct_recovery";
+    } else if (recoverability === "not_recoverable") {
+      recoveryTreatment = "nonrecoverable";
+    } else if (recoverability === "conditional") {
+      recoveryTreatment = "conditional";
+    } else {
+      recoveryTreatment = "pooled_recovery";
+    }
+  }
+
+  let vendorPaymentParty = rule?.vendor_payment_party || null;
+  if (!vendorPaymentParty) {
+    if (["tenant_direct", "compliance_only"].includes(recoveryTreatment) || paymentTreatment === "tenant_direct_contract") {
+      vendorPaymentParty = "tenant";
+    } else {
+      vendorPaymentParty = "landlord";
+    }
+  }
+
+  let camParticipation = rule?.cam_participation || null;
+  if (!camParticipation) {
+    if (["tenant_direct", "included_in_rent", "compliance_only", "direct_bill", "nonrecoverable"].includes(recoveryTreatment)) {
+      camParticipation = "not_applicable";
+    } else if (camElig === "not_eligible") {
+      camParticipation = "not_applicable";
+    } else if (camElig === "conditional" || recoveryTreatment === "conditional") {
+      camParticipation = "conditional";
+    } else {
+      const publishCheck = derivePublishToCamEligibility(rule);
+      camParticipation = publishCheck.eligible ? "eligible" : "blocked";
+    }
+  }
+
+  let actualExpenseExpected = rule?.actual_expense_expected || null;
+  if (!actualExpenseExpected) {
+    if (vendorPaymentParty === "tenant" || ["tenant_direct", "compliance_only"].includes(recoveryTreatment)) {
+      actualExpenseExpected = "no";
+    } else if (recoveryTreatment === "conditional") {
+      actualExpenseExpected = "conditional";
+    } else {
+      actualExpenseExpected = "yes";
+    }
+  }
+
+  const scope = rule?.scope_level || rule?.scope || (rule?.unit_id ? "unit" : rule?.building_id ? "building" : rule?.lease_id ? "tenant" : "property");
+
+  return {
+    expense_category_id: rule?.expense_category_id || rule?.canonical_category_id || null,
+    cost_bearer: costBearer,
+    vendor_payment_party: vendorPaymentParty,
+    recovery_treatment: recoveryTreatment,
+    cam_participation: camParticipation,
+    actual_expense_expected: actualExpenseExpected,
+    scope,
+    allocation_method: rule?.allocation_method || rule?.pro_rata_share_type || "pro_rata",
+    condition_type: rule?.condition_type || null,
+    condition_data: rule?.condition_data || null,
+    cap: rule?.cap_rate ?? rule?.cap_percentage ?? null,
+    floor: rule?.floor_rate ?? null,
+    base_year: rule?.base_year ?? null,
+    expense_stop: rule?.expense_stop_amount ?? null,
+    share: rule?.tenant_share_pct ?? rule?.pro_rata_share ?? null,
+    billing_frequency: rule?.billing_frequency || "monthly",
+    effective_start_date: rule?.effective_start_date || rule?.start_date || null,
+    effective_end_date: rule?.effective_end_date || rule?.end_date || null,
+    source_evidence: getRuleSourceText(rule),
+    approval_status: deriveRuleStatus(rule),
+  };
+}
+
 function deriveRuleDecision(rule = {}) {
   const status = deriveRuleStatus(rule);
   const recoverability = deriveRecoverabilityDecision(rule);
   const exclusion = deriveExclusionDecision(rule);
   const camEligibility = deriveCamEligibility(rule);
   const publishToCam = derivePublishToCamEligibility(rule);
+  const normalizedModel = deriveNormalizedContractModel(rule);
   return {
     status,
     recoverability,
@@ -393,6 +481,7 @@ function deriveRuleDecision(rule = {}) {
     camEligibility,
     publishToCamEligibility: publishToCam.status,
     blockingReasons: publishToCam.blockingReasons,
+    normalizedContractModel: normalizedModel,
     legacy: {
       recoverableFromTenant: toLegacyRecoverableFromTenant(recoverability),
       camEligible: toLegacyCamEligible(camEligibility),
@@ -406,6 +495,7 @@ export {
   deriveCamEligibility,
   deriveExclusionDecision,
   deriveIncludedInBaseRent,
+  deriveNormalizedContractModel,
   deriveOperationalResponsibility,
   derivePaymentTreatment,
   derivePublishToCamEligibility,

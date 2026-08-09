@@ -396,49 +396,52 @@ export default function LeaseExpenseClassification() {
 
   const totals = useMemo(() => {
     return rows.reduce((summary, row) => {
-      const amount = row.financialAmount;
+      const amount = Number(row.financialAmount) || 0;
       if (row.actualExpenseId) {
         summary.approvedActualTotal += amount;
-      }
-      if (row.rowType === "actual_missing_rule" && row.actualExpenseId) {
-        summary.unmatchedActualTotal += amount;
+
+        const decisionState = rowDecisions.get(row.id)?.decision?.state;
+        const treatment = row.rule?.recovery_treatment || row.rule?.normalizedContractModel?.recovery_treatment;
+
+        if (decisionState === "published_to_cam" || decisionState === "ready_to_send") {
+          if (treatment === "direct_recovery" || row.rule?.direct_tenant_charge) {
+            summary.directRecovery += amount;
+          } else {
+            summary.pooledCam += amount;
+          }
+        } else if (decisionState === "direct_bill" || treatment === "direct_bill") {
+          summary.directBill += amount;
+        } else if (decisionState === "tenant_direct" || treatment === "tenant_direct") {
+          summary.tenantDirect += amount;
+        } else if (decisionState === "included_in_rent" || treatment === "included_in_rent") {
+          summary.includedInRent += amount;
+        } else if (decisionState === "not_cam_eligible" || treatment === "nonrecoverable") {
+          summary.nonrecoverable += amount;
+        } else {
+          summary.conditionalNeedsReview += amount;
+        }
+
+        if (decisionState === "published_to_cam") {
+          summary.publishedCamTotal += amount;
+        }
       }
       if (row.rowType === "rule_missing_actual") {
         summary.rulesMissingActualCount += 1;
         summary.ruleGapAmount += amount;
       }
-      if (row.rowType !== "matched_classification" || !row.actualExpenseId) return summary;
-      const decisionState = rowDecisions.get(row.id)?.decision?.state;
-      summary.matchedActualTotal += amount;
-      if (decisionState === "ready_to_send" || decisionState === "published_to_cam") summary.recoverable += amount;
-      if (decisionState === "not_cam_eligible") summary.excluded += amount;
-      if (decisionState === "conditional_review_required") summary.conditional += amount;
-      if (row.camEligible === "conditional") summary.conditionalCamEligible += amount;
-      if (row.classificationStatus === "finalized") {
-        summary.finalized += amount;
-        if (decisionState === "ready_to_send" || decisionState === "published_to_cam") {
-          summary.finalizedCamEligible += amount;
-        }
-      }
-      if (decisionState === "ready_to_send") summary.camReady += amount;
-      if (decisionState === "published_to_cam") summary.sentToCam += amount;
       return summary;
     }, {
       approvedActualTotal: 0,
-      matchedActualTotal: 0,
-      unmatchedActualTotal: 0,
+      pooledCam: 0,
+      directRecovery: 0,
+      directBill: 0,
+      tenantDirect: 0,
+      includedInRent: 0,
+      nonrecoverable: 0,
+      conditionalNeedsReview: 0,
+      publishedCamTotal: 0,
       rulesMissingActualCount: 0,
       ruleGapAmount: 0,
-      recoverable: 0,
-      nonRecoverable: 0,
-      conditional: 0,
-      excluded: 0,
-      camEligible: 0,
-      conditionalCamEligible: 0,
-      finalized: 0,
-      finalizedCamEligible: 0,
-      camReady: 0,
-      sentToCam: 0,
     });
   }, [rows, rowDecisions]);
 
@@ -1007,48 +1010,47 @@ export default function LeaseExpenseClassification() {
           <CardContent className="p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Classification Trace</p>
-                <p className="text-sm font-semibold text-slate-900">Approved actuals to lease rules to CAM-ready costs</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Financial Reconciliation & Tie-Out</p>
+                <p className="text-sm font-semibold text-slate-900">7-Category Exact Expense Classification Breakdown</p>
               </div>
               <Badge className="bg-slate-100 text-slate-700">
-                {counts.published_to_cam} sent to CAM
+                Published CAM Total: {fmt(totals.publishedCamTotal)}
               </Badge>
             </div>
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
               <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total Approved Actuals</p>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Approved Actual Expenses</p>
                 <p className="mt-1 text-lg font-bold text-slate-900">{fmt(totals.approvedActualTotal)}</p>
-                <p className="mt-1 text-xs text-slate-500">{approvedActuals.length} approved expense row(s)</p>
+                <p className="mt-1 text-xs text-slate-500">{approvedActuals.length} approved actual invoice(s)</p>
               </div>
               <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Matched To Rules</p>
-                <p className="mt-1 text-lg font-bold text-emerald-900">{fmt(totals.matchedActualTotal)}</p>
-                <p className="mt-1 text-xs text-emerald-700">{rows.filter((row) => row.rowType === "matched_classification").length} matched classification row(s)</p>
-              </div>
-              <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-amber-700">Needs Decision</p>
-                <p className="mt-1 text-lg font-bold text-amber-900">{fmt(totals.unmatchedActualTotal + totals.conditional + totals.ruleGapAmount)}</p>
-                <p className="mt-1 text-xs text-amber-700">
-                  {rows.filter((row) => row.rowType === "actual_missing_rule").length} actual gap(s), {totals.rulesMissingActualCount} rule gap(s)
-                </p>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Pooled CAM</p>
+                <p className="mt-1 text-lg font-bold text-emerald-900">{fmt(totals.pooledCam)}</p>
+                <p className="mt-1 text-xs text-emerald-700">Property/building recoverable pool</p>
               </div>
               <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700">CAM Ready Basis</p>
-                <p className="mt-1 text-lg font-bold text-blue-900">{fmt(totals.camReady)}</p>
-                <p className="mt-1 text-xs text-blue-700">
-                  {fmt(totals.sentToCam)} already sent to CAM
-                </p>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700">Direct Recovery</p>
+                <p className="mt-1 text-lg font-bold text-blue-900">{fmt(totals.directRecovery)}</p>
+                <p className="mt-1 text-xs text-blue-700">Reimbursable tenant-specific actuals</p>
+              </div>
+              <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">Direct Bill</p>
+                <p className="mt-1 text-lg font-bold text-indigo-900">{fmt(totals.directBill)}</p>
+                <p className="mt-1 text-xs text-indigo-700">Billed directly to tenant outside CAM</p>
               </div>
             </div>
-            <div className="mt-3 grid gap-2 text-xs text-slate-600 md:grid-cols-3">
+            <div className="mt-3 grid gap-2 text-xs text-slate-600 md:grid-cols-4">
               <div className="rounded-md border border-slate-200 p-2">
-                Recoverable: <span className="font-semibold text-slate-900">{fmt(totals.recoverable)}</span>
+                Tenant Direct: <span className="font-semibold text-slate-900">{fmt(totals.tenantDirect)}</span>
               </div>
               <div className="rounded-md border border-slate-200 p-2">
-                Non-recoverable / excluded: <span className="font-semibold text-slate-900">{fmt(totals.nonRecoverable + totals.excluded)}</span>
+                Included in Rent: <span className="font-semibold text-slate-900">{fmt(totals.includedInRent)}</span>
               </div>
               <div className="rounded-md border border-slate-200 p-2">
-                Conditional CAM: <span className="font-semibold text-slate-900">{fmt(totals.conditionalCamEligible)}</span>
+                Nonrecoverable: <span className="font-semibold text-slate-900">{fmt(totals.nonrecoverable)}</span>
+              </div>
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-2">
+                Conditional / Needs Review: <span className="font-semibold text-amber-900">{fmt(totals.conditionalNeedsReview)}</span>
               </div>
             </div>
           </CardContent>

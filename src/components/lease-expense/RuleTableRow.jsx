@@ -228,19 +228,33 @@ export default function RuleTableRow({
             </Badge>
           );
         })()}
-        {camPolicyStatus && (
-          <Badge
-            className={`mt-1 text-[10px] whitespace-normal text-left leading-tight ${
-              camPolicyStatus.tone === "emerald" ? "bg-emerald-100 text-emerald-700"
-              : camPolicyStatus.tone === "amber" ? "bg-amber-100 text-amber-800"
-              : camPolicyStatus.tone === "red" ? "bg-red-100 text-red-700"
-              : "bg-slate-100 text-slate-600"
-            }`}
-            title="Whether this approved rule has a materialized CAM recovery policy"
-          >
-            {camPolicyStatus.label}
-          </Badge>
-        )}
+        {(() => {
+          const treatment = rule?.recovery_treatment || rule?.normalizedContractModel?.recovery_treatment;
+          const isOutsideCam = ["tenant_direct", "included_in_rent", "compliance_only", "direct_bill", "nonrecoverable"].includes(treatment);
+          if (isOutsideCam) {
+            return (
+              <Badge className="mt-1 text-[10px] bg-slate-100 text-slate-600 whitespace-normal text-left leading-tight">
+                CAM N/A (Outside CAM)
+              </Badge>
+            );
+          }
+          if (camPolicyStatus) {
+            return (
+              <Badge
+                className={`mt-1 text-[10px] whitespace-normal text-left leading-tight ${
+                  camPolicyStatus.tone === "emerald" ? "bg-emerald-100 text-emerald-700"
+                  : camPolicyStatus.tone === "amber" ? "bg-amber-100 text-amber-800"
+                  : camPolicyStatus.tone === "red" ? "bg-red-100 text-red-700"
+                  : "bg-slate-100 text-slate-600"
+                }`}
+                title="Whether this approved rule has a materialized CAM recovery policy"
+              >
+                {camPolicyStatus.label}
+              </Badge>
+            );
+          }
+          return null;
+        })()}
         <div className="mt-2 text-xs text-slate-600">
           {sourcePage ? <span className="mr-2 font-medium">p. {sourcePage}</span> : null}
           {sourceText && sourceText !== "-" ? <span className="italic">"{truncate(sourceText)}"</span> : "-"}
