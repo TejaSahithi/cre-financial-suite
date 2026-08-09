@@ -15,6 +15,8 @@ import {
   getSimplifiedRuleView,
   getContractStatus,
   getPolicyStatus,
+  getAppliesWhenLabel,
+  getAmountFormulaLabel,
 } from "./utils/leaseExpenseRulesHelpers";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -75,12 +77,16 @@ export default function RuleDetailDrawer({ context, onOpenChange }) {
   const view = getSimplifiedRuleView(rule);
   const contractStatus = getContractStatus(rule);
   const policyStatus = camPolicyStatus !== undefined ? camPolicyStatus : getPolicyStatus(rule, [], false);
+  const appliesWhen = getAppliesWhenLabel(rule);
+  const amountFormula = getAmountFormulaLabel(rule);
   const model = view.model;
+  const policy = policyStatus?.policy || null;
+  const policyVersion = policy?.materializer_version || policy?.source_rule_hash || null;
   const capText = [
     rule.cap_type ? humanizeToken(rule.cap_type) : null,
     rule.cap_percent != null ? `${rule.cap_percent}%` : null,
     money(rule.cap_amount ?? model.cap),
-  ].filter(Boolean).join(" · ") || null;
+  ].filter(Boolean).join(" - ") || null;
 
   return (
     <Sheet open={open} onOpenChange={(next) => { if (!next) onOpenChange?.(); }}>
@@ -88,7 +94,7 @@ export default function RuleDetailDrawer({ context, onOpenChange }) {
         <SheetHeader>
           <SheetTitle>{rule.category_name || rule.expense_category || "Lease expense rule"}</SheetTitle>
           <SheetDescription>
-            {lease?.tenant_name || "Unassigned lease"}{property?.name ? ` · ${property.name}` : ""}
+            {lease?.tenant_name || "Unassigned lease"}{property?.name ? ` - ${property.name}` : ""}
           </SheetDescription>
         </SheetHeader>
 
@@ -96,10 +102,15 @@ export default function RuleDetailDrawer({ context, onOpenChange }) {
           <Badge className={`text-[10px] ${TONE_CLASS[contractStatus.tone]}`}>{contractStatus.label}</Badge>
           <Badge className="text-[10px] bg-slate-100 text-slate-600">{view.treatmentLabel}</Badge>
           <Badge className="text-[10px] bg-slate-100 text-slate-600">CAM: {view.camLabel}</Badge>
-          <Badge className="text-[10px] bg-slate-100 text-slate-600">Actual expense: {view.actualExpenseLabel}</Badge>
+          <Badge className="text-[10px] bg-slate-100 text-slate-600">Landlord expense expected: {view.actualExpenseLabel}</Badge>
         </div>
 
         <div className="mt-6 space-y-4">
+          <Section title="Business answer">
+            <Field label="Applies when" value={appliesWhen} />
+            <Field label="Amount / share / formula" value={amountFormula} />
+          </Section>
+
           <Section title="Responsibility &amp; billing">
             <Field label="Responsibility / cost bearer" value={humanizeToken(model.cost_bearer)} />
             <Field label="Vendor payment party" value={humanizeToken(model.vendor_payment_party)} />
@@ -130,7 +141,9 @@ export default function RuleDetailDrawer({ context, onOpenChange }) {
                 {policyStatus.reason && <span className="text-xs text-slate-500">{policyStatus.reason}</span>}
               </span>
             ) : "Not yet evaluated"} />
-            <Field label="Rule set version" value={ruleSet ? `v${ruleSet.version} · ${humanizeToken(ruleSet.status)}` : null} />
+            <Field label="Policy ID" value={policy?.id} />
+            <Field label="Policy version" value={policyVersion} />
+            <Field label="Rule set version" value={ruleSet ? `v${ruleSet.version} - ${humanizeToken(ruleSet.status)}` : null} />
           </Section>
 
           <Section title="Evidence">

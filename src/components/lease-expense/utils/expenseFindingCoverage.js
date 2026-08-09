@@ -169,7 +169,7 @@ export function deriveFindingCoverageDecision(rule = {}) {
     const text = rule.exact_source_text || rule.source_text || "";
     const category = normalizeKey(rule.expense_category || rule.category_name);
     let expenseTreatment = "Not Applicable";
-    let camParticipation = "Not Eligible";
+    let camParticipation = "N/A";
     let actualExpenseExpected = "no";
     let reason = "Evidence retained for review; it has not been promoted to a normalized rule candidate.";
 
@@ -180,12 +180,12 @@ export function deriveFindingCoverageDecision(rule = {}) {
       expenseTreatment = "Tenant Direct";
       reason = "Tenant appears to pay or perform directly; no landlord actual expense is expected.";
     } else if (isDirectRecoveryText(text)) {
-      expenseTreatment = "Direct Reimbursement";
-      camParticipation = "Direct Recovery Only";
+      expenseTreatment = "Direct Recovery";
+      camParticipation = "Conditional";
       actualExpenseExpected = "conditional";
       reason = "Potential direct recovery or fee; reviewer should decide whether it is an actionable rule.";
     } else if (isLandlordExpenseText(text)) {
-      expenseTreatment = "Landlord Expense";
+      expenseTreatment = "Pooled Recovery";
       camParticipation = "Conditional";
       actualExpenseExpected = "conditional";
       reason = "Potential landlord-incurred cost; reviewer should promote or merge if contractually actionable.";
@@ -196,7 +196,7 @@ export function deriveFindingCoverageDecision(rule = {}) {
       expenseTreatment,
       camParticipation,
       actualExpenseExpected,
-      materialization: "Not Materialized",
+      materialization: "Evidence Only",
       reason,
     };
   }
@@ -216,33 +216,33 @@ export function deriveFindingCoverageDecision(rule = {}) {
   } else if (category.includes("tenant_insurance") || category.includes("liability_insurance") || isComplianceOnlyText(sourceText)) {
     expenseTreatment = "Compliance Only";
   } else if (["late_fees", "interest", "legal_enforcement_fees", "percentage_rent"].includes(category)) {
-    expenseTreatment = "Fee / Charge";
+    expenseTreatment = "Direct Bill";
   } else if (["direct_bill", "actual_usage", "fixed_amount"].includes(normalizeKey(rule.recovery_method)) && recoverability !== "not_recoverable") {
-    expenseTreatment = "Direct Reimbursement";
+    expenseTreatment = "Direct Recovery";
   } else if (recoverability === "recoverable" || camEligibility === "eligible") {
-    expenseTreatment = "Landlord Expense";
+    expenseTreatment = "Pooled Recovery";
   }
 
-  let camParticipation = "Not Eligible";
+  let camParticipation = "N/A";
   if (camEligibility === "eligible") camParticipation = "Eligible";
   else if (camEligibility === "conditional") camParticipation = "Conditional";
-  else if (recoverability === "recoverable" && ["Direct Reimbursement", "Fee / Charge"].includes(expenseTreatment)) {
-    camParticipation = "Direct Recovery Only";
+  else if (recoverability === "recoverable" && ["Direct Recovery", "Direct Bill"].includes(expenseTreatment)) {
+    camParticipation = "Conditional";
   }
 
   let actualExpenseExpected = "conditional";
-  if (["Tenant Direct", "Compliance Only", "Fee / Charge"].includes(expenseTreatment)) {
+  if (["Tenant Direct", "Compliance Only", "Direct Bill"].includes(expenseTreatment)) {
     actualExpenseExpected = "no";
-  } else if (expenseTreatment === "Landlord Expense" && camParticipation === "Eligible") {
+  } else if (expenseTreatment === "Pooled Recovery" && camParticipation === "Eligible") {
     actualExpenseExpected = "yes";
   }
 
   const materialization =
     camParticipation === "Eligible" && decision.status === "approved"
-      ? "CAM-Enabled Subset"
+      ? "CAM Eligible"
       : decision.status === "approved"
-        ? "Approved Contractual Rule"
-        : "Rule Candidate";
+        ? "Approved"
+        : "Actionable Rule";
 
   return {
     contractStatus: humanize(decision.status || "draft"),
@@ -336,9 +336,9 @@ export function calculateFindingCoverageCounts(rows = []) {
   };
   for (const { rule } of rows) {
     const coverage = rule?._coverage || deriveFindingCoverageDecision(rule);
-    if (coverage.materialization === "Rule Candidate") summary.rule_candidates += 1;
-    if (coverage.materialization === "Approved Contractual Rule") summary.contract_approved += 1;
-    if (coverage.materialization === "CAM-Enabled Subset" || coverage.camParticipation === "Eligible") summary.cam_enabled += 1;
+    if (coverage.materialization === "Actionable Rule") summary.rule_candidates += 1;
+    if (["Approved", "CAM Eligible"].includes(coverage.materialization)) summary.contract_approved += 1;
+    if (coverage.materialization === "CAM Eligible" || coverage.camParticipation === "Eligible") summary.cam_enabled += 1;
     if (coverage.actualExpenseExpected === "yes") summary.actual_expected += 1;
     if (coverage.contractStatus === "Evidence Only") summary.evidence_only += 1;
   }

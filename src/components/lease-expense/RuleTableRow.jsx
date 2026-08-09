@@ -27,10 +27,11 @@ import {
   getRuleSourceText,
   getExactSourceText,
   getCoverageGapLabel,
-  humanizeToken,
   truncate,
   getSimplifiedRuleView,
   getContractStatus,
+  getAppliesWhenLabel,
+  getAmountFormulaLabel,
 } from "./utils/leaseExpenseRulesHelpers";
 
 const TONE_CLASS = {
@@ -53,10 +54,10 @@ const TREATMENT_TONE = {
 };
 
 const CAM_TONE = { eligible: "emerald", conditional: "amber", not_applicable: "slate", blocked: "red" };
-const ACTUAL_EXPENSE_TONE = { yes: "emerald", conditional: "amber", no: "slate" };
+const LANDLORD_EXPENSE_TONE = { yes: "emerald", conditional: "amber", no: "slate" };
 
 /**
- * Nine business columns only (checkbox + Actions aside) — every technical
+ * Main business columns only (checkbox + Actions aside) - every technical
  * field that used to live here (responsibility, cap, share, base year,
  * billing frequency, scope, policy version, full evidence, audit history)
  * now lives in the detail drawer (onOpenDetail). Presentation only: the
@@ -86,6 +87,8 @@ export default function RuleTableRow({
 }) {
   const view = getSimplifiedRuleView(rule);
   const contractStatus = getContractStatus(rule);
+  const appliesWhen = getAppliesWhenLabel(rule);
+  const amountFormula = getAmountFormulaLabel(rule);
   const sourcePage = getSourcePage(rule);
   const sourceText = getRuleSourceText(rule) || getExactSourceText(rule) || "-";
 
@@ -123,7 +126,7 @@ export default function RuleTableRow({
         )}
         {property?.name && <p className="mt-0.5 text-[11px] text-slate-400">{property.name}</p>}
         {rule?._findingOnly && (
-          <Badge className="bg-amber-100 text-amber-800 text-[9px] px-1 py-0 h-4 mt-1">Not materialized</Badge>
+          <Badge className="bg-amber-100 text-amber-800 text-[9px] px-1 py-0 h-4 mt-1">Evidence only</Badge>
         )}
         {displayMode === "gaps" && !rule?._findingOnly && (
           <Badge className="bg-amber-100 text-amber-800 text-[9px] px-1 py-0 h-4 mt-1">{getCoverageGapLabel(rule)}</Badge>
@@ -147,39 +150,44 @@ export default function RuleTableRow({
         </Badge>
       </TableCell>
 
-      {/* 4. Recovery Method */}
+      {/* 4. Applies When */}
       <TableCell className="text-sm text-slate-700">
-        {humanizeToken(rule.recovery_method) || "-"}
+        {appliesWhen}
       </TableCell>
 
-      {/* 5. CAM */}
+      {/* 5. Amount / Share / Formula */}
+      <TableCell className="max-w-[180px] text-sm text-slate-700">
+        {amountFormula}
+      </TableCell>
+
+      {/* 6. CAM */}
       <TableCell>
         <Badge className={`text-[10px] ${TONE_CLASS[CAM_TONE[view.cam]] || TONE_CLASS.slate}`}>
           {view.camLabel}
         </Badge>
       </TableCell>
 
-      {/* 6. Actual Expense */}
+      {/* 7. Landlord Expense Expected */}
       <TableCell>
-        <Badge className={`text-[10px] ${TONE_CLASS[ACTUAL_EXPENSE_TONE[view.actualExpense]] || TONE_CLASS.slate}`}>
+        <Badge className={`text-[10px] ${TONE_CLASS[LANDLORD_EXPENSE_TONE[view.actualExpense]] || TONE_CLASS.slate}`}>
           {view.actualExpenseLabel}
         </Badge>
       </TableCell>
 
-      {/* 7. Contract Status */}
+      {/* 8. Contract Status */}
       <TableCell>
         <Badge className={`text-[10px] ${TONE_CLASS[contractStatus.tone] || TONE_CLASS.slate}`}>
           {contractStatus.label}
         </Badge>
       </TableCell>
 
-      {/* 8. Evidence */}
+      {/* 9. Evidence */}
       <TableCell className="max-w-[260px] text-xs text-slate-600">
         {sourcePage ? <span className="mr-2 font-medium">p. {sourcePage}</span> : null}
         {sourceText && sourceText !== "-" ? <span className="italic">&ldquo;{truncate(sourceText, 100)}&rdquo;</span> : "-"}
       </TableCell>
 
-      {/* 9. Actions */}
+      {/* 10. Actions */}
       <TableCell>
         <div className="flex items-center gap-0.5">
           <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={openDetail} aria-label="View rule details">

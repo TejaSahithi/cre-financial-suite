@@ -82,8 +82,7 @@ import {
   buildRuleEditForm,
   isApprovedRule,
   getPolicyStatus,
-  needsReviewRule,
-  getRecoverableDecision,
+  getContractStatus,
   isLeaseDerivedRule,
   isCoverageGapRule,
   getRuleValidation,
@@ -273,7 +272,7 @@ export default function LeaseExpenseRules() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("lease_recovery_policies")
-        .select("id, source_rule_id, status, created_at")
+        .select("id, source_rule_id, status, created_at, source_rule_hash, materializer_version")
         .in("source_rule_id", approvedRuleIds)
         .order("created_at", { ascending: false });
       if (error) return [];
@@ -340,10 +339,10 @@ export default function LeaseExpenseRules() {
     for (const entry of ruleSetsByLease) rulesByLeaseId.set(entry.leaseId, entry.rules?.length || 0);
     const totalRulesInScope = flattenedRows.length;
     const hiddenByStatusFilter = statusFilter === "all" ? 0 : flattenedRows.length - flattenedRows.filter(({ rule }) => {
-      if (statusFilter === "recoverable") return ["yes", "conditional"].includes(leaseExpenseRuleService.getRecoverableDecision(rule)) && !rule.is_excluded;
-      if (statusFilter === "excluded") return rule.is_excluded;
-      if (statusFilter === "needs_review") return needsReviewRule(rule);
-      if (statusFilter === "approved") return isApprovedRule(rule);
+      const contractStatus = getContractStatus(rule).value;
+      if (statusFilter === "needs_review") return contractStatus === "needs_review";
+      if (statusFilter === "approved") return contractStatus === "approved";
+      if (statusFilter === "rejected") return contractStatus === "rejected";
       return true;
     }).length;
     console.group("[LeaseExpenseRules] diagnostic");
@@ -382,17 +381,11 @@ export default function LeaseExpenseRules() {
       if (!haystack.some((value) => value.includes(search.toLowerCase()))) return false;
     }
 
-    // Recoverable / Non-Recoverable / Conditional now have separate filter
-    // buckets (per product requirement). A rule lands in exactly ONE of
-    // them based on its recoverable_from_tenant decision; "Excluded" rules
-    // are folded into Non-Recoverable.
-    const decision = getRecoverableDecision(rule);
+    const contractStatus = getContractStatus(rule).value;
     if (statusFilter === "all") return true;
-    if (statusFilter === "recoverable") return decision === "yes" && !rule.is_excluded;
-    if (statusFilter === "non_recoverable") return decision === "no" || rule.is_excluded;
-    if (statusFilter === "conditional") return decision === "conditional" && !rule.is_excluded;
-    if (statusFilter === "needs_review") return needsReviewRule(rule);
-    if (statusFilter === "approved") return isApprovedRule(rule);
+    if (statusFilter === "needs_review") return contractStatus === "needs_review";
+    if (statusFilter === "approved") return contractStatus === "approved";
+    if (statusFilter === "rejected") return contractStatus === "rejected";
     return true;
   }), [flattenedRows, search, statusFilter]);
 
@@ -860,10 +853,10 @@ export default function LeaseExpenseRules() {
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
         <StatCard label="All Findings" value={coverageSummary.all} />
-        <StatCard label="Rule Candidates" value={coverageSummary.rule_candidates} accent="border-l-amber-500 bg-amber-50" />
+        <StatCard label="Actionable Rules" value={coverageSummary.rule_candidates} accent="border-l-amber-500 bg-amber-50" />
         <StatCard label="Contract Approved" value={coverageSummary.contract_approved} accent="border-l-emerald-500 bg-emerald-50" />
         <StatCard label="CAM Eligible" value={coverageSummary.cam_enabled} accent="border-l-blue-500 bg-blue-50" />
-        <StatCard label="Actual Expected" value={coverageSummary.actual_expected} accent="border-l-purple-500 bg-purple-50" />
+        <StatCard label="Landlord Expense Expected" value={coverageSummary.actual_expected} accent="border-l-purple-500 bg-purple-50" />
         <StatCard label="Evidence Only" value={coverageSummary.evidence_only} accent="border-l-slate-400 bg-slate-50" />
       </div>
 
@@ -877,18 +870,16 @@ export default function LeaseExpenseRules() {
         <Tabs value={statusFilter} onValueChange={setStatusFilter}>
           <TabsList className="bg-white border">
             <TabsTrigger value="all" className="text-xs">All ({counts.all})</TabsTrigger>
-            <TabsTrigger value="recoverable" className="text-xs">Recoverable ({counts.recoverable})</TabsTrigger>
-            <TabsTrigger value="non_recoverable" className="text-xs">Non-Recoverable ({counts.non_recoverable})</TabsTrigger>
-            <TabsTrigger value="conditional" className="text-xs">Conditional ({counts.conditional})</TabsTrigger>
             <TabsTrigger value="needs_review" className="text-xs">Needs Review ({counts.needs_review})</TabsTrigger>
             <TabsTrigger value="approved" className="text-xs">Approved ({counts.approved})</TabsTrigger>
+            <TabsTrigger value="rejected" className="text-xs">Rejected ({counts.rejected})</TabsTrigger>
           </TabsList>
         </Tabs>
         <Tabs value={displayMode} onValueChange={setDisplayMode}>
           <TabsList className="bg-white border">
             <TabsTrigger value="findings" className="text-xs">All Findings ({allFindingRows.length})</TabsTrigger>
-            <TabsTrigger value="lease" className="text-xs">Rule Candidates ({leaseDerivedRows.length})</TabsTrigger>
-            <TabsTrigger value="gaps" className="text-xs">Not Materialized ({coverageGapRows.length})</TabsTrigger>
+            <TabsTrigger value="lease" className="text-xs">Actionable Rules ({leaseDerivedRows.length})</TabsTrigger>
+            <TabsTrigger value="gaps" className="text-xs">Evidence Only ({coverageGapRows.length})</TabsTrigger>
           </TabsList>
         </Tabs>
         <div className="ml-auto flex items-center gap-2">
@@ -933,9 +924,10 @@ export default function LeaseExpenseRules() {
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Tenant / Lease</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Category</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Treatment</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Recovery Method</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Applies When</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Amount / Share / Formula</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">CAM</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actual Expense</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Landlord Expense Expected</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Contract Status</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Evidence</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actions</TableHead>
@@ -944,13 +936,13 @@ export default function LeaseExpenseRules() {
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="py-12 text-center">
+                  <TableCell colSpan={11} className="py-12 text-center">
                     <Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" />
                   </TableCell>
                 </TableRow>
               ) : filteredRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="py-12 text-center text-sm text-slate-400">
+                  <TableCell colSpan={11} className="py-12 text-center text-sm text-slate-400">
                     <div className="mx-auto flex max-w-2xl flex-col items-center gap-3">
                       {ruleSetLoadError ? (
                         <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-left text-red-700">

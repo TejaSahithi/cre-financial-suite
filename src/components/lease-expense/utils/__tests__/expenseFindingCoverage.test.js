@@ -106,9 +106,9 @@ describe("expense finding coverage", () => {
     expect(deriveFindingCoverageDecision(tenantInsuranceRule)).toMatchObject({
       contractStatus: "Approved",
       expenseTreatment: "Tenant Direct",
-      camParticipation: "Not Eligible",
+      camParticipation: "N/A",
       actualExpenseExpected: "no",
-      materialization: "Approved Contractual Rule",
+      materialization: "Approved",
     });
 
     const taxRule = {
@@ -123,10 +123,10 @@ describe("expense finding coverage", () => {
 
     expect(deriveFindingCoverageDecision(taxRule)).toMatchObject({
       contractStatus: "Approved",
-      expenseTreatment: "Landlord Expense",
+      expenseTreatment: "Pooled Recovery",
       camParticipation: "Eligible",
       actualExpenseExpected: "yes",
-      materialization: "CAM-Enabled Subset",
+      materialization: "CAM Eligible",
     });
   });
 });

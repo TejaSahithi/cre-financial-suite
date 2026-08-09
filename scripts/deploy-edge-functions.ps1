@@ -1,6 +1,12 @@
+param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$OnlyFunctions = @()
+)
+
 # Deploy all Supabase edge functions to the linked project.
 # Run from the repo root in PowerShell:
 #   .\scripts\deploy-edge-functions.ps1
+#   .\scripts\deploy-edge-functions.ps1 normalize-pdf-output lease-extraction-worker
 #
 # Migrations are NOT pushed here (db push requires an interactive password).
 # To push migrations:  npx supabase db push
@@ -17,12 +23,28 @@
 # index.ts (e.g. azure/, a shared .ts module with no function entrypoint) are
 # excluded automatically.
 $ErrorActionPreference = "Continue"
+
+# Avoid Supabase CLI telemetry writes under the user profile, which can fail
+# on locked-down Windows shells before the CLI even starts deploying.
+$env:SUPABASE_TELEMETRY_DISABLED = "1"
+$env:DO_NOT_TRACK = "1"
+if (-not $env:SUPABASE_HOME) {
+    $LocalSupabaseHome = Join-Path (Get-Location) ".supabase-home"
+    New-Item -ItemType Directory -Force -Path $LocalSupabaseHome | Out-Null
+    $env:SUPABASE_HOME = $LocalSupabaseHome
+}
 $ProjectRef = "cjwdwuqqdokblakheyjb"
 
-$Functions = Get-ChildItem -Path "supabase\functions" -Directory |
+$DiscoveredFunctions = Get-ChildItem -Path "supabase\functions" -Directory |
     Where-Object { $_.Name -notlike "_*" -and (Test-Path (Join-Path $_.FullName "index.ts")) } |
     Select-Object -ExpandProperty Name |
     Sort-Object
+
+$Functions = if ($OnlyFunctions.Count -gt 0) {
+    $OnlyFunctions | Sort-Object -Unique
+} else {
+    $DiscoveredFunctions
+}
 
 Write-Host ""
 Write-Host ("=== Deploying " + $Functions.Count + " edge functions to " + $ProjectRef + " ===") -ForegroundColor Yellow

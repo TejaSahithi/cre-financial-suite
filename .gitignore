@@ -75,3 +75,4 @@ current_lint_errors.txt
 /test-results/phase5f/
 /test-results/phase5f-html/
 /playwright/.auth/
+.supabase-home/
