@@ -918,7 +918,7 @@ async function fetchContext(supabaseAdmin: any, orgId: string) {
       .eq("is_active", true),
     supabaseAdmin
       .from("stakeholders")
-      .select("id, org_id, property_id, portfolio_id, tenant_id, name, email, phone, role")
+      .select("id, org_id, property_id, name, email, role")
       .eq("org_id", orgId),
   ]);
   if (membershipsResult.error) throw membershipsResult.error;

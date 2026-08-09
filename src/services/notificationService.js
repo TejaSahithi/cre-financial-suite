@@ -165,7 +165,7 @@ async function fetchNotificationContext(orgId) {
       .eq('is_active', true), [], 'user_access'),
     safeSelect(supabase
       .from('stakeholders')
-      .select('id, org_id, property_id, portfolio_id, tenant_id, name, email, phone, role')
+      .select('id, org_id, property_id, name, email, role')
       .eq('org_id', orgId), [], 'stakeholders'),
     safeSelect(supabase
       .from('notification_preferences')
