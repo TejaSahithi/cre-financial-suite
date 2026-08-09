@@ -819,9 +819,8 @@ export default function Expenses() {
                   {bulkApproveMutation.isPending ? "Approving…" : `Approve ${selectedExpenseIds.length}`}
                 </Button>
                 <Button
-                  variant="outline"
                   size="sm"
-                  className="border-red-200 text-red-600 hover:bg-red-50"
+                  variant="destructive"
                   onClick={() => setShowBulkDelete(true)}
                 >
                   <Trash2 className="w-4 h-4 mr-1" />
