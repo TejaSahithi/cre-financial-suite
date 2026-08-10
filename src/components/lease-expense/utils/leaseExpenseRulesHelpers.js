@@ -679,11 +679,19 @@ export function getAppliesWhenLabel(rule) {
   );
   if (explicit) return humanizeToken(explicit);
 
-  const haystack = `${rule?.category_name || ""} ${rule?.expense_category || ""} ${rule?.expense_subcategory || ""} ${model?.source_evidence || ""}`.toLowerCase();
+  // The condition is usually stated IN the clause itself ("over the 2026
+  // base taxes", "if not separately metered"), not in the category label --
+  // category/subcategory alone was missing conditions like this base-year
+  // tax escalation, which fell through to a bare "Always" even though the
+  // lease clearly states an "applies only above X" trigger.
+  const sourceText = getRuleSourceText(rule) || rule?.exact_source_text || rule?.source_text || "";
+  const haystack = `${rule?.category_name || ""} ${rule?.expense_category || ""} ${rule?.expense_subcategory || ""} ${model?.source_evidence || ""} ${sourceText}`.toLowerCase();
   if (/not\s+separately\s+metered|unmetered|not\s+metered/.test(haystack)) return "Not separately metered";
   if (/separately\s+metered|metered\s+separately/.test(haystack)) return "Separately metered";
   if (/tenant[-\s]+caused|caused\s+by\s+tenant|tenant\s+negligence|damage/.test(haystack)) return "Tenant-caused damage";
-  if (/base\s+year|expense\s+stop|exceeds?\s+(the\s+)?base/.test(haystack)) return "Expense exceeds base year";
+  if (/\bbase\s+(?:year|taxes|rent|amount)\b|expense\s+stop|exceeds?\s+(?:the\s+)?base|increase\s+over|excess\s+over/.test(haystack)) {
+    return "Expense exceeds base year";
+  }
   if (/assignment|transfer/.test(haystack)) return "On assignment";
   if (/overdue|late\s+payment|default\s+interest|late\s+fee/.test(haystack)) return "Payment overdue";
   if (model?.effective_start_date || model?.effective_end_date) return "During lease term";
@@ -761,6 +769,14 @@ function getBusinessCamStatus(rule, model, decision, treatment) {
   if (decision?.camEligibility === "eligible") {
     const appliesWhen = getAppliesWhenLabel(rule);
     return { value: ["Always", "During lease term"].includes(appliesWhen) ? "eligible" : "conditional", reason: null };
+  }
+  // camEligibility "unknown" means rule.cam_eligible was never explicitly set
+  // (freshly extracted, not yet reviewed) -- it is not a business conclusion
+  // that CAM doesn't apply. A pooled/direct-recovery treatment already signals
+  // CAM participation on its own; showing "N/A" here reads as "definitely
+  // excluded" when the true state is "not yet confirmed."
+  if (decision?.camEligibility === "unknown" && CAM_PARTICIPATING_TREATMENTS.has(treatment)) {
+    return { value: "conditional", reason: null };
   }
   return { value: "not_applicable", reason: null };
 }

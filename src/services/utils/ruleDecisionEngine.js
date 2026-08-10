@@ -219,6 +219,31 @@ function toLegacyRecoverableFromTenant(recoverability) {
   return "needs_review";
 }
 
+/** A stated share/allocation/formula on the rule itself -- the same signal
+ * leaseExpenseRulesHelpers.js's hasExplicitFormulaValue() checks for amount
+ * display, reused here as evidence that a rule is a real pooled/reimbursable
+ * recovery clause (e.g. a base-year tax escalation: 70% of the increase
+ * over a stated base year) rather than a generic non-recoverable line. */
+function hasStatedAllocationOrFormula(rule = {}) {
+  return Boolean(firstPresent(
+    rule?.tenant_share_percent,
+    rule?.tenant_pro_rata_share,
+    rule?.allocation_basis,
+    rule?.amount_formula,
+    rule?.fixed_amount,
+    rule?.monthly_amount,
+    rule?.estimated_annual_amount,
+    rule?.estimated_monthly_amount,
+    rule?.cap_percent,
+    rule?.cap_amount,
+    rule?.expense_stop_amount,
+    rule?.base_year,
+    rule?.base_year_amount,
+    rule?.coverage_requirement_amount,
+    rule?.insurance_coverage_amount,
+  ));
+}
+
 function deriveCamEligibility(rule = {}) {
   const paymentTreatment = derivePaymentTreatment(rule);
   const recoverability = deriveRecoverabilityDecision(rule);
@@ -230,7 +255,19 @@ function deriveCamEligibility(rule = {}) {
 
   const explicit = normalizeTriStateDecision(rule?.cam_eligible);
   if (explicit === "yes") return "eligible";
-  if (explicit === "no") return "not_eligible";
+  if (explicit === "no") {
+    // A pooled/reimbursable recovery rule (recoverable, not tenant-direct)
+    // that also carries a real share/formula -- e.g. a base-year tax
+    // escalation -- contradicts a flat cam_eligible:"no". Per confirmed
+    // policy, base-year-style escalations DO participate in CAM even
+    // though they're computed per-lease rather than building-wide pro
+    // rata, so trusting "no" verbatim here silently dropped a real
+    // recoverable expense out of CAM. Surface "conditional" (not "eligible"
+    // outright) so a reviewer confirms/resolves the conflict rather than
+    // either side being silently overridden.
+    if (paymentTreatment === "reimbursable" && hasStatedAllocationOrFormula(rule)) return "conditional";
+    return "not_eligible";
+  }
   if (explicit === "conditional") return "conditional";
   if (explicit === "needs_review") return "unknown";
 

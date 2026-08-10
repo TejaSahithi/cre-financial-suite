@@ -292,6 +292,12 @@ export function deriveFindingCoverageDecision(rule = {}) {
   else if (camEligibility === "conditional") camParticipation = "Conditional";
   else if (recoverability === "recoverable" && ["Direct Recovery", "Direct Bill"].includes(expenseTreatment)) {
     camParticipation = "Conditional";
+  } else if (camEligibility === "unknown" && ["Pooled Recovery", "Direct Recovery"].includes(expenseTreatment)) {
+    // Same "not yet reviewed, not the same as excluded" case as
+    // leaseExpenseRulesHelpers.js's getBusinessCamStatus() -- a recovery
+    // treatment already implies CAM participation independent of whether
+    // rule.cam_eligible has been explicitly confirmed yet.
+    camParticipation = "Conditional";
   }
 
   let actualExpenseExpected = "conditional";

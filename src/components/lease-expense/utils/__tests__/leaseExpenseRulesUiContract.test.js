@@ -6,6 +6,7 @@ import {
   LEASE_EXPENSE_RULES_UI_CONTRACT_VERSION,
   TREATMENT_LABELS,
   getAmountFormulaLabel,
+  getAppliesWhenLabel,
   getContractStatus,
   getSimplifiedRuleView,
 } from "../leaseExpenseRulesHelpers";
@@ -56,6 +57,61 @@ describe("Lease Expense Rules UI Contract v1", () => {
     ]) {
       expect(getSimplifiedRuleView({ recovery_treatment }).camLabel).toBe("N/A");
     }
+  });
+
+  it("shows CAM Conditional (not N/A) for a base-year tax escalation the extraction flagged cam_eligible:no", () => {
+    // Regression, real production row: "Tenant pays 70% of the increase ...
+    // real estate taxes over the 2026 base taxes" had payment_treatment=
+    // reimbursable, recoverable_from_tenant=yes, tenant_share_percent=70 --
+    // every structural signal of a pooled recovery clause -- but the
+    // extraction had stamped cam_eligible="no" on it, which made the row
+    // show CAM "N/A" (reads as "definitely excluded"). Confirmed policy:
+    // base-year escalations DO participate in CAM. See the matching fix in
+    // ruleDecisionEngine.js's deriveCamEligibility().
+    const rule = {
+      expense_category: "real_estate_taxes",
+      expense_subcategory: "tax_escalation",
+      payment_treatment: "reimbursable",
+      recoverable_from_tenant: "yes",
+      is_recoverable: true,
+      recovery_method: "base_year",
+      tenant_share_percent: "70",
+      allocation_basis: "70% of increase over stated base taxes",
+      cam_eligible: "no",
+      actual_expense_expected: "yes",
+      approval_status: "draft",
+      review_status: "needs_review",
+    };
+    const view = getSimplifiedRuleView(rule);
+    expect(view.treatmentLabel).toBe("Pooled Recovery");
+    expect(view.camLabel).toBe("Conditional");
+  });
+
+  it("reads the applies-when condition from the clause text, not just the category label", () => {
+    // Regression: "Applies When" only scanned category_name/expense_subcategory
+    // for condition keywords, so a base-year tax escalation clause ("...over
+    // the 2026 calendar-year base taxes") fell through to a bare "Always"
+    // even though the lease clearly states the condition.
+    const baseYearTaxEscalation = {
+      expense_category: "real_estate_taxes",
+      expense_subcategory: "tax_escalation",
+      exact_source_text: "Tenant pays 70% of the increase in combined city, county, school, and special-district real estate taxes over the 2026 calendar-year base taxes of $38,400.00.",
+    };
+    expect(getAppliesWhenLabel(baseYearTaxEscalation)).toBe("Expense exceeds base year");
+
+    const tenantCausedDamage = {
+      expense_category: "roof_repair",
+      expense_subcategory: "structural_roof",
+      exact_source_text: "Landlord maintains the roof, foundation, exterior load-bearing walls, and structural framing, except for damage caused by Tenant's negligence.",
+    };
+    expect(getAppliesWhenLabel(tenantCausedDamage)).toBe("Tenant-caused damage");
+
+    const noCondition = {
+      expense_category: "utilities",
+      expense_subcategory: "electricity",
+      exact_source_text: "Tenant shall contract directly for and pay electricity charges.",
+    };
+    expect(getAppliesWhenLabel(noCondition)).toBe("Always");
   });
 
   it("requires allocation review for pooled recovery with no stated allocation", () => {

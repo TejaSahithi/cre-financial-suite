@@ -65,6 +65,53 @@ describe("ruleDecisionEngine", () => {
     })).toBe("not_applicable");
   });
 
+  it("does not let a raw cam_eligible:'no' silently exclude a base-year tax escalation with a real share/formula", () => {
+    // Regression: an extracted rule for "Tenant pays 70% of the increase in
+    // combined ... real estate taxes over the 2026 calendar-year base taxes"
+    // had payment_treatment=reimbursable, recoverable_from_tenant=yes,
+    // tenant_share_percent=70, but cam_eligible explicitly stamped "no" --
+    // trusting that flag verbatim made an obviously CAM-participating
+    // clause show as "N/A" (not_eligible). Confirmed policy: base-year
+    // escalations DO participate in CAM even though they're computed
+    // per-lease rather than via a building-wide pooled formula.
+    const baseYearTaxEscalation = {
+      id: "rule-tax-escalation",
+      expense_category: "real_estate_taxes",
+      expense_subcategory: "tax_escalation",
+      payment_treatment: "reimbursable",
+      recoverable_from_tenant: "yes",
+      is_recoverable: true,
+      recovery_method: "base_year",
+      tenant_share_percent: "70",
+      allocation_basis: "70% of increase over stated base taxes",
+      cam_eligible: "no",
+      review_status: "needs_review",
+      approval_status: "draft",
+      exact_source_text: "Tenant pays 70% of the increase in combined city, county, school, and special-district real estate taxes over the 2026 calendar-year base taxes of $38,400.00.",
+    };
+
+    expect(deriveCamEligibility(baseYearTaxEscalation)).toBe("conditional");
+    expect(deriveRuleDecision(baseYearTaxEscalation).camEligibility).toBe("conditional");
+  });
+
+  it("still trusts cam_eligible:'no' when there is no pooled/reimbursable treatment or stated formula behind it", () => {
+    // The override above is narrow: a plain not-recoverable/no-formula rule
+    // with cam_eligible:"no" must still resolve to not_eligible, not get
+    // swept into "conditional" just because cam_eligible happens to be "no".
+    expect(deriveCamEligibility({
+      payment_treatment: "tenant_direct_contract",
+      recoverable_from_tenant: "no",
+      cam_eligible: "no",
+    })).toBe("not_eligible");
+
+    expect(deriveCamEligibility({
+      payment_treatment: "reimbursable",
+      recoverable_from_tenant: "yes",
+      cam_eligible: "no",
+      // no tenant_share_percent/allocation_basis/formula at all
+    })).toBe("not_eligible");
+  });
+
   it("blocks publish when mapping or lease evidence is missing", () => {
     const eligibility = derivePublishToCamEligibility({
       ...approvedCamRule,

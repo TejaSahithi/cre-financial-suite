@@ -129,4 +129,29 @@ describe("expense finding coverage", () => {
       materialization: "CAM Eligible",
     });
   });
+
+  it("marks a base-year tax escalation Conditional, not N/A, so the CAM Eligible stat isn't undercounted", () => {
+    // Same production row as ruleDecisionEngine.test.js's regression test:
+    // cam_eligible explicitly "no" on a reimbursable/recoverable rule with a
+    // real 70% share was falling through to camParticipation "N/A", making
+    // the header's "CAM Eligible" count silently exclude it even though it's
+    // a textbook base-year real estate tax pass-through.
+    const unreviewedTaxRule = {
+      expense_category: "real_estate_taxes",
+      exact_source_text: "Tenant pays 70% of the increase in combined city, county, school, and special-district real estate taxes.",
+      payment_treatment: "reimbursable",
+      recoverable_from_tenant: "yes",
+      tenant_share_percent: 70,
+      allocation_basis: "70% of increase over stated base taxes",
+      cam_eligible: "no",
+      review_status: "needs_review",
+      approval_status: "needs_review",
+    };
+
+    expect(deriveFindingCoverageDecision(unreviewedTaxRule)).toMatchObject({
+      contractStatus: "Needs Review",
+      expenseTreatment: "Pooled Recovery",
+      camParticipation: "Conditional",
+    });
+  });
 });

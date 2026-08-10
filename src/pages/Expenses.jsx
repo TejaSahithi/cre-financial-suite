@@ -513,6 +513,14 @@ export default function Expenses() {
     queryClient.invalidateQueries({ queryKey: ["lease-expense-classifications"] });
     queryClient.invalidateQueries({ queryKey: ["expense-review-exceptions"] });
     queryClient.invalidateQueries({ queryKey: ["expense-projection-finalized"] });
+    // Expense Classification (LeaseExpenseClassification.jsx) reads approved
+    // actuals through its own "expense-recoverability-workspace"/-diagnostics
+    // queries, keyed separately from "Expense" -- approving/rejecting here
+    // never told that page's cache to refetch, so an approval made on this
+    // page could sit invisible on Classification until something else
+    // happened to remount/refetch it.
+    queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+    queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
   };
 
   const updateExpenseMutation = useMutation({
