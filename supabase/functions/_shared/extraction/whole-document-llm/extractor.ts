@@ -2,7 +2,7 @@
 
 import { callLLMStructured } from "../../llm.ts";
 import { callLLMStructuredWithProvenance } from "../provenance/transport/openai.ts";
-import { getSchema, LEASE_SCHEMA_VERSION, type FieldDef } from "../schemas.ts";
+import { getFieldGroups, getSchema, LEASE_SCHEMA_VERSION, type FieldDef } from "../schemas.ts";
 import type {
   DoclingOutput,
   ExtractedField,
@@ -1702,6 +1702,289 @@ async function runSectionedWholeDocumentLlmPipeline(args: {
   });
 }
 
+/**
+ * Partitions `fields` by getFieldGroups(moduleType) (the same domain
+ * grouping already used for prompting elsewhere) so related fields whose
+ * derivations depend on each other (e.g. monthly_rent/annual_rent, both in
+ * the "financial" group) stay in the same LLM call. Fields not covered by
+ * any named group (or when the module type has no group config) fall into
+ * one trailing "ungrouped" bucket rather than being silently dropped.
+ */
+function partitionFieldsIntoGroups(
+  fields: Array<[string, FieldDef]>,
+  moduleType: ModuleType,
+): Array<{ name: string; fields: Array<[string, FieldDef]> }> {
+  const byKey = new Map(fields);
+  const assigned = new Set<string>();
+  const groups: Array<{ name: string; fields: Array<[string, FieldDef]> }> = [];
+
+  for (const group of getFieldGroups(moduleType)) {
+    const groupFields: Array<[string, FieldDef]> = [];
+    for (const key of group.fields) {
+      const def = byKey.get(key);
+      if (!def || assigned.has(key)) continue;
+      groupFields.push([key, def]);
+      assigned.add(key);
+    }
+    if (groupFields.length > 0) groups.push({ name: group.name, fields: groupFields });
+  }
+
+  const ungrouped = fields.filter(([key]) => !assigned.has(key));
+  if (ungrouped.length > 0) groups.push({ name: "ungrouped", fields: ungrouped });
+
+  return groups;
+}
+
+/**
+ * Combines N already-fully-processed per-group results (each produced by
+ * the ordinary single-call path in runWholeDocumentLlmOnCompact, just with
+ * a field subset) into one result shaped exactly like a direct call's.
+ * Fields are disjoint by construction (each requested field belongs to
+ * exactly one group), so merging is "take the one non-null value" rather
+ * than genuine conflict resolution -- flattenRecords() already fills every
+ * schema field on every group's row, null for anything outside that
+ * group's own field list.
+ *
+ * computeDerivedFields() runs again on the merged row: each group's own
+ * pass already tried to derive from its own subset and safely no-op'd
+ * wherever a dependency lived in another group (its calculator functions
+ * only fill a field when its inputs are non-null), so a second pass here
+ * fills exactly the cross-group derivations the per-group passes couldn't
+ * see -- with no risk of overwriting an already-correct value, since the
+ * calculator functions are gated on the target field being null first.
+ */
+function mergeFieldPartitionedResults(args: {
+  startedAt: number;
+  moduleType: ModuleType;
+  groupNames: string[];
+  groupResults: ExtractionPipelineResult[];
+}): ExtractionPipelineResult {
+  const { startedAt, moduleType, groupNames, groupResults } = args;
+
+  const mergedRow: Record<string, unknown> = { _row: 1 };
+  const mergedConfidences: Record<string, number> = {};
+  const mergedSources: Record<string, string> = {};
+  const mergedEvidence: Record<string, unknown> = {};
+  const validationErrors: ValidationError[] = [];
+  const customFieldSuggestions: Array<Record<string, unknown>> = [];
+  const fieldStatuses: Record<string, string> = {};
+  const evidenceAnchors: Array<Record<string, unknown>> = [];
+  const dynamicItems: unknown[] = [];
+  const expenseRuleCandidates: unknown[] = [];
+  const failedGroups: Array<{ group: string; reason: string }> = [];
+
+  let llmCallCount = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let factsExtractedCount = 0;
+  let factsMappedCount = 0;
+  let model: string | null = null;
+
+  groupResults.forEach((result, index) => {
+    const groupName = groupNames[index] ?? `group_${index + 1}`;
+    const debug = (result.metadata as any)?.extractionDebug?.openai_fact_ledger ?? null;
+    llmCallCount += Number(debug?.llm_call_count ?? 1);
+    inputTokens += Number(debug?.input_tokens ?? 0);
+    outputTokens += Number(debug?.output_tokens ?? 0);
+    model = model ?? debug?.model ?? null;
+
+    const row = result.rows?.[0] as Record<string, unknown> | undefined;
+    if (!row || result.method === "fallback") {
+      failedGroups.push({ group: groupName, reason: String(debug?.failure_classification ?? "unknown") });
+      return;
+    }
+
+    for (const [key, value] of Object.entries(row)) {
+      if (key.startsWith("_") || key === "confidence_score" || key === "extraction_notes") continue;
+      if (value == null) continue;
+      if (mergedRow[key] == null) mergedRow[key] = value;
+    }
+    Object.assign(mergedConfidences, (row as any)._field_confidences ?? {});
+    Object.assign(mergedSources, (row as any)._field_sources ?? {});
+    Object.assign(mergedEvidence, (row as any)._field_evidence ?? {});
+
+    validationErrors.push(...(result.validationErrors ?? []));
+    customFieldSuggestions.push(...(result.customFieldSuggestions ?? []));
+    Object.assign(fieldStatuses, debug?.field_statuses ?? {});
+    evidenceAnchors.push(...(debug?.evidence_anchors ?? []));
+    dynamicItems.push(...(debug?.dynamic_items ?? []));
+    expenseRuleCandidates.push(...(debug?.expense_rule_candidates ?? []));
+    factsExtractedCount += Number(debug?.facts_extracted_count ?? 0);
+    factsMappedCount += Number(debug?.facts_mapped_count ?? 0);
+  });
+
+  const rows = [mergedRow];
+  computeDerivedFields(rows, moduleType);
+
+  const nonNullFieldCount = Object.entries(mergedRow).filter(
+    ([key, value]) => !key.startsWith("_") && key !== "confidence_score" && value !== null && value !== undefined && value !== "",
+  ).length;
+
+  if (nonNullFieldCount === 0) {
+    return failureResult(
+      startedAt,
+      `Field-partitioned whole-document LLM produced no usable values across ${groupResults.length} field ` +
+      `group call(s) (${failedGroups.length} group(s) failed: ${failedGroups.map((g) => `${g.group}:${g.reason}`).join(", ") || "none"}).`,
+      {
+        failure_classification: "FIELD_PARTITION_ALL_GROUPS_FAILED",
+        architecture: "llm_field_partitioned",
+        group_count: groupResults.length,
+        failed_groups: failedGroups,
+      },
+    );
+  }
+
+  const confidenceValues = Object.values(mergedConfidences);
+  const avgConfidence = confidenceValues.length
+    ? Math.round((confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length) * 100)
+    : 0;
+  mergedRow.confidence_score = avgConfidence;
+  mergedRow._field_confidences = mergedConfidences;
+  mergedRow._field_sources = mergedSources;
+  mergedRow._field_evidence = mergedEvidence;
+
+  // Same shape/key set as snapshotFieldMap() in pipeline.ts: keyed by the
+  // LLM-extracted field keys only (derived fields computeDerivedFields just
+  // added to mergedRow are intentionally excluded here, matching the direct
+  // single-call path, which snapshots record.fields BEFORE derivation runs).
+  const mergedFieldSources: Record<string, Record<string, unknown>> = {};
+  for (const key of new Set([
+    ...Object.keys(mergedConfidences),
+    ...Object.keys(mergedSources),
+    ...Object.keys(mergedEvidence),
+  ])) {
+    const evidence = (mergedEvidence as any)[key] ?? {};
+    mergedFieldSources[key] = {
+      value: mergedRow[key] ?? null,
+      source: mergedSources[key] ?? null,
+      confidence: mergedConfidences[key] ?? null,
+      source_text: evidence.source_text ?? null,
+      source_page: evidence.source_page ?? null,
+      extraction_status: evidence.extraction_status ?? null,
+      candidates: evidence.candidates ?? [],
+      conflict_candidates: evidence.conflict_candidates ?? [],
+      conflict_candidate_ids: evidence.conflict_candidate_ids ?? [],
+      canonical_status: evidence.canonical_status ?? null,
+      resolution_state: evidence.resolution_state ?? null,
+      requires_review: evidence.requires_review ?? false,
+      decision: evidence.decision ?? null,
+      selected_candidate_id: evidence.selected_candidate_id ?? null,
+    };
+  }
+
+  return {
+    rows,
+    method: "llm_only",
+    warnings: failedGroups.length > 0
+      ? [`${failedGroups.length} of ${groupResults.length} field-group call(s) failed: ${failedGroups.map((g) => `${g.group} (${g.reason})`).join("; ")}. Fields in those groups may be missing.`]
+      : [],
+    validationErrors,
+    customFieldSuggestions,
+    metadata: {
+      ruleFieldsExtracted: 0,
+      tableFieldsExtracted: 0,
+      llmFieldsExtracted: Object.keys(mergedConfidences).length,
+      totalRecords: rows.length,
+      avgConfidence,
+      chunksProcessed: groupResults.length,
+      processingTimeMs: Date.now() - startedAt,
+      extractionDebug: {
+        extraction_contract_version: EXTRACTION_CONTRACT_VERSION,
+        merged_field_sources: mergedFieldSources,
+        validated_field_values: mergedFieldSources,
+        openai_fact_ledger: {
+          extraction_mode: "whole_document_llm_v2",
+          architecture: "llm_field_partitioned",
+          authoritative: true,
+          typescript_field_mapping_used: false,
+          llm_call_count: llmCallCount,
+          model,
+          input_tokens: inputTokens,
+          output_tokens: outputTokens,
+          facts_extracted_count: factsExtractedCount,
+          facts_mapped_count: factsMappedCount,
+          facts_unmapped_count: 0,
+          mapped_non_null_field_count: nonNullFieldCount,
+          invalid_or_omitted_claim_count: validationErrors.length,
+          field_statuses: fieldStatuses,
+          evidence_anchors: evidenceAnchors,
+          dynamic_items: dynamicItems,
+          expense_rule_candidates: expenseRuleCandidates,
+          group_count: groupResults.length,
+          failed_group_count: failedGroups.length,
+          failed_groups: failedGroups,
+        },
+      },
+    } as any,
+  };
+}
+
+/**
+ * Retries a truncated direct whole-document call by splitting the FIELD
+ * SCHEMA (not the document) across multiple small calls -- see the module
+ * comment on shouldRetryDirectWholeDocumentWithSectioned for why
+ * document-sectioning alone can't fix output-token truncation: every
+ * section still requests the full field list, so it still has to write the
+ * same oversized response. Each group call here asks for only the 3-8
+ * fields in its domain group, so its response can't approach
+ * maxOutputTokens regardless of how large the source document is.
+ *
+ * Runs sequentially (like runSectionedWholeDocumentLlmPipeline) respecting
+ * the same deadline reserve, so a slow normalize invocation still stops
+ * cleanly rather than running every remaining group past the worker's
+ * overall time budget.
+ */
+async function runFieldPartitionedWholeDocumentLlmPipeline(args: {
+  baseArgs: RunWholeDocumentLlmArgs;
+  compact: CompactLeaseDocument;
+  fields: Array<[string, FieldDef]>;
+  startedAt: number;
+  maxInputChars: number;
+}): Promise<ExtractionPipelineResult> {
+  const groups = partitionFieldsIntoGroups(args.fields, args.baseArgs.moduleType);
+  if (groups.length === 0) {
+    return failureResult(args.startedAt, "Field partitioning produced no field groups to retry.", {
+      failure_classification: "field_partition_empty",
+      architecture: "llm_field_partitioned",
+    });
+  }
+
+  const groupResults: ExtractionPipelineResult[] = [];
+  const groupNames: string[] = [];
+  for (const group of groups) {
+    if (args.baseArgs.deadlineAt && Date.now() + sectionDeadlineReserveMs() > args.baseArgs.deadlineAt) {
+      break;
+    }
+    groupNames.push(group.name);
+    groupResults.push(await runWholeDocumentLlmOnCompact({
+      document: args.compact,
+      moduleType: args.baseArgs.moduleType,
+      fields: group.fields,
+      systemPrompt: buildWholeDocumentSystemPrompt(group.fields),
+      startedAt: args.startedAt,
+      maxInputChars: args.maxInputChars,
+      provenance: args.baseArgs.provenance,
+      operation: "whole_document_lease_extraction_field_partition_v1",
+      section: null,
+    }));
+  }
+
+  if (groupResults.length === 0) {
+    return failureResult(args.startedAt, "Field-partitioned LLM continuation had no safe time budget for any group call.", {
+      failure_classification: "field_partition_deadline_exhausted",
+      architecture: "llm_field_partitioned",
+      group_count: groups.length,
+    });
+  }
+
+  return mergeFieldPartitionedResults({
+    startedAt: args.startedAt,
+    moduleType: args.baseArgs.moduleType,
+    groupNames,
+    groupResults,
+  });
+}
+
 export async function runWholeDocumentLlmPipeline(
   args: RunWholeDocumentLlmArgs,
 ): Promise<ExtractionPipelineResult> {
@@ -1750,16 +2033,21 @@ export async function runWholeDocumentLlmPipeline(
   });
 
   if (shouldRetryDirectWholeDocumentWithSectioned(directResult)) {
-    const sectionedResult = await runSectionedWholeDocumentLlmPipeline({
+    // Field-partitioned, not document-sectioned: a truncated direct call
+    // ran out of OUTPUT tokens writing claims for the full ~50-field schema,
+    // which document-sectioning can't fix (every section still requests the
+    // full field list -- see runFieldPartitionedWholeDocumentLlmPipeline's
+    // doc comment). Splitting the schema itself into small domain groups is
+    // what actually bounds each call's response size, independent of how
+    // large or small the source document is.
+    const partitionedResult = await runFieldPartitionedWholeDocumentLlmPipeline({
       baseArgs: args,
       compact,
       fields,
-      systemPrompt,
       startedAt,
       maxInputChars,
-      originalPromptChars,
     });
-    return mergeDirectRetryDiagnostics(sectionedResult, directResult);
+    return mergeDirectRetryDiagnostics(partitionedResult, directResult);
   }
 
   return directResult;
@@ -1780,4 +2068,6 @@ export const __test__ = {
   buildCompactSections,
   mergeSectionedWholeDocumentResults,
   shouldRetryDirectWholeDocumentWithSectioned,
+  partitionFieldsIntoGroups,
+  mergeFieldPartitionedResults,
 };
