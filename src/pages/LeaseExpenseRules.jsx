@@ -323,6 +323,15 @@ export default function LeaseExpenseRules() {
     return dedupeDisplayRows([...persistedGaps, ...evidenceOnlyFindings]);
   }, [allDisplayRows, allFindingRows]);
 
+  const persistedRuleIds = useMemo(() => {
+    const ids = new Set();
+    for (const entry of ruleSetsByLease) {
+      for (const rule of entry.rules || []) {
+        if (isUuid(rule?.id)) ids.add(rule.id);
+      }
+    }
+    return ids;
+  }, [ruleSetsByLease]);
   const flattenedRows = displayMode === "gaps"
     ? coverageGapRows
     : displayMode === "findings"
@@ -396,9 +405,9 @@ export default function LeaseExpenseRules() {
   const selectableRuleIds = useMemo(
     () =>
       filteredRows
-        .filter(({ rule }) => isUuid(rule?.id) && !isApprovedRule(rule))
+        .filter(({ rule }) => isUuid(rule?.id) && persistedRuleIds.has(rule.id) && !rule?._findingOnly && isLeaseDerivedRule(rule) && !isApprovedRule(rule))
         .map(({ rule }) => rule.id),
-    [filteredRows],
+    [filteredRows, persistedRuleIds],
   );
 
   const selectedVisibleCount = useMemo(
@@ -517,6 +526,7 @@ export default function LeaseExpenseRules() {
       return summary;
     },
     onSuccess: (summary) => {
+      setSelectedRuleIds(new Set());
       invalidateRuleWorkflowQueries();
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
       queryClient.invalidateQueries({ queryKey: ["leases"] });
@@ -584,9 +594,16 @@ export default function LeaseExpenseRules() {
 
   const bulkApproveRulesMutation = useMutation({
     mutationFn: async () => {
-      const selected = new Set(selectedRuleIds);
+      const selectable = new Set(selectableRuleIds);
+      const selected = new Set([...selectedRuleIds].filter((id) => selectable.has(id)));
       const targets = filteredRows.filter(({ rule }) => selected.has(rule?.id));
       const summary = { approved: 0, skipped: [], failed: [] };
+
+      if (selected.size !== selectedRuleIds.size) {
+        summary.skipped.push({
+          reason: "Some selected rows were stale, already approved, or evidence-only and were ignored.",
+        });
+      }
 
       for (const { rule, lease } of targets) {
         try {
@@ -1014,7 +1031,7 @@ export default function LeaseExpenseRules() {
                     displayMode={displayMode}
                     isUpdating={updateRuleMutation.isPending || bulkApproveRulesMutation.isPending}
                     isSelected={selectedRuleIds.has(rule.id)}
-                    canSelect={isUuid(rule?.id) && !isApprovedRule(rule)}
+                    canSelect={selectableRuleIds.includes(rule.id)}
                     camPolicyStatus={rule?._findingOnly ? null : getPolicyStatus(rule, policiesBySourceRuleId.get(rule.id) || [], leasesWithPremises.has(lease?.id))}
                     isHighlighted={rule.id === highlightedRuleId}
                     onSelectChange={(checked) => toggleRuleSelection(rule.id, checked)}
@@ -1052,3 +1069,5 @@ export default function LeaseExpenseRules() {
     </div>
   );
 }
+
+
