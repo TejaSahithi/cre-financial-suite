@@ -368,6 +368,9 @@ export function buildClassificationRows({
     }
 
     const actualAmount = toNumber(expense.amount);
+    const actualExpenseCategoryId = expense.expense_category_id || expense.category_id || expense.canonical_category_id || null;
+    const classificationExpenseCategoryId = classificationRecord?.expense_category_id || null;
+    const ruleExpenseCategoryId = matchedRule?.expense_category_id || null;
     const hasMatchedRule = Boolean(matchedRule);
     if (matchedRule?.id) usedRuleIds.add(matchedRule.id);
     if (persistedRuleId && hasMatchedRule) usedRuleIds.add(persistedRuleId);
@@ -479,7 +482,10 @@ export function buildClassificationRows({
         : "-",
       amount: actualAmount,
       financialAmount: actualAmount,
-      expenseCategoryId: classificationRecord?.expense_category_id || matchedRule?.expense_category_id || null,
+      expenseCategoryId: actualExpenseCategoryId,
+      actualExpenseCategoryId,
+      classificationExpenseCategoryId,
+      ruleExpenseCategoryId,
       servicePeriodStart: classificationRecord?.service_period_start || expense.service_period_start || null,
       servicePeriodEnd: classificationRecord?.service_period_end || expense.service_period_end || null,
       recoverabilityResult: classificationBucket,
@@ -597,3 +603,4 @@ export function buildClassificationRows({
 
   return result;
 }
+

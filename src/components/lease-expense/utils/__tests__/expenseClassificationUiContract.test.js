@@ -85,6 +85,26 @@ describe("Expense Classification V1 UI contract", () => {
     expect(deriveClassificationDecision(nonrecoverable).label).toBe("Nonrecoverable");
   });
 
+  it("does not let a stale finalized outside-CAM row bypass a missing actual category", () => {
+    const row = buildClassificationUiRow({
+      ...baseRow,
+      id: "missing-actual-category",
+      expenseCategoryId: null,
+      actualExpenseCategoryId: null,
+      classificationStatus: "finalized",
+      classificationRecord: {
+        id: "classification-tenant-direct",
+        classification_status: "finalized",
+        next_step: "No CAM - Tenant Pays Vendor",
+      },
+      rule: { recovery_treatment: "tenant_direct", approval_status: "approved" },
+    });
+
+    expect(row.v1Decision.label).toBe("Needs Category");
+    expect(row.v1Status.label).toBe("Needs Review");
+    expect(row.v1Tab).toBe("needs_review");
+  });
+
   it("keeps policy evidence separate from the financial decision", () => {
     const row = {
       ...baseRow,

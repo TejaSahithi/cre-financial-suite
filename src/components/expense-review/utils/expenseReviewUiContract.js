@@ -141,7 +141,10 @@ function hasValue(value) {
 }
 
 function isMissingCategory(row = {}) {
-  return !hasValue(row.expense_category_id) && !hasValue(row.category);
+  if (hasValue(row.actual_expense_id) && Object.prototype.hasOwnProperty.call(row, "actual_expense_category_id")) {
+    return !hasValue(row.actual_expense_category_id);
+  }
+  return !hasValue(row.expense_category_id);
 }
 
 function isMissingScope(row = {}) {
@@ -175,11 +178,9 @@ function hasConditionalReview(row = {}) {
 }
 
 export function deriveExpenseReviewDecision(row = {}) {
-  if (!isFinalized(row)) {
-    const issue = deriveExpenseReviewIssue(row);
-    if (EXCEPTION_DECISION_KEYS.has(issue.decision)) {
-      return buildDecision(issue.decision);
-    }
+  const issue = deriveExpenseReviewIssue(row);
+  if (EXCEPTION_DECISION_KEYS.has(issue.decision)) {
+    return buildDecision(issue.decision);
   }
 
   const text = fieldText(row);
@@ -245,7 +246,6 @@ function buildIssue(decision, label, bucket) {
 
 export function isExpenseReviewException(row = {}) {
   if (!row || row.row_type === "rule_missing_actual") return false;
-  if (isFinalized(row)) return false;
   const issue = deriveExpenseReviewIssue(row);
   return issue.decision !== "resolved";
 }
@@ -441,3 +441,4 @@ export function buildExpenseReviewReportRows(rows = []) {
     Source: row.rule_source || row.evidence_text || "",
   }));
 }
+

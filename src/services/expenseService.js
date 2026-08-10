@@ -1650,6 +1650,11 @@ export const expenseService = {
         "tenant_id",
         "category",
         "subcategory",
+        "expense_category_id",
+        "financial_route",
+        "classification_decision",
+        "recovery_treatment",
+        "payment_treatment",
         "amount",
         "service_period_start",
         "service_period_end",
@@ -3598,3 +3603,4 @@ export const expenseService = {
 // Named export for golden regression tests; keep service facade unchanged.
 export { scoreRuleMatch, buildAmountBuckets, canSendClassificationToCam };
 export default expenseService;
+

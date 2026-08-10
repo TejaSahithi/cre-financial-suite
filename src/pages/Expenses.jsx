@@ -62,6 +62,7 @@ import {
   expenseNeedsClassification,
   getAccountingStatus,
   getCanonicalCategoryLabel,
+  hasCanonicalCategory,
   getRecoveryStatusFromClassification,
   selectCanonicalExpenseClassification,
 } from "@/components/expenses/utils/actualExpensesUiContract";
@@ -432,7 +433,9 @@ export default function Expenses() {
       const classification = classificationByExpenseId.get(expense.id) || null;
       const categoryLabel = getCanonicalCategoryLabel(expense, categoryById);
       const accountingStatus = getAccountingStatus(expense);
-      const recoveryStatus = getRecoveryStatusFromClassification(classification);
+      const recoveryStatus = hasCanonicalCategory(expense)
+        ? getRecoveryStatusFromClassification(classification)
+        : { value: "needs_review", label: "Needs Review", tone: "amber" };
       const matchedVendor = vendors.find(
         (vendor) => vendor.name?.toLowerCase() === expense.vendor?.toLowerCase() || vendor.id === expense.vendor_id
       ) || null;
@@ -951,3 +954,4 @@ export default function Expenses() {
     </div>
   );
 }
+

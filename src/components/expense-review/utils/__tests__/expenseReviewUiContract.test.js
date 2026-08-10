@@ -18,6 +18,8 @@ const baseFinalized = {
   expense_category_id: "cat1",
   category: "Utilities",
   amount: 100,
+  service_period_start: "2026-01-01",
+  service_period_end: "2026-01-31",
   cam_eligible: "yes",
   recoverability_result: "recoverable",
 };
@@ -45,6 +47,23 @@ describe("expenseReviewUiContract", () => {
     expect(row.v1Issue.label).toBe("Missing category");
     expect(row.v1Issue.requiredDecision).toBe("Assign Category");
     expect(getExpenseReviewExceptionCounts([row])).toMatchObject({ missingInformation: 1, total: 1, amount: 75 });
+  });
+
+  it("moves finalized rows with missing actual category back to review", () => {
+    const row = buildExpenseReviewUiRow({
+      ...baseFinalized,
+      id: "missing-actual-category",
+      actual_expense_category_id: null,
+      expense_category_id: "classification-cat",
+      category: "Utilities",
+      recovery_method: "pooled_cam",
+      classification_status: "finalized",
+    });
+
+    expect(isExpenseReviewFinalized(row)).toBe(false);
+    expect(isExpenseReviewException(row)).toBe(true);
+    expect(row.v1Decision.label).toBe("Needs Category");
+    expect(row.v1Issue.requiredDecision).toBe("Assign Category");
   });
 
   it("treats outside-CAM routes as valid finalized decisions with CAM N/A", () => {
@@ -94,6 +113,7 @@ describe("expenseReviewUiContract", () => {
     expect(outsideRows).toHaveLength(1);
     expect(buildExpenseReviewReportRows(outsideRows)[0].Decision).toBe("Included in Rent");
   });
+
   it("honors persisted outside-CAM next steps over generic recoverable fields", () => {
     const row = buildExpenseReviewUiRow({
       ...baseFinalized,
@@ -110,3 +130,4 @@ describe("expenseReviewUiContract", () => {
     expect(canSendExpenseReviewRowToCam(row)).toBe(false);
   });
 });
+

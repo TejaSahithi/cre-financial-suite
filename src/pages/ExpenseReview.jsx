@@ -209,6 +209,7 @@ export default function ExpenseReview() {
     .map((row) => {
       const expenseId = row.actual_expense_id || row.expense_id;
       const actualExpense = actualExpenseById.get(expenseId) || {};
+      const actualExpenseCategoryId = actualExpense.expense_category_id || actualExpense.category_id || actualExpense.canonical_category_id || null;
       const effectiveRow = {
         ...actualExpense,
         ...row,
@@ -229,6 +230,9 @@ export default function ExpenseReview() {
         actual_expense_id: expenseId,
         amount: Number(row.amount ?? actualExpense.amount ?? 0),
         category: row.category || actualExpense.category || null,
+        expense_category_id: actualExpenseCategoryId || row.expense_category_id || null,
+        actual_expense_category_id: actualExpenseCategoryId,
+        classification_expense_category_id: row.expense_category_id || null,
         expense_subcategory: row.subcategory || actualExpense.subcategory || actualExpense.expense_subcategory || null,
         description: row.description || actualExpense.description || null,
         service_period_start: row.service_period_start || actualExpense.service_period_start || actualExpense.expense_date || actualExpense.date || null,
@@ -707,3 +711,4 @@ function DetailSection({ title, items }) {
     </section>
   );
 }
+
