@@ -1,8 +1,44 @@
 // @ts-nocheck
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const BASE_RENT_KEYS = new Set(["base_rent", "rent", "minimum_rent", "fixed_rent"]);
+const NON_EXPENSE_LEASE_METADATA_KEYS = new Set([
+  "base_rent",
+  "rent",
+  "minimum_rent",
+  "fixed_rent",
+  "monthly_rent",
+  "annual_rent",
+  "additional_rent",
+  "base_rent_monthly",
+  "lease_date",
+  "lease_term",
+  "term",
+  "commencement_date",
+  "expiration_date",
+  "rent_start_date",
+  "broker",
+  "broker_name",
+  "brokers",
+  "tenant_name",
+  "landlord_name",
+  "tenant_address",
+  "landlord_address",
+  "property_address",
+  "premises_address",
+  "suite_number",
+  "unit_number",
+  "permitted_use",
+  "use",
+  "rent_frequency",
+  "security_deposit",
+  "assignment_consideration",
+  "landlord_consent",
+  "parking_rights",
+  "rentable_area_sqft",
+]);
 
+const NON_EXPENSE_LEASE_METADATA_TEXT = /\b(?:lease\s+date|lease\s+term|commencement\s+date|expiration\s+date|broker\s+name|brokers?|tenant\s+name|landlord\s+name|tenant\s+address|landlord\s+address|property\s+address|premises\s+address|suite\s+number|permitted\s+use|base\s+rent\s+monthly|base\s+rent|monthly\s+rent|security\s+deposit|rentable\s+area|assignment\s+consideration|landlord\s+consent|parking\s+(?:rights|requirements?))\b/i;
+const EXPENSE_SIGNAL_TEXT = /\b(?:cam|common\s+area|operating\s+expense|tax(?:es)?|insurance|utilities?|electric|water|sewer|gas|hvac|janitorial|security|landscap|repair|maintenance|reimburse|recover|pro\s*rata|proportionate\s+share|direct\s+bill|separately\s+metered|late\s+fee|attorney|legal\s+fee|expense\s+stop|base\s+year|cap)\b/i;
 function asArray(value: unknown): any[] {
   return Array.isArray(value) ? value : [];
 }
@@ -25,6 +61,33 @@ function normalizeToken(value: unknown): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
+}
+function isNonExpenseLeaseMetadataRule(rule: any): boolean {
+  if (!isObject(rule)) return false;
+  const keys = [
+    rule?.normalized_key,
+    rule?.fallback_category_key,
+    rule?.expense_category,
+    rule?.expense_subcategory,
+    rule?.category_name,
+    rule?.subcategory_name,
+    rule?.category,
+    rule?.key,
+    rule?.field_key,
+    rule?.source_field_key,
+    rule?.item_type,
+    rule?.clause_type,
+    rule?.title,
+    rule?.label,
+  ].map(normalizeToken).filter(Boolean);
+
+  if (keys.some((key) => NON_EXPENSE_LEASE_METADATA_KEYS.has(key))) return true;
+
+  const keyText = keys.join(" ").replace(/_/g, " ");
+  if (NON_EXPENSE_LEASE_METADATA_TEXT.test(keyText)) return true;
+
+  const sourceText = exactSourceText(rule) || workflowEvidenceText(rule) || "";
+  return NON_EXPENSE_LEASE_METADATA_TEXT.test(sourceText) && !EXPENSE_SIGNAL_TEXT.test(sourceText);
 }
 
 function numberOrNull(value: unknown): number | null {
@@ -154,7 +217,8 @@ function isSourceBackedExpenseRule(rule: any): boolean {
   if (generationSource.includes("fallback") || generationSource.startsWith("typescript_schema")) return false;
   const sourceText = exactSourceText(rule);
   const category = normalizeToken(rule?.expense_category || rule?.normalized_key || rule?.category);
-  return Boolean(sourceText && category && !BASE_RENT_KEYS.has(category));
+  if (isNonExpenseLeaseMetadataRule(rule)) return false;
+  return Boolean(sourceText && category);
 }
 
 function shouldPublishWorkflowExpenseRules(workflow: any): boolean {
@@ -192,7 +256,7 @@ function explicitExpenseCategory(item: any): string | null {
     item?.item_type ??
     item?.clause_type,
   );
-  if (!token || BASE_RENT_KEYS.has(token)) return null;
+  if (!token || NON_EXPENSE_LEASE_METADATA_KEYS.has(token) || isNonExpenseLeaseMetadataRule(item)) return null;
   return token;
 }
 
@@ -419,7 +483,7 @@ function canonicalRuleKey(leaseId: string, rule: any): string {
 
 function prepareRulePayload(lease: any, orgId: string, rule: any) {
   const category = normalizeToken(rule?.expense_category || rule?.normalized_key || rule?.category);
-  if (!category || BASE_RENT_KEYS.has(category)) return null;
+  if (!category || NON_EXPENSE_LEASE_METADATA_KEYS.has(category) || isNonExpenseLeaseMetadataRule(rule)) return null;
 
   const sourceText = exactSourceText(rule);
   if (!sourceText) return null;
@@ -681,8 +745,40 @@ async function applyFrozenV1RuleSemanticPatches(supabaseAdmin: any, orgId: strin
   return updated;
 }
 
-async function repairExistingFrozenV1RuleSemantics(_supabaseAdmin: any, _orgId: string, _lease: any) {
-  return 0;
+async function repairExistingFrozenV1RuleSemantics(supabaseAdmin: any, orgId: string, lease: any) {
+  const { data, error } = await supabaseAdmin
+    .from("lease_expense_rules")
+    .select("id, rule_key, rule_type, expense_category, expense_subcategory, source_field_key, exact_source_text, source, notes, row_status")
+    .eq("org_id", orgId)
+    .eq("lease_id", lease.id);
+
+  if (error) throw new Error("Could not inspect existing Lease Expense Rules V1 rows: " + error.message);
+
+  const ids = asArray(data)
+    .filter((rule) => normalizeToken(rule?.row_status) !== "superseded")
+    .filter(isNonExpenseLeaseMetadataRule)
+    .map((rule) => rule.id)
+    .filter(Boolean);
+
+  if (ids.length === 0) return 0;
+
+  const { error: updateError } = await supabaseAdmin
+    .from("lease_expense_rules")
+    .update({
+      row_status: "superseded",
+      review_status: "rejected",
+      approval_status: "superseded",
+      extraction_status: "superseded",
+      cam_eligible: "no",
+      recoverable_from_tenant: "no",
+      is_recoverable: false,
+      published_to_cam: false,
+      notes: "Filtered from Lease Expense Rules V1: lease metadata evidence belongs in Lease Review, not expense classification or CAM.",
+    })
+    .in("id", ids);
+
+  if (updateError) throw new Error("Could not supersede non-expense lease metadata rows: " + updateError.message);
+  return ids.length;
 }
 
 async function promoteApprovedLeaseRuleRows(_supabaseAdmin: any, _orgId: string, _lease: any, _actorUserId: string | null) {
@@ -952,3 +1048,7 @@ export const __test__ = {
   sourceFileIdCandidates,
   workflowFromFactLedgerDebug,
 };
+
+
+
+

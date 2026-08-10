@@ -106,6 +106,10 @@ const ACTUAL_EXPENSE_WORKFLOW_FIELDS = [
   "billing_period_end",
   "confidence_score",
   "is_controllable",
+  "allocation_type",
+  "allocation_method",
+  "allocation_meta",
+  "direct_tenant_ids",
 ];
 
 function monthFromExpenseDate(value) {

@@ -83,7 +83,39 @@ export const CANONICAL_EXPENSE_CATEGORY_CONFIG = [
   },
 ];
 
-export const EXCLUDED_LEASE_EXPENSE_RULE_KEYS = new Set(["base_rent", "monthly_rent", "annual_rent", "additional_rent"]);
+export const EXCLUDED_LEASE_EXPENSE_RULE_KEYS = new Set([
+  "base_rent",
+  "monthly_rent",
+  "annual_rent",
+  "additional_rent",
+  "minimum_rent",
+  "fixed_rent",
+  "lease_date",
+  "lease_term",
+  "term",
+  "commencement_date",
+  "expiration_date",
+  "rent_start_date",
+  "broker",
+  "broker_name",
+  "brokers",
+  "tenant_name",
+  "landlord_name",
+  "tenant_address",
+  "landlord_address",
+  "property_address",
+  "premises_address",
+  "suite_number",
+  "unit_number",
+  "permitted_use",
+  "use",
+  "rent_frequency",
+  "security_deposit",
+  "assignment_consideration",
+  "landlord_consent",
+  "parking_rights",
+  "rentable_area_sqft",
+]);
 
 export const GENERIC_SOURCE_PATTERNS = [
   /included in base rent under/i,
@@ -267,4 +299,5 @@ export function isRuleExcludedFromLeaseExpenses(rule, canonicalKey) {
     EXCLUDED_LEASE_EXPENSE_RULE_KEYS.has(normalizeCategoryKey(rule?.category_name)) ||
     EXCLUDED_LEASE_EXPENSE_RULE_KEYS.has(normalizeCategoryKey(rule?.normalized_key));
 }
+
 

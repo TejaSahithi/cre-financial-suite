@@ -353,6 +353,65 @@ function importLookupCandidates(value) {
   ].filter(Boolean))];
 }
 
+const EXPENSE_IMPORT_CATEGORY_ALIASES = [
+  {
+    terms: ['premises property tax', 'real estate tax', 'property tax', 're tax', 'assessment'],
+    keys: ['real_estate_taxes', 'real estate taxes'],
+  },
+  {
+    terms: ['landlord property policy', 'landlord property insurance', 'property insurance', 'property policy', 'prop ins', 'insurance premium', 'annual property insurance'],
+    keys: ['property_insurance', 'property insurance', 'insurance'],
+  },
+  {
+    terms: ['electricity and water', 'utilities electric', 'util elec', 'electric service', 'water sewer', 'utilities', 'utility'],
+    keys: ['utilities', 'electricity', 'water'],
+  },
+  {
+    terms: ['tenant service contract', 'hvac service', 'hvac maintenance', 'hvac'],
+    keys: ['hvac_maintenance', 'hvac maintenance', 'hvac'],
+  },
+  {
+    terms: ['tenant caused damage', 'tenant caused repair', 'damage by tenant'],
+    keys: ['tenant_repairs', 'tenant repairs', 'repairs maintenance'],
+  },
+  {
+    terms: ['legal review', 'legal assign', 'assignment review', 'consent review'],
+    keys: ['assignment_review_fee', 'assignment review fee'],
+  },
+  {
+    terms: ['resurfacing', 'parking lot', 'park resur', 'paving', 'parking maintenance'],
+    keys: ['common_area_operations', 'common area operations', 'parking'],
+  },
+  {
+    terms: ['tenant improvement', 'ti allowance'],
+    keys: ['tenant_improvements', 'tenant improvements'],
+  },
+  { terms: ['janitorial', 'cleaning'], keys: ['janitorial'] },
+  { terms: ['security', 'patrol', 'gate monitoring'], keys: ['security'] },
+  { terms: ['landscaping', 'landscape'], keys: ['landscaping'] },
+];
+
+function expenseImportAliasCandidates(row = {}) {
+  const text = normalizeImportLookup([
+    row.category,
+    row.expense_category,
+    row.raw_category,
+    row.expense_subcategory,
+    row.gl_code,
+    row.description,
+  ].filter(Boolean).join(' '));
+  if (!text) return [];
+
+  const aliases = [];
+  EXPENSE_IMPORT_CATEGORY_ALIASES.forEach(({ terms, keys }) => {
+    const matched = terms.some((term) => {
+      const normalizedTerm = normalizeImportLookup(term);
+      return normalizedTerm && text.includes(normalizedTerm);
+    });
+    if (matched) aliases.push(...keys);
+  });
+  return aliases.flatMap(importLookupCandidates);
+}
 function resolveExpenseCategoryIdForImport(row = {}, categories = []) {
   const suppliedId = String(row.expense_category_id || '').trim();
   if (UUID_RE.test(suppliedId)) return suppliedId;
@@ -362,6 +421,7 @@ function resolveExpenseCategoryIdForImport(row = {}, categories = []) {
     ...importLookupCandidates(row.expense_category),
     ...importLookupCandidates(row.raw_category),
     ...importLookupCandidates(row.expense_subcategory),
+    ...expenseImportAliasCandidates(row),
   ]);
   if (candidates.size === 0) return null;
 

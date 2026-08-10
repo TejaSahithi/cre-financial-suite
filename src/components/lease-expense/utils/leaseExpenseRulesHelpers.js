@@ -283,7 +283,7 @@ export function isHardCoverageGapRule(rule) {
 }
 
 export function isLeaseDerivedRule(rule) {
-  if (isSupersededRule(rule)) return false;
+  if (isSupersededRule(rule) || isNonExpenseLeaseMetadataRule(rule)) return false;
   if (isHumanApprovedOrManualRule(rule)) return true;
   if (isHardCoverageGapRule(rule)) return false;
   const generationSource = normalizeRuleToken(rule?.generation_source);
@@ -304,7 +304,7 @@ export function isLeaseDerivedRule(rule) {
 }
 
 export function isCoverageGapRule(rule) {
-  if (isSupersededRule(rule)) return false;
+  if (isSupersededRule(rule) || isNonExpenseLeaseMetadataRule(rule)) return false;
   if (isLeaseDerivedRule(rule)) return false;
   return true;
 }
@@ -485,6 +485,69 @@ const NON_CAM_PARTICIPATING_TREATMENTS = new Set([
   "nonrecoverable",
 ]);
 
+
+const NON_EXPENSE_LEASE_METADATA_KEYS = new Set([
+  "lease_date",
+  "lease_term",
+  "term",
+  "commencement_date",
+  "expiration_date",
+  "rent_start_date",
+  "broker",
+  "broker_name",
+  "brokers",
+  "tenant_name",
+  "landlord_name",
+  "tenant_address",
+  "landlord_address",
+  "property_address",
+  "premises_address",
+  "suite_number",
+  "unit_number",
+  "permitted_use",
+  "use",
+  "base_rent",
+  "base_rent_monthly",
+  "monthly_rent",
+  "annual_rent",
+  "rent_frequency",
+  "security_deposit",
+  "assignment_consideration",
+  "landlord_consent",
+  "parking_rights",
+  "rentable_area_sqft",
+]);
+
+const NON_EXPENSE_LEASE_METADATA_TEXT = /\b(?:lease\s+date|lease\s+term|commencement\s+date|expiration\s+date|broker\s+name|brokers?|tenant\s+name|landlord\s+name|tenant\s+address|landlord\s+address|property\s+address|premises\s+address|suite\s+number|permitted\s+use|base\s+rent\s+monthly|base\s+rent|monthly\s+rent|security\s+deposit|rentable\s+area|assignment\s+consideration|landlord\s+consent|parking\s+rights)\b/i;
+
+export function isNonExpenseLeaseMetadataRule(rule = {}) {
+  const keys = [
+    rule?.normalized_key,
+    rule?.fallback_category_key,
+    rule?.expense_category,
+    rule?.expense_subcategory,
+    rule?.category_name,
+    rule?.subcategory_name,
+    rule?.category,
+    rule?.key,
+    rule?.field_key,
+    rule?.source_field_key,
+    rule?.item_type,
+    rule?.clause_type,
+  ].map(normalizeDisplayKey).filter(Boolean);
+  if (keys.some((key) => NON_EXPENSE_LEASE_METADATA_KEYS.has(key))) return true;
+
+  const compactKeys = keys.join(" ");
+  if (NON_EXPENSE_LEASE_METADATA_TEXT.test(compactKeys.replace(/_/g, " "))) return true;
+
+  const sourceText = getRuleSourceText(rule) || rule?.exact_source_text || rule?.source_text || rule?.source || "";
+  const text = String(sourceText || "").trim();
+  if (!text) return false;
+
+  const looksLikeMetadata = NON_EXPENSE_LEASE_METADATA_TEXT.test(text);
+  const looksLikeExpense = /\b(?:cam|common\s+area|operating\s+expense|tax(?:es)?|insurance|utilities?|electric|water|sewer|gas|hvac|janitorial|security|landscap|repair|maintenance|reimburse|recover|pro\s*rata|proportionate\s+share|direct\s+bill|separately\s+metered|late\s+fee|attorney|legal\s+fee|expense\s+stop|base\s+year|cap)\b/i.test(text);
+  return looksLikeMetadata && !looksLikeExpense;
+}
 const CAM_PARTICIPATING_TREATMENTS = new Set([
   "pooled_recovery",
   "direct_recovery",
@@ -704,6 +767,21 @@ function getBusinessCamStatus(rule, model, decision, treatment) {
 
 /** Frozen V1 table projection: one business answer per primary column. */
 export function getSimplifiedRuleView(rule) {
+  if (rule?._findingOnly) {
+    const coverage = rule._coverage || {};
+    const treatment = frozenTreatmentKey(coverage.expenseTreatment);
+    const actualExpense = frozenLandlordExpenseKey(coverage.actualExpenseExpected);
+    return {
+      treatment,
+      treatmentLabel: TREATMENT_LABELS[treatment],
+      cam: "not_applicable",
+      camLabel: CAM_LABELS.not_applicable,
+      camReason: null,
+      actualExpense,
+      actualExpenseLabel: LANDLORD_EXPENSE_LABELS[actualExpense],
+    };
+  }
+
   const model = deriveNormalizedContractModel(rule);
   const decision = deriveRuleDecision(rule);
   const treatment = frozenTreatmentKey(model.recovery_treatment);
@@ -858,7 +936,7 @@ export function buildDisplayRows(ruleSetsByLease, leaseById, categoryById, scope
     const lease = leaseById.get(entry.leaseId);
     const property = lease?.property_id ? scopePropertyById.get(lease.property_id) ?? null : null;
     for (const rule of entry.rules || []) {
-      if (isSupersededRule(rule)) continue;
+      if (isSupersededRule(rule) || isNonExpenseLeaseMetadataRule(rule)) continue;
       const normalizedRule = normalizeLeaseExpenseRule(rule);
       rows.push({
         rule: normalizedRule,
@@ -901,3 +979,4 @@ export function calculateRuleCounts(flattenedRows) {
 
   return summary;
 }
+

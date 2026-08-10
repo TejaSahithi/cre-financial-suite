@@ -65,6 +65,69 @@ const GENERIC_EXPLICIT_CATEGORIES = new Set([
   "utilities",
 ]);
 
+const NON_EXPENSE_LEASE_METADATA_KEYS = new Set([
+  "lease_date",
+  "lease_term",
+  "term",
+  "commencement_date",
+  "expiration_date",
+  "rent_start_date",
+  "broker",
+  "broker_name",
+  "brokers",
+  "tenant_name",
+  "landlord_name",
+  "tenant_address",
+  "landlord_address",
+  "property_address",
+  "premises_address",
+  "suite_number",
+  "unit_number",
+  "permitted_use",
+  "use",
+  "base_rent",
+  "base_rent_monthly",
+  "monthly_rent",
+  "annual_rent",
+  "rent_frequency",
+  "security_deposit",
+  "assignment_consideration",
+  "landlord_consent",
+  "parking_rights",
+  "rentable_area_sqft",
+]);
+
+const NON_EXPENSE_LEASE_METADATA_TEXT = /\b(?:lease\s+date|lease\s+term|commencement\s+date|expiration\s+date|broker\s+name|brokers?|tenant\s+name|landlord\s+name|tenant\s+address|landlord\s+address|property\s+address|premises\s+address|suite\s+number|permitted\s+use|base\s+rent\s+monthly|base\s+rent|monthly\s+rent|security\s+deposit|rentable\s+area|assignment\s+consideration|landlord\s+consent|parking\s+(?:rights|requirements?))\b/i;
+const EXPENSE_SIGNAL_TEXT = /\b(?:cam|common\s+area|operating\s+expense|tax(?:es)?|insurance|utilities?|electric|water|sewer|gas|hvac|janitorial|security|landscap|repair|maintenance|reimburse|recover|pro\s*rata|proportionate\s+share|direct\s+bill|separately\s+metered|late\s+fee|attorney|legal\s+fee|expense\s+stop|base\s+year|cap)\b/i;
+
+function isNonExpenseLeaseMetadataFinding(record, sourceText) {
+  const keys = [
+    record?.normalized_key,
+    record?.fallback_category_key,
+    record?.expense_category,
+    record?.expense_subcategory,
+    record?.category_name,
+    record?.subcategory_name,
+    record?.category,
+    record?.key,
+    record?.field_key,
+    record?.source_field_key,
+    record?.item_type,
+    record?.clause_type,
+    record?.label,
+    record?.title,
+  ].map(normalizeKey).filter(Boolean);
+
+  if (keys.some((key) => NON_EXPENSE_LEASE_METADATA_KEYS.has(key))) return true;
+
+  const keyText = keys.join(" ").replace(/_/g, " ");
+  if (NON_EXPENSE_LEASE_METADATA_TEXT.test(keyText)) return true;
+
+  const text = compactText(sourceText);
+  if (!text) return false;
+  return NON_EXPENSE_LEASE_METADATA_TEXT.test(text) && !EXPENSE_SIGNAL_TEXT.test(text);
+}
+
 function findExpenseCategory(text, explicitCategory) {
   const explicit = normalizeKey(explicitCategory);
   if (explicit && !GENERIC_EXPLICIT_CATEGORIES.has(explicit)) {
@@ -136,6 +199,7 @@ export function extractExpenseClauseFindings(lease) {
     for (const record of records) {
       const sourceText = evidenceTextFromRecord(record);
       if (sourceText.length < 18) continue;
+      if (isNonExpenseLeaseMetadataFinding(record, sourceText)) continue;
       const category = findExpenseCategory(
         sourceText,
         record?.expense_category || record?.category || record?.field_key || record?.clause_type,
@@ -344,3 +408,4 @@ export function calculateFindingCoverageCounts(rows = []) {
   }
   return summary;
 }
+

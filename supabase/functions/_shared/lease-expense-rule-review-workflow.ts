@@ -71,7 +71,7 @@ export async function handleRuleReviewRequest(req: Request, action: "approve" | 
     if (!targetRule) {
       return jsonResponse({
         error: true,
-        message: "Lease expense rule not found for this organization",
+        message: "Lease expense rule no longer exists. Refresh Lease Expense Rules, sync approved rules, and select current rows.",
         error_code: "RULE_NOT_FOUND",
       }, 404);
     }
@@ -152,3 +152,4 @@ export async function handleRuleReviewRequest(req: Request, action: "approve" | 
     }, errorStatus(message));
   }
 }
+
