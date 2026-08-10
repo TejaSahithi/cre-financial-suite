@@ -17,9 +17,10 @@
 
 import { checkGenerationStillActive } from "../generation-fence.ts";
 import { enqueueBoundedEnrichStage } from "./dispatch.ts";
-import { nextEnrichBoundedStage, isFinalEnrichBoundedStage, type EnrichBoundedStageName } from "./stage-sequence.ts";
+import { nextEnrichBoundedStage, isFinalEnrichBoundedStage, isExpensesAndCamEvidenceSubstage, type EnrichBoundedStageName } from "./stage-sequence.ts";
 import { getLeaseDocumentPackageMode } from "../document-package/feature-mode.ts";
 import { getLeaseFinancialScheduleMode } from "../lease-financial-schedule/feature-mode.ts";
+import { mergeBoundedStageResult } from "./stage-persistence.ts";
 
 /**
  * Calls finalize_lease_extraction_for_review exactly the way every other
@@ -91,6 +92,27 @@ export interface BoundedStageOutcome {
   errorMessage?: string | null;
 }
 
+
+function isResourceExhaustionLikeFailure(outcome: BoundedStageOutcome): boolean {
+  const code = String(outcome.errorCode ?? "").toUpperCase();
+  const message = String(outcome.errorMessage ?? "").toLowerCase();
+  return Boolean(outcome.limitExceeded) ||
+    code === "DOWNSTREAM_FUNCTION_FAILED" ||
+    code === "BOUNDED_STAGE_LIMIT_EXCEEDED" ||
+    code === "FUNCTION_RESOURCE_EXHAUSTED" ||
+    code === "WORKER_TIMEOUT" ||
+    code === "FUNCTION_TIMEOUT" ||
+    message.includes("not enough compute resources") ||
+    message.includes("resource") ||
+    message.includes("timeout") ||
+    message.includes("timed out");
+}
+
+function hasReviewDraftPayload(payload: any): boolean {
+  const firstRecord = Array.isArray(payload?.records) ? payload.records[0] : null;
+  return Array.isArray(firstRecord?.standard_fields) && firstRecord.standard_fields.length > 0;
+}
+
 export async function completeBoundedEnrichStage(args: {
   supabaseAdmin: any;
   job: any;
@@ -146,6 +168,72 @@ export async function completeBoundedEnrichStage(args: {
     }
     await enqueueBoundedEnrichStage({ supabaseAdmin, orgId, fileId, stage: next, generationId: job.generation_id ?? null, moduleType, logger });
     return { proceeded: true, chainComplete: false, nextStage: next };
+  }
+
+
+  if (isExpensesAndCamEvidenceSubstage(stage) && isResourceExhaustionLikeFailure(outcome)) {
+    const { data: currentFile } = await supabaseAdmin
+      .from("uploaded_files")
+      .select("ui_review_payload, normalized_output")
+      .eq("id", fileId)
+      .maybeSingle();
+    const currentPayload = currentFile?.ui_review_payload || {};
+    if (hasReviewDraftPayload(currentPayload) && currentFile?.normalized_output) {
+      const updatedNormalizedOutput = mergeBoundedStageResult({
+        normalizedOutput: currentFile.normalized_output,
+        stage,
+        generationId: job.generation_id ?? null,
+        status: "completed",
+        data: [],
+        limitsHit: ["optional_evidence_resource_exhaustion"],
+        errorCode: outcome.errorCode ?? "OPTIONAL_EVIDENCE_RESOURCE_EXHAUSTED",
+        errorMessage: String(outcome.errorMessage ?? "Optional evidence enrichment exceeded function resources").slice(0, 1000),
+      });
+      const warnings = Array.isArray(currentPayload.enrichment_warnings) ? currentPayload.enrichment_warnings : [];
+      await supabaseAdmin.from("uploaded_files").update({
+        normalized_output: updatedNormalizedOutput,
+        ui_review_payload: {
+          ...currentPayload,
+          enrichment_status: currentPayload.enrichment_status ?? "partial_with_warnings",
+          enrichment_warnings: [
+            ...warnings,
+            {
+              stage,
+              code: outcome.errorCode ?? "OPTIONAL_EVIDENCE_RESOURCE_EXHAUSTED",
+              message: String(outcome.errorMessage ?? "Optional evidence enrichment skipped because the function ran out of resources").slice(0, 500),
+            },
+          ],
+        },
+        updated_at: now,
+      }).eq("id", fileId);
+
+      await supabaseAdmin.from("pipeline_jobs").update({
+        status: "completed",
+        error_code: null,
+        error_message: null,
+        completed_at: now,
+        updated_at: now,
+        metadata: {
+          ...(job.metadata || {}),
+          [`${stage}_completed_at`]: now,
+          optional_evidence_resource_skipped: true,
+          original_error_code: outcome.errorCode ?? null,
+          original_error_message: String(outcome.errorMessage ?? "").slice(0, 1000),
+        },
+      }).eq("id", job.id);
+      await logger?.event?.(stage, "completed_with_warning", {
+        error_code: outcome.errorCode ?? "OPTIONAL_EVIDENCE_RESOURCE_EXHAUSTED",
+        error_message: outcome.errorMessage ?? null,
+        metadata: { job_id: job.id, optional_evidence_resource_skipped: true },
+      });
+
+      const next = nextEnrichBoundedStage(stage);
+      if (next) {
+        await enqueueBoundedEnrichStage({ supabaseAdmin, orgId, fileId, stage: next, generationId: job.generation_id ?? null, moduleType, logger });
+      }
+      console.log(`[enrich-bounded-stage/completion] ${stage}_resource_limited_optional_evidence_skipped file_id=${fileId}`);
+      return { proceeded: true, chainComplete: false, nextStage: next, skippedStage: stage };
+    }
   }
 
   // Terminal failure -- this includes outcome.limitExceeded (an oversized

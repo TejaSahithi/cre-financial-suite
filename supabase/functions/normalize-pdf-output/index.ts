@@ -2744,6 +2744,126 @@ const EXPENSES_AND_CAM_SUBSTAGE_GROUPS: Record<string, string[]> = {
   enrich_evidence_insurance: ["insurance"],
   enrich_evidence_utilities: ["utilities"],
 };
+const EXPENSES_AND_CAM_SUBSTAGE_KEYWORDS: Record<string, string[]> = {
+  enrich_evidence_expenses_recoveries: [
+    "expense", "expenses", "recover", "recovery", "reimburse", "reimbursement", "common area",
+    "maintenance", "cam", "operating", "additional rent", "landlord cost", "tenant shall pay",
+  ],
+  enrich_evidence_cam_rules: [
+    "cam", "common area", "operating expense", "additional rent", "pro rata", "share", "allocation",
+    "gross lease", "triple net", "included in rent", "separately metered", "not separately metered",
+  ],
+  enrich_evidence_taxes: [
+    "tax", "taxes", "assessment", "assessments", "real estate tax", "property tax", "ad valorem",
+  ],
+  enrich_evidence_insurance: [
+    "insurance", "insured", "coverage", "policy", "policies", "liability", "premium", "deductible",
+    "additional insured", "worker", "workers", "waiver of subrogation", "certificate of insurance",
+  ],
+  enrich_evidence_utilities: [
+    "utilities", "utility", "electric", "electricity", "water", "sewer", "gas", "heat", "hvac",
+    "metered", "meter", "separately metered", "not separately metered", "tenant pays vendor",
+  ],
+};
+
+function valueText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+
+function objectText(value: any): string {
+  if (!value || typeof value !== "object") return valueText(value);
+  return [
+    valueText(value.text),
+    valueText(value.content),
+    valueText(value.markdown),
+    valueText(value.full_text),
+    valueText(value.value),
+    valueText(value.label),
+    valueText(value.key),
+  ].filter(Boolean).join(" ");
+}
+
+function pageNumberFrom(value: any): number | null {
+  const raw = value?.page ?? value?.page_number ?? value?.source_page ?? value?.number;
+  const page = Number(raw);
+  return Number.isFinite(page) && page > 0 ? page : null;
+}
+
+function textMatchesAnyKeyword(text: string, keywords: string[]): boolean {
+  const lowered = text.toLowerCase();
+  return keywords.some((keyword) => lowered.includes(keyword));
+}
+
+function compactDoclingRawForExpensesAndCamSubstage(
+  doclingRaw: Record<string, unknown> | null,
+  stage: EnrichBoundedStageName,
+): Record<string, unknown> | null {
+  if (!doclingRaw || !isExpensesAndCamEvidenceSubstage(stage)) return doclingRaw;
+  const keywords = EXPENSES_AND_CAM_SUBSTAGE_KEYWORDS[stage] ?? [];
+  if (keywords.length === 0) return doclingRaw;
+
+  const sourceTextBlocks = Array.isArray((doclingRaw as any).text_blocks) ? (doclingRaw as any).text_blocks : [];
+  const sourcePages = Array.isArray((doclingRaw as any).pages) ? (doclingRaw as any).pages : [];
+  const sourceFields = Array.isArray((doclingRaw as any).fields) ? (doclingRaw as any).fields : [];
+  const selectedPages = new Set<number>();
+
+  const filteredTextBlocks = sourceTextBlocks.filter((block: any) => {
+    const text = objectText(block);
+    const matched = textMatchesAnyKeyword(text, keywords);
+    if (matched) {
+      const page = pageNumberFrom(block);
+      if (page) selectedPages.add(page);
+    }
+    return matched;
+  });
+
+  const filteredFields = sourceFields.filter((field: any) => {
+    const text = objectText(field);
+    const matched = textMatchesAnyKeyword(text, keywords);
+    if (matched) {
+      const page = pageNumberFrom(field);
+      if (page) selectedPages.add(page);
+    }
+    return matched;
+  });
+
+  const filteredPages = sourcePages.filter((page: any) => {
+    const pageNumber = pageNumberFrom(page);
+    const text = objectText(page);
+    const matched = textMatchesAnyKeyword(text, keywords) || (pageNumber != null && selectedPages.has(pageNumber));
+    if (matched && pageNumber) selectedPages.add(pageNumber);
+    return matched;
+  });
+
+  if (filteredTextBlocks.length === 0 && filteredPages.length === 0 && filteredFields.length === 0) {
+    return doclingRaw;
+  }
+
+  const compactFullText = [
+    ...filteredTextBlocks.map(objectText),
+    ...filteredPages.map(objectText),
+    ...filteredFields.map(objectText),
+  ].filter(Boolean).join("\n\n").slice(0, 60000);
+
+  return {
+    ...doclingRaw,
+    text_blocks: filteredTextBlocks.length > 0 ? filteredTextBlocks : sourceTextBlocks.slice(0, 80),
+    pages: filteredPages,
+    fields: filteredFields,
+    full_text: compactFullText || valueText((doclingRaw as any).full_text).slice(0, 60000),
+    _metadata: {
+      ...((doclingRaw as any)._metadata || {}),
+      bounded_stage_compacted_for: stage,
+      bounded_stage_original_text_block_count: sourceTextBlocks.length,
+      bounded_stage_compacted_text_block_count: filteredTextBlocks.length,
+      bounded_stage_original_page_count: sourcePages.length || (doclingRaw as any).page_count || null,
+      bounded_stage_compacted_page_count: filteredPages.length,
+    },
+  };
+}
 
 function handleEnrichEvidenceFieldGroupStage(args: {
   stage: EnrichBoundedStageName;
@@ -2757,13 +2877,14 @@ function handleEnrichEvidenceFieldGroupStage(args: {
   normalizedOutput: any;
 }): any {
   const { stage, derivation, extractionModuleType, row, moduleType, doclingRaw, truthAssemblyCanonicalFields, fileRecord, normalizedOutput } = args;
+  const evidenceDoclingRaw = compactDoclingRawForExpensesAndCamSubstage(doclingRaw, stage);
   const groups = EXPENSES_AND_CAM_SUBSTAGE_GROUPS[stage] ?? [];
   const schema = getSchema(extractionModuleType);
   const allSchemaEntries = Object.entries(schema).filter(([, def]) => !(def as any).derived);
   const groupEntries = getSchemaEntriesForFieldGroups(allSchemaEntries, groups as any);
   const values = stripInternalKeys(row);
   if (isLeaseModuleType(moduleType) && isBlank(values.notes)) {
-    const camNote = extractCamNoteFromText(doclingRaw);
+    const camNote = extractCamNoteFromText(evidenceDoclingRaw);
     if (camNote) values.notes = camNote;
   }
   const fieldConfidencesRow = (row._field_confidences ?? {}) as Record<string, number>;
@@ -2776,7 +2897,7 @@ function handleEnrichEvidenceFieldGroupStage(args: {
   return buildStandardFieldsForEntries({
     schemaEntries: groupEntries, index: 0, values, workflowOutput: derivation,
     fieldConfidences: fieldConfidencesRow, fieldSources: fieldSourcesRow, fieldEvidence: fieldEvidenceRow,
-    calculatorDerivationTraces, calculatorDerivationSourceFields, doclingRaw, extractionModuleType,
+    calculatorDerivationTraces, calculatorDerivationSourceFields, doclingRaw: evidenceDoclingRaw, extractionModuleType,
     truthAssemblyCanonicalFields, source, rowConfidence,
   });
 }

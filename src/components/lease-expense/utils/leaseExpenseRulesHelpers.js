@@ -775,7 +775,7 @@ export function getSimplifiedRuleView(rule) {
       treatment,
       treatmentLabel: TREATMENT_LABELS[treatment],
       cam: "not_applicable",
-      camLabel: CAM_LABELS.not_applicable,
+      camLabel: CAM_STATUS_LABELS.not_applicable,
       camReason: null,
       actualExpense,
       actualExpenseLabel: LANDLORD_EXPENSE_LABELS[actualExpense],
