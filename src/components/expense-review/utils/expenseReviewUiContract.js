@@ -255,6 +255,16 @@ export function isExpenseReviewFinalized(row = {}) {
   return isFinalized(row) && deriveExpenseReviewDecision(row).isFinalDecision;
 }
 
+// Expense Review's frozen scope: only finalized classifications that
+// resolved to one of the four outside-CAM routes (Direct Bill, Tenant
+// Direct, Included in Rent, Nonrecoverable). Pooled CAM and Direct Recovery
+// -- CAM-ready or already published -- belong to Lease Expense
+// Classification / CAM, not here, regardless of finalized status.
+export function isExpenseReviewOutsideCamFinalized(row = {}) {
+  if (!row || row.row_type === "rule_missing_actual") return false;
+  return isFinalized(row) && deriveExpenseReviewDecision(row).isOutsideCam;
+}
+
 export function deriveExpenseReviewPolicyEvidence(row = {}, decision = deriveExpenseReviewDecision(row)) {
   const source = squish(row.rule_source);
   const hasRule = hasValue(row.lease_expense_rule_id) || hasValue(row.recovery_rule_id);

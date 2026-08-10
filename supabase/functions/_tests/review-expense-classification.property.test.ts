@@ -1,9 +1,11 @@
 // Feature: enterprise-readiness-hardening Phase 6E-1 (review_expense_classification
-// RPC: Finalize + Reopen only).
+// RPC: Finalize + Reopen only), hardened by UAT Finding A
+// (20269900000055_finalize_requires_resolved_canonical_decision.sql).
 // Properties:
-//   1. finalize succeeds: updates expenses + expense_classifications with
-//      exactly the fields the old client code wrote, writes exactly one
-//      canonical audit_logs row (action: 'expense_classification_finalized').
+//   1. finalize succeeds for a genuinely resolved classification: updates
+//      expenses + expense_classifications with exactly the fields the old
+//      client code wrote, writes exactly one canonical audit_logs row
+//      (action: 'expense_classification_finalized').
 //   2. reopen succeeds: resets expense_classifications state, writes exactly
 //      one canonical audit_logs row (action: 'expense_classification_reopened').
 //   3. A user without write access to LeaseExpenseClassification is blocked
@@ -14,6 +16,20 @@
 //      writes, no audit row.
 //   6. Existing behavior for other expense actions is unaffected — verified
 //      by the full regression suite, not re-tested here.
+//   7. (UAT Finding A) An unmatched classification (no canonical category,
+//      no linked rule) cannot be finalized as recoverable, no matter what
+//      recovery_status the caller claims — the classic exploit reproduced
+//      against 7 real rows in the UAT.
+//   8. A classification with recoverability "conditional" cannot finalize.
+//   9. A classification flagged exception_type "policy_conflict" cannot
+//      finalize.
+//  10. Property-wide Pooled CAM: a classification with NO single linked
+//      rule can still finalize as recoverable when real approved/effective
+//      pooled recovery-policy coverage exists for its canonical category on
+//      its property.
+//  11. Direct Recovery: a rule whose recovery_method is 'direct_recovery'
+//      can only finalize when the classification has a tenant_id or
+//      lease_id; without either, finalize is rejected (needs_tenant_lease).
 import {
   assertEquals,
   assertExists,
@@ -89,32 +105,77 @@ function callReviewExpenseClassification(accessToken: string, body: Record<strin
   });
 }
 
-async function setUpScope(admin: ReturnType<typeof adminClient>, suffix: string) {
+async function setUpOrgAndProperty(admin: ReturnType<typeof adminClient>, suffix: string) {
   const org = await insertOne(admin, "organizations", {
     name: `Review Expense Classification Org ${suffix}`,
     status: "active",
   });
-
   const { accessToken, userId, email } = await createOrgUser(admin, suffix, org.id, "org_admin");
-
   const property = await insertOne(admin, "properties", {
     org_id: org.id,
     name: `Review Expense Classification Property ${suffix}`,
     status: "active",
   });
+  return { org, accessToken, userId, email, property };
+}
+
+// Baseline fixture: a genuinely RESOLVED classification -- real canonical
+// category, real approved pooled-recovery rule linked to it, real service
+// period. This is what "finalize succeeds" should look like after the UAT
+// Finding A hardening; the pre-hardening version of this test built a
+// classification with no category and no rule at all and asserted finalize
+// still succeeded, which was exactly the exploit.
+async function setUpScope(admin: ReturnType<typeof adminClient>, suffix: string) {
+  const { org, accessToken, userId, email, property } = await setUpOrgAndProperty(admin, suffix);
+
+  const category = await insertOne(admin, "expense_categories", {
+    org_id: org.id,
+    category_name: `CAM ${suffix}`,
+    normalized_key: `cam_${suffix}`,
+    is_active: true,
+  });
+
+  const lease = await insertOne(admin, "leases", {
+    org_id: org.id,
+    property_id: property.id,
+    tenant_name: `Tester Tenant ${suffix}`,
+    status: "approved",
+  });
+
+  const rule = await insertOne(admin, "lease_expense_rules", {
+    org_id: org.id,
+    lease_id: lease.id,
+    property_id: property.id,
+    expense_category_id: category.id,
+    expense_category: "common_area_maintenance",
+    payment_treatment: "reimbursable",
+    recovery_method: "pro_rata_share",
+    approval_status: "approved",
+    recoverable_from_tenant: "yes",
+  });
 
   const expense = await insertOne(admin, "expenses", {
     org_id: org.id,
     property_id: property.id,
+    lease_id: lease.id,
+    expense_category_id: category.id,
     category: "CAM",
     amount: 2500,
+    service_period_start: "2026-01-01",
+    service_period_end: "2026-01-31",
   });
 
   const classification = await insertOne(admin, "expense_classifications", {
     org_id: org.id,
     property_id: property.id,
+    lease_id: lease.id,
     expense_id: expense.id,
     actual_expense_id: expense.id,
+    expense_category_id: category.id,
+    linked_expense_rule_id: rule.id,
+    lease_expense_rule_id: rule.id,
+    service_period_start: "2026-01-01",
+    service_period_end: "2026-01-31",
     recovery_status: "needs_review",
     recoverability_result: "needs_review",
     cam_eligible: "yes",
@@ -124,11 +185,11 @@ async function setUpScope(admin: ReturnType<typeof adminClient>, suffix: string)
     classification_key: `${org.id}:${expense.id}:manual`,
   });
 
-  return { org, accessToken, userId, email, property, expense, classification };
+  return { org, accessToken, userId, email, property, lease, category, rule, expense, classification };
 }
 
 Deno.test({
-  name: "review_expense_classification: finalize succeeds, exactly one audit row, correct field shape",
+  name: "review_expense_classification: finalize succeeds for a resolved Pooled CAM classification, exactly one audit row, correct field shape",
   sanitizeResources: false,
   sanitizeOps: false,
   fn: async () => {
@@ -324,5 +385,280 @@ Deno.test({
       .eq("entity_id", classification.id);
     assertNoError(auditErr);
     assertEquals(auditRows?.length ?? 0, 0, "a rejected action must not write any audit row");
+  },
+});
+
+// ---------------------------------------------------------------------------
+// UAT Finding A: finalize must reject unresolved classifications, never
+// trust p_recovery_status alone.
+// ---------------------------------------------------------------------------
+
+Deno.test({
+  name: "UAT Finding A: an unmatched classification (no category, no rule) cannot finalize as recoverable",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { org, accessToken, property } = await setUpOrgAndProperty(admin, suffix);
+
+    // Mirrors the 7 real Riverfront Commerce Center rows this UAT found:
+    // property-level expense, no lease, no canonical category, no rule.
+    const expense = await insertOne(admin, "expenses", {
+      org_id: org.id,
+      property_id: property.id,
+      category: "unclassified_utility",
+      amount: 1000,
+    });
+    const classification = await insertOne(admin, "expense_classifications", {
+      org_id: org.id,
+      property_id: property.id,
+      expense_id: expense.id,
+      actual_expense_id: expense.id,
+      linked_expense_rule_id: null,
+      recovery_status: "needs_review",
+      recoverability_result: "needs_review",
+      cam_eligible: "needs_review",
+      classification_status: "unmatched",
+      exception_type: "unmatched",
+      approved_status: "draft",
+      amount: 1000,
+      classification_key: `${org.id}:${expense.id}:manual`,
+    });
+
+    const res = await callReviewExpenseClassification(accessToken, {
+      classification_id: classification.id,
+      action: "finalize",
+      recovery_status: "recoverable",
+    });
+    const body = await res.json();
+    assertEquals(body.error, true, `expected finalize to be rejected: ${JSON.stringify(body)}`);
+    assertEquals(res.status, 400, `expected 400, got ${res.status}: ${JSON.stringify(body)}`);
+    assertEquals(/not resolved|needs_category/i.test(body.message || ""), true, `expected an unresolved-decision message: ${JSON.stringify(body)}`);
+
+    const { data: classificationAfter } = await admin
+      .from("expense_classifications")
+      .select("classification_status, recoverability_result, finalized_at")
+      .eq("id", classification.id)
+      .single();
+    assertEquals(classificationAfter?.classification_status, "unmatched", "rejected finalize must not change classification_status");
+    assertEquals(classificationAfter?.recoverability_result, "needs_review", "rejected finalize must not fabricate recoverable");
+    assertEquals(classificationAfter?.finalized_at, null);
+  },
+});
+
+Deno.test({
+  name: "UAT Finding A: a conditional classification cannot finalize",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { accessToken, classification } = await setUpScope(admin, suffix);
+
+    await admin.from("expense_classifications").update({ recoverability_result: "conditional" }).eq("id", classification.id);
+
+    const res = await callReviewExpenseClassification(accessToken, {
+      classification_id: classification.id,
+      action: "finalize",
+      recovery_status: "recoverable",
+    });
+    const body = await res.json();
+    assertEquals(body.error, true, `expected finalize to be rejected: ${JSON.stringify(body)}`);
+    assertEquals(res.status, 400, `expected 400, got ${res.status}: ${JSON.stringify(body)}`);
+    assertEquals(/conditional_review/i.test(body.message || ""), true, `expected a conditional_review message: ${JSON.stringify(body)}`);
+  },
+});
+
+Deno.test({
+  name: "UAT Finding A: a policy_conflict classification cannot finalize",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { accessToken, classification } = await setUpScope(admin, suffix);
+
+    await admin.from("expense_classifications").update({ exception_type: "policy_conflict" }).eq("id", classification.id);
+
+    const res = await callReviewExpenseClassification(accessToken, {
+      classification_id: classification.id,
+      action: "finalize",
+      recovery_status: "recoverable",
+    });
+    const body = await res.json();
+    assertEquals(body.error, true, `expected finalize to be rejected: ${JSON.stringify(body)}`);
+    assertEquals(res.status, 400, `expected 400, got ${res.status}: ${JSON.stringify(body)}`);
+    assertEquals(/policy_conflict/i.test(body.message || ""), true, `expected a policy_conflict message: ${JSON.stringify(body)}`);
+  },
+});
+
+Deno.test({
+  name: "UAT Finding A: property-wide Pooled CAM can finalize without a single linked rule when valid pooled policy coverage exists",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { org, accessToken, userId, email, property, category, rule } = await setUpScope(admin, suffix);
+
+    // Materialize the SAME approved rule into a real recovery policy via the
+    // existing RPC (not a hand-built policy row), then classify a SECOND,
+    // property-level expense with NO single linked rule against that
+    // category -- exactly the "pooled CAM aggregates across the property"
+    // shape the instruction requires.
+    const { data: materializeResult, error: materializeError } = await admin.rpc("materialize_lease_recovery_policy", {
+      p_org_id: org.id,
+      p_rule_id: rule.id,
+      p_actor_user_id: userId,
+      p_actor_email: email,
+    });
+    assertNoError(materializeError);
+    assertExists(materializeResult);
+
+    const pooledExpense = await insertOne(admin, "expenses", {
+      org_id: org.id,
+      property_id: property.id,
+      expense_category_id: category.id,
+      category: "CAM",
+      amount: 800,
+      service_period_start: "2026-01-05",
+      service_period_end: "2026-01-25",
+    });
+    const pooledClassification = await insertOne(admin, "expense_classifications", {
+      org_id: org.id,
+      property_id: property.id,
+      expense_id: pooledExpense.id,
+      actual_expense_id: pooledExpense.id,
+      expense_category_id: category.id,
+      linked_expense_rule_id: null,
+      service_period_start: "2026-01-05",
+      service_period_end: "2026-01-25",
+      recovery_status: "needs_review",
+      recoverability_result: "needs_review",
+      cam_eligible: "yes",
+      classification_status: "matched",
+      approved_status: "draft",
+      amount: 800,
+      classification_key: `${org.id}:${pooledExpense.id}:manual`,
+    });
+
+    const res = await callReviewExpenseClassification(accessToken, {
+      classification_id: pooledClassification.id,
+      action: "finalize",
+      recovery_status: "recoverable",
+    });
+    const body = await res.json();
+    assertEquals(res.status, 200, `expected pooled-without-rule finalize to succeed: ${JSON.stringify(body)}`);
+    assertEquals(body.row.classification_status, "finalized");
+    assertEquals(body.row.recoverability_result, "recoverable");
+  },
+});
+
+Deno.test({
+  name: "UAT Finding A: Direct Recovery requires a tenant or lease -- rejected without one, accepted with one",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { org, accessToken, property, category } = await setUpScope(admin, suffix);
+
+    const directLease = await insertOne(admin, "leases", {
+      org_id: org.id,
+      property_id: property.id,
+      tenant_name: `Direct Recovery Tenant ${suffix}`,
+      status: "approved",
+    });
+    const directRule = await insertOne(admin, "lease_expense_rules", {
+      org_id: org.id,
+      lease_id: directLease.id,
+      property_id: property.id,
+      expense_category_id: category.id,
+      expense_category: "utilities",
+      payment_treatment: "reimbursable",
+      recovery_method: "direct_recovery",
+      approval_status: "approved",
+      recoverable_from_tenant: "yes",
+    });
+
+    // No tenant_id / lease_id on the classification -- must be rejected.
+    const noTenantExpense = await insertOne(admin, "expenses", {
+      org_id: org.id,
+      property_id: property.id,
+      expense_category_id: category.id,
+      category: "utilities",
+      amount: 500,
+      service_period_start: "2026-02-01",
+      service_period_end: "2026-02-28",
+    });
+    const noTenantClassification = await insertOne(admin, "expense_classifications", {
+      org_id: org.id,
+      property_id: property.id,
+      expense_id: noTenantExpense.id,
+      actual_expense_id: noTenantExpense.id,
+      expense_category_id: category.id,
+      linked_expense_rule_id: directRule.id,
+      lease_id: null,
+      tenant_id: null,
+      service_period_start: "2026-02-01",
+      service_period_end: "2026-02-28",
+      recovery_status: "needs_review",
+      recoverability_result: "needs_review",
+      cam_eligible: "yes",
+      classification_status: "matched",
+      approved_status: "draft",
+      amount: 500,
+      classification_key: `${org.id}:${noTenantExpense.id}:manual`,
+    });
+
+    const rejectedRes = await callReviewExpenseClassification(accessToken, {
+      classification_id: noTenantClassification.id,
+      action: "finalize",
+      recovery_status: "recoverable",
+    });
+    const rejectedBody = await rejectedRes.json();
+    assertEquals(rejectedBody.error, true, `expected direct-recovery-without-tenant to be rejected: ${JSON.stringify(rejectedBody)}`);
+    assertEquals(rejectedRes.status, 400, `expected 400, got ${rejectedRes.status}: ${JSON.stringify(rejectedBody)}`);
+    assertEquals(/needs_tenant_lease/i.test(rejectedBody.message || ""), true, `expected a needs_tenant_lease message: ${JSON.stringify(rejectedBody)}`);
+
+    // Same rule, same category, but WITH a lease_id -- must succeed.
+    const withLeaseExpense = await insertOne(admin, "expenses", {
+      org_id: org.id,
+      property_id: property.id,
+      lease_id: directLease.id,
+      expense_category_id: category.id,
+      category: "utilities",
+      amount: 500,
+      service_period_start: "2026-02-01",
+      service_period_end: "2026-02-28",
+    });
+    const withLeaseClassification = await insertOne(admin, "expense_classifications", {
+      org_id: org.id,
+      property_id: property.id,
+      lease_id: directLease.id,
+      expense_id: withLeaseExpense.id,
+      actual_expense_id: withLeaseExpense.id,
+      expense_category_id: category.id,
+      linked_expense_rule_id: directRule.id,
+      service_period_start: "2026-02-01",
+      service_period_end: "2026-02-28",
+      recovery_status: "needs_review",
+      recoverability_result: "needs_review",
+      cam_eligible: "yes",
+      classification_status: "matched",
+      approved_status: "draft",
+      amount: 500,
+      classification_key: `${org.id}:${withLeaseExpense.id}:manual`,
+    });
+
+    const acceptedRes = await callReviewExpenseClassification(accessToken, {
+      classification_id: withLeaseClassification.id,
+      action: "finalize",
+      recovery_status: "recoverable",
+    });
+    const acceptedBody = await acceptedRes.json();
+    assertEquals(acceptedRes.status, 200, `expected direct-recovery-with-lease to succeed: ${JSON.stringify(acceptedBody)}`);
+    assertEquals(acceptedBody.row.classification_status, "finalized");
   },
 });

@@ -29,14 +29,17 @@ import {
   filterFinalizedExpenseReviewRows,
   getExpenseReviewExceptionCounts,
   isExpenseReviewException,
-  isExpenseReviewFinalized,
+  isExpenseReviewOutsideCamFinalized,
 } from "@/components/expense-review/utils/expenseReviewUiContract";
 
+// Expense Review's frozen scope is outside-CAM only -- Pooled CAM and Direct
+// Recovery are CAM routes, managed on Lease Expense Classification / CAM.
 const FINALIZED_FILTERS = [
-  { value: "all", label: "All Finalized" },
-  { value: "ready_for_cam", label: "Ready for CAM" },
-  { value: "published", label: "Published" },
-  { value: "outside_cam", label: "Outside CAM" },
+  { value: "all", label: "All Outside CAM" },
+  { value: "direct_bill", label: "Direct Bill" },
+  { value: "tenant_direct", label: "Tenant Direct" },
+  { value: "included_in_rent", label: "Included in Rent" },
+  { value: "nonrecoverable", label: "Nonrecoverable" },
 ];
 
 function formatCurrency(value, options = {}) {
@@ -111,7 +114,7 @@ async function exportPdf(rows, tieOut) {
   doc.text("Expense Review V1 - Finalized Expenses", 36, y);
   y += 22;
   doc.setFontSize(9);
-  doc.text(`Total Finalized: ${formatCurrency(tieOut.totalFinalized)}   Rows: ${tieOut.rows}   Ready for CAM: ${formatCurrency(tieOut.readyForCam)}   Published CAM: ${formatCurrency(tieOut.publishedCam)}`, 36, y);
+  doc.text(`Total Finalized (Outside CAM): ${formatCurrency(tieOut.totalFinalized)}   Rows: ${tieOut.rows}   Direct Bill: ${formatCurrency(tieOut.directBill)}   Tenant Direct: ${formatCurrency(tieOut.tenantDirect)}   Included in Rent: ${formatCurrency(tieOut.includedInRent)}   Nonrecoverable: ${formatCurrency(tieOut.nonrecoverable)}`, 36, y);
   y += 20;
   const columns = ["Date", "Vendor", "Property", "Tenant", "Category", "Amount", "Decision", "CAM Status"];
   const widths = [62, 110, 120, 110, 105, 70, 92, 92];
@@ -138,7 +141,7 @@ function exportWord(rows, tieOut) {
   if (!reportRows.length) return toast.info("No finalized expenses to export.");
   const headers = Object.keys(reportRows[0]);
   const htmlRows = reportRows.map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(row[header])}</td>`).join("")}</tr>`).join("");
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Expense Review V1</title><style>body{font-family:Arial,sans-serif;color:#111827}table{border-collapse:collapse;width:100%;font-size:10pt}th,td{border:1px solid #cbd5e1;padding:5px;text-align:left}th{background:#f1f5f9}</style></head><body><h1>Expense Review V1 - Finalized Expenses</h1><p>Total Finalized: ${formatCurrency(tieOut.totalFinalized)} | Rows: ${tieOut.rows} | Ready for CAM: ${formatCurrency(tieOut.readyForCam)} | Published CAM: ${formatCurrency(tieOut.publishedCam)}</p><table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${htmlRows}</tbody></table></body></html>`;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Expense Review V1</title><style>body{font-family:Arial,sans-serif;color:#111827}table{border-collapse:collapse;width:100%;font-size:10pt}th,td{border:1px solid #cbd5e1;padding:5px;text-align:left}th{background:#f1f5f9}</style></head><body><h1>Expense Review V1 - Finalized Expenses (Outside CAM)</h1><p>Total Finalized: ${formatCurrency(tieOut.totalFinalized)} | Rows: ${tieOut.rows} | Direct Bill: ${formatCurrency(tieOut.directBill)} | Tenant Direct: ${formatCurrency(tieOut.tenantDirect)} | Included in Rent: ${formatCurrency(tieOut.includedInRent)} | Nonrecoverable: ${formatCurrency(tieOut.nonrecoverable)}</p><table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${htmlRows}</tbody></table></body></html>`;
   downloadBlob(html, buildReportFilename("doc"), "application/msword;charset=utf-8");
 }
 
@@ -253,7 +256,7 @@ export default function ExpenseReview() {
       };
     }), [scopedClassifications, actualExpenseById, scope.propertyById, scope.buildingById, scope.unitById, leases, allUnits, tenants]);
 
-  const finalizedBaseRows = useMemo(() => reviewRows.filter((row) => isExpenseReviewFinalized(row)), [reviewRows]);
+  const finalizedBaseRows = useMemo(() => reviewRows.filter((row) => isExpenseReviewOutsideCamFinalized(row)), [reviewRows]);
   const finalizedClassificationIds = useMemo(() => finalizedBaseRows.map((expense) => expense.id).filter(Boolean), [finalizedBaseRows]);
 
   const { data: publishedCamInputs = [], isLoading: isLoadingCamInputs } = useQuery({
@@ -383,11 +386,11 @@ export default function ExpenseReview() {
       />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <MetricCard label="Total Finalized" value={formatCurrency(finalizedSummary.totalFinalized)} sub="accepted routes only" />
+        <MetricCard label="Total Finalized" value={formatCurrency(finalizedSummary.totalFinalized)} sub="outside-CAM routes only" />
         <MetricCard label="Rows" value={finalizedSummary.rows} sub="finalized classifications" />
-        <MetricCard label="Ready for CAM" value={formatCurrency(finalizedSummary.readyForCam)} sub={`${finalizedSummary.readyForCamRows} rows`} />
-        <MetricCard label="Published CAM" value={formatCurrency(finalizedSummary.publishedCam)} sub={`${finalizedSummary.publishedCamRows} active inputs`} />
-        <MetricCard label="Outside CAM" value={formatCurrency(finalizedSummary.outsideCam)} sub={`${finalizedSummary.outsideCamRows} rows`} />
+        <MetricCard label="Direct Bill" value={formatCurrency(finalizedSummary.directBill)} sub="route to billing" />
+        <MetricCard label="Tenant Direct" value={formatCurrency(finalizedSummary.tenantDirect)} sub="tenant pays vendor" />
+        <MetricCard label="Included in Rent / Nonrecoverable" value={formatCurrency(finalizedSummary.includedInRent + finalizedSummary.nonrecoverable)} sub="no separate recovery" />
       </div>
 
       <Card className={finalizedSummary.tieOutOk ? "border-emerald-200 bg-emerald-50/60" : "border-red-200 bg-red-50/70"}>
@@ -396,7 +399,7 @@ export default function ExpenseReview() {
             {finalizedSummary.tieOutOk ? <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" /> : <ShieldAlert className="mt-0.5 h-4 w-4 text-red-600" />}
             <div>
               <p className={finalizedSummary.tieOutOk ? "font-semibold text-emerald-800" : "font-semibold text-red-800"}>{finalizedSummary.tieOutOk ? "Financial Tie-Out Complete" : "Financial Tie-Out Mismatch"}</p>
-              <p className="text-xs text-slate-600">Total Finalized Expense Amount = Pooled CAM + Direct Recovery + Direct Bill + Tenant Direct + Included in Rent + Nonrecoverable.</p>
+              <p className="text-xs text-slate-600">Total Finalized Expense Amount = Direct Bill + Tenant Direct + Included in Rent + Nonrecoverable. Pooled CAM and Direct Recovery are managed on Lease Expense Classification / CAM, not here.</p>
             </div>
           </div>
           <div className="text-xs text-slate-600 lg:text-right">
@@ -435,7 +438,7 @@ export default function ExpenseReview() {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <CardTitle className="text-base">Finalized Expenses</CardTitle>
-              <p className="mt-1 text-xs text-slate-500">Finalized classifications for the selected scope. These rows show the authoritative financial route for each approved actual expense. CAM-eligible rows must still be separately published to CAM.</p>
+              <p className="mt-1 text-xs text-slate-500">Finalized outside-CAM classifications for the selected scope: Direct Bill, Tenant Direct, Included in Rent, and Nonrecoverable. Pooled CAM and Direct Recovery routes are managed on Lease Expense Classification / CAM.</p>
             </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -615,11 +618,9 @@ function LoadingState({ label }) {
 }
 
 function FinalizedEmptyState({ filter }) {
-  const message = filter === "ready_for_cam"
-    ? "No finalized expenses are currently ready to publish to CAM."
-    : filter === "outside_cam"
-      ? "No finalized outside-CAM expenses for this scope."
-      : "No finalized expense classifications for this scope.";
+  const message = filter === "all"
+    ? "No finalized outside-CAM expense classifications for this scope."
+    : `No finalized ${filter.replace(/_/g, " ")} expenses for this scope.`;
   return <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">{message}</div>;
 }
 

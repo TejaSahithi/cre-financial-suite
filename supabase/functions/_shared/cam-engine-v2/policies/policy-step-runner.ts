@@ -93,6 +93,16 @@ export function runPolicySteps(
         if (recoveryMethod === "fixed_percentage" && tenantSharePercent != null) {
           share = tenantSharePercent / 100;
           formula = "FIXED_PERCENTAGE";
+        } else if (before === 0) {
+          // No allocable pool amount reached this step this segment (e.g. a
+          // month the pool's published expenses don't cover at all) --
+          // `running` will stay exactly 0 regardless of what share is
+          // computed here (0 * anything = 0), so a missing/zero denominator
+          // has no effect on the output and is not a real data defect.
+          // Blocking on it would fail readiness for months that legitimately
+          // have nothing to allocate. See CAM readiness/engine parity fix.
+          share = 0;
+          formula = "AREA_PRO_RATA_NO_AMOUNT";
         } else {
           if (ctx.denominatorArea <= 0) {
             exceptions.push({

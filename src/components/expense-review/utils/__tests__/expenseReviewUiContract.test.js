@@ -8,6 +8,7 @@ import {
   getExpenseReviewExceptionCounts,
   isExpenseReviewException,
   isExpenseReviewFinalized,
+  isExpenseReviewOutsideCamFinalized,
 } from "../expenseReviewUiContract";
 
 const baseFinalized = {
@@ -128,6 +129,66 @@ describe("expenseReviewUiContract", () => {
     expect(row.v1CamStatus.label).toBe("N/A");
     expect(row.v1PolicyEvidence.label).toBe("No Policy Required");
     expect(canSendExpenseReviewRowToCam(row)).toBe(false);
+  });
+
+  describe("isExpenseReviewOutsideCamFinalized (UAT: Expense Review frozen scope)", () => {
+    // Expense Review's frozen definition: only finalized classifications
+    // resolving to Direct Bill, Tenant Direct, Included in Rent, or
+    // Nonrecoverable. Pooled CAM and Direct Recovery -- CAM-ready or
+    // already published -- must never appear here, regardless of finalized
+    // status.
+    it("excludes a finalized Pooled CAM row", () => {
+      expect(isExpenseReviewFinalized(baseFinalized)).toBe(true);
+      expect(isExpenseReviewOutsideCamFinalized(baseFinalized)).toBe(false);
+    });
+
+    it("excludes a finalized Direct Recovery row", () => {
+      const row = { ...baseFinalized, id: "direct-recovery", recovery_method: "direct_recovery", lease_id: "l1", tenant_id: "t1" };
+      expect(isExpenseReviewOutsideCamFinalized(row)).toBe(false);
+    });
+
+    it("excludes a finalized row already published to CAM (publication doesn't change the underlying route)", () => {
+      const row = { ...baseFinalized, id: "published-pooled", sent_to_cam: true, cam_status: "published" };
+      expect(isExpenseReviewOutsideCamFinalized(row)).toBe(false);
+    });
+
+    it.each([
+      ["direct_bill", "Direct Bill"],
+      ["tenant_direct", "Tenant Direct"],
+      ["included_in_rent", "Included in Rent"],
+      ["non_recoverable", "Nonrecoverable"],
+    ])("includes a finalized %s row", (recoveryMethodOrResult, expectedLabel) => {
+      const row = {
+        ...baseFinalized,
+        id: `outside-${recoveryMethodOrResult}`,
+        cam_eligible: "no",
+        recovery_method: recoveryMethodOrResult === "non_recoverable" ? undefined : recoveryMethodOrResult,
+        recoverability_result: recoveryMethodOrResult === "non_recoverable" ? "non_recoverable" : baseFinalized.recoverability_result,
+      };
+      expect(isExpenseReviewOutsideCamFinalized(row)).toBe(true);
+      expect(buildExpenseReviewUiRow(row).v1Decision.label).toBe(expectedLabel);
+    });
+
+    it("excludes an unresolved (unmatched/exception) row even though it is not a CAM route", () => {
+      const row = { id: "unresolved", actual_expense_id: "e9", classification_status: "unmatched", exception_type: "unmatched", property_id: "p1", amount: 40 };
+      expect(isExpenseReviewOutsideCamFinalized(row)).toBe(false);
+      expect(isExpenseReviewException(row)).toBe(true);
+    });
+
+    it("Expense Review row set built from a mixed batch contains only the four outside-CAM decisions", () => {
+      const rows = [
+        { ...baseFinalized, id: "pooled" },
+        { ...baseFinalized, id: "direct-recovery", recovery_method: "direct_recovery", lease_id: "l1", tenant_id: "t1" },
+        { ...baseFinalized, id: "direct-bill", recovery_method: "direct_bill", cam_eligible: "no" },
+        { ...baseFinalized, id: "tenant-direct", recovery_method: "tenant_direct", cam_eligible: "no" },
+        { ...baseFinalized, id: "included-in-rent", recovery_method: "included_in_rent", cam_eligible: "no" },
+        { ...baseFinalized, id: "nonrecoverable", recoverability_result: "non_recoverable", recovery_method: undefined, cam_eligible: "no" },
+        { id: "needs-category", actual_expense_id: "e10", classification_status: "exception", exception_type: "needs_category", property_id: "p1", amount: 5 },
+      ];
+
+      const expenseReviewRows = rows.filter(isExpenseReviewOutsideCamFinalized);
+      expect(expenseReviewRows.map((row) => row.id).sort()).toEqual(["direct-bill", "included-in-rent", "nonrecoverable", "tenant-direct"]);
+    });
   });
 });
 
