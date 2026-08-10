@@ -10,6 +10,7 @@ import { createNotificationsForEvent } from "@/services/notificationService";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction, invokeEdgeFunctionFormData } from "@/services/edgeFunctions";
 import useOrgQuery from "@/hooks/useOrgQuery";
+import useExpenseCategories from "@/hooks/useExpenseCategories";
 import { buildHierarchyScope } from "@/lib/hierarchyScope";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import {
@@ -88,7 +89,7 @@ export default function AddExpense() {
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
-  const { data: expenseCategories = [] } = useOrgQuery("ExpenseCategory");
+  const { data: expenseCategories = [] } = useExpenseCategories();
 
   const scope = useMemo(
     () =>

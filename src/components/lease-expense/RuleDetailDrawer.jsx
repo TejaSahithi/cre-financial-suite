@@ -79,13 +79,13 @@ export default function RuleDetailDrawer({ context, onOpenChange }) {
   const policyStatus = camPolicyStatus !== undefined ? camPolicyStatus : getPolicyStatus(rule, [], false);
   const appliesWhen = getAppliesWhenLabel(rule);
   const amountFormula = getAmountFormulaLabel(rule);
-  const model = view.model;
+  const model = view?.model || {};
   const policy = policyStatus?.policy || null;
   const policyVersion = policy?.materializer_version || policy?.source_rule_hash || null;
   const capText = [
     rule.cap_type ? humanizeToken(rule.cap_type) : null,
     rule.cap_percent != null ? `${rule.cap_percent}%` : null,
-    money(rule.cap_amount ?? model.cap),
+    money(rule.cap_amount ?? model?.cap),
   ].filter(Boolean).join(" - ") || null;
 
   return (
@@ -112,26 +112,26 @@ export default function RuleDetailDrawer({ context, onOpenChange }) {
           </Section>
 
           <Section title="Responsibility &amp; billing">
-            <Field label="Responsibility / cost bearer" value={humanizeToken(model.cost_bearer)} />
-            <Field label="Vendor payment party" value={humanizeToken(model.vendor_payment_party)} />
-            <Field label="Allocation method" value={humanizeToken(model.allocation_method)} />
-            <Field label="Billing frequency" value={humanizeToken(model.billing_frequency)} />
+            <Field label="Responsibility / cost bearer" value={humanizeToken(model?.cost_bearer)} />
+            <Field label="Vendor payment party" value={humanizeToken(model?.vendor_payment_party)} />
+            <Field label="Allocation method" value={humanizeToken(model?.allocation_method)} />
+            <Field label="Billing frequency" value={humanizeToken(model?.billing_frequency)} />
           </Section>
 
           <Section title="Recovery terms">
             <Field label="Cap" value={capText} />
-            <Field label="Share" value={model.share != null ? `${model.share}%` : rule.tenant_share_percent != null ? `${rule.tenant_share_percent}%` : null} />
-            <Field label="Base year" value={model.base_year} />
-            <Field label="Expense stop" value={money(model.expense_stop)} />
+            <Field label="Share" value={model?.share != null ? `${model.share}%` : rule.tenant_share_percent != null ? `${rule.tenant_share_percent}%` : null} />
+            <Field label="Base year" value={model?.base_year} />
+            <Field label="Expense stop" value={money(model?.expense_stop)} />
             <Field label="Admin fee" value={rule.admin_fee_percent != null ? `${rule.admin_fee_percent}%` : rule.admin_fee_applicable ? "Yes" : null} />
             <Field label="Gross-up" value={rule.gross_up_percent != null ? `${rule.gross_up_percent}%` : rule.gross_up_applicable ? "Yes" : null} />
             <Field label="Reconciliation required" value={rule.reconciliation_required ? "Yes" : "No"} />
           </Section>
 
           <Section title="Scope &amp; term">
-            <Field label="Scope" value={humanizeToken(model.scope)} />
-            <Field label="Effective start" value={model.effective_start_date} />
-            <Field label="Effective end" value={model.effective_end_date || "Ongoing"} />
+            <Field label="Scope" value={humanizeToken(model?.scope)} />
+            <Field label="Effective start" value={model?.effective_start_date} />
+            <Field label="Effective end" value={model?.effective_end_date || "Ongoing"} />
           </Section>
 
           <Section title="CAM policy">
@@ -152,7 +152,7 @@ export default function RuleDetailDrawer({ context, onOpenChange }) {
                 {rule.source_page ? `Page ${rule.source_page}` : "Source clause"}
               </p>
               <p className="mt-1 whitespace-pre-wrap text-sm italic text-slate-700">
-                {model.source_evidence || rule.exact_source_text || rule.source_text || "No clause text on file."}
+                {model?.source_evidence || rule.exact_source_text || rule.source_text || "No clause text on file."}
               </p>
             </div>
           </Section>

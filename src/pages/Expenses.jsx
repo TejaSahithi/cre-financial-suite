@@ -27,6 +27,7 @@ import PageHeader from "@/components/PageHeader";
 import ScopeSelector from "@/components/ScopeSelector";
 import VendorSpendAnalysis from "@/components/expenses/VendorSpendAnalysis";
 import useOrgQuery from "@/hooks/useOrgQuery";
+import useExpenseCategories from "@/hooks/useExpenseCategories";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { ExpenseService } from "@/services/api";
 import { expenseService } from "@/services/expenseService";
@@ -286,7 +287,7 @@ export default function Expenses() {
   const { data: allUnits = [] } = useOrgQuery("Unit");
   const { data: vendors = [] } = useOrgQuery("Vendor");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
-  const { data: expenseCategories = [] } = useOrgQuery("ExpenseCategory");
+  const { data: expenseCategories = [] } = useExpenseCategories();
 
   const scope = useMemo(
     () =>

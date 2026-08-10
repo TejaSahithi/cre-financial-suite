@@ -31,6 +31,7 @@ import {
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import StatCard from "@/components/lease-expense/StatCard";
 import useOrgQuery from "@/hooks/useOrgQuery";
+import useExpenseCategories from "@/hooks/useExpenseCategories";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { createPageUrl } from "@/utils";
@@ -226,7 +227,7 @@ export default function CAMSetup() {
     () => activeLeases.filter((l) => l.property_id === propertyId && (!buildingId || l.building_id === buildingId)).map((l) => l.id),
     [activeLeases, propertyId, buildingId],
   );
-  const { data: categories = [] } = useOrgQuery("ExpenseCategory");
+  const { data: categories = [] } = useExpenseCategories();
   const categoryNamesById = useMemo(() => new Map((categories || []).map((c) => [c.id, c.category_name])), [categories]);
 
   const { data: buildings = [] } = useQuery({
