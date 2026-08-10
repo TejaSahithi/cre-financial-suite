@@ -43,6 +43,42 @@ export function daysBetweenInclusive(start, end) {
 function daysInUtcMonth(value) {
   return utcMonthEnd(value.getUTCFullYear(), value.getUTCMonth()).getUTCDate();
 }
+function dateYear(value) {
+  const date = safeDate(value);
+  return date ? date.getUTCFullYear() : null;
+}
+
+function addYearRange(years, startYear, endYear) {
+  if (!Number.isFinite(startYear) && !Number.isFinite(endYear)) return;
+  const start = Number.isFinite(startYear) ? startYear : endYear;
+  const end = Number.isFinite(endYear) ? endYear : startYear;
+  const lower = Math.min(start, end);
+  const upper = Math.max(start, end);
+  for (let year = lower; year <= upper; year += 1) years.add(year);
+  years.add(lower - 1);
+  years.add(upper + 1);
+}
+
+export function buildRentFiscalYearOptions({ selectedYear, currentYear = new Date().getFullYear(), leaseRows = [], scheduleRows = [] } = {}) {
+  const years = new Set();
+  [selectedYear, currentYear - 1, currentYear, currentYear + 1, currentYear + 2]
+    .filter(Number.isFinite)
+    .forEach((year) => years.add(Number(year)));
+
+  for (const row of leaseRows || []) {
+    const startYear = dateYear(row.rent_commencement_date || row.lease_start || row.commencement_date || row.start_date || row.lease_start_date || row.term_start_date);
+    const endYear = dateYear(row.lease_end || row.expiration_date || row.end_date || row.lease_end_date || row.term_end_date);
+    addYearRange(years, startYear, endYear);
+  }
+
+  for (const row of scheduleRows || []) {
+    addYearRange(years, dateYear(row.period_start), dateYear(row.period_end));
+  }
+
+  return [...years]
+    .filter((year) => Number.isInteger(year) && year >= 1900 && year <= 2200)
+    .sort((left, right) => left - right);
+}
 
 export function isActiveRentScheduleRow(row = {}) {
   return ACTIVE_SCHEDULE_STATUSES.has(normalizeToken(row.status));

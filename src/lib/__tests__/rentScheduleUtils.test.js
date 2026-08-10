@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildLeaseYearSchedule,
+  buildRentFiscalYearOptions,
   scheduleRowsForLease,
 } from "../rentScheduleUtils";
 
@@ -78,5 +79,19 @@ describe("rentScheduleUtils", () => {
     expect(schedule.months[3]).toMatchObject({ month: "Apr", amount: 3100, isPartial: false });
     expect(schedule.months[4]).toMatchObject({ month: "May", amount: 1400, isPartial: true });
     expect(schedule.total).toBe(6200);
+  });
+  it("includes lease-active historical fiscal years in the selector options", () => {
+    const years = buildRentFiscalYearOptions({
+      selectedYear: 2025,
+      currentYear: 2026,
+      leaseRows: [
+        {
+          rent_commencement_date: "2019-03-01",
+          lease_end: "2023-12-31",
+        },
+      ],
+    });
+
+    expect(years).toEqual(expect.arrayContaining([2019, 2020, 2021, 2022, 2023, 2025, 2026, 2027, 2028]));
   });
 });

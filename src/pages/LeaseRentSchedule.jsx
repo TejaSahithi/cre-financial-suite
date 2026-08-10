@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
+  AlertCircle,
   ArrowLeft,
   Building2,
   CalendarDays,
@@ -36,6 +37,7 @@ import { getLeaseFieldLabel } from "@/lib/leaseFieldOptions";
 import {
   RENT_SCHEDULE_MONTHS,
   buildLeaseYearSchedule,
+  buildRentFiscalYearOptions,
   scheduleRowsForLease,
 } from "@/lib/rentScheduleUtils";
 import { supabase } from "@/services/supabaseClient";
@@ -161,12 +163,29 @@ export default function LeaseRentSchedule() {
   });
 
   const persistedRows = useMemo(() => scheduleRowsForLease(rentScheduleRows, leaseId), [rentScheduleRows, leaseId]);
+  const fiscalYearOptions = useMemo(() => buildRentFiscalYearOptions({
+    selectedYear: fiscalYear,
+    currentYear: new Date().getFullYear(),
+    leaseRows: leaseRow ? [leaseRow] : [],
+    scheduleRows: persistedRows,
+  }), [fiscalYear, leaseRow, persistedRows]);
+
   const periods = useMemo(() => {
     if (!leaseRow || schedulesLoading) return [];
     return [fiscalYear - 1, fiscalYear, fiscalYear + 1].map((year) =>
       buildLeaseYearSchedule(leaseRow, persistedRows, year),
     );
   }, [leaseRow, persistedRows, fiscalYear, schedulesLoading]);
+
+  const rentBearingYears = useMemo(() => {
+    if (!leaseRow || schedulesLoading) return [];
+    return fiscalYearOptions.filter((year) =>
+      buildLeaseYearSchedule(leaseRow, persistedRows, year).total > 0,
+    );
+  }, [fiscalYearOptions, leaseRow, persistedRows, schedulesLoading]);
+
+  const selectedYearHasNoRent = periods.length === 3 && periods[1].total === 0 && rentBearingYears.length > 0;
+  const suggestedRentYear = rentBearingYears[rentBearingYears.length - 1] || null;
 
   const comparisonRows = useMemo(() => {
     if (periods.length !== 3) return [];
@@ -259,7 +278,7 @@ export default function LeaseRentSchedule() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {[initialYear - 2, initialYear - 1, initialYear, initialYear + 1, initialYear + 2].map((year) => (
+            {fiscalYearOptions.map((year) => (
               <SelectItem key={year} value={String(year)}>
                 FY {year}
               </SelectItem>
@@ -325,6 +344,27 @@ export default function LeaseRentSchedule() {
               </CardContent>
             </Card>
           </div>
+
+          {selectedYearHasNoRent && (
+            <Card className="border-amber-200 bg-amber-50">
+              <CardContent className="flex items-center justify-between gap-4 p-4">
+                <div className="flex items-center gap-3 text-sm text-amber-800">
+                  <AlertCircle className="h-5 w-5 shrink-0 text-amber-500" />
+                  <div>
+                    <p className="font-semibold">FY{fiscalYear} is outside this lease rent schedule.</p>
+                    <p className="text-xs text-amber-700">
+                      The lease rent term runs {leaseRow.rent_commencement_date || leaseRow.lease_start || "-"} to {leaseRow.lease_end || "-"}. Select FY{suggestedRentYear} to view the last year with scheduled rent.
+                    </p>
+                  </div>
+                </div>
+                {suggestedRentYear && (
+                  <Button type="button" variant="outline" size="sm" onClick={() => setFiscalYear(suggestedRentYear)}>
+                    View FY{suggestedRentYear}
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader className="pb-3">

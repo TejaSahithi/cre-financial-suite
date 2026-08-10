@@ -34,6 +34,7 @@ import {
   RENT_SCHEDULE_MONTHS,
   annualizedRunRateFromYearSchedule,
   buildLeaseYearSchedule,
+  buildRentFiscalYearOptions,
   safeDate,
   scheduleHasMonthlyVariability,
   scheduleRowsForLease,
@@ -346,6 +347,13 @@ export default function RentProjection() {
     },
     retry: false,
   });
+  const fiscalYearOptions = useMemo(() => buildRentFiscalYearOptions({
+    selectedYear: fiscalYear,
+    currentYear,
+    leaseRows: baseDisplayedLeaseRows,
+    scheduleRows: rentScheduleRows,
+  }), [baseDisplayedLeaseRows, fiscalYear, currentYear, rentScheduleRows]);
+
   const displayedLeaseRows = useMemo(() => {
     return baseDisplayedLeaseRows.map((row) => {
       const leaseScheduleRows = scheduleRowsForLease(rentScheduleRows, row.lease_id, { projectionMode });
@@ -483,7 +491,7 @@ export default function RentProjection() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {[currentYear - 1, currentYear, currentYear + 1, currentYear + 2].map((year) => (
+              {fiscalYearOptions.map((year) => (
                 <SelectItem key={year} value={String(year)}>
                   FY {year}
                 </SelectItem>
