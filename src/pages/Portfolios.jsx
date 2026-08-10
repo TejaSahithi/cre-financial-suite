@@ -16,7 +16,7 @@ import {
   Info,
 } from "lucide-react";
 import { PortfolioService } from "@/services/api";
-import { dispatchPortfolioCreatedNotification } from "@/services/notificationService";
+import { createNotificationsForEvent, dispatchPortfolioCreatedNotification } from "@/services/notificationService";
 import { supabase } from "@/services/supabaseClient";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useAuth } from "@/lib/AuthContext";
@@ -79,6 +79,48 @@ async function ensureCreatorPortfolioAccess({ portfolioId, orgId, user }) {
   if (grantError) throw grantError;
 }
 
+async function assignPortfolioManager({ portfolioId, orgId, managerUserId }) {
+  if (!portfolioId || !orgId || !managerUserId) return null;
+
+  const { data: membership, error: membershipError } = await supabase
+    .from("memberships")
+    .select("user_id, assigned_portfolios")
+    .eq("user_id", managerUserId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+
+  if (membershipError) throw membershipError;
+
+  const assignedPortfolios = Array.isArray(membership?.assigned_portfolios)
+    ? membership.assigned_portfolios
+    : [];
+
+  if (membership?.user_id && !assignedPortfolios.includes(portfolioId)) {
+    const { error: updateError } = await supabase
+      .from("memberships")
+      .update({ assigned_portfolios: [...assignedPortfolios, portfolioId] })
+      .eq("user_id", managerUserId)
+      .eq("org_id", orgId);
+
+    if (updateError) throw updateError;
+  }
+
+  const { error: accessError } = await supabase
+    .from("user_access")
+    .upsert({
+      user_id: managerUserId,
+      org_id: orgId,
+      scope: "portfolio",
+      scope_id: portfolioId,
+      role: "manager",
+      is_active: true,
+    }, { onConflict: "user_id,scope,scope_id" });
+
+  if (accessError) throw accessError;
+
+  return managerUserId;
+}
+
 export default function Portfolios() {
   const [showCreate, setShowCreate] = useState(false);
   const [search, setSearch] = useState("");
@@ -97,6 +139,7 @@ export default function Portfolios() {
     fiscal_year: "jan_dec",
     intents: [],
     notes: "",
+    property_manager_user_id: "",
   };
   const [form, setForm] = useState(defaultForm);
   const queryClient = useQueryClient();
@@ -109,6 +152,8 @@ export default function Portfolios() {
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
   const { data: leases = [] } = useOrgQuery("Lease");
+  const rawRole = user?._raw_role || user?.role || "";
+  const canAssignPortfolioManager = isAdmin || ["admin", "super_admin", "org_admin", "owner", "org_owner"].includes(rawRole);
 
   const { data: organizations = [] } = useQuery({
     queryKey: ["portfolio-organizations"],
@@ -128,6 +173,64 @@ export default function Portfolios() {
     () => Object.fromEntries(organizations.map((org) => [org.id, org.name])),
     [organizations]
   );
+
+  const createOrgId = isAdmin
+    ? selectedCreateOrgId
+    : (orgId && orgId !== "__none__" ? orgId : "");
+
+  const { data: assignableManagers = [], isFetching: isLoadingManagers } = useQuery({
+    queryKey: ["portfolio-assignable-managers", createOrgId],
+    queryFn: async () => {
+      if (!createOrgId) return [];
+
+      const { data: memberships, error: membershipError } = await supabase
+        .from("memberships")
+        .select("user_id, role, status, custom_role, capabilities, assigned_portfolios")
+        .eq("org_id", createOrgId);
+
+      if (membershipError) throw membershipError;
+
+      const managerMemberships = (memberships || []).filter((membership) => {
+        const roles = new Set([
+          membership.role,
+          membership.custom_role,
+          ...(Array.isArray(membership.capabilities?.roles) ? membership.capabilities.roles : []),
+        ].filter(Boolean));
+        const status = membership.status || "active";
+        return ["active", "approved"].includes(status) && (
+          roles.has("property_manager") ||
+          roles.has("manager") ||
+          roles.has("portfolio_manager") ||
+          roles.has("asset_manager")
+        );
+      });
+
+      if (managerMemberships.length === 0) return [];
+
+      const userIds = [...new Set(managerMemberships.map((membership) => membership.user_id).filter(Boolean))];
+      const { data: profiles, error: profileError } = await supabase
+        .from("profiles")
+        .select("id, full_name, email")
+        .in("id", userIds);
+
+      if (profileError) throw profileError;
+
+      const profilesById = Object.fromEntries((profiles || []).map((profile) => [profile.id, profile]));
+
+      return managerMemberships
+        .map((membership) => ({
+          ...membership,
+          profile: profilesById[membership.user_id] || {},
+        }))
+        .sort((a, b) => {
+          const left = a.profile.full_name || a.profile.email || a.user_id;
+          const right = b.profile.full_name || b.profile.email || b.user_id;
+          return String(left).localeCompare(String(right));
+        });
+    },
+    enabled: showCreate && canAssignPortfolioManager && !!createOrgId,
+    initialData: [],
+  });
 
   const handleSelectedOrgChange = (value) => {
     setSelectedOrgId(value);
@@ -154,6 +257,7 @@ export default function Portfolios() {
     mutationFn: async (data) => {
       assertCanWritePage(user, "Portfolios", "create portfolios");
       const writableOrgId = data.org_id || await resolveWritableOrgId(orgId);
+      const { property_manager_user_id, ...portfolioData } = data;
       // TEMP DIAGNOSTIC (remove once the RLS 42501 on portfolio create is
       // root-caused): the client-side permission gate above passed, but the
       // database's WITH CHECK (can_write_page(org_id, 'Portfolios')) has
@@ -174,7 +278,7 @@ export default function Portfolios() {
         })),
       });
       const created = await PortfolioService.create({
-        ...data,
+        ...portfolioData,
         ...(writableOrgId ? { org_id: writableOrgId } : {}),
       });
 
@@ -183,6 +287,31 @@ export default function Portfolios() {
         orgId: created?.org_id || writableOrgId,
         user,
       });
+
+      if (property_manager_user_id) {
+        await assignPortfolioManager({
+          portfolioId: created?.id,
+          orgId: created?.org_id || writableOrgId,
+          managerUserId: property_manager_user_id,
+        });
+
+        createNotificationsForEvent({
+          event_type: "portfolio.manager_assigned",
+          org_id: created?.org_id || writableOrgId,
+          portfolio_id: created?.id,
+          entity_type: "portfolio",
+          entity_id: created?.id,
+          entity_label: created?.name || data.name,
+          action_url: createPageUrl("Portfolios"),
+          metadata: {
+            portfolio_name: created?.name || data.name,
+            assigned_manager_user_id: property_manager_user_id,
+            assignment_source: "portfolio_create_modal",
+          },
+        }).catch((error) => {
+          console.warn("[Portfolios] manager assignment notification failed:", error?.message || error);
+        });
+      }
 
       dispatchPortfolioCreatedNotification({
         org_id: created?.org_id || writableOrgId,
@@ -747,6 +876,47 @@ export default function Portfolios() {
                 </div>
               )}
 
+              {canAssignPortfolioManager && (
+                <div className="col-span-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                  <Label>Property Manager Assignment</Label>
+                  <Select
+                    value={form.property_manager_user_id || "none"}
+                    onValueChange={(value) => setForm({ ...form, property_manager_user_id: value === "none" ? "" : value })}
+                    disabled={!createOrgId || isLoadingManagers || assignableManagers.length === 0}
+                  >
+                    <SelectTrigger className="mt-1 bg-white">
+                      <SelectValue
+                        placeholder={
+                          isLoadingManagers
+                            ? "Loading property managers..."
+                            : "Assign a property manager to this portfolio"
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Do not assign now</SelectItem>
+                      {assignableManagers.map((manager) => {
+                        const displayName = manager.profile.full_name || manager.profile.email || manager.user_id;
+                        const roleLabel = (manager.custom_role || manager.role || "manager").replaceAll("_", " ");
+                        return (
+                          <SelectItem key={manager.user_id} value={manager.user_id}>
+                            {displayName} · {roleLabel}
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                    Assigned managers receive portfolio-scope access and the portfolio assignment notification after creation.
+                  </p>
+                  {createOrgId && !isLoadingManagers && assignableManagers.length === 0 && (
+                    <p className="mt-2 text-[11px] text-amber-700">
+                      No active property manager users are available in this organization.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div>
                 <Label>Portfolio Type</Label>
                 <Select value={form.type} onValueChange={(value) => setForm({ ...form, type: value })}>
@@ -868,6 +1038,7 @@ export default function Portfolios() {
                 createMutation.mutate({
                   name: form.name,
                   ...(description ? { description } : {}),
+                  ...(form.property_manager_user_id ? { property_manager_user_id: form.property_manager_user_id } : {}),
                   ...(isAdmin && selectedCreateOrgId ? { org_id: selectedCreateOrgId } : {}),
                 });
               }}
