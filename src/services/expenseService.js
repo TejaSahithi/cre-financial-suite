@@ -385,6 +385,87 @@ function scoreScopeMatch(expense, rule) {
   return score;
 }
 
+// Resolves an expense or rule to a canonical expense_categories.id: its own
+// stored expense_category_id if present, otherwise an EXACT (case-insensitive,
+// trimmed) match of its text label against category_name / normalized_key /
+// subcategory_name -- the same fields and exact-only rule
+// resolve_expense_category_id() uses (migration 20269900000039). More than
+// one candidate row is ambiguous and fails closed (null), never guessed.
+function resolveCanonicalCategoryId(entity, categoriesById) {
+  const directId = entity?.expense_category_id || entity?.category?.id || null;
+  if (directId) return directId;
+  if (!categoriesById) return null;
+
+  const labels = [entity?.category?.normalized_key, entity?.category_name, entity?.category, entity?.expense_category, entity?.expense_subcategory, entity?.subcategory_name]
+    .map((value) => normalizeText(value))
+    .filter(Boolean);
+  if (labels.length === 0) return null;
+
+  let resolved = null;
+  for (const row of categoriesById.values()) {
+    const fields = [row?.category_name, row?.normalized_key, row?.subcategory_name].map(normalizeText);
+    if (labels.some((label) => fields.includes(label))) {
+      if (resolved && resolved !== row.id) return null; // ambiguous -> fail closed
+      resolved = row.id;
+    }
+  }
+  return resolved;
+}
+
+/**
+ * Whether a rule is a genuine candidate for this expense -- deliberately
+ * excludes every scope-ish signal (lease_id match, source_type) that
+ * scoreRuleMatch() also folds in for its own (display/tie-breaking)
+ * purposes. matchActualExpenseToLeaseRule() requires this to be true before
+ * a rule can win a match: being in the same lease/property already scores
+ * 120-880 points on its own via scoreScopeMatch(), so without this gate ANY
+ * approved rule on the expense's lease "matches" regardless of category, and
+ * ties silently resolve to whichever rule the loop happens to enumerate
+ * first (see the CAM audit -- 5 of 7 real fixture expenses landed on an
+ * unrelated "utilities" rule this way).
+ *
+ * Precedence (each tier only runs if the previous one didn't decide):
+ *   1. explicit recovery_rule_id link -- a deliberate human/import
+ *      assignment, not a heuristic.
+ *   2. exact canonical expense_category_id match -- authoritative when
+ *      populated on BOTH sides: equal ids match, unequal ids do not,
+ *      regardless of what labels/tokens say.
+ *   3. existing normalized category relationship (categoriesById, if the
+ *      caller supplies it): when at least one side has no stored canonical
+ *      id, resolve it via the same exact-match-only lookup
+ *      resolve_expense_category_id() uses, then compare canonical ids. Only
+ *      reachable when tier 2 could not decide (i.e. not both sides already
+ *      had a stored id).
+ *   4. free-text/token overlap, as a fallback only when neither side
+ *      resolves to a canonical category at all.
+ *   5. otherwise: not a candidate (caller treats as unmatched/needs review).
+ */
+function hasCategoryRelevantMatch(expense, rule, categoriesById) {
+  if (expense?.recovery_rule_id && rule?.id && expense.recovery_rule_id === rule.id) return true;
+
+  const expenseCategoryId = expense?.expense_category_id || null;
+  const ruleCategoryId = rule?.expense_category_id || null;
+  if (expenseCategoryId && ruleCategoryId) {
+    return expenseCategoryId === ruleCategoryId;
+  }
+
+  if (categoriesById) {
+    const resolvedExpenseId = resolveCanonicalCategoryId(expense, categoriesById);
+    const resolvedRuleId = resolveCanonicalCategoryId(rule, categoriesById);
+    if (resolvedExpenseId && resolvedRuleId) {
+      return resolvedExpenseId === resolvedRuleId;
+    }
+  }
+
+  const expenseTokens = normalizeExpenseCategoryTokens(expense);
+  if (expenseTokens.length === 0) return false;
+  const ruleTokens = ruleCategoryTokens(rule);
+  return ruleTokens.some((ruleToken) =>
+    expenseTokens.includes(ruleToken) ||
+    expenseTokens.some((token) => token.includes(ruleToken) || ruleToken.includes(token))
+  );
+}
+
 function approvedRuleForMatching(rule) {
   return isApprovedLeaseRule(rule);
 }
@@ -2160,7 +2241,7 @@ export const expenseService = {
     };
   },
 
-  matchActualExpenseToLeaseRule(actualExpense, { leases = [], rulesByLeaseId = new Map() } = {}) {
+  matchActualExpenseToLeaseRule(actualExpense, { leases = [], rulesByLeaseId = new Map(), categoriesById = null } = {}) {
     // Defensive eligibility gate. Loaders SHOULD filter both sides before
     // reaching this matcher, but the matcher is also called by other code
     // paths (runExpenseClassification, manual review flows). Short-circuiting
@@ -2194,9 +2275,11 @@ export const expenseService = {
     let bestScore = 0;
     // Read-only signal for the match-status resolver (resolveMatchStatus in
     // leaseExpenseRulesHelpers.js): how many rules independently cleared the
-    // same qualifying bar (>=120) used below to accept a match at all. Never
-    // changes which rule wins (still the single highest score, same as
-    // before) -- purely informs "Multiple Policy Matches" as a review flag.
+    // same qualifying bar (>=120 AND genuine category relevance) used below
+    // to accept a match at all. Never changes which rule wins (still the
+    // single highest-scoring genuinely-relevant candidate) -- purely informs
+    // "Multiple Policy Matches" as a review flag when 2+ category-relevant
+    // rules tie or conflict.
     let qualifyingCandidateCount = 0;
 
     for (const lease of candidateLeases) {
@@ -2206,6 +2289,15 @@ export const expenseService = {
         // filter; this guards against rulesByLeaseId being built from a
         // different source than loadApprovedLeaseExpenseRules.
         if (!isRuleClassificationEligible(rule, { scopeMatch: true })) continue;
+        // Scope match (same lease/unit/building/property) alone is never
+        // enough to accept a rule -- it scores 120-880 points on its own,
+        // which already clears the >=120 acceptance bar below regardless of
+        // category. Require genuine category relevance (or an explicit
+        // recovery_rule_id link) first, so an expense with no relevant
+        // approved rule correctly falls through to "unmatched" instead of
+        // being pinned to whichever same-lease rule happens to be enumerated
+        // first.
+        if (!hasCategoryRelevantMatch(actualExpense, rule, categoriesById)) continue;
         const scopeScore = scoreScopeMatch(actualExpense, rule);
         const categoryScore = scoreRuleMatch(actualExpense, rule);
         const periodScore = servicePeriodOverlaps(actualExpense, lease) ? 40 : -1000;
@@ -2304,7 +2396,7 @@ export const expenseService = {
 
     const leaseIds = [...new Set(allLeases.map((lease) => lease.id).filter(Boolean))];
     const { ruleSets, rules, categories } = await fetchApprovedRuleArtifacts(leaseIds);
-    const { rulesByLeaseId } = buildApprovedRuleLookups(rules, categories);
+    const { rulesByLeaseId, categoriesById } = buildApprovedRuleLookups(rules, categories);
     const leaseById = buildLeaseLookup(allLeases);
     const orgIdFallback = await getCurrentOrgId();
 
@@ -2324,7 +2416,7 @@ export const expenseService = {
           normalizeText(expense?.rule_source) === "manual" &&
           normalizeText(existingClassification?.approved_status || expense?.approved_status) === "approved"
         );
-      const match = this.matchActualExpenseToLeaseRule(expense, { leases: allLeases, rulesByLeaseId });
+      const match = this.matchActualExpenseToLeaseRule(expense, { leases: allLeases, rulesByLeaseId, categoriesById });
       const matchedRule = match.rule;
       const matchedLease = match.lease || (expense.lease_id ? leaseById.get(expense.lease_id) : null);
       const matchedRuleSet = matchedRule ? ruleSets.find((ruleSet) => ruleSet.id === matchedRule.rule_set_id) || null : null;
@@ -3633,6 +3725,6 @@ export const expenseService = {
 };
 
 // Named export for golden regression tests; keep service facade unchanged.
-export { scoreRuleMatch, buildAmountBuckets, canSendClassificationToCam };
+export { scoreRuleMatch, hasCategoryRelevantMatch, buildAmountBuckets, canSendClassificationToCam };
 export default expenseService;
 

@@ -371,6 +371,12 @@ export function buildClassificationRows({
     const actualExpenseCategoryId = expense.expense_category_id || expense.category_id || expense.canonical_category_id || null;
     const classificationExpenseCategoryId = classificationRecord?.expense_category_id || null;
     const ruleExpenseCategoryId = matchedRule?.expense_category_id || null;
+    // Same precedence the server-side canonical-category triggers use
+    // (expense_classifications_set_canonical_category(), migration
+    // 20269900000048): the classification's own resolved id wins, then the
+    // matched rule's canonical category (contractual truth), then whatever
+    // the actual expense row itself carries as a last resort.
+    const resolvedExpenseCategoryId = classificationExpenseCategoryId || ruleExpenseCategoryId || actualExpenseCategoryId;
     const hasMatchedRule = Boolean(matchedRule);
     if (matchedRule?.id) usedRuleIds.add(matchedRule.id);
     if (persistedRuleId && hasMatchedRule) usedRuleIds.add(persistedRuleId);
@@ -482,7 +488,7 @@ export function buildClassificationRows({
         : "-",
       amount: actualAmount,
       financialAmount: actualAmount,
-      expenseCategoryId: actualExpenseCategoryId,
+      expenseCategoryId: resolvedExpenseCategoryId,
       actualExpenseCategoryId,
       classificationExpenseCategoryId,
       ruleExpenseCategoryId,

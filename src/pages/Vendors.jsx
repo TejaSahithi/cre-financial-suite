@@ -18,6 +18,7 @@ import ScopeSelector from "@/components/ScopeSelector";
 import { downloadCSV } from "@/utils/index";
 import BulkImportModal from "@/components/property/BulkImportModal";
 import { toast } from "sonner";
+import { expenseMatchesVendor } from "@/lib/vendorMatch";
 
 const CATEGORIES = ["maintenance","utilities","insurance","janitorial","landscaping","security","legal","accounting","construction","technology","other"];
 const statusColors = { active: "bg-emerald-100 text-emerald-700", inactive: "bg-slate-100 text-slate-600", pending: "bg-amber-100 text-amber-700" };
@@ -131,10 +132,7 @@ export default function Vendors() {
   }, [combinedVendors, orgId, queryClient]);
 
   const enriched = combinedVendors.map(v => {
-    const vExpenses = expenses.filter(e => {
-      const eVendor = (e.vendor || e.vendor_name || "").trim().toLowerCase();
-      return eVendor === v.name?.toLowerCase() || (v.id && e.vendor_id === v.id);
-    });
+    const vExpenses = expenses.filter(e => expenseMatchesVendor(e, v));
     const propExpenses = scopeProperty !== "all" ? vExpenses.filter(e => e.property_id === scopeProperty) : vExpenses;
     const propIds = [...new Set(propExpenses.map(e => e.property_id).filter(Boolean))];
     const lastExpense = propExpenses.sort((a, b) => (b.expense_date || b.date || '').localeCompare(a.expense_date || a.date || ''))[0];

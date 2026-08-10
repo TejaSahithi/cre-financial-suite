@@ -102,7 +102,14 @@ describe("approved lease expense-rule projection", () => {
     })).toBe(true);
   });
 
-  it("builds publisher fallback rules from source-backed expense clauses when canonical expense_rules are absent", () => {
+  it("never synthesizes fallback rules from raw clause text, even when canonical expense_rules are absent", () => {
+    // Frozen by migration 20260810020000_disable_fallback_lease_expense_rules:
+    // "Fallback/TypeScript keyword-generated rows are not authoritative
+    // contract rules. They must not be approved, published, or used as
+    // recovery-policy inputs." fallbackExpenseRulesFromWorkflowEvidence is
+    // now a permanent no-op (see FALLBACK_EXPENSE_CATEGORY_PATTERNS being
+    // emptied in approved-lease-expense-rules.ts) -- this replaces the old
+    // pre-freeze test that asserted pattern-derived categories/auto-approval.
     const clauseText =
       "This is a Gross Lease. The Tenant is aware that in the Monthly Rent amount and payment that all CAM, property taxes, insurance, maintenance and utility and janitorial costs are included as shown on Summary page.";
     const fallbackRules = __test__.fallbackExpenseRulesFromWorkflowEvidence({
@@ -114,44 +121,15 @@ describe("approved lease expense-rule projection", () => {
       expense_rules: [],
     });
 
-    const categories = fallbackRules.map((rule) => rule.expense_category);
-    expect(categories).toEqual(expect.arrayContaining([
-      "common_area_maintenance",
-      "real_estate_taxes",
-      "property_insurance",
-      "repairs_maintenance",
-      "utilities",
-      "janitorial",
-    ]));
-
-    const camRule = fallbackRules.find((rule) => rule.expense_category === "common_area_maintenance");
-    expect(camRule).toMatchObject({
-      included_in_base_rent: true,
-      recoverable_from_tenant: false,
-      payment_treatment: "included_in_base_rent",
-      recovery_method: "included_in_base_rent",
-      source_page: 5,
-    });
-    expect(__test__.isSourceBackedExpenseRule(camRule)).toBe(true);
-
-    const prepared = __test__.prepareRulePayload(
-      { id: "11111111-1111-4111-8111-111111111111" },
-      "22222222-2222-4222-8222-222222222222",
-      camRule,
-    );
-    expect(prepared.rule).toMatchObject({
-      expense_category: "common_area_maintenance",
-      included_in_base_rent: true,
-      recoverable_from_tenant: "no",
-      payment_treatment: "included_in_base_rent",
-      row_status: "mapped",
-      review_status: "approved",
-      approval_status: "approved",
-      published_to_cam: false,
-    });
+    expect(fallbackRules).toEqual([]);
   });
 
-  it("auto-approves and publishes source-backed recoverable CAM rules after lease approval", () => {
+  it("never auto-approves or auto-publishes a prepared rule, even a strong source-backed recoverable CAM candidate", () => {
+    // Frozen by the same migration: prepareRulePayload's approvalReady/
+    // publishToCam are hardcoded false unconditionally (see
+    // approved-lease-expense-rules.ts) -- a human must explicitly approve
+    // and publish every rule regardless of how confident the extraction is.
+    // This replaces the old pre-freeze test that asserted auto-approval.
     const reimbursablePrepared = __test__.prepareRulePayload(
       { id: "11111111-1111-4111-8111-111111111111" },
       "22222222-2222-4222-8222-222222222222",
@@ -167,10 +145,10 @@ describe("approved lease expense-rule projection", () => {
     );
     expect(reimbursablePrepared.rule).toMatchObject({
       expense_category: "common_area_maintenance",
-      row_status: "mapped",
-      review_status: "approved",
-      approval_status: "approved",
-      published_to_cam: true,
+      row_status: "needs_review",
+      review_status: "needs_review",
+      approval_status: "draft",
+      published_to_cam: false,
     });
   });
 

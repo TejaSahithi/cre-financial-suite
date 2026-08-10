@@ -15,6 +15,7 @@ import { ArrowLeft, TrendingUp, ArrowUpRight, ArrowDownRight, FileText, Search, 
 import {  Link , useLocation } from 'react-router-dom';
 import { createPageUrl } from "@/utils";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
+import { expenseMatchesVendor } from "@/lib/vendorMatch";
 
 export default function VendorProfile() {
   const location = useLocation();
@@ -45,7 +46,7 @@ export default function VendorProfile() {
   if (vendorLoading) return <div className="flex items-center justify-center h-64"><Loader2 className="w-6 h-6 animate-spin text-slate-400" /></div>;
   if (!vendor) return <div className="p-6"><p className="text-slate-500">Vendor not found.</p><Link to={createPageUrl("Vendors")}><Button variant="outline" className="mt-4"><ArrowLeft className="w-4 h-4 mr-1" />Back to Vendors</Button></Link></div>;
 
-  const vendorExpenses = expenses.filter(e => e.vendor?.toLowerCase() === vendor.name?.toLowerCase() || e.vendor_id === vendor.id);
+  const vendorExpenses = expenses.filter(e => expenseMatchesVendor(e, vendor));
   const currentYear = new Date().getFullYear();
   const prevYear = currentYear - 1;
   const thisYearExp = vendorExpenses.filter(e => e.fiscal_year === currentYear);
