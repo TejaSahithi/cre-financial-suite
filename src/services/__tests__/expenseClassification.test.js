@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildAmountBuckets, canSendClassificationToCam, scoreRuleMatch } from '../expenseService';
+import { buildAmountBuckets, canSendClassificationToCam, expenseService, scoreRuleMatch } from '../expenseService';
 import { MOCK_ACTUAL_EXPENSE, MOCK_APPROVED_CAM_RULE, MOCK_CLASSIFICATION_RECORD } from './fixtures/camFixtures';
 
 describe('expenseService - CAM Classification Helpers', () => {
@@ -74,5 +74,30 @@ describe('expenseService - CAM Classification Helpers', () => {
 
     expect(directScore).toBeGreaterThan(categoryScore);
     expect(categoryScore).toBeGreaterThan(unrelatedScore);
+  });
+
+  describe('isApprovedExpenseRecord', () => {
+    // Regression: a prior classification run stamping exception_type
+    // ("unmatched"/"low_confidence"/"missing_decision"/"manual_review" --
+    // see runExpenseClassification's own writes) used to permanently
+    // exclude the expense from ever being reconsidered by Expense
+    // Classification, because the gate treated any exception_type other
+    // than "none"/"resolved" as disqualifying -- but nothing in the
+    // codebase ever writes "resolved", so a genuinely approved expense
+    // that just couldn't be matched to a rule became invisible forever.
+    it('stays eligible when approved but the classification engine flagged it unmatched/low-confidence/manual-review', () => {
+      const approvedExpense = { ...MOCK_ACTUAL_EXPENSE, approval_status: "approved", approved_status: "approved", review_status: "approved" };
+
+      for (const exceptionType of ["unmatched", "low_confidence", "missing_decision", "manual_review"]) {
+        const classification = { ...MOCK_CLASSIFICATION_RECORD, classification_status: "unmatched", exception_type: exceptionType };
+        expect(expenseService.isApprovedExpenseRecord(approvedExpense, classification)).toBe(true);
+      }
+    });
+
+    it('still excludes an expense that is genuinely rejected, draft, or needs_review', () => {
+      expect(expenseService.isApprovedExpenseRecord({ ...MOCK_ACTUAL_EXPENSE, approval_status: "rejected" })).toBe(false);
+      expect(expenseService.isApprovedExpenseRecord({ ...MOCK_ACTUAL_EXPENSE, approval_status: "draft" })).toBe(false);
+      expect(expenseService.isApprovedExpenseRecord({ ...MOCK_ACTUAL_EXPENSE, approval_status: "needs_review" })).toBe(false);
+    });
   });
 });

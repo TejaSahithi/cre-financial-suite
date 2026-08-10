@@ -476,14 +476,22 @@ function isApprovedExpenseRecord(expense, classification = null) {
   const approval = getEffectiveApprovalStatus(effectiveExpense);
   const review = getRawReviewStatus(effectiveExpense);
   const status = normalizeText(effectiveExpense?.status);
-  const exceptionType = normalizeText(effectiveExpense?.exception_type);
   const source = normalizeText(effectiveExpense?.source || effectiveExpense?.source_type || effectiveExpense?.cam_input_type);
 
   if (source === "lease_rule_amount") return false;
   if (approval === "rejected" || review === "rejected" || status === "rejected") return false;
   if (approval === "needs_review" || review === "needs_review") return false;
   if (approval === "draft" || review === "draft" || status === "draft") return false;
-  if (exceptionType && exceptionType !== "none" && exceptionType !== "resolved") return false;
+  // NOTE: this used to also exclude any expense whose merged exception_type
+  // wasn't "none"/"resolved". exception_type is written by the classification
+  // engine itself (runExpenseClassification) as its OWN output --
+  // "unmatched"/"low_confidence"/"missing_decision"/"manual_review" -- never
+  // as "resolved" (grepped: nothing in the codebase ever writes that value).
+  // So that check locked an expense out of ever appearing in Expense
+  // Classification the moment a prior run couldn't cleanly match it --
+  // exactly the rows this workspace exists to surface for review. An
+  // expense classification's own exception state is not an accounting-side
+  // reason to hide the underlying approved expense.
 
   if (approval === "approved") return true;
   if (review === "approved") return true;
@@ -1507,6 +1515,7 @@ async function selectExpenseClassificationsForExpenseIds(expenseIds = [], column
 export const expenseService = {
   ...baseExpenseService,
   isApprovedLeaseRule,
+  isApprovedExpenseRecord,
 
   async resolveExpenseLeaseLink(expenseLike = {}, leases = null) {
     if (expenseLike?.skip_lease_resolution === true) {
@@ -1631,6 +1640,29 @@ export const expenseService = {
     const result = await invokeEdgeFunction("bulk-create-expenses", { expenses });
     this.autoSyncVendorsFromExpenses(expenses).catch(() => null);
     return result;
+  },
+
+  // expense_classifications has no recovery_treatment/payment_treatment column
+  // (confirmed against the live schema -- selectExpenseClassifications()
+  // does `select("*")` then projects the requested columns in JS, so asking
+  // for a nonexistent one just silently comes back undefined rather than
+  // erroring). Any classification-driven recovery-status display that wants
+  // the specific treatment ("Tenant Direct" vs. a generic "Nonrecoverable")
+  // has to re-derive it from the linked lease_expense_rules row, the same
+  // way expenseClassificationUiContract.js's normalizeTreatment() already
+  // does for the Expense Classification page.
+  async listLeaseExpenseRulesByIds(ruleIds = []) {
+    const cleanIds = [...new Set((ruleIds || []).filter(Boolean))];
+    if (!supabase || cleanIds.length === 0) return [];
+    const { data, error } = await supabase
+      .from("lease_expense_rules")
+      .select("*")
+      .in("id", cleanIds);
+    if (error) {
+      console.error("[expenseService] listLeaseExpenseRulesByIds failed", error);
+      return [];
+    }
+    return data || [];
   },
 
   async listExpenseClassificationsForExpenses(expenseIds = []) {

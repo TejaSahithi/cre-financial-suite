@@ -57,6 +57,7 @@ import { createPageUrl, downloadCSV } from "@/utils";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { resolveTenantForExpense } from "@/lib/tenantResolver";
 import { approvedLeaseFieldValue } from "@/lib/approvedLeaseSnapshot";
+import { deriveNormalizedContractModel } from "@/services/utils/ruleDecisionEngine";
 import {
   PRIMARY_FILTERS,
   RECOVERY_FILTERS,
@@ -390,6 +391,25 @@ export default function Expenses() {
     enabled: selectorScopedExpenseIds.length > 0,
   });
 
+  const linkedRuleIds = useMemo(
+    () =>
+      selectorScopedClassifications
+        .map((c) => c.lease_expense_rule_id || c.linked_expense_rule_id || c.recovery_rule_id)
+        .filter(Boolean),
+    [selectorScopedClassifications]
+  );
+
+  const { data: linkedClassificationRules = [] } = useQuery({
+    queryKey: ["expense-dashboard-classification-rules", linkedRuleIds.slice().sort().join("|")],
+    queryFn: () => expenseService.listLeaseExpenseRulesByIds(linkedRuleIds),
+    enabled: linkedRuleIds.length > 0,
+  });
+
+  const linkedRuleById = useMemo(
+    () => new Map(linkedClassificationRules.map((rule) => [rule.id, rule])),
+    [linkedClassificationRules]
+  );
+
   const classificationByExpenseId = useMemo(() => {
     const grouped = new Map();
     for (const classification of selectorScopedClassifications) {
@@ -399,12 +419,24 @@ export default function Expenses() {
       grouped.get(expenseId).push(classification);
     }
     return new Map(
-      [...grouped.entries()].map(([expenseId, classifications]) => [
-        expenseId,
-        selectCanonicalExpenseClassification(classifications),
-      ])
+      [...grouped.entries()].map(([expenseId, classifications]) => {
+        const canonical = selectCanonicalExpenseClassification(classifications);
+        if (!canonical) return [expenseId, canonical];
+        // expense_classifications has no recovery_treatment column (see
+        // expenseService.listLeaseExpenseRulesByIds) -- re-derive the
+        // specific treatment from the linked rule so "Tenant Direct" shows
+        // instead of the generic "Nonrecoverable" bucket recoverability_result
+        // alone collapses it into.
+        const ruleId = canonical.lease_expense_rule_id || canonical.linked_expense_rule_id || canonical.recovery_rule_id;
+        const linkedRule = ruleId ? linkedRuleById.get(ruleId) : null;
+        if (!linkedRule) return [expenseId, canonical];
+        return [
+          expenseId,
+          { ...canonical, recovery_treatment: deriveNormalizedContractModel(linkedRule).recovery_treatment },
+        ];
+      })
     );
-  }, [selectorScopedClassifications]);
+  }, [selectorScopedClassifications, linkedRuleById]);
 
   const tenantById = useMemo(() => new Map((tenants || []).map((tenant) => [tenant.id, tenant])), [tenants]);
   const unitById = useMemo(() => new Map((allUnits || []).map((unit) => [unit.id, unit])), [allUnits]);
