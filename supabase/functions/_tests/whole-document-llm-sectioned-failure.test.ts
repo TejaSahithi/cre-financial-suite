@@ -118,6 +118,36 @@ Deno.test("direct whole-document incomplete response retries with sectioned extr
   assertEquals(shouldRetryDirectWholeDocumentWithSectioned(result), true);
 });
 
+Deno.test("direct whole-document truncated at the transport layer (status:'truncated', no claim counts) still retries", () => {
+  // The real production shape: callLLMStructured (_shared/llm.ts) detects
+  // finish_reason === "length" and returns status:"truncated" directly, so
+  // runWholeDocumentLlmOnCompact's response.status !== "success" branch
+  // fires and stamps failure_classification from response.status --
+  // "truncated" (lowercase), with no invalid_or_omitted_claim_count or
+  // facts_extracted/mapped_count populated (those only exist on the
+  // finishReason-based branch, which this path never reaches). A retry
+  // trigger that only recognized "RESPONSE_TRUNCATED" silently never fired
+  // for this -- the actual observed failure mode.
+  const result = {
+    rows: [],
+    method: "fallback",
+    warnings: ["Structured output truncated (finish_reason=length) before completing."],
+    validationErrors: [],
+    metadata: {
+      extractionDebug: {
+        openai_fact_ledger: {
+          extraction_mode: "whole_document_llm_v2",
+          architecture: "llm_direct_schema",
+          failure_classification: "truncated",
+          finish_reason: null,
+        },
+      },
+    },
+  };
+
+  assertEquals(shouldRetryDirectWholeDocumentWithSectioned(result), true);
+});
+
 Deno.test("direct whole-document valid rows do not retry with sectioned extraction", () => {
   const result = {
     rows: [{ tenant_name: "Mindful Tech Solutions, Inc." }],

@@ -126,8 +126,18 @@ function shouldRetryDirectWholeDocumentWithSectioned(result: ExtractionPipelineR
   const noUsableRows = !Array.isArray(result.rows) || result.rows.length === 0 || !result.rows.some((row) => rowHasMeaningfulScalarValue(row as Record<string, unknown>));
   if (!noUsableRows) return false;
 
+  // "truncated" (lowercase) is StructuredLlmStatus's own enum value --
+  // callLLMStructured (_shared/llm.ts) detects finish_reason === "length"
+  // and returns status:"truncated" directly, so the call above already took
+  // the response.status !== "success" branch and stamped
+  // failure_classification: response.errorClassification ?? response.status
+  // = "truncated" -- it never reaches this file's own isTruncatedFinishReason
+  // check (which only fires for a "success" status with a truncated
+  // finishReason, a narrower and rarer case). Checking only the uppercase
+  // "RESPONSE_TRUNCATED" here silently never matched the actual truncation
+  // path, so the fallback never ran.
   const classification = String(debug?.failure_classification ?? "").trim();
-  if (["STRICT_RESPONSE_MASS_OMISSION", "RESPONSE_TRUNCATED"].includes(classification)) return true;
+  if (["STRICT_RESPONSE_MASS_OMISSION", "RESPONSE_TRUNCATED", "truncated"].includes(classification)) return true;
 
   const invalidOrOmittedCount = Number(debug?.invalid_or_omitted_claim_count ?? 0);
   const factsExtractedCount = Number(debug?.facts_extracted_count ?? 0);
