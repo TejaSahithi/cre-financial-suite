@@ -667,7 +667,7 @@ function allocationRequiredButUnresolved(rule, model, treatment) {
 }
 
 export function getAppliesWhenLabel(rule) {
-  const model = deriveNormalizedContractModel(rule);
+  const model = deriveNormalizedContractModel(rule) || {};
   const explicit = firstNonBlank(
     rule?.applies_when,
     rule?.condition_label,
@@ -675,24 +675,24 @@ export function getAppliesWhenLabel(rule) {
     rule?.condition_reason,
     rule?.trigger_condition,
     rule?.condition_type,
-    model.condition_type,
+    model?.condition_type,
   );
   if (explicit) return humanizeToken(explicit);
 
-  const haystack = `${rule?.category_name || ""} ${rule?.expense_category || ""} ${rule?.expense_subcategory || ""} ${model.source_evidence || ""}`.toLowerCase();
+  const haystack = `${rule?.category_name || ""} ${rule?.expense_category || ""} ${rule?.expense_subcategory || ""} ${model?.source_evidence || ""}`.toLowerCase();
   if (/not\s+separately\s+metered|unmetered|not\s+metered/.test(haystack)) return "Not separately metered";
   if (/separately\s+metered|metered\s+separately/.test(haystack)) return "Separately metered";
   if (/tenant[-\s]+caused|caused\s+by\s+tenant|tenant\s+negligence|damage/.test(haystack)) return "Tenant-caused damage";
   if (/base\s+year|expense\s+stop|exceeds?\s+(the\s+)?base/.test(haystack)) return "Expense exceeds base year";
   if (/assignment|transfer/.test(haystack)) return "On assignment";
   if (/overdue|late\s+payment|default\s+interest|late\s+fee/.test(haystack)) return "Payment overdue";
-  if (model.effective_start_date || model.effective_end_date) return "During lease term";
+  if (model?.effective_start_date || model?.effective_end_date) return "During lease term";
   return "Always";
 }
 
 export function getAmountFormulaLabel(rule) {
-  const model = deriveNormalizedContractModel(rule);
-  const treatment = frozenTreatmentKey(model.recovery_treatment);
+  const model = deriveNormalizedContractModel(rule) || {};
+  const treatment = frozenTreatmentKey(model?.recovery_treatment);
   const explicit = firstNonBlank(
     rule?.amount_formula,
     rule?.formula,
@@ -705,25 +705,25 @@ export function getAmountFormulaLabel(rule) {
 
   const fixedAmount = formatMoneyAmount(rule?.fixed_amount ?? rule?.monthly_amount);
   if (fixedAmount) {
-    const frequency = compactText(rule?.billing_frequency || model.billing_frequency).toLowerCase();
+    const frequency = compactText(rule?.billing_frequency || model?.billing_frequency).toLowerCase();
     return frequency && !["unknown", "not applicable", "not_applicable"].includes(frequency)
       ? `${fixedAmount} / ${humanizeToken(frequency)}`
       : fixedAmount;
   }
 
-  const share = formatPercent(model.share ?? rule?.tenant_share_percent ?? rule?.tenant_pro_rata_share);
+  const share = formatPercent(model?.share ?? rule?.tenant_share_percent ?? rule?.tenant_pro_rata_share);
   if (share) {
-    const allocation = compactText(model.allocation_method || rule?.allocation_basis).toLowerCase();
+    const allocation = compactText(model?.allocation_method || rule?.allocation_basis).toLowerCase();
     return allocation.includes("pro rata") || allocation.includes("pro_rata") ? `${share} Pro Rata` : `${share} Share`;
   }
 
-  const cap = formatPercent(rule?.cap_percent ?? rule?.cam_cap_rate ?? model.cap);
+  const cap = formatPercent(rule?.cap_percent ?? rule?.cam_cap_rate ?? model?.cap);
   if (cap) return `${cap} Annual Cap`;
 
-  const expenseStop = formatMoneyAmount(model.expense_stop ?? rule?.expense_stop_amount);
+  const expenseStop = formatMoneyAmount(model?.expense_stop ?? rule?.expense_stop_amount);
   if (expenseStop) return `${expenseStop} Expense Stop`;
 
-  if (model.base_year || rule?.base_year) return `${model.base_year || rule.base_year} Base Year`;
+  if (model?.base_year || rule?.base_year) return `${model?.base_year || rule.base_year} Base Year`;
 
   const coverage = formatMoneyAmount(rule?.coverage_requirement_amount ?? rule?.insurance_coverage_amount);
   if (coverage) return `${coverage} Coverage Requirement`;
