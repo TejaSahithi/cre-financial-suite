@@ -65,6 +65,7 @@ import {
 import { summarizePolicy } from "@/lib/camPolicySummary";
 import { suggestPools, suggestParticipants } from "@/lib/camSuggestions";
 import { normalizeReadiness, computeExpenseGapExceptions, mergeReadiness, suggestedPeriodForCalendar } from "@/lib/camReadiness";
+import { buildCamActiveLeaseIdSet, filterCamActiveLeases, filterRowsToCamActiveLeases } from "@/lib/activeLease";
 
 // ---- Helpers ----------------------------------------------------------------
 
@@ -208,6 +209,8 @@ export default function CAMSetup() {
   // ---- Data queries ---------------------------------------------------------
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: leases = [] } = useOrgQuery("Lease");
+  const activeLeases = useMemo(() => filterCamActiveLeases(leases), [leases]);
+  const activeLeaseIds = useMemo(() => buildCamActiveLeaseIdSet(activeLeases), [activeLeases]);
   // useOrgQuery initializes with leases=[] before its own org-scoped fetch
   // resolves. Any query that filters leases inside its OWN queryFn without
   // this value (or something derived from it) in its queryKey would run
@@ -220,8 +223,8 @@ export default function CAMSetup() {
   // of the building selector, silently showing every building's data no
   // matter which one was picked.
   const propertyLeaseIds = useMemo(
-    () => leases.filter((l) => l.property_id === propertyId && (!buildingId || l.building_id === buildingId)).map((l) => l.id),
-    [leases, propertyId, buildingId],
+    () => activeLeases.filter((l) => l.property_id === propertyId && (!buildingId || l.building_id === buildingId)).map((l) => l.id),
+    [activeLeases, propertyId, buildingId],
   );
   const { data: categories = [] } = useOrgQuery("ExpenseCategory");
   const categoryNamesById = useMemo(() => new Map((categories || []).map((c) => [c.id, c.category_name])), [categories]);
@@ -324,12 +327,12 @@ export default function CAMSetup() {
   const selectedPoolCategoryIds = useMemo(() => new Set((selectedPool?.recovery_pool_categories || []).filter((c) => c.inclusion_mode === "include").map((c) => c.expense_category_id)), [selectedPool]);
 
   const { data: participants = [], refetch: refetchParticipants } = useQuery({
-    queryKey: ["pool_participants", selectedPoolId],
+    queryKey: ["pool_participants", selectedPoolId, propertyLeaseIds.join(",")],
     enabled: Boolean(selectedPoolId),
     queryFn: async () => {
       const { data, error } = await supabase.from("recovery_pool_lease_participants").select("*, leases(tenant_name)").eq("pool_id", selectedPoolId).order("created_at");
       if (error) return [];
-      return data || [];
+      return filterRowsToCamActiveLeases(data || [], activeLeaseIds);
     },
   });
 
@@ -338,14 +341,14 @@ export default function CAMSetup() {
   // pool only) -- needed for the Pool Calculation tab's "Participants"
   // column (spec section C) without re-querying per row.
   const { data: participantCountsByPoolId = new Map() } = useQuery({
-    queryKey: ["pool_participant_counts", pools.map((p) => p.id).join(",")],
+    queryKey: ["pool_participant_counts", pools.map((p) => p.id).join(","), propertyLeaseIds.join(",")],
     enabled: pools.length > 0,
     queryFn: async () => {
       const poolIds = pools.map((p) => p.id);
-      const { data, error } = await supabase.from("recovery_pool_lease_participants").select("pool_id").in("pool_id", poolIds).eq("status", "active");
+      const { data, error } = await supabase.from("recovery_pool_lease_participants").select("pool_id, lease_id").in("pool_id", poolIds).eq("status", "active");
       if (error) return new Map();
       const counts = new Map();
-      for (const row of data || []) counts.set(row.pool_id, (counts.get(row.pool_id) || 0) + 1);
+      for (const row of filterRowsToCamActiveLeases(data || [], activeLeaseIds)) counts.set(row.pool_id, (counts.get(row.pool_id) || 0) + 1);
       return counts;
     },
   });
@@ -419,11 +422,11 @@ export default function CAMSetup() {
 
   const { data: priorAdjustments = [], refetch: refetchPriorAdj } = useQuery({
     // Building-scoped, same reasoning as estimateSchedules below.
-    queryKey: ["cam_prior_period_adjustments", periodId, buildingId ? propertyLeaseIds.join(",") : null],
+    queryKey: ["cam_prior_period_adjustments", periodId, propertyLeaseIds.join(",")],
     enabled: Boolean(periodId),
     queryFn: async () => {
       let query = supabase.from("cam_prior_period_adjustments").select("*, leases(tenant_name)").eq("recovery_period_id", periodId);
-      if (buildingId) query = query.in("lease_id", propertyLeaseIds.length > 0 ? propertyLeaseIds : ["00000000-0000-0000-0000-000000000000"]);
+      query = query.in("lease_id", propertyLeaseIds.length > 0 ? propertyLeaseIds : ["00000000-0000-0000-0000-000000000000"]);
       const { data, error } = await query;
       if (error) return [];
       return data || [];
@@ -518,11 +521,11 @@ export default function CAMSetup() {
     // belongs to one calendar, which belongs to one property), but it says
     // nothing about building -- without this, every building's estimates
     // showed regardless of the building selector.
-    queryKey: ["cam_estimate_schedules", periodId, buildingId ? propertyLeaseIds.join(",") : null],
+    queryKey: ["cam_estimate_schedules", periodId, propertyLeaseIds.join(",")],
     enabled: Boolean(periodId),
     queryFn: async () => {
       let query = supabase.from("cam_estimate_schedules").select("*, leases(tenant_name)").eq("recovery_period_id", periodId);
-      if (buildingId) query = query.in("lease_id", propertyLeaseIds.length > 0 ? propertyLeaseIds : ["00000000-0000-0000-0000-000000000000"]);
+      query = query.in("lease_id", propertyLeaseIds.length > 0 ? propertyLeaseIds : ["00000000-0000-0000-0000-000000000000"]);
       const { data, error } = await query.order("month_date");
       if (error) return [];
       return data || [];
@@ -576,12 +579,12 @@ export default function CAMSetup() {
   });
 
   const { data: leaseResults = [] } = useQuery({
-    queryKey: ["cam-workbench-lease-results", activeRun?.id],
+    queryKey: ["cam-workbench-lease-results", activeRun?.id, propertyLeaseIds.join(",")],
     enabled: Boolean(activeRun?.id),
     queryFn: async () => {
       const { data, error } = await supabase.from("cam_run_lease_results").select("*, leases(tenant_name)").eq("cam_run_id", activeRun.id);
       if (error) return [];
-      return data || [];
+      return filterRowsToCamActiveLeases(data || [], activeLeaseIds);
     },
   });
 
@@ -792,7 +795,7 @@ export default function CAMSetup() {
     // -- otherwise a lease correctly excluded from `policies`/`estimateSchedules`
     // by the building filter still shows up here, e.g. as a false "missing
     // policy" for a lease that simply belongs to a different building.
-    const propLeases = leases.filter((l) => propertyLeaseIds.includes(l.id));
+    const propLeases = activeLeases.filter((l) => propertyLeaseIds.includes(l.id));
     const approvedLeases = propLeases.filter((l) => policies.some((p) => p.lease_id === l.id && p.status === "approved"));
     const leasesWithApprovedRules = new Set(policies.filter((p) => p.status === "approved").map((p) => p.lease_id)).size;
     const materializedPolicies = policies.length;
@@ -1247,8 +1250,8 @@ export default function CAMSetup() {
 
     const suggestions = useMemo(() => {
       if (!selectedPool || !selectedPeriod) return [];
-      return suggestParticipants(selectedPool, leases, leasePremises, approvedPolicySteps, selectedPoolCategoryIds, participants, selectedPeriod);
-    }, [selectedPool, leases, leasePremises, approvedPolicySteps, selectedPoolCategoryIds, participants, selectedPeriod]);
+      return suggestParticipants(selectedPool, activeLeases, leasePremises, approvedPolicySteps, selectedPoolCategoryIds, participants, selectedPeriod);
+    }, [selectedPool, activeLeases, leasePremises, approvedPolicySteps, selectedPoolCategoryIds, participants, selectedPeriod]);
 
     const activeParticipants = participants.filter((p) => p.status === "active");
 
@@ -1343,7 +1346,7 @@ export default function CAMSetup() {
               <div><Label>Lease</Label>
                 <Select value={partForm.lease_id} onValueChange={(v) => setPartForm({ ...partForm, lease_id: v })}>
                   <SelectTrigger id="part-lease"><SelectValue placeholder="Select lease..." /></SelectTrigger>
-                  <SelectContent>{leases.filter((l) => l.property_id === propertyId).map((l) => <SelectItem key={l.id} value={l.id}>{l.tenant_name ?? l.id.slice(0, 8)}</SelectItem>)}</SelectContent>
+                  <SelectContent>{activeLeases.filter((l) => l.property_id === propertyId).map((l) => <SelectItem key={l.id} value={l.id}>{l.tenant_name ?? l.id.slice(0, 8)}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
               <div><Label>Effective From</Label><Input id="part-effective-from" type="date" value={partForm.effective_from} onChange={(e) => setPartForm({ ...partForm, effective_from: e.target.value })} /></div>
@@ -1405,7 +1408,7 @@ export default function CAMSetup() {
     // -- otherwise a lease correctly excluded from `policies`/`estimateSchedules`
     // by the building filter still shows up here, e.g. as a false "missing
     // policy" for a lease that simply belongs to a different building.
-    const propLeases = leases.filter((l) => propertyLeaseIds.includes(l.id));
+    const propLeases = activeLeases.filter((l) => propertyLeaseIds.includes(l.id));
     const leasesMissingPolicy = propLeases.filter((l) => !policies.some((p) => p.lease_id === l.id));
 
     return (
@@ -1684,7 +1687,7 @@ export default function CAMSetup() {
   // Step 6 — Estimates & Adjustments (Requirement 8: bulk entry)
   // ============================================================================
   function Step6() {
-    const leaseOptions = leases.filter((l) => l.property_id === propertyId);
+    const leaseOptions = activeLeases.filter((l) => l.property_id === propertyId);
     const [bulkForm, setBulkForm] = useState({ lease_id: "", reason: "" });
     const [ranges, setRanges] = useState([{ amount: "", start_month: "", end_month: "" }]);
 
@@ -2306,7 +2309,7 @@ export default function CAMSetup() {
     // -- otherwise a lease correctly excluded from `policies`/`estimateSchedules`
     // by the building filter still shows up here, e.g. as a false "missing
     // policy" for a lease that simply belongs to a different building.
-    const propLeases = leases.filter((l) => propertyLeaseIds.includes(l.id));
+    const propLeases = activeLeases.filter((l) => propertyLeaseIds.includes(l.id));
     const [leaseId, setLeaseId] = useState("");
     React.useEffect(() => {
       if (!leaseId && propLeases.length > 0) setLeaseId(propLeases[0].id);
@@ -2517,7 +2520,7 @@ export default function CAMSetup() {
     // -- otherwise a lease correctly excluded from `policies`/`estimateSchedules`
     // by the building filter still shows up here, e.g. as a false "missing
     // policy" for a lease that simply belongs to a different building.
-    const propLeases = leases.filter((l) => propertyLeaseIds.includes(l.id));
+    const propLeases = activeLeases.filter((l) => propertyLeaseIds.includes(l.id));
     const varianceRows = useMemo(() => {
       return propLeases.map((l) => {
         const annualEstimate = estimateSchedules.filter((es) => es.lease_id === l.id).reduce((s, es) => s + Number(es.amount || 0), 0);

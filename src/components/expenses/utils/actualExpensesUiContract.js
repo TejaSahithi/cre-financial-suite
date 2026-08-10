@@ -96,6 +96,17 @@ export function hasCanonicalCategory(expense = {}) {
   return Boolean(expense.expense_category_id);
 }
 
+export function getRawCategoryEvidence(expense = {}) {
+  return (
+    expense.expense_subcategory ||
+    expense.subcategory ||
+    expense.category ||
+    expense.raw_category ||
+    expense.imported_category ||
+    null
+  );
+}
+
 export function getCanonicalCategoryLabel(expense = {}, categoryById = new Map()) {
   const categoryId = expense.expense_category_id || null;
   if (!categoryId) {

@@ -11,7 +11,7 @@
  *   - Statements & Charge Export (CSV generation, download, delivery)
  *   - Lineage (Adjustment & Restatement run tracking)
  */
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -24,6 +24,7 @@ import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { createPageUrl } from "@/utils";
+import { buildCamActiveLeaseIdSet, filterCamActiveLeases, filterRowsToCamActiveLeases } from "@/lib/activeLease";
 import PageHeader from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -91,6 +92,10 @@ export default function CAMRun() {
   const [reasonForm, setReasonForm] = useState({ reason: "" });
 
   const { data: properties = [] } = useOrgQuery("Property");
+  const { data: leases = [] } = useOrgQuery("Lease");
+  const activeLeases = useMemo(() => filterCamActiveLeases(leases), [leases]);
+  const activeLeaseIds = useMemo(() => buildCamActiveLeaseIdSet(activeLeases.filter((lease) => !propertyId || lease.property_id === propertyId)), [activeLeases, propertyId]);
+  const activeLeaseKey = [...activeLeaseIds].sort().join(",");
 
   const { data: calendars = [] } = useQuery({
     queryKey: ["cam-run-calendars", propertyId],
@@ -147,12 +152,12 @@ export default function CAMRun() {
   });
 
   const { data: leaseResults = [] } = useQuery({
-    queryKey: ["cam-run-lease-results", activeRun?.id],
+    queryKey: ["cam-run-lease-results", activeRun?.id, activeLeaseKey],
     queryFn: async () => {
       try {
         const { data, error } = await supabase.from("cam_run_lease_results").select("*, leases(tenant_name)").eq("cam_run_id", activeRun.id);
         if (error) return [];
-        return data || [];
+        return filterRowsToCamActiveLeases(data || [], activeLeaseIds);
       } catch {
         return [];
       }

@@ -1,3 +1,5 @@
+import { isCamActiveLease } from "@/lib/activeLease";
+
 function asNumber(value) {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
@@ -12,6 +14,8 @@ function leaseSqft(lease) {
 }
 
 function leaseOverlapsFiscalYear(lease, fiscalYear) {
+  if (!isCamActiveLease(lease)) return false;
+
   const status = String(lease?.status || "active").toLowerCase();
   if (status === "expired") return false;
 

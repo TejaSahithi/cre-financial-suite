@@ -24,6 +24,23 @@ function validatePayload(body: Record<string, unknown> = {}) {
   return { leaseIds: uniqueIds, singleMode: uniqueIds.length === 1 && Boolean(rawLeaseId) };
 }
 
+const CAM_LEASE_ID_TABLES = [
+  "recovery_pool_lease_participants",
+  "cam_pool_lease_shares",
+  "cam_run_statements",
+  "cam_statements",
+  "cam_charge_exports",
+  "cam_estimate_schedules",
+  "cam_prior_period_adjustments",
+];
+
+async function deleteLeaseIdRows(supabaseAdmin: any, tableName: string, leaseId: string) {
+  try {
+    await supabaseAdmin.from(tableName).delete().eq("lease_id", leaseId);
+  } catch (_) {
+    // Table might not exist in all environments; the RPC remains authoritative.
+  }
+}
 function errorStatus(message: string) {
   if (/unauthorized|missing authorization/i.test(message)) return 401;
   if (/access denied|permission|only organization admins/i.test(message)) return 403;
@@ -73,16 +90,10 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
-      // Pre-clean foreign key RESTRICT tables (CAM pool participation) to guarantee safe cascade deletion
-      try {
-        await supabaseAdmin.from("recovery_pool_lease_participants").delete().eq("lease_id", targetId);
-      } catch (_) {
-        // Table might not exist in all environments; proceed to RPC
-      }
-      try {
-        await supabaseAdmin.from("cam_pool_lease_shares").delete().eq("lease_id", targetId);
-      } catch (_) {
-        // Ignore if table unpopulated
+      // Pre-clean lease-keyed CAM tables to guarantee safe cascade deletion.
+      // The RPC below remains authoritative and handles trigger-gated run rows.
+      for (const tableName of CAM_LEASE_ID_TABLES) {
+        await deleteLeaseIdRows(supabaseAdmin, tableName, targetId);
       }
 
       const { error } = await supabaseAdmin.rpc("delete_lease_cascade", {

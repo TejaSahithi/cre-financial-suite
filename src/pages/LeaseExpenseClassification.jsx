@@ -1113,6 +1113,7 @@ export default function LeaseExpenseClassification() {
                           row.expenseCategory ||
                           (row.ruleLabel && row.ruleLabel !== "ACTUAL MISSING RULE" && row.ruleLabel !== "Actual Missing Rule" ? row.ruleLabel : null) ||
                           "General Expense";
+                        const categoryIsRawOnly = Boolean(row.actualExpenseId && !row.expenseCategoryId && row.expense?.category);
                         const servicePeriodLabel = row.servicePeriodStart && row.servicePeriodEnd
                           ? `${row.servicePeriodStart} - ${row.servicePeriodEnd}`
                           : "-";
@@ -1136,7 +1137,10 @@ export default function LeaseExpenseClassification() {
                                 </div>
                               )}
                             </TableCell>
-                            <TableCell className="max-w-[190px] text-xs font-semibold text-slate-800">{categoryDisplayName}</TableCell>
+                            <TableCell className="max-w-[190px] text-xs font-semibold text-slate-800">
+                              <div>{categoryDisplayName}</div>
+                              {categoryIsRawOnly && <div className="mt-0.5 text-[10px] font-medium text-amber-700">Raw source only</div>}
+                            </TableCell>
                             <TableCell className="text-xs font-medium text-slate-800">{servicePeriodLabel}</TableCell>
                             <TableCell className="text-right text-sm font-semibold text-slate-900">
                               {row.actualExpenseId ? fmt(row.amount) : <span className="text-xs font-medium text-slate-500">No actual posted</span>}

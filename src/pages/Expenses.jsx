@@ -62,6 +62,7 @@ import {
   expenseNeedsClassification,
   getAccountingStatus,
   getCanonicalCategoryLabel,
+  getRawCategoryEvidence,
   hasCanonicalCategory,
   getRecoveryStatusFromClassification,
   selectCanonicalExpenseClassification,
@@ -432,6 +433,7 @@ export default function Expenses() {
         approvedLeaseFieldValue(matchedLease, ["tenant_name", "tenant", "tenant_legal_name", "lessee"]);
       const classification = classificationByExpenseId.get(expense.id) || null;
       const categoryLabel = getCanonicalCategoryLabel(expense, categoryById);
+      const rawCategoryEvidence = getRawCategoryEvidence(expense);
       const accountingStatus = getAccountingStatus(expense);
       const recoveryStatus = hasCanonicalCategory(expense)
         ? getRecoveryStatusFromClassification(classification)
@@ -454,6 +456,7 @@ export default function Expenses() {
         _tenantLeaseLabel: tenantLeaseLabel,
         _classificationRecord: classification,
         _categoryLabel: categoryLabel,
+        _rawCategoryEvidence: rawCategoryEvidence,
         _accountingStatus: accountingStatus,
         _recoveryStatus: recoveryStatus,
         _needsClassification: expenseNeedsClassification(expense, classification),
@@ -773,7 +776,7 @@ export default function Expenses() {
                     <TableHead className="text-[10px] font-bold tracking-wider">Date</TableHead>
                     <TableHead className="text-[10px] font-bold tracking-wider">Vendor</TableHead>
                     <TableHead className="text-[10px] font-bold tracking-wider">Property / Building / Unit</TableHead>
-                    <TableHead className="text-[10px] font-bold tracking-wider">Tenant / Lease</TableHead>
+                    <TableHead className="text-[10px] font-bold tracking-wider">Tenant</TableHead>
                     <TableHead className="text-[10px] font-bold tracking-wider">Category</TableHead>
                     <TableHead className="text-[10px] font-bold tracking-wider">GL Code</TableHead>
                     <TableHead className="text-right text-[10px] font-bold tracking-wider">Amount</TableHead>
@@ -843,10 +846,16 @@ export default function Expenses() {
                             <div className={expense._categoryLabel?.value === "needs_category" ? "font-semibold text-amber-700" : "font-medium text-slate-900"}>
                               {expense._categoryLabel?.label}
                             </div>
-                            {(expense._categoryLabel?.subcategory || expense.expense_subcategory) && (
+                            {expense._categoryLabel?.value === "needs_category" ? (
                               <div className="mt-0.5 text-[11px] text-slate-500">
-                                {expense._categoryLabel?.subcategory || expense.expense_subcategory}
+                                {expense._rawCategoryEvidence ? `Raw source: ${expense._rawCategoryEvidence}` : "No source category provided"}
                               </div>
+                            ) : (
+                              (expense._categoryLabel?.subcategory || expense.expense_subcategory) && (
+                                <div className="mt-0.5 text-[11px] text-slate-500">
+                                  {expense._categoryLabel?.subcategory || expense.expense_subcategory}
+                                </div>
+                              )
                             )}
                           </TableCell>
                           <TableCell className="text-[10px] font-mono text-slate-500">{expense.gl_code || expense.account_code || "-"}</TableCell>

@@ -22,6 +22,7 @@ import useOrgId from "@/hooks/useOrgId";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { supabase } from "@/services/supabaseClient";
 import { getCamScopeContext } from "@/lib/camScope";
+import { buildCamActiveLeaseIdSet, filterRowsToCamActiveLeases } from "@/lib/activeLease";
 import { createPageUrl } from "@/utils";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 
@@ -91,6 +92,8 @@ export default function CAMDashboard() {
       }),
     [properties, buildings, units, leaseList, expenses, scopeProperty, scopeBuilding, scopeUnit, currentYear],
   );
+  const activeLeaseIds = useMemo(() => buildCamActiveLeaseIdSet(scope.activeLeases), [scope.activeLeases]);
+  const activeLeaseKey = [...activeLeaseIds].sort().join(",");
 
   // Active period for selected property
   const { data: recoveryPeriods = [] } = useQuery({
@@ -176,7 +179,7 @@ export default function CAMDashboard() {
 
   // Lease results for latest run
   const { data: leaseResults = [] } = useQuery({
-    queryKey: ["cam-overview-lease-results", latestRun?.id],
+    queryKey: ["cam-overview-lease-results", latestRun?.id, activeLeaseKey],
     enabled: !!latestRun?.id,
     queryFn: async () => {
       try {
@@ -185,7 +188,7 @@ export default function CAMDashboard() {
           .select("*, leases(tenant_name)")
           .eq("cam_run_id", latestRun.id);
         if (error) return [];
-        return data ?? [];
+        return filterRowsToCamActiveLeases(data ?? [], activeLeaseIds);
       } catch {
         return [];
       }

@@ -228,6 +228,10 @@ BEGIN
       ('extraction_stage_runs', 'org_id = $1 AND run_id IN (SELECT id FROM _lease_delete_extraction_run_ids)'),
       ('extraction_runs', 'org_id = $1 AND (id IN (SELECT id FROM _lease_delete_extraction_run_ids) OR lease_id = $2 OR uploaded_file_id IN (SELECT id FROM _lease_delete_file_ids))'),
 
+      -- CAM run/statement rows derived from this lease. Calculation lines do
+      -- not carry lease_id directly, so remove by the deleted lease's run result.
+      ('cam_run_calculation_lines', 'org_id = $1 AND lease_result_id IN (SELECT id FROM public.cam_run_lease_results WHERE org_id = $1 AND lease_id = $2)'),
+      ('cam_run_exceptions', 'org_id = $1 AND entity_type = ''lease'' AND entity_id = $2'),
       -- Pipeline/upload records and legacy review tables.
       ('document_links', 'org_id = $1 AND ((entity_type = ''lease'' AND entity_id = $2) OR file_id IN (SELECT id FROM _lease_delete_file_ids))'),
       ('compute_runs', 'org_id = $1 AND source_file_id IN (SELECT id FROM _lease_delete_file_ids)'),
@@ -258,9 +262,14 @@ BEGIN
   FOREACH child_table IN ARRAY ARRAY[
     'recovery_pool_lease_participants',
     'cam_pool_lease_shares',
+    'cam_run_lease_results',
+    'cam_run_statements',
+    'cam_statements',
+    'cam_charge_exports',
+    'cam_estimate_schedules',
+    'cam_prior_period_adjustments',
     'cam_calculation_results',
     'cam_statement_line_items',
-    'cam_statements',
     'cam_reconciliations',
     'cam_blueprint_run_ledger',
     'cam_pool_rules',

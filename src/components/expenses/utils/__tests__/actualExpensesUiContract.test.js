@@ -7,6 +7,7 @@ import {
   expenseNeedsClassification,
   getAccountingStatus,
   getCanonicalCategoryLabel,
+  getRawCategoryEvidence,
   getRecoveryStatusFromClassification,
   selectCanonicalExpenseClassification,
 } from "../actualExpensesUiContract";
@@ -35,7 +36,9 @@ describe("Actual Expenses V1 UI contract", () => {
   });
 
   it("uses expense_category_id as authoritative for the primary category", () => {
-    expect(getCanonicalCategoryLabel({ category: "repairs" }).label).toBe("Needs Category");
+    const rawOnlyExpense = { category: "repairs", expense_subcategory: "Roof Repair" };
+    expect(getCanonicalCategoryLabel(rawOnlyExpense).label).toBe("Needs Category");
+    expect(getRawCategoryEvidence(rawOnlyExpense)).toBe("Roof Repair");
     const categories = new Map([["cat-1", { category_name: "Utilities", subcategory_name: "Electric" }]]);
     expect(getCanonicalCategoryLabel({ expense_category_id: "cat-1", category: "raw import" }, categories)).toMatchObject({
       label: "Utilities",
