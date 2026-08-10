@@ -1,0 +1,82 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  buildLeaseYearSchedule,
+  scheduleRowsForLease,
+} from "../rentScheduleUtils";
+
+describe("rentScheduleUtils", () => {
+  it("prorates a mid-month rent change into the affected month", () => {
+    const rows = [
+      {
+        id: "old-rent",
+        lease_id: "lease-1",
+        status: "approved",
+        phase: "contracted",
+        period_start: "2026-01-01",
+        period_end: "2026-06-14",
+        monthly_amount: 1000,
+      },
+      {
+        id: "new-rent",
+        lease_id: "lease-1",
+        status: "approved",
+        phase: "contracted",
+        period_start: "2026-06-15",
+        period_end: "2026-12-31",
+        monthly_amount: 1200,
+      },
+    ];
+
+    const schedule = buildLeaseYearSchedule({}, scheduleRowsForLease(rows, "lease-1", { projectionMode: "contracted_only" }), 2026, { projectionMode: "contracted_only" });
+
+    expect(schedule.months[0]).toMatchObject({ month: "Jan", amount: 1000, isPartial: false });
+    expect(schedule.months[5]).toMatchObject({ month: "Jun", amount: 1106.67, hasChange: true });
+    expect(schedule.months[11]).toMatchObject({ month: "Dec", amount: 1200, isPartial: false });
+    expect(schedule.total).toBe(13306.67);
+  });
+
+  it("includes approved extension rows only when projection mode allows renewals", () => {
+    const rows = [
+      {
+        lease_id: "lease-1",
+        status: "approved",
+        phase: "contracted",
+        period_start: "2026-01-01",
+        period_end: "2026-12-31",
+        monthly_amount: 1000,
+      },
+      {
+        lease_id: "lease-1",
+        status: "approved",
+        phase: "approved_extension",
+        period_start: "2027-01-01",
+        period_end: "2027-12-31",
+        monthly_amount: 1300,
+      },
+    ];
+
+    const contractedOnly = buildLeaseYearSchedule({}, scheduleRowsForLease(rows, "lease-1", { projectionMode: "contracted_only" }), 2027, { projectionMode: "contracted_only" });
+    const withRenewals = buildLeaseYearSchedule({}, scheduleRowsForLease(rows, "lease-1", { projectionMode: "include_approved_renewals" }), 2027, { projectionMode: "include_approved_renewals" });
+
+    expect(contractedOnly.total).toBe(0);
+    expect(withRenewals.total).toBe(15600);
+  });
+
+  it("uses approved abstract preview dates when no stored rent schedule exists", () => {
+    const schedule = buildLeaseYearSchedule(
+      {
+        rent_commencement_date: "2026-03-15",
+        lease_end: "2026-05-14",
+        monthly_rent: 3100,
+      },
+      [],
+      2026,
+    );
+
+    expect(schedule.months[2]).toMatchObject({ month: "Mar", amount: 1700, isPartial: true });
+    expect(schedule.months[3]).toMatchObject({ month: "Apr", amount: 3100, isPartial: false });
+    expect(schedule.months[4]).toMatchObject({ month: "May", amount: 1400, isPartial: true });
+    expect(schedule.total).toBe(6200);
+  });
+});

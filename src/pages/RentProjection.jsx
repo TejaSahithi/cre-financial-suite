@@ -32,8 +32,10 @@ import { buildHierarchyScope, matchesHierarchyScope } from "@/lib/hierarchyScope
 import { getLeaseFieldLabel } from "@/lib/leaseFieldOptions";
 import {
   RENT_SCHEDULE_MONTHS,
+  annualizedRunRateFromYearSchedule,
   buildLeaseYearSchedule,
   safeDate,
+  scheduleHasMonthlyVariability,
   scheduleRowsForLease,
 } from "@/lib/rentScheduleUtils";
 import { supabase } from "@/services/supabaseClient";
@@ -322,10 +324,10 @@ export default function RentProjection() {
     return rows.filter((row) => [row.tenant_name, row.lease_type].filter(Boolean).join(" ").toLowerCase().includes(needle));
   }, [filteredApprovedLeases, search]);
 
-  const displayedLeaseRows = hasAuthoritativeProjection ? leaseSummaryRows : liveLeaseSummaryRows;
+  const baseDisplayedLeaseRows = hasAuthoritativeProjection ? leaseSummaryRows : liveLeaseSummaryRows;
   const displayedLeaseIds = useMemo(
-    () => Array.from(new Set(displayedLeaseRows.map((row) => row.lease_id).filter(Boolean))),
-    [displayedLeaseRows],
+    () => Array.from(new Set(baseDisplayedLeaseRows.map((row) => row.lease_id).filter(Boolean))),
+    [baseDisplayedLeaseRows],
   );
   const { data: rentScheduleRows = [] } = useQuery({
     queryKey: ["rent-projection-rent-schedules", displayedLeaseIds],
@@ -344,21 +346,42 @@ export default function RentProjection() {
     },
     retry: false,
   });
+  const displayedLeaseRows = useMemo(() => {
+    return baseDisplayedLeaseRows.map((row) => {
+      const leaseScheduleRows = scheduleRowsForLease(rentScheduleRows, row.lease_id, { projectionMode });
+      const currentYearSchedule = buildLeaseYearSchedule(row, leaseScheduleRows, fiscalYear, { projectionMode });
+      const nextYearSchedule = buildLeaseYearSchedule(row, leaseScheduleRows, fiscalYear + 1, { projectionMode });
+      const annualizedRunRate = annualizedRunRateFromYearSchedule(currentYearSchedule) || Number(row.annualized_rent || 0);
+      return {
+        ...row,
+        fy_scheduled_rent: currentYearSchedule.total,
+        next_fy_scheduled_rent: nextYearSchedule.total,
+        annualized_rent: annualizedRunRate,
+        rent_psf: Number(row.rsf || 0) > 0 && annualizedRunRate > 0 ? annualizedRunRate / Number(row.rsf || 0) : row.rent_psf,
+        next_fy_zero_explanation: nextYearSchedule.total > 0
+          ? (scheduleHasMonthlyVariability(nextYearSchedule) ? "Monthly schedule includes rent changes or partial months." : "Monthly schedule calculated.")
+          : "No scheduled rent in next fiscal year.",
+        rent_provenance: currentYearSchedule.source,
+        schedule_row_count: currentYearSchedule.storedRowCount,
+        has_monthly_variability: scheduleHasMonthlyVariability(currentYearSchedule) || scheduleHasMonthlyVariability(nextYearSchedule),
+        current_year_schedule: currentYearSchedule,
+        next_year_schedule: nextYearSchedule,
+      };
+    });
+  }, [baseDisplayedLeaseRows, fiscalYear, projectionMode, rentScheduleRows]);
+
   const liveProjectionChart = useMemo(() => {
-    const schedules = displayedLeaseRows.map((row) => ({
-      current: buildLeaseYearSchedule(row, scheduleRowsForLease(rentScheduleRows, row.lease_id), fiscalYear),
-      next: buildLeaseYearSchedule(row, scheduleRowsForLease(rentScheduleRows, row.lease_id), fiscalYear + 1),
-    }));
     return RENT_SCHEDULE_MONTHS.map((month, index) => ({
       month,
-      current: Math.round(schedules.reduce((sum, item) => sum + item.current.months[index].amount, 0) * 100) / 100,
-      projected: Math.round(schedules.reduce((sum, item) => sum + item.next.months[index].amount, 0) * 100) / 100,
+      current: Math.round(displayedLeaseRows.reduce((sum, row) => sum + Number(row.current_year_schedule?.months?.[index]?.amount || 0), 0) * 100) / 100,
+      projected: Math.round(displayedLeaseRows.reduce((sum, row) => sum + Number(row.next_year_schedule?.months?.[index]?.amount || 0), 0) * 100) / 100,
     }));
-  }, [displayedLeaseRows, fiscalYear, rentScheduleRows]);
-  const displayedChart = hasAuthoritativeProjection ? authoritativeChart : liveProjectionChart;
+  }, [displayedLeaseRows]);
+  const displayedChart = hasAuthoritativeProjection && authoritativeChart.length > 0 ? authoritativeChart : liveProjectionChart;
 
   const currentScheduledAnnual = displayedChart.reduce((sum, row) => sum + Number(row.current || 0), 0);
   const projectedAnnual = displayedChart.reduce((sum, row) => sum + Number(row.projected || 0), 0);
+  const scheduledRentPerSf = Number(displayedStats.totalSf || 0) > 0 ? currentScheduledAnnual / Number(displayedStats.totalSf || 0) : 0;
   const currentMonthlyAvg = currentScheduledAnnual / 12;
   const projectedMonthlyAvg = projectedAnnual / 12;
   const yoyChange =
@@ -395,53 +418,51 @@ export default function RentProjection() {
   };
 
   const handleExport = () => {
-    if (hasAuthoritativeProjection && leaseSummaryRows.length > 0) {
-      downloadCSV(
-        leaseSummaryRows.map((row) => ({
-          tenant: row.tenant_name || "",
-          property: row.property_id || "",
-          building: row.building_id || "",
-          unit: row.unit_id || "",
-          lease_type: row.lease_type || "",
-          lease_start: row.lease_start || "",
-          rent_commencement_date: row.rent_commencement_date || "",
-          lease_end: row.lease_end || "",
-          rsf: row.rsf || 0,
-          fy_scheduled_rent: Math.round(Number(row.fy_scheduled_rent || 0)),
-          annualized_rent: Math.round(Number(row.annualized_rent || 0)),
-          rent_source: row.rent_source || "Derived",
-          rent_provenance: row.rent_provenance || "",
-          rent_psf: row.rent_psf == null ? "" : Number(row.rent_psf).toFixed(2),
-          next_fy_scheduled_rent: Math.round(Number(row.next_fy_scheduled_rent || 0)),
-          next_fy_note: row.next_fy_zero_explanation || "",
-        })),
-        `rent-projection-${fiscalYear}-${projectionMode}.csv`,
-      );
-      return;
-    }
-
-    if (filteredApprovedLeases.length === 0) {
+    if (displayedLeaseRows.length === 0) {
       toast.info("No approved leases to export.");
       return;
     }
 
     downloadCSV(
-      filteredApprovedLeases.map((lease) => ({
-        tenant: approvedFieldValue(lease, ["tenant_name"]) || "",
-        property: hierarchy.propertyById.get(lease.property_id)?.name || "",
-        building: hierarchy.buildingById.get(hierarchy.unitById.get(lease.unit_id)?.building_id)?.name || "",
-        unit: hierarchy.unitById.get(lease.unit_id)?.unit_number || lease.unit_number || "",
-        lease_type: getLeaseFieldLabel("lease_type", approvedFieldValue(lease, ["lease_type"])) || approvedFieldValue(lease, ["lease_type"]) || "",
-        lease_start: approvedFieldValue(lease, ["commencement_date", "start_date"]) || "",
-        rent_commencement_date: approvedFieldValue(lease, ["rent_commencement_date"]) || "",
-        lease_end: approvedFieldValue(lease, ["expiration_date", "end_date"]) || "",
-        rsf: approvedLeaseRsf(lease),
-        annual_rent: Math.round(approvedLeaseAnnualRent(lease)),
-      })),
-      `approved-leases-${fiscalYear}.csv`,
+      displayedLeaseRows.map((row) => {
+        const monthColumns = Object.fromEntries(
+          RENT_SCHEDULE_MONTHS.map((month, index) => [
+            `${fiscalYear}_${month.toLowerCase()}`,
+            Number(row.current_year_schedule?.months?.[index]?.amount || 0),
+          ]),
+        );
+        const nextMonthColumns = Object.fromEntries(
+          RENT_SCHEDULE_MONTHS.map((month, index) => [
+            `${fiscalYear + 1}_${month.toLowerCase()}`,
+            Number(row.next_year_schedule?.months?.[index]?.amount || 0),
+          ]),
+        );
+        return {
+          tenant: row.tenant_name || "",
+          property: hierarchy.propertyById.get(row.property_id)?.name || row.property_id || "",
+          building: hierarchy.buildingById.get(row.building_id)?.name || "",
+          unit: hierarchy.unitById.get(row.unit_id)?.unit_number || row.unit_id || "",
+          lease_type: row.lease_type || "",
+          lease_start: row.lease_start || "",
+          rent_commencement_date: row.rent_commencement_date || "",
+          lease_end: row.lease_end || "",
+          rsf: row.rsf || 0,
+          projection_mode: projectionMode,
+          schedule_source: row.rent_provenance || "",
+          schedule_row_count: row.schedule_row_count || 0,
+          fy_scheduled_rent: Math.round(Number(row.fy_scheduled_rent || 0)),
+          run_rate_annualized_rent: Math.round(Number(row.annualized_rent || 0)),
+          rent_psf: row.rent_psf == null ? "" : Number(row.rent_psf).toFixed(2),
+          has_monthly_variability: Boolean(row.has_monthly_variability),
+          ...monthColumns,
+          next_fy_scheduled_rent: Math.round(Number(row.next_fy_scheduled_rent || 0)),
+          ...nextMonthColumns,
+          next_fy_note: row.next_fy_zero_explanation || "",
+        };
+      }),
+      `rent-projection-monthly-${fiscalYear}-${projectionMode}.csv`,
     );
   };
-
   const openLeaseSchedule = (row) => {
     if (!row?.lease_id) return;
     navigate(createPageUrl("LeaseRentSchedule", { id: row.lease_id, fiscal_year: fiscalYear }));
@@ -572,7 +593,7 @@ export default function RentProjection() {
         <Card className="border-l-4 border-l-slate-400">
           <CardContent className="p-4">
             <p className="text-[10px] font-semibold text-slate-500 uppercase">Annualized Rent / SF</p>
-            <p className="text-2xl font-bold text-slate-700">${Number(displayedStats.avgRentPerSf || 0).toFixed(2)}</p>
+            <p className="text-2xl font-bold text-slate-700">${Number(scheduledRentPerSf || 0).toFixed(2)}</p>
             <p className="text-[10px] text-slate-400">{Number(displayedStats.totalSf || 0).toLocaleString()} RSF</p>
           </CardContent>
         </Card>
@@ -651,6 +672,74 @@ export default function RentProjection() {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <CardTitle className="text-base">Monthly Budget Basis</CardTitle>
+              <p className="mt-1 text-xs text-slate-500">
+                FY totals are the sum of these monthly cells. Partial months use actual-day proration.
+              </p>
+            </div>
+            <Badge variant="outline" className="text-[10px]">
+              {PROJECTION_MODES.find((mode) => mode.value === projectionMode)?.label}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="overflow-x-auto p-0">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-slate-50">
+                <TableHead className="sticky left-0 z-10 min-w-[180px] bg-slate-50 text-[11px] font-semibold uppercase text-slate-500">Tenant</TableHead>
+                {RENT_SCHEDULE_MONTHS.map((month) => (
+                  <TableHead key={month} className="min-w-[78px] text-right text-[11px] font-semibold uppercase text-slate-500">{month}</TableHead>
+                ))}
+                <TableHead className="min-w-[100px] text-right text-[11px] font-semibold uppercase text-slate-500">FY Total</TableHead>
+                <TableHead className="min-w-[110px] text-right text-[11px] font-semibold uppercase text-slate-500">Run Rate</TableHead>
+                <TableHead className="min-w-[120px] text-[11px] font-semibold uppercase text-slate-500">Basis</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {displayedLeaseRows.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={16} className="py-10 text-center text-sm text-slate-400">No lease schedules in scope.</TableCell>
+                </TableRow>
+              ) : displayedLeaseRows.map((row, index) => (
+                <TableRow key={`monthly-${row.lease_id || index}`} className="hover:bg-slate-50">
+                  <TableCell className="sticky left-0 z-10 bg-white text-xs font-semibold text-slate-900">
+                    <button type="button" className="text-left hover:underline" onClick={() => openLeaseSchedule(row)}>
+                      {row.tenant_name || "-"}
+                    </button>
+                    <div className="mt-0.5 text-[10px] font-normal text-slate-500">
+                      {row.schedule_row_count ? `${row.schedule_row_count} schedule row${row.schedule_row_count === 1 ? "" : "s"}` : row.rent_provenance}
+                    </div>
+                  </TableCell>
+                  {RENT_SCHEDULE_MONTHS.map((month, monthIndex) => {
+                    const monthRow = row.current_year_schedule?.months?.[monthIndex] || {};
+                    const highlight = monthRow.isPartial || monthRow.hasChange;
+                    return (
+                      <TableCell
+                        key={`${row.lease_id || index}-${month}`}
+                        className={`text-right font-mono text-xs ${highlight ? "bg-amber-50 text-amber-800" : "text-slate-800"}`}
+                        title={highlight ? "Partial month or rent change inside month" : "Full-month scheduled rent"}
+                      >
+                        {fmtMoney(monthRow.amount)}
+                        {highlight && <div className="text-[9px] font-sans uppercase">{monthRow.hasChange ? "Change" : "Partial"}</div>}
+                      </TableCell>
+                    );
+                  })}
+                  <TableCell className="text-right font-mono text-sm font-semibold">{fmtMoney(row.fy_scheduled_rent)}</TableCell>
+                  <TableCell className="text-right font-mono text-sm">{fmtMoney(row.annualized_rent)}</TableCell>
+                  <TableCell className="text-xs text-slate-500">
+                    {row.rent_provenance || "-"}
+                    {row.has_monthly_variability && <div className="mt-0.5 text-[10px] font-semibold text-amber-700">Variable monthly schedule</div>}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between flex-wrap gap-2">

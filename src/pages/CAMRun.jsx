@@ -93,12 +93,10 @@ export default function CAMRun() {
   const [reasonForm, setReasonForm] = useState({ reason: "" });
 
   const { data: properties = [] } = useOrgQuery("Property");
-<<<<<<< HEAD
   const { data: leases = [] } = useOrgQuery("Lease");
   const activeLeases = useMemo(() => filterCamActiveLeases(leases), [leases]);
   const activeLeaseIds = useMemo(() => buildCamActiveLeaseIdSet(activeLeases.filter((lease) => !propertyId || lease.property_id === propertyId)), [activeLeases, propertyId]);
   const activeLeaseKey = [...activeLeaseIds].sort().join(",");
-=======
   const activeProperty = properties.find((property) => property.id === propertyId) || null;
 
   const notifyCamEvent = (eventType, result, source) => {
@@ -121,7 +119,6 @@ export default function CAMRun() {
       console.warn("[CAMRun] notification event failed:", error?.message || error);
     });
   };
->>>>>>> 57a5774 (email-update)
 
   const { data: calendars = [] } = useQuery({
     queryKey: ["cam-run-calendars", propertyId],
