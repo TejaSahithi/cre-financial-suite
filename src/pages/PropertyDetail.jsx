@@ -119,14 +119,15 @@ export default function PropertyDetail() {
         event_type: "building.created",
         entity_type: "building",
         entity_id: created?.id,
+        entity_label: created?.name || data.name,
         portfolio_id: property?.portfolio_id || null,
         property_id: created?.property_id || propertyId,
-        title: "Building Added",
-        message: `Building "${created?.name || data.name}" was added${property?.name ? ` to ${property.name}` : ""}.`,
         action_url: `${createPageUrl("PropertyDetail")}?id=${propertyId}`,
         created_by: user?.id,
         metadata: {
           source: "property_detail_building_create",
+          building_name: created?.name || data.name,
+          property_name: property?.name || null,
         },
       }).catch((error) => {
         console.warn("[PropertyDetail] notification event failed:", error?.message || error);
@@ -139,9 +140,32 @@ export default function PropertyDetail() {
   });
 
   const createUnitMutation = useMutation({
-    mutationFn: (data) => {
+    mutationFn: async (data) => {
       assertCanWritePage(user, "Units", "add units");
-      return UnitService.create(data);
+      const created = await UnitService.create(data);
+      const building = buildings.find((item) => item.id === (created?.building_id || data.building_id));
+
+      createNotificationsForEvent({
+        org_id: created?.org_id || property?.org_id || data.org_id,
+        event_type: "unit.created",
+        entity_type: "unit",
+        entity_id: created?.id,
+        entity_label: created?.unit_number || data.unit_number,
+        portfolio_id: property?.portfolio_id || null,
+        property_id: created?.property_id || propertyId,
+        action_url: `${createPageUrl("PropertyDetail")}?id=${propertyId}`,
+        created_by: user?.id,
+        metadata: {
+          source: "property_detail_unit_create",
+          unit_number: created?.unit_number || data.unit_number,
+          building_name: building?.name || null,
+          property_name: property?.name || null,
+        },
+      }).catch((error) => {
+        console.warn("[PropertyDetail] unit notification event failed:", error?.message || error);
+      });
+
+      return created;
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['units', propertyId] }); setShowAddUnit(false); setUnitForm({ unit_number: "", square_footage: "", status: "vacant" }); },
     onError: (err) => toast.error(isPagePermissionError(err) ? err.message : `Failed to create unit: ${err?.message || "Unknown error"}`),

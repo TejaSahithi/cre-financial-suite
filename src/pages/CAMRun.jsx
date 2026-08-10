@@ -23,6 +23,7 @@ import {
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { createNotificationsForEvent } from "@/services/notificationService";
 import { createPageUrl } from "@/utils";
 import { buildCamActiveLeaseIdSet, filterCamActiveLeases, filterRowsToCamActiveLeases } from "@/lib/activeLease";
 import PageHeader from "@/components/PageHeader";
@@ -92,10 +93,35 @@ export default function CAMRun() {
   const [reasonForm, setReasonForm] = useState({ reason: "" });
 
   const { data: properties = [] } = useOrgQuery("Property");
+<<<<<<< HEAD
   const { data: leases = [] } = useOrgQuery("Lease");
   const activeLeases = useMemo(() => filterCamActiveLeases(leases), [leases]);
   const activeLeaseIds = useMemo(() => buildCamActiveLeaseIdSet(activeLeases.filter((lease) => !propertyId || lease.property_id === propertyId)), [activeLeases, propertyId]);
   const activeLeaseKey = [...activeLeaseIds].sort().join(",");
+=======
+  const activeProperty = properties.find((property) => property.id === propertyId) || null;
+
+  const notifyCamEvent = (eventType, result, source) => {
+    const run = result?.run || result || activeRun || {};
+    createNotificationsForEvent({
+      org_id: run.org_id || activeProperty?.org_id,
+      event_type: eventType,
+      entity_type: "cam",
+      entity_id: run.id || activeRun?.id || null,
+      entity_label: activeProperty?.name ? `${activeProperty.name} CAM` : "CAM Run",
+      property_id: propertyId || run.property_id || null,
+      action_url: `${createPageUrl("CAMRun")}?property_id=${propertyId}&recovery_period_id=${periodId}`,
+      metadata: {
+        source,
+        property_name: activeProperty?.name || null,
+        fiscal_year: run.fiscal_year || run.recovery_year || null,
+        status: run.status || result?.status || null,
+      },
+    }).catch((error) => {
+      console.warn("[CAMRun] notification event failed:", error?.message || error);
+    });
+  };
+>>>>>>> 57a5774 (email-update)
 
   const { data: calendars = [] } = useQuery({
     queryKey: ["cam-run-calendars", propertyId],
@@ -242,8 +268,10 @@ export default function CAMRun() {
     onSuccess: (result) => {
       if (result?.status === "readiness_failed") {
         toast.warning("Readiness check failed — view exceptions for details.");
+        notifyCamEvent("cam.review_required", result, "cam_calculation_readiness_failed");
       } else {
         toast.success(result?.idempotent_rerun ? "Up to date — no changes since last calculation." : "Calculation complete.");
+        notifyCamEvent("cam.calculation_generated", result, "cam_calculation_generated");
       }
       refetchRuns();
       queryClient.invalidateQueries({ queryKey: ["cam-run-pool-results"] });
@@ -257,7 +285,14 @@ export default function CAMRun() {
   const actionMutation = useMutation({
     mutationFn: ({ action, payload }) =>
       invokeEdgeFunction("cam-run-workflow-v2", { action, cam_run_id: activeRun?.id, ...payload }),
-    onSuccess: () => {
+    onSuccess: (result, variables) => {
+      const eventByAction = {
+        submit_for_review: "cam.final_approval_required",
+        approve: "cam.approved",
+        reject: "cam.review_required",
+      };
+      const eventType = eventByAction[variables?.action];
+      if (eventType) notifyCamEvent(eventType, result, `cam_run_${variables.action}`);
       refetchRuns();
       refetchStatements();
       refetchExports();

@@ -6,6 +6,7 @@ import { Loader2, Paperclip, ArrowLeft, Plus, FileUp, CheckCircle2, AlertCircle 
 
 import { expenseService } from "@/services/expenseService";
 import { vendorService } from "@/services/vendorService";
+import { createNotificationsForEvent } from "@/services/notificationService";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction, invokeEdgeFunctionFormData } from "@/services/edgeFunctions";
 import useOrgQuery from "@/hooks/useOrgQuery";
@@ -414,9 +415,31 @@ export default function AddExpense() {
         service_period_end: form.date || null,
       },
       {
-        onSuccess: () => {
-          queryClient.invalidateQueries({ queryKey: ["Expense"] });
-          toast.success(saveAsDraft ? "Expense saved as draft" : "Expense saved successfully");
+          onSuccess: (result) => {
+            const createdId = result?.expense_id || result?.id || result?.created_ids?.[0] || result?.createdIds?.[0] || null;
+            createNotificationsForEvent({
+              org_id: writableOrgId,
+              event_type: saveAsDraft ? "expense.submitted" : "expense.approved",
+              entity_type: "expense",
+              entity_id: createdId,
+              entity_label: form.description || resolvedVendorFields.vendor || form.vendor || "Expense",
+              portfolio_id: property?.portfolio_id || form.portfolio_id || null,
+              property_id: form.property_id || null,
+              tenant_id: resolvedTenantId,
+              action_url: createdId ? `${createPageUrl("Expenses")}?id=${createdId}` : expensesUrl,
+              metadata: {
+                source: saveAsDraft ? "expense_draft_create" : "expense_manual_approved_create",
+                property_name: property?.name || property?.property_name || null,
+                vendor_name: resolvedVendorFields.vendor || form.vendor || null,
+                amount: parseFloat(form.amount),
+                fiscal_year: form.date ? new Date(form.date).getFullYear() : new Date().getFullYear(),
+                status: saveAsDraft ? "draft" : "approved",
+              },
+            }).catch((error) => {
+              console.warn("[AddExpense] notification event failed:", error?.message || error);
+            });
+            queryClient.invalidateQueries({ queryKey: ["Expense"] });
+            toast.success(saveAsDraft ? "Expense saved as draft" : "Expense saved successfully");
           if (addAnother) {
             setForm({
               ...buildInitialForm(scope),

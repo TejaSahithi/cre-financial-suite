@@ -203,6 +203,23 @@ export function resolveBusinessNotificationEvent(event, context = {}) {
 
 export async function createNotificationsForEvent(event, options = {}) {
   const normalizedEvent = normalizeEvent(event);
+  if (options.local !== true) {
+    return invokeEdgeFunction('notification-dispatch-v9', {
+      ...normalizedEvent,
+      org_id: normalizedEvent.org_id,
+      organization_id: normalizedEvent.org_id,
+      event_type: normalizedEvent.event_type,
+      entity_type: normalizedEvent.entity_type,
+      entity_id: normalizedEvent.entity_id,
+      portfolio_id: normalizedEvent.portfolio_id,
+      property_id: normalizedEvent.property_id,
+      tenant_id: normalizedEvent.tenant_id,
+      entity_label: normalizedEvent.entity_label || normalizedEvent.name || normalizedEvent.metadata?.entity_label,
+      action_url: absoluteActionUrl(normalizedEvent.action_url || normalizedEvent.actionUrl || normalizedEvent.link),
+      metadata: normalizedEvent.metadata || {},
+    });
+  }
+
   const context = options.context || await fetchNotificationContext(normalizedEvent.org_id);
   const resolution = resolveNotificationRecipients(normalizedEvent, context);
   const created = [];

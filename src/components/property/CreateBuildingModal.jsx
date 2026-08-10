@@ -60,13 +60,14 @@ export default function CreateBuildingModal({ isOpen, onClose, properties = [] }
         event_type: "building.created",
         entity_type: "building",
         entity_id: created?.id,
+        entity_label: created?.name || data.name,
         portfolio_id: property?.portfolio_id || null,
         property_id: created?.property_id || data.property_id,
-        title: "Building Added",
-        message: `Building "${created?.name || data.name}" was added${property?.name ? ` to ${property.name}` : ""}.`,
         action_url: createPageUrl("BuildingsUnits"),
         metadata: {
           source: "building_create_modal",
+          building_name: created?.name || data.name,
+          property_name: property?.name || null,
         },
       }).catch((error) => {
         console.warn("[CreateBuildingModal] notification event failed:", error?.message || error);

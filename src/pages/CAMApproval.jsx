@@ -16,6 +16,8 @@ import { CheckCircle2, ArrowLeft, XCircle, RotateCcw } from "lucide-react";
 
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { createNotificationsForEvent } from "@/services/notificationService";
+import useOrgQuery from "@/hooks/useOrgQuery";
 import { createPageUrl } from "@/utils";
 import PageHeader from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,6 +43,7 @@ export default function CAMApproval() {
   const camRunId = searchParams.get("cam_run_id") || "";
   const [dialogAction, setDialogAction] = useState(null); // 'reject' | 'return_to_draft'
   const [reason, setReason] = useState("");
+  const { data: properties = [] } = useOrgQuery("Property");
 
   const { data: run, refetch: refetchRun } = useQuery({
     queryKey: ["cam-approval-run", camRunId],
@@ -84,16 +87,37 @@ export default function CAMApproval() {
     refetchRun();
     queryClient.invalidateQueries({ queryKey: ["cam-run-list"] });
   };
+  const activeProperty = properties.find((property) => property.id === run?.property_id || property.id === run?.scope_id) || null;
+  const notifyCamApprovalEvent = (eventType, source, result) => {
+    createNotificationsForEvent({
+      org_id: run?.org_id || activeProperty?.org_id,
+      event_type: eventType,
+      entity_type: "cam",
+      entity_id: camRunId,
+      entity_label: activeProperty?.name ? `${activeProperty.name} CAM` : "CAM Run",
+      property_id: run?.property_id || run?.scope_id || null,
+      action_url: `${createPageUrl("CAMApproval")}?cam_run_id=${camRunId}`,
+      metadata: {
+        source,
+        property_name: activeProperty?.name || null,
+        fiscal_year: run?.fiscal_year || run?.recovery_year || null,
+        status: result?.status || run?.status || null,
+      },
+    }).catch((error) => {
+      console.warn("[CAMApproval] notification event failed:", error?.message || error);
+    });
+  };
 
   const approveMutation = useMutation({
     mutationFn: () => invokeEdgeFunction("cam-run-workflow-v2", { cam_run_id: camRunId, action: "approve" }),
-    onSuccess: () => { toast.success("Run approved."); invalidate(); },
+    onSuccess: (result) => { notifyCamApprovalEvent("cam.approved", "cam_approval_page_approve", result); toast.success("Run approved."); invalidate(); },
     onError: (err) => toast.error(err?.message || "Could not approve — check for unresolved blocking exceptions"),
   });
 
   const reasonMutation = useMutation({
     mutationFn: () => invokeEdgeFunction("cam-run-workflow-v2", { cam_run_id: camRunId, action: dialogAction, reason }),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (dialogAction === "reject") notifyCamApprovalEvent("cam.review_required", "cam_approval_page_reject", result);
       toast.success(dialogAction === "reject" ? "Run rejected." : "Run returned to draft.");
       setDialogAction(null);
       setReason("");

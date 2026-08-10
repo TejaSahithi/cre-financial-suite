@@ -24,6 +24,7 @@ import { expenseService } from "@/services/expenseService";
 import { resolveExpenseClassificationCondition } from "@/services/expenseClassificationWorkflowService";
 import { supabase } from "@/services/supabaseClient";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
+import { createNotificationsForEvent } from "@/services/notificationService";
 import { useAuth } from "@/lib/AuthContext";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { createPageUrl } from "@/utils";
@@ -632,7 +633,26 @@ export default function LeaseExpenseClassification() {
     mutationFn: async (ruleId) => {
       return expenseService.publishRuleToCamSetup(ruleId);
     },
-    onSuccess: () => {
+    onSuccess: (_result, ruleId) => {
+      const row = rows.find((item) => item.rule?.id === ruleId || item.ruleId === ruleId) || {};
+      createNotificationsForEvent({
+        org_id: row.rule?.org_id || row.lease?.org_id || getStoredActingOrgId() || orgId,
+        event_type: "lease_rule.published_to_cam",
+        entity_type: "lease_expense_rule",
+        entity_id: ruleId,
+        entity_label: row.ruleLabel || row.rule?.expense_category || "Lease Expense Rule",
+        portfolio_id: row.property?.portfolio_id || null,
+        property_id: row.property?.id || row.rule?.property_id || row.lease?.property_id || null,
+        action_url: createPageUrl("CAMSetup"),
+        metadata: {
+          source: "lease_expense_classification_publish_rule",
+          lease_name: row.lease?.tenant_name || row.lease?.name || null,
+          property_name: row.property?.name || row.property?.property_name || null,
+          rule_category: row.ruleLabel || row.rule?.expense_category || null,
+        },
+      }).catch((error) => {
+        console.warn("[LeaseExpenseClassification] notification event failed:", error?.message || error);
+      });
       toast.success("Published rule to CAM setup");
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });

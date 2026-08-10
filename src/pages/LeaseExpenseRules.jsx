@@ -53,6 +53,7 @@ import {
 } from "@/services/leaseExpenseRuleWorkflowService";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { createNotificationsForEvent } from "@/services/notificationService";
 import { createPageUrl } from "@/utils";
 
 const RULE_PATCH_KEYS = [
@@ -577,7 +578,16 @@ export default function LeaseExpenseRules() {
       }
       return markLeaseExpenseRuleNotApplicable({ ruleId, reason, idempotencyKey });
     },
-    onSuccess: invalidateRuleWorkflowQueries,
+    onSuccess: (_result, variables) => {
+      invalidateRuleWorkflowQueries();
+      const eventByAction = {
+        approve: "lease_rule.approved",
+        reject: "lease_rule.rejected",
+        not_applicable: "lease_rule.rejected",
+      };
+      const eventType = eventByAction[variables?.action];
+      if (eventType) notifyRuleEvent(eventType, variables.ruleId, `lease_expense_rule_${variables.action}`);
+    },
     onError: (error) => toast.error(error?.message || "Could not review rule"),
   });
 
@@ -656,6 +666,30 @@ export default function LeaseExpenseRules() {
     const leaseName = lease?.tenant_name || lease?.name || "this lease";
     toast.error(`Expense rules for ${leaseName} are not persisted yet. Use Sync Approved Rules, then review the saved rows.`);
     throw new Error("Expense rule is not persisted");
+  };
+
+  const notifyRuleEvent = (eventType, ruleId, source) => {
+    const context = allDisplayRows.find(({ rule }) => rule?.id === ruleId) || {};
+    const { rule, lease, property, category } = context;
+    createNotificationsForEvent({
+      org_id: rule?.org_id || lease?.org_id || property?.org_id,
+      event_type: eventType,
+      entity_type: "lease_expense_rule",
+      entity_id: ruleId,
+      entity_label: category?.name || rule?.expense_category || rule?.rule_type || "Lease Expense Rule",
+      portfolio_id: property?.portfolio_id || null,
+      property_id: rule?.property_id || lease?.property_id || property?.id || null,
+      action_url: createPageUrl("LeaseExpenseRules"),
+      metadata: {
+        source,
+        lease_name: lease?.tenant_name || lease?.name || null,
+        property_name: property?.name || property?.property_name || null,
+        rule_category: category?.name || rule?.expense_category || null,
+        status: eventType.replace("lease_rule.", ""),
+      },
+    }).catch((error) => {
+      console.warn("[LeaseExpenseRules] notification event failed:", error?.message || error);
+    });
   };
 
   const approveRule = async (rawRule, lease) => {

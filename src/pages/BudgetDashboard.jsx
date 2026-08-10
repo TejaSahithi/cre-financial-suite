@@ -19,6 +19,7 @@ import {
 
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { generateApprovedBudgetWorkbook } from "@/services/approvedBudgetWorkbookGenerator";
+import { createNotificationsForEvent } from "@/services/notificationService";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useSnapshotQuery } from "@/hooks/useSnapshotQuery";
@@ -351,8 +352,37 @@ export default function BudgetDashboard() {
         expected_updated_at: expected_updated_at || budget?.updated_at || undefined,
         approval_comment: approval_comment || undefined,
       }),
-    onSuccess: async () => {
+    onSuccess: async (_result, variables) => {
       await invalidateBudgetCaches(queryClient);
+      const budget = variables?.budget;
+      const eventByAction = {
+        mark_reviewed: "budget.final_approval_required",
+        approve: "budget.approved",
+        reject: "budget.rejected",
+        lock: "budget.approved",
+      };
+      const eventType = eventByAction[variables?.action];
+      if (eventType && budget) {
+        createNotificationsForEvent({
+          org_id: budget.org_id || budget.organization_id,
+          event_type: eventType,
+          entity_type: "budget",
+          entity_id: budget.id,
+          entity_label: budget.name || `${getBudgetYear(budget)} Budget`,
+          portfolio_id: budget.portfolio_id || null,
+          property_id: budget.property_id || null,
+          action_url: createPageUrl("BudgetDashboard"),
+          metadata: {
+            source: "budget_dashboard_status_change",
+            budget_name: budget.name || null,
+            fiscal_year: getBudgetYear(budget),
+            status: variables.action,
+            amount: budget.total_expenses || budget.total_budget || null,
+          },
+        }).catch((error) => {
+          console.warn("[BudgetDashboard] notification event failed:", error?.message || error);
+        });
+      }
       toast.success("Budget status updated");
     },
     onError: (err) => {

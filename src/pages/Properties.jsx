@@ -25,6 +25,7 @@ import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { useModuleAccess } from "@/lib/ModuleAccessContext";
 import { assertCanWritePage, isPagePermissionError } from "@/lib/userPermissions";
 import { useAuth } from "@/lib/AuthContext";
+import { createNotificationsForEvent } from "@/services/notificationService";
 
 export default function Properties() {
   const { user } = useAuth();
@@ -101,6 +102,24 @@ export default function Properties() {
       setForm(buildDefaultForm());
       setCurrentStep(1);
       toast.success("Property created successfully");
+      createNotificationsForEvent({
+        org_id: data?.org_id || activePortfolio?.org_id || currentOrgId || orgId,
+        event_type: "property.created",
+        entity_type: "property",
+        entity_id: data?.id,
+        entity_label: data?.name || form.name,
+        portfolio_id: data?.portfolio_id || form.portfolio_id || activePortfolioId || null,
+        property_id: data?.id,
+        action_url: `${createPageUrl("PropertyDetail")}?id=${data?.id}`,
+        created_by: user?.id,
+        metadata: {
+          source: "property_create",
+          property_name: data?.name || form.name,
+          portfolio_name: activePortfolio?.name || null,
+        },
+      }).catch((error) => {
+        console.warn("[Properties] notification event failed:", error?.message || error);
+      });
       if (data && data.id) {
         navigate(createPageUrl("PropertyDetail") + "?id=" + data.id);
       }
