@@ -417,21 +417,12 @@ export default function LeaseExpenseRules() {
     });
   }, [selectableRuleIds]);
 
-  const persistedLeaseIdsWithRules = useMemo(() => {
-    const ids = new Set();
-    for (const entry of serverRuleSets || []) {
-      if (entry?.leaseId && (entry.rules || []).length > 0) ids.add(entry.leaseId);
-    }
-    return ids;
-  }, [serverRuleSets]);
-
   const approvedLeasesMissingRules = useMemo(
     () =>
       selectorFilteredLeases
         .filter((lease) => !leaseIdParam || lease.id === leaseIdParam)
-        .filter(isApprovedLeaseForExpenseRuleSync)
-        .filter((lease) => !persistedLeaseIdsWithRules.has(lease.id)),
-    [selectorFilteredLeases, leaseIdParam, persistedLeaseIdsWithRules],
+        .filter(isApprovedLeaseForExpenseRuleSync),
+    [selectorFilteredLeases, leaseIdParam],
   );
 
   const openRuleEditor = (context) => {
@@ -837,8 +828,8 @@ export default function LeaseExpenseRules() {
           disabled={isLoadingRuleSets || syncApprovedLeaseRulesMutation.isPending || approvedLeasesMissingRules.length === 0}
           title={
             approvedLeasesMissingRules.length === 0
-              ? "No approved leases in this scope are missing persisted expense rules."
-              : "Create lease expense rule rows for approved leases that do not have them yet."
+              ? "No approved leases in this scope can be synced."
+              : "Create or repair frozen V1 lease expense rule rows for approved leases in scope."
           }
         >
           <RefreshCw className={`mr-2 h-4 w-4 ${syncApprovedLeaseRulesMutation.isPending ? "animate-spin" : ""}`} />
@@ -992,7 +983,7 @@ export default function LeaseExpenseRules() {
                           {displayMode === "gaps"
                           ? "No coverage gaps in this view."
                           : approvedLeasesMissingRules.length > 0
-                            ? `${approvedLeasesMissingRules.length} approved lease${approvedLeasesMissingRules.length === 1 ? "" : "s"} in this scope have no persisted expense rules yet.`
+                            ? `${approvedLeasesMissingRules.length} approved lease${approvedLeasesMissingRules.length === 1 ? "" : "s"} in this scope can be synced or repaired to the frozen V1 rule contract.`
                             : "No lease-derived expense rules in this view. Sync approved leases or review coverage gaps for missing rule evidence."}
                         </p>
                       )}

@@ -26,35 +26,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { createPageUrl } from "@/utils";
 
-const CATEGORIES = [
-  "property_tax",
-  "insurance",
-  "utilities",
-  "landscaping",
-  "snow_removal",
-  "parking_lot_maintenance",
-  "elevator_maintenance",
-  "security",
-  "janitorial",
-  "trash_removal",
-  "fire_systems",
-  "hvac_maintenance",
-  "plumbing",
-  "electrical",
-  "roof_repairs",
-  "pest_control",
-  "management_fee",
-  "administrative_fee",
-  "general_repairs",
-  "lobby_maintenance",
-  "cleaning",
-  "accounting",
-  "legal_fees",
-  "capital_improvements",
-  "structural_repairs",
-  "other",
-];
-
 const VENDOR_CATEGORIES = ["maintenance", "utilities", "insurance", "janitorial", "landscaping", "security", "legal", "accounting", "construction", "technology", "other"];
 
 const DOCUMENT_UPLOAD_ACCEPT = ".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.tsv,.png,.jpg,.jpeg,.tiff,.tif,.webp,.gif,.bmp";
@@ -65,6 +36,7 @@ function buildInitialForm(scope) {
     date: "",
     amount: "",
     category: "",
+    expense_category_id: "",
     expense_subcategory: "",
     gl_code: "",
     invoice_number: "",
@@ -116,6 +88,7 @@ export default function AddExpense() {
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
+  const { data: expenseCategories = [] } = useOrgQuery("ExpenseCategory");
 
   const scope = useMemo(
     () =>
@@ -223,6 +196,7 @@ export default function AddExpense() {
       date: editingExpense.date || "",
       amount: editingExpense.amount ?? "",
       category: editingExpense.category || "",
+      expense_category_id: editingExpense.expense_category_id || "",
       expense_subcategory: editingExpense.expense_subcategory || "",
       gl_code: editingExpense.gl_code || "",
       invoice_number: editingExpense.invoice_number || "",
@@ -244,6 +218,33 @@ export default function AddExpense() {
     });
     setAttachmentUrl(editingExpense.attachment_url || "");
   }, [editingExpense]);
+
+  const categoryOptions = useMemo(
+    () => [...expenseCategories].sort((left, right) => {
+      const leftOrder = Number(left.display_order ?? 999999);
+      const rightOrder = Number(right.display_order ?? 999999);
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+      return String(left.category_name || "").localeCompare(String(right.category_name || ""));
+    }),
+    [expenseCategories]
+  );
+
+  const categoryById = useMemo(
+    () => new Map(categoryOptions.map((category) => [category.id, category])),
+    [categoryOptions]
+  );
+
+  const selectedCategory = form.expense_category_id ? categoryById.get(form.expense_category_id) || null : null;
+
+  const handleCategorySelect = (categoryId) => {
+    const category = categoryById.get(categoryId) || null;
+    setForm((current) => ({
+      ...current,
+      expense_category_id: categoryId,
+      category: category?.category_name || current.category,
+      expense_subcategory: category?.subcategory_name || "",
+    }));
+  };
 
   const visibleProperties = scope.scopedProperties;
   const visibleBuildings = form.property_id
@@ -647,7 +648,7 @@ export default function AddExpense() {
       }
 
       const { rows } = extracted;
-      const candidate = buildInvoiceExpenseCandidate(rows[0], CATEGORIES, extracted.record);
+      const candidate = buildInvoiceExpenseCandidate(rows[0], categoryOptions.map((category) => category.normalized_key || category.category_name).filter(Boolean), extracted.record);
       applyInvoiceCandidate(candidate);
       setInvoiceExtractionStatus("Document fields extracted. Review them before saving.");
       toast.success("Document extracted and the Add Expense form was prefilled.");
@@ -773,7 +774,7 @@ export default function AddExpense() {
     });
   };
 
-  const isValid = form.date && form.amount && form.category && form.vendor && form.property_id;
+  const isValid = form.date && form.amount && form.expense_category_id && form.category && form.vendor && form.property_id;
   const showExpenseEntryForm = isEditing || !isInvoiceMode || invoiceDetailsVisible;
 
   return (
@@ -870,14 +871,14 @@ export default function AddExpense() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Label>Category *</Label>
-              <Select value={form.category} onValueChange={(value) => setForm((current) => ({ ...current, category: value }))}>
+              <Select value={form.expense_category_id} onValueChange={handleCategorySelect}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select category..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {CATEGORIES.map((category) => (
-                    <SelectItem key={category} value={category}>
-                      {category.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())}
+                  {categoryOptions.map((category) => (
+                    <SelectItem key={category.id} value={category.id}>
+                      {[category.category_name, category.subcategory_name].filter(Boolean).join(" / ")}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -914,7 +915,7 @@ export default function AddExpense() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Label>Subcategory</Label>
-              <Input value={form.expense_subcategory} onChange={(event) => setForm((current) => ({ ...current, expense_subcategory: event.target.value }))} placeholder="Optional subcategory..." />
+              <Input value={selectedCategory?.subcategory_name || form.expense_subcategory} readOnly placeholder="Selected category subcategory" />
             </div>
             <div>
               <Label>GL Code</Label>

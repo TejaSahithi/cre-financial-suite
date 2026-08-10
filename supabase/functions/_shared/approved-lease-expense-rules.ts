@@ -151,6 +151,7 @@ function isSourceBackedExpenseRule(rule: any): boolean {
   const ruleType = normalizeToken(rule?.rule_type || rule?.row_type);
   const generationSource = normalizeToken(rule?.generation_source);
   if (ruleType === "coverage_gap" || ["original_lease_required", "template_checklist", "coverage_gap"].includes(generationSource)) return false;
+  if (generationSource.includes("fallback") || generationSource.startsWith("typescript_schema")) return false;
   const sourceText = exactSourceText(rule);
   const category = normalizeToken(rule?.expense_category || rule?.normalized_key || rule?.category);
   return Boolean(sourceText && category && !BASE_RENT_KEYS.has(category));
@@ -159,27 +160,12 @@ function isSourceBackedExpenseRule(rule: any): boolean {
 function shouldPublishWorkflowExpenseRules(workflow: any): boolean {
   const source = normalizeToken(workflow?.expense_rule_source);
   if (source === "whole_document_llm_expense_obligations") return true;
+  if (source.includes("fallback") || source.startsWith("typescript_schema")) return false;
   const rules = asArray(workflow?.expense_rules);
   return rules.some(isSourceBackedExpenseRule);
 }
 
-const FALLBACK_EXPENSE_CATEGORY_PATTERNS = [
-  { category: "common_area_maintenance", patterns: [/\bcam\b/i, /common\s+area\s+maintenance/i] },
-  { category: "operating_expenses", patterns: [/operating\s+expenses?/i] },
-  { category: "real_estate_taxes", patterns: [/real\s+estate\s+tax(?:es)?/i, /property\s+tax(?:es)?/i, /\btaxes\b/i] },
-  { category: "property_insurance", patterns: [/property\s+insurance/i, /landlord(?:'s)?\s+insurance/i, /insurance\s+premium/i] },
-  { category: "utilities", patterns: [/utilit/i, /electric(?:ity)?/i, /water/i, /sewer/i, /gas/i, /hvac/i] },
-  { category: "janitorial", patterns: [/janitorial/i, /cleaning/i] },
-  { category: "repairs_maintenance", patterns: [/repair/i, /maintenance/i] },
-  { category: "management_fees", patterns: [/management\s+fee/i, /property\s+management/i] },
-  { category: "administrative_fees", patterns: [/admin(?:istrative)?\s+fee/i] },
-  { category: "trash_removal", patterns: [/trash/i, /refuse/i, /garbage/i] },
-  { category: "security", patterns: [/security\s+(?:service|services|guard|patrol|monitoring)/i] },
-  { category: "landscaping", patterns: [/landscap/i] },
-  { category: "snow_removal", patterns: [/snow\s+removal/i, /snow\s+plowing/i] },
-  { category: "parking", patterns: [/parking[\s\S]{0,120}(?:maintenance|repair|lighting|sweeping|striping|snow|operating\s+expense|cam)/i] },
-  { category: "late_fees", patterns: [/late\s+(?:fee|charge)/i] },
-];
+const FALLBACK_EXPENSE_CATEGORY_PATTERNS: any[] = [];
 
 function workflowEvidenceText(item: any): string | null {
   return cleanText(
@@ -207,117 +193,7 @@ function explicitExpenseCategory(item: any): string | null {
     item?.clause_type,
   );
   if (!token || BASE_RENT_KEYS.has(token)) return null;
-  if (FALLBACK_EXPENSE_CATEGORY_PATTERNS.some((entry) => entry.category === token)) return token;
-  if (token === "cam") return "common_area_maintenance";
-  if (token === "insurance") return "property_insurance";
-  if (token === "taxes") return "real_estate_taxes";
-  if (token === "maintenance") return "repairs_maintenance";
-  return null;
-}
-
-function isTenantInsuranceComplianceText(text: string): boolean {
-  return /\btenant\b[\s\S]{0,160}\b(?:obtain|maintain|carry|provide|deliver|furnish)\b[\s\S]{0,240}\b(?:insurance|policy|certificate|additional\s+insured|waiver\s+of\s+subrogation|liability)\b/i.test(text) ||
-    /\b(?:commercial\s+general\s+liability|general\s+liability|public\s+liability|bodily\s+injury|property\s+damage|additional\s+insured|certificate\s+of\s+insurance|waiver\s+of\s+subrogation)\b/i.test(text);
-}
-
-function isMonetaryCoverageLimitText(text: string): boolean {
-  return /\b(?:limit|limits|coverage|liability|each\s+occurrence|per\s+occurrence|aggregate|bodily\s+injury|property\s+damage|umbrella|excess\s+liability|not\s+less\s+than|minimum)\b/i.test(text) &&
-    !/\b(?:premium|premiums|tax(?:es)?|assessment|assessments|reimburse|reimbursement|additional\s+rent|landlord(?:'s)?\s+cost|landlord(?:'s)?\s+expense|incurred\s+by\s+landlord)\b/i.test(text);
-}
-
-function isLandlordIncurredRecoverableText(text: string): boolean {
-  const landlordExpense = /\blandlord\b[\s\S]{0,220}\b(?:pay|paid|pays|incur|incurred|levied|assessed|obtain|maintain|carry|procure)\b/i.test(text) ||
-    /\b(?:tax(?:es)?|assessment|assessments|premium|premiums|insurance)\b[\s\S]{0,160}\b(?:levied|assessed|charged|imposed|incurred|paid)\b[\s\S]{0,80}\b(?:landlord|owner|property)\b/i.test(text);
-  const tenantRecovery = /\btenant\b[\s\S]{0,260}\b(?:pay|reimburse|repay|contribute|be\s+responsible\s+for)\b/i.test(text) ||
-    /\b(?:additional\s+rent|pro\s*rata|proportionate\s+share|tenant'?s\s+share|reimburs(?:e|ement)|pass[-\s]?through)\b/i.test(text);
-  return landlordExpense && tenantRecovery;
-}
-
-function categoriesFromEvidence(item: any, text: string): string[] {
-  if (isTenantInsuranceComplianceText(text) && isMonetaryCoverageLimitText(text)) {
-    return [];
-  }
-  const categories = new Set<string>();
-  const explicit = explicitExpenseCategory(item);
-  if (explicit && !(explicit === "property_insurance" && isTenantInsuranceComplianceText(text) && !isLandlordIncurredRecoverableText(text))) categories.add(explicit);
-  for (const entry of FALLBACK_EXPENSE_CATEGORY_PATTERNS) {
-    if (entry.patterns.some((pattern) => pattern.test(text))) categories.add(entry.category);
-  }
-  if (categories.has("common_area_maintenance") && /\b(?:cam|common\s+area\s+maintenance)\b/i.test(text)) {
-    categories.delete("repairs_maintenance");
-  }
-  return [...categories];
-}
-
-function treatmentFromEvidence(text: string) {
-  const lower = text.toLowerCase();
-  const included = /(?:included|comprise|covers?|full[-\s]?service|gross\s+lease)[\s\S]{0,140}(?:base\s+rent|monthly\s+rent|rent|cam|tax(?:es)?|insurance|maintenance|utilit|janitorial)/i.test(text)
-    || /(?:cam|tax(?:es)?|insurance|maintenance|utilit|janitorial)[\s\S]{0,140}(?:included\s+in|part\s+of)[\s\S]{0,80}(?:base\s+rent|monthly\s+rent|rent)/i.test(text);
-  const tenantDirect = /tenant\s+(?:shall|must|will|agrees\s+to|is\s+responsible\s+for)[\s\S]{0,120}(?:pay|contract|maintain|provide|obtain).{0,80}(?:direct|directly|at\s+tenant'?s\s+(?:sole\s+)?(?:cost|expense))/i.test(text);
-  const reimbursable = /(?:reimburse|reimbursement|additional\s+rent|pro\s*rata|proportionate\s+share|pass[-\s]?through|separately\s+billed|pay\s+landlord)/i.test(lower);
-  if (isTenantInsuranceComplianceText(text) && !isLandlordIncurredRecoverableText(text)) {
-    return {
-      included_in_base_rent: false,
-      recoverable_from_tenant: false,
-      cam_eligible: false,
-      payment_treatment: "tenant_direct_contract",
-      recovery_method: "tenant_direct_contract",
-      lease_treatment: "tenant_insurance_compliance",
-      recoverable_flag: false,
-    };
-  }
-  if (isLandlordIncurredRecoverableText(text)) {
-    return {
-      included_in_base_rent: false,
-      recoverable_from_tenant: true,
-      cam_eligible: true,
-      payment_treatment: "reimbursable",
-      recovery_method: /pro\s*rata|proportionate\s+share|tenant'?s\s+share/i.test(text) ? "pro_rata_share" : "pass_through",
-      lease_treatment: "landlord_incurred_tenant_recovery",
-      recoverable_flag: true,
-    };
-  }
-  if (included) {
-    return {
-      included_in_base_rent: true,
-      recoverable_from_tenant: false,
-      cam_eligible: false,
-      payment_treatment: "included_in_base_rent",
-      recovery_method: "included_in_base_rent",
-      lease_treatment: "included_in_rent",
-      recoverable_flag: false,
-    };
-  }
-  if (tenantDirect) {
-    return {
-      included_in_base_rent: false,
-      recoverable_from_tenant: false,
-      cam_eligible: false,
-      payment_treatment: "tenant_direct_contract",
-      recovery_method: "tenant_direct_contract",
-      lease_treatment: "tenant_direct",
-      recoverable_flag: false,
-    };
-  }
-  if (reimbursable) {
-    return {
-      included_in_base_rent: false,
-      recoverable_from_tenant: true,
-      cam_eligible: true,
-      payment_treatment: "reimbursable",
-      recovery_method: /pro\s*rata|proportionate\s+share/i.test(text) ? "pro_rata_share" : "manual_review",
-      lease_treatment: "tenant_recovery",
-      recoverable_flag: true,
-    };
-  }
-  return {
-    recoverable_from_tenant: "conditional",
-    cam_eligible: "conditional",
-    payment_treatment: "reimbursable",
-    recovery_method: "manual_review",
-    lease_treatment: "manual_review",
-    recoverable_flag: "conditional",
-  };
+  return token;
 }
 
 function workflowEvidenceItems(workflow: any): any[] {
@@ -370,99 +246,19 @@ function rawDocumentItems(fileRecord: any): any[] {
   return items;
 }
 
-function snippetForCategory(text: string, category: string): string {
-  const patterns = FALLBACK_EXPENSE_CATEGORY_PATTERNS.find((entry) => entry.category === category)?.patterns || [];
-  const normalized = cleanText(text);
-  if (!normalized) return "";
-  const matches = patterns
-    .map((pattern) => {
-      const match = normalized.match(pattern);
-      return match?.index ?? -1;
-    })
-    .filter((index) => index >= 0)
-    .sort((left, right) => left - right);
-  const anchor = matches[0] ?? 0;
-  const start = Math.max(0, anchor - 450);
-  const end = Math.min(normalized.length, anchor + 1200);
-  return cleanText(normalized.slice(start, end));
-}
-
-function fallbackExpenseRulesFromEvidenceItems(items: any[], generationSource: string, notes: string): any[] {
-  const rows: any[] = [];
-  const seen = new Set<string>();
-  for (const item of items) {
-    if (!isObject(item)) continue;
-    const sourceText = workflowEvidenceText(item);
-    if (!sourceText) continue;
-    const categories = categoriesFromEvidence(item, sourceText);
-    if (categories.length === 0) continue;
-    const page = workflowEvidencePage(item);
-    for (const category of categories) {
-      const snippet = snippetForCategory(sourceText, category) || sourceText;
-      const treatment = treatmentFromEvidence(snippet);
-      const key = [category, page ?? "no_page", stableHash(snippet)].join("|");
-      if (seen.has(key)) continue;
-      seen.add(key);
-      rows.push({
-        expense_category: category,
-        source_clause: snippet,
-        exact_source_text: snippet,
-        source_text: snippet,
-        source_page: page,
-        page_number: page,
-        confidence_score: numberOrNull(item?.confidence_score ?? item?.confidence) ?? 0.66,
-        extraction_status: page == null ? "missing_source_evidence" : "extracted",
-        review_status: "needs_review",
-        approval_status: "draft",
-        generation_source: generationSource,
-        notes,
-        ...treatment,
-      });
-    }
-  }
-  return rows;
+function fallbackExpenseRulesFromEvidenceItems(_items: any[], _generationSource: string, _notes: string): any[] {
+  return [];
 }
 
 function fallbackExpenseRulesFromRawDocument(fileRecord: any): any[] {
   return fallbackExpenseRulesFromEvidenceItems(
     rawDocumentItems(fileRecord),
-    "typescript_schema_raw_document_fallback",
+    "disabled_raw_document_fallback",
     "Generated from stored raw document text because no canonical LLM expense_rules payload was available.",
   );
 }
-function fallbackExpenseRulesFromWorkflowEvidence(workflow: any): any[] {
-  const rows: any[] = [];
-  const seen = new Set<string>();
-  for (const item of workflowEvidenceItems(workflow)) {
-    if (!isObject(item)) continue;
-    const sourceText = workflowEvidenceText(item);
-    if (!sourceText) continue;
-    const categories = categoriesFromEvidence(item, sourceText);
-    if (categories.length === 0) continue;
-    const page = workflowEvidencePage(item);
-    const treatment = treatmentFromEvidence(sourceText);
-    for (const category of categories) {
-      const key = [category, page ?? "no_page", stableHash(sourceText)].join("|");
-      if (seen.has(key)) continue;
-      seen.add(key);
-      rows.push({
-        expense_category: category,
-        source_clause: sourceText,
-        exact_source_text: sourceText,
-        source_text: sourceText,
-        source_page: page,
-        page_number: page,
-        confidence_score: numberOrNull(item?.confidence_score ?? item?.confidence) ?? 0.72,
-        extraction_status: page == null ? "missing_source_evidence" : "extracted",
-        review_status: "needs_review",
-        approval_status: "draft",
-        generation_source: "typescript_schema_workflow_evidence_fallback",
-        notes: "Generated from source-backed workflow clause because no canonical expense_rules payload was available.",
-        ...treatment,
-      });
-    }
-  }
-  return rows;
+function fallbackExpenseRulesFromWorkflowEvidence(_workflow: any): any[] {
+  return [];
 }
 
 export function isLeaseApprovedForExpensePublication(lease: any): boolean {
@@ -565,90 +361,27 @@ function stableHash(value: unknown): string {
 }
 
 function includedInBaseRent(rule: any): boolean | null {
-  const explicit = booleanOrNull(rule?.included_in_base_rent ?? rule?.included_in_rent);
-  if (explicit != null) return explicit;
-  return /included/.test(normalizeToken(rule?.lease_treatment)) ? true : null;
+  return booleanOrNull(rule?.included_in_base_rent ?? rule?.included_in_rent);
 }
 
 function recoverableDecision(rule: any): "yes" | "no" | "conditional" {
-  const explicit = triState(rule?.recoverable_from_tenant ?? rule?.recoverable_flag);
-  if (explicit) return explicit;
-  if (includedInBaseRent(rule) || rule?.is_excluded) return "no";
-  const classification = normalizeToken(rule?.rule_classification);
-  if (classification === "recoverable") return "yes";
-  if (classification === "conditional") return "conditional";
-  if (["non_recoverable", "excluded"].includes(classification)) return "no";
-  return "conditional";
+  return triState(rule?.recoverable_from_tenant ?? rule?.recoverable_flag, "conditional");
 }
 
-function camEligibleDecision(rule: any, recoverable: string): "yes" | "no" | "conditional" {
-  const explicit = triState(rule?.cam_eligible);
-  if (explicit) return explicit;
-  if (includedInBaseRent(rule)) return "no";
-  const category = normalizeToken(rule?.expense_category || rule?.normalized_key);
-  if ([
-    "common_area_maintenance",
-    "operating_expenses",
-    "real_estate_taxes",
-    "property_insurance",
-    "repairs_maintenance",
-    "utilities",
-    "electricity",
-    "water",
-    "sewer",
-    "gas",
-    "hvac",
-    "janitorial",
-    "trash_removal",
-    "security",
-    "landscaping",
-    "snow_removal",
-    "management_fees",
-    "administrative_fees",
-    "capital_expenditures",
-  ].includes(category)) {
-    return recoverable === "no" ? "no" : recoverable as "yes" | "conditional";
-  }
-  return "conditional";
+function camEligibleDecision(rule: any, _recoverable: string): "yes" | "no" | "conditional" {
+  return triState(rule?.cam_eligible, "conditional");
 }
 
-function operationalResponsibility(rule: any, recoverable: string): string {
+function operationalResponsibility(rule: any, _recoverable: string): string {
   const explicit = normalizeToken(rule?.operational_responsibility || rule?.responsibility);
-  if (["landlord", "tenant", "shared", "third_party"].includes(explicit)) return explicit;
-  if (normalizeToken(rule?.recovery_method) === "tenant_direct_contract") return "tenant";
-  if (includedInBaseRent(rule) || ["yes", "conditional"].includes(recoverable)) return "landlord";
-  return "unknown";
+  return ["landlord", "tenant", "shared", "third_party"].includes(explicit) ? explicit : "unknown";
 }
 
-function paymentTreatment(rule: any, recoverable: string): string {
+function paymentTreatment(rule: any, _recoverable: string): string {
   const explicit = normalizeToken(rule?.payment_treatment);
-  if (["included_in_base_rent", "reimbursable", "tenant_direct_contract", "separately_billed", "not_applicable"].includes(explicit)) {
-    return explicit;
-  }
-  if (includedInBaseRent(rule)) return "included_in_base_rent";
-  if (normalizeToken(rule?.recovery_method) === "tenant_direct_contract") return "tenant_direct_contract";
-  if (["yes", "conditional"].includes(recoverable)) return "reimbursable";
-  return "not_applicable";
-}
-
-function hasLeaseSourcePage(rule: any): boolean {
-  const page = numberOrNull(rule?.source_page ?? rule?.page_number);
-  return page != null && page > 0;
-}
-
-function isApprovalReadyLeaseRule(rule: any, payment: string, recoverable: string, camEligible: string): boolean {
-  const sourceText = exactSourceText(rule);
-  if (!sourceText || !hasLeaseSourcePage(rule)) return false;
-  if (payment === "tenant_direct_contract") return true;
-  if (payment === "included_in_base_rent" || includedInBaseRent(rule)) return true;
-  return recoverable === "yes" && ["yes", "no"].includes(camEligible);
-}
-
-function shouldPublishPreparedRuleToCam(rule: any, payment: string, recoverable: string, camEligible: string): boolean {
-  if (!isApprovalReadyLeaseRule(rule, payment, recoverable, camEligible)) return false;
-  if (payment === "included_in_base_rent" || payment === "tenant_direct_contract") return false;
-  if (includedInBaseRent(rule) || rule?.is_excluded === true) return false;
-  return recoverable === "yes" && camEligible === "yes";
+  return ["included_in_base_rent", "reimbursable", "tenant_direct_contract", "separately_billed", "not_applicable"].includes(explicit)
+    ? explicit
+    : "not_applicable";
 }
 function billingTreatment(rule: any, payment: string): string {
   const explicit = normalizeToken(rule?.billing_treatment);
@@ -671,19 +404,11 @@ function exactSourceText(rule: any): string | null {
   ) || null;
 }
 
-function isInsuranceComplianceRule(rule: any, category: string, sourceText: string): boolean {
-  return category === "property_insurance" &&
-    isTenantInsuranceComplianceText(sourceText) &&
-    !isLandlordIncurredRecoverableText(sourceText);
-}
-
-function explicitExpenseAmount(rule: any, sourceText: string): number | null {
-  if (isMonetaryCoverageLimitText(sourceText)) return null;
+function explicitExpenseAmount(rule: any, _sourceText: string): number | null {
   return numberOrNull(rule?.fixed_monthly_amount) ??
     numberOrNull(rule?.explicit_charge_amount) ??
     numberOrNull(rule?.base_year_amount);
 }
-
 function canonicalRuleKey(leaseId: string, rule: any): string {
   const category = normalizeToken(rule?.expense_category || rule?.normalized_key || rule?.category || "uncategorized");
   const subcategory = normalizeToken(rule?.expense_subcategory || rule?.subcategory_name);
@@ -698,31 +423,14 @@ function prepareRulePayload(lease: any, orgId: string, rule: any) {
 
   const sourceText = exactSourceText(rule);
   if (!sourceText) return null;
-  const insuranceCompliance = isInsuranceComplianceRule(rule, category, sourceText);
-  const coverageLimit = isMonetaryCoverageLimitText(sourceText);
-  if (insuranceCompliance) {
-    rule = {
-      ...rule,
-      recoverable_from_tenant: "no",
-      is_recoverable: false,
-      cam_eligible: "no",
-      payment_treatment: "tenant_direct_contract",
-      recovery_method: "tenant_direct_contract",
-      operational_responsibility: "tenant",
-      lease_treatment: "tenant_insurance_compliance",
-      fixed_monthly_amount: null,
-      explicit_charge_amount: null,
-      estimated_monthly_amount: null,
-      estimated_annual_amount: null,
-      base_year_amount: null,
-    };
-  }
+
+
   const sourcePage = numberOrNull(rule?.source_page ?? rule?.page_number);
-  const recoverable = recoverableDecision(rule);
-  const camEligible = camEligibleDecision(rule, recoverable);
-  const payment = paymentTreatment(rule, recoverable);
-  const approvalReady = isApprovalReadyLeaseRule(rule, payment, recoverable, camEligible);
-  const publishToCam = shouldPublishPreparedRuleToCam(rule, payment, recoverable, camEligible);
+  const recoverable = triState(rule?.recoverable_from_tenant ?? rule?.recoverable_flag, "conditional");
+  const camEligible = triState(rule?.cam_eligible, "conditional");
+  const payment = normalizeToken(rule?.payment_treatment) || normalizeToken(rule?.recovery_method) || "not_applicable";
+  const approvalReady = false;
+  const publishToCam = false;
   const recoveryMethod =
     normalizeToken(rule?.recovery_method) ||
     (payment === "included_in_base_rent" ? "included_in_base_rent" : "manual_review");
@@ -734,8 +442,6 @@ function prepareRulePayload(lease: any, orgId: string, rule: any) {
     : (normalizeToken(rule?.extraction_status || rule?.status) || "extracted");
   const notes = [
     cleanText(rule?.notes),
-    insuranceCompliance ? "Tenant insurance coverage requirement; monetary limits are compliance thresholds, not recoverable expense amounts." : "",
-    coverageLimit && !insuranceCompliance ? "Monetary amount appears to be a coverage/cap limit; verify before treating it as an expense amount." : "",
     missingPage ? "Source page missing; verify the clause citation before approving this rule." : "",
   ].filter(Boolean).join(" ");
   const ruleKey = canonicalRuleKey(lease.id, rule);
@@ -766,18 +472,27 @@ function prepareRulePayload(lease: any, orgId: string, rule: any) {
       payment_treatment: payment,
       billing_treatment: billingTreatment(rule, payment),
       recovery_method: recoveryMethod,
+      recovery_treatment: cleanText(rule?.recovery_treatment) || null,
+      cam_participation: cleanText(rule?.cam_participation) || null,
+      actual_expense_expected: triState(rule?.actual_expense_expected, null),
+      vendor_payment_party: cleanText(rule?.vendor_payment_party) || null,
+      amount_formula: cleanText(rule?.amount_formula) || null,
+      applies_when: cleanText(rule?.applies_when) || null,
+      condition_type: cleanText(rule?.condition_type) || null,
+      coverage_requirement_amount: numberOrNull(rule?.coverage_requirement_amount),
+      insurance_coverage_amount: numberOrNull(rule?.insurance_coverage_amount),
       allocation_basis: allocationBasis,
       is_excluded: Boolean(rule?.is_excluded),
       is_controllable: Boolean(rule?.is_controllable),
-      is_subject_to_cap: coverageLimit ? false : Boolean(rule?.is_subject_to_cap || rule?.cap_type),
-      cap_type: coverageLimit ? null : cleanText(rule?.cap_type) || null,
-      cap_value: coverageLimit ? null : numberOrNull(rule?.cap_value ?? rule?.cap_amount),
-      cap_amount: coverageLimit ? null : numberOrNull(rule?.cap_amount ?? rule?.cap_value),
+      is_subject_to_cap: Boolean(rule?.is_subject_to_cap || rule?.cap_type),
+      cap_type: cleanText(rule?.cap_type) || null,
+      cap_value: numberOrNull(rule?.cap_value ?? rule?.cap_amount),
+      cap_amount: numberOrNull(rule?.cap_amount ?? rule?.cap_value),
       cap_percent: numberOrNull(rule?.cap_percent),
-      has_base_year: coverageLimit ? false : Boolean(rule?.has_base_year || rule?.base_year || rule?.base_year_type),
-      base_year_type: coverageLimit ? null : cleanText(rule?.base_year_type) || null,
-      base_year: coverageLimit ? null : cleanText(rule?.base_year || rule?.base_year_type) || null,
-      base_year_amount: coverageLimit ? null : numberOrNull(rule?.base_year_amount),
+      has_base_year: Boolean(rule?.has_base_year || rule?.base_year || rule?.base_year_type),
+      base_year_type: cleanText(rule?.base_year_type) || null,
+      base_year: cleanText(rule?.base_year || rule?.base_year_type) || null,
+      base_year_amount: numberOrNull(rule?.base_year_amount),
       expense_stop_amount: numberOrNull(rule?.expense_stop_amount),
       gross_up_applicable: Boolean(rule?.gross_up_applicable || numberOrNull(rule?.gross_up_percent) != null),
       gross_up_percent: numberOrNull(rule?.gross_up_percent),
@@ -806,14 +521,14 @@ function prepareRulePayload(lease: any, orgId: string, rule: any) {
       created_from: "approved_lease_expense_publication",
       generation_source: cleanText(rule?.generation_source) || "whole_document_llm_expense_obligation_v1",
       tenant_share_percent: numberOrNull(rule?.tenant_share_percent),
-      estimated_monthly_amount: coverageLimit ? null : numberOrNull(rule?.fixed_monthly_amount ?? rule?.explicit_charge_amount),
-      estimated_annual_amount: coverageLimit ? null : numberOrNull(rule?.estimated_annual_amount),
+      estimated_monthly_amount: numberOrNull(rule?.fixed_monthly_amount ?? rule?.explicit_charge_amount),
+      estimated_annual_amount: numberOrNull(rule?.estimated_annual_amount),
     },
     value: finalValue == null
       ? null
       : {
         rule_key: ruleKey,
-        base_year_amount: coverageLimit ? null : numberOrNull(rule?.base_year_amount),
+        base_year_amount: numberOrNull(rule?.base_year_amount),
         extracted_value: finalValue,
         manual_value: null,
         final_value: finalValue,
@@ -928,86 +643,50 @@ async function resolveExpenseCategoryIds(
 // performs no write; callers still get a stable { persisted, error }-shaped
 // result so publishApprovedLeaseExpenseArtifacts's response contract is
 // unchanged.
-async function promoteApprovedLeaseRuleRows(supabaseAdmin: any, orgId: string, lease: any, actorUserId: string | null) {
-  const { data: rows, error } = await supabaseAdmin
-    .from("lease_expense_rules")
-    .select("*")
-    .eq("org_id", orgId)
-    .eq("lease_id", lease.id);
-  if (error) throw new Error(`Could not load approved lease expense rules for promotion: ${error.message}`);
-
-  let approved = 0;
-  let publishedToCam = 0;
-  let ruleSetsApproved = 0;
-  const effectiveRows: any[] = [];
-
-  for (const row of asArray(rows)) {
-    const recoverable = recoverableDecision(row);
-    const camEligible = camEligibleDecision(row, recoverable);
-    const payment = paymentTreatment(row, recoverable);
-    const approvalReady = isApprovalReadyLeaseRule(row, payment, recoverable, camEligible);
-    if (!approvalReady) {
-      effectiveRows.push(row);
-      continue;
-    }
-
-    const publishToCam = shouldPublishPreparedRuleToCam(row, payment, recoverable, camEligible);
-    const patch = {
-      row_status: normalizeToken(row.row_status) === "needs_review" ? "mapped" : row.row_status,
-      review_status: "approved",
-      approval_status: "approved",
-      published_to_cam: publishToCam || row.published_to_cam === true,
-      approved_by: uuidOrNull(row.approved_by) ?? uuidOrNull(actorUserId) ?? null,
-      approved_at: row.approved_at ?? lease?.abstract_approved_at ?? lease?.approved_at ?? new Date().toISOString(),
-    };
-    if (
-      row.review_status !== patch.review_status ||
-      row.approval_status !== patch.approval_status ||
-      row.published_to_cam !== patch.published_to_cam ||
-      row.row_status !== patch.row_status ||
-      row.approved_by !== patch.approved_by ||
-      row.approved_at !== patch.approved_at
-    ) {
-      const { error: updateError } = await supabaseAdmin
-        .from("lease_expense_rules")
-        .update(patch)
-        .eq("id", row.id)
-        .eq("org_id", orgId);
-      if (updateError) throw new Error(`Could not promote approved lease expense rule ${row.id}: ${updateError.message}`);
-    }
-    approved += 1;
-    if (patch.published_to_cam) publishedToCam += 1;
-    effectiveRows.push({ ...row, ...patch });
-  }
-
-  const rowsBySet = new Map<string, any[]>();
-  for (const row of effectiveRows) {
-    const ruleSetId = cleanText(row?.rule_set_id);
-    if (!ruleSetId) continue;
-    if (!rowsBySet.has(ruleSetId)) rowsBySet.set(ruleSetId, []);
-    rowsBySet.get(ruleSetId)!.push(row);
-  }
-
-  for (const [ruleSetId, setRows] of rowsBySet.entries()) {
-    const activeRows = setRows.filter((row) => normalizeToken(row?.approval_status) !== "superseded");
-    if (activeRows.length === 0) continue;
-    const allApproved = activeRows.every((row) => normalizeToken(row?.approval_status) === "approved");
-    if (!allApproved) continue;
-    const { error: setUpdateError } = await supabaseAdmin
-      .from("lease_expense_rule_sets")
-      .update({
-        status: "approved",
-        approved_by: uuidOrNull(actorUserId) ?? uuidOrNull(lease?.abstract_approved_by) ?? uuidOrNull(lease?.approved_by) ?? null,
-        approved_at: lease?.abstract_approved_at ?? lease?.approved_at ?? new Date().toISOString(),
-      })
-      .eq("id", ruleSetId)
+async function applyFrozenV1RuleSemanticPatches(supabaseAdmin: any, orgId: string, lease: any, prepared: any[]) {
+  let updated = 0;
+  for (const item of asArray(prepared)) {
+    const rule = item?.rule;
+    const ruleKey = cleanText(rule?.rule_key);
+    if (!ruleKey) continue;
+    const patch = compactSemanticPatch({
+      included_in_base_rent: rule.included_in_base_rent,
+      recoverable_from_tenant: rule.recoverable_from_tenant,
+      is_recoverable: rule.is_recoverable,
+      cam_eligible: rule.cam_eligible,
+      operational_responsibility: rule.operational_responsibility,
+      payment_treatment: rule.payment_treatment,
+      billing_treatment: rule.billing_treatment,
+      recovery_method: rule.recovery_method,
+      recovery_treatment: rule.recovery_treatment,
+      cam_participation: rule.cam_participation,
+      actual_expense_expected: rule.actual_expense_expected,
+      vendor_payment_party: rule.vendor_payment_party,
+      amount_formula: rule.amount_formula,
+      applies_when: rule.applies_when,
+      condition_type: rule.condition_type,
+      coverage_requirement_amount: rule.coverage_requirement_amount,
+      insurance_coverage_amount: rule.insurance_coverage_amount,
+    });
+    if (Object.keys(patch).length === 0) continue;
+    const { error } = await supabaseAdmin
+      .from("lease_expense_rules")
+      .update(patch)
       .eq("org_id", orgId)
-      .eq("lease_id", lease.id);
-    if (setUpdateError) throw new Error(`Could not promote approved lease expense rule set ${ruleSetId}: ${setUpdateError.message}`);
-    ruleSetsApproved += 1;
+      .eq("lease_id", lease.id)
+      .eq("rule_key", ruleKey);
+    if (error) throw new Error("Could not update Lease Expense Rules V1 semantics: " + error.message);
+    updated += 1;
   }
+  return updated;
+}
 
-  return { approved, published_to_cam: publishedToCam, rule_sets_approved: ruleSetsApproved };
+async function repairExistingFrozenV1RuleSemantics(_supabaseAdmin: any, _orgId: string, _lease: any) {
+  return 0;
+}
+
+async function promoteApprovedLeaseRuleRows(_supabaseAdmin: any, _orgId: string, _lease: any, _actorUserId: string | null) {
+  return { approved: 0, published_to_cam: 0, rule_sets_approved: 0 };
 }
 async function materializeApprovedLeaseRecoveryPolicies(
   supabaseAdmin: any,
@@ -1098,14 +777,9 @@ export async function publishApprovedLeaseExpenseArtifacts({
   const storedWorkflow = getAuthoritativeWorkflowOutput(lease, fileRecord);
   const expenseRuleSource = cleanText(storedWorkflow?.expense_rule_source);
   const workflowExpenseRules = asArray(storedWorkflow?.expense_rules).filter(isSourceBackedExpenseRule);
-  const fallbackExpenseRules = workflowExpenseRules.length > 0 ? [] : fallbackExpenseRulesFromWorkflowEvidence(storedWorkflow);
-  const rawDocumentFallbackRules = workflowExpenseRules.length > 0 || fallbackExpenseRules.length > 0
-    ? []
-    : fallbackExpenseRulesFromRawDocument(fileRecord);
-  const hasPublishableWorkflowExpenseRules = workflowExpenseRules.length > 0 ||
-    fallbackExpenseRules.length > 0 ||
-    rawDocumentFallbackRules.length > 0 ||
-    shouldPublishWorkflowExpenseRules(storedWorkflow);
+  const fallbackExpenseRules: any[] = [];
+  const rawDocumentFallbackRules: any[] = [];
+  const hasPublishableWorkflowExpenseRules = workflowExpenseRules.length > 0;
   if (!force && Number(existingRuleCount || 0) > 0) {
     const existingCamProfileResult = hasPublishableWorkflowExpenseRules
       ? await persistCamProfile(
@@ -1115,6 +789,7 @@ export async function publishApprovedLeaseExpenseArtifacts({
         storedWorkflow?.cam_profile,
       )
       : { persisted: false, error: null };
+    const v1SemanticRowsRepaired = await repairExistingFrozenV1RuleSemantics(supabaseAdmin, orgId, lease);
     const promotion = await promoteApprovedLeaseRuleRows(supabaseAdmin, orgId, lease, actorUserId);
     const camPolicies = await materializeApprovedLeaseRecoveryPolicies(
       supabaseAdmin,
@@ -1139,6 +814,7 @@ export async function publishApprovedLeaseExpenseArtifacts({
       cam_policies_blocked: camPolicies.blocked,
       cam_policy_blocked_examples: camPolicies.blocked_examples,
       regenerated: false,
+      v1_semantic_rows_repaired: v1SemanticRowsRepaired,
       expense_rule_source: expenseRuleSource || null,
       reason: hasPublishableWorkflowExpenseRules
         ? null
@@ -1149,17 +825,10 @@ export async function publishApprovedLeaseExpenseArtifacts({
   }
 
   const workflow = storedWorkflow;
-  const expenseRules = workflowExpenseRules.length > 0
-    ? workflowExpenseRules
-    : fallbackExpenseRules.length > 0
-      ? fallbackExpenseRules
-      : rawDocumentFallbackRules;
+  const expenseRules = workflowExpenseRules;
   const publicationExtractionVersion = expenseRuleSource === "whole_document_llm_expense_obligations"
     ? "whole_document_llm_expense_obligations_v1"
-    : rawDocumentFallbackRules.length > 0
-      ? "typescript_schema_raw_document_fallback_v1"
-      : "typescript_schema_expense_rules_fallback_v1";
-
+    : "source_backed_lease_expense_rules_v1";
   const camProfileResult = hasPublishableWorkflowExpenseRules
     ? await persistCamProfile(
       supabaseAdmin,
@@ -1230,6 +899,7 @@ export async function publishApprovedLeaseExpenseArtifacts({
   });
   if (saveError) throw new Error(`Could not persist approved lease expense rules: ${saveError.message}`);
 
+  const v1SemanticRowsRepaired = await applyFrozenV1RuleSemanticPatches(supabaseAdmin, orgId, lease, prepared);
   const promotion = await promoteApprovedLeaseRuleRows(supabaseAdmin, orgId, lease, actorUserId);
   const camPolicies = await materializeApprovedLeaseRecoveryPolicies(
     supabaseAdmin,
@@ -1258,7 +928,8 @@ export async function publishApprovedLeaseExpenseArtifacts({
     cam_policy_blocked_examples: camPolicies.blocked_examples,
     rule_set_id: saved?.rule_set_id ?? existingSet?.id ?? null,
     regenerated: false,
-    expense_rule_source: expenseRuleSource || (rawDocumentFallbackRules.length > 0 ? "typescript_schema_raw_document_fallback" : null),
+    v1_semantic_rows_repaired: v1SemanticRowsRepaired,
+    expense_rule_source: expenseRuleSource || null,
     cam_profile_persisted: camProfileResult.persisted,
     cam_profile_error: camProfileResult.error ?? null,
   };

@@ -121,6 +121,12 @@ Deno.test("whole-document LLM expense candidates recover evidence by quote when 
       obligationKind: "cam",
       responsibleParty: "tenant",
       paymentTreatment: "reimbursable",
+      recoveryTreatment: "direct_recovery",
+      appliesWhen: "During lease term",
+      amountFormula: "Tenant proportionate share",
+      landlordExpenseExpected: "yes",
+      vendorPaymentParty: "landlord",
+      ruleScope: "premises/common area",
       recoverableFromTenant: "yes",
       camEligible: "yes",
       recoveryMethod: "pro_rata_share",
@@ -137,8 +143,15 @@ Deno.test("whole-document LLM expense candidates recover evidence by quote when 
       capPercent: null,
       grossUpPercent: null,
       adminFeePercent: null,
+      effectiveStartDate: null,
+      effectiveEndDate: null,
       reconciliationRequired: "conditional",
       reconciliationFrequency: null,
+      billingFrequency: null,
+      auditRight: null,
+      inclusions: ["common area maintenance expenses"],
+      exclusions: [],
+      blockingReason: null,
       status: "found",
       sourceNodeIds: ["stale-node-id"],
       sourceQuote: quote,
@@ -153,4 +166,10 @@ Deno.test("whole-document LLM expense candidates recover evidence by quote when 
   assertEquals(result.rules[0].source_page, 7);
   assertEquals(result.rules[0].source_node_ids, ["page:7"]);
   assertEquals(result.rules[0].source_evidence_recovered, true);
+  assertEquals(result.rules[0].recovery_treatment, "direct_recovery");
+  assertEquals(result.rules[0].amount_formula, "Tenant proportionate share");
+  assertEquals(result.rules[0].applies_when, "During lease term");
+  assertEquals(result.rules[0].actual_expense_expected, "yes");
+  assertEquals(result.rules[0].vendor_payment_party, "landlord");
+  assertEquals(result.rules[0].cam_participation, "eligible");
 });

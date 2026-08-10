@@ -142,7 +142,7 @@ Deno.test("approved publication ignores coverage gaps before persistence", () =>
 });
 
 
-Deno.test("source-backed TypeScript workflow rules are valid fallback", () => {
+Deno.test("TypeScript fallback workflow rules are not authoritative publication rules", () => {
   const workflow = {
     expense_rule_source: "typescript_schema_expense_rules_fallback",
     expense_rules: [{
@@ -153,8 +153,8 @@ Deno.test("source-backed TypeScript workflow rules are valid fallback", () => {
     }],
   };
 
-  assertEquals(__test__.shouldPublishWorkflowExpenseRules(workflow), true);
-  assertEquals(__test__.isSourceBackedExpenseRule(workflow.expense_rules[0]), true);
+  assertEquals(__test__.shouldPublishWorkflowExpenseRules(workflow), false);
+  assertEquals(__test__.isSourceBackedExpenseRule(workflow.expense_rules[0]), false);
 });
 
 Deno.test("template checklist expense rows are not valid publication fallback", () => {
@@ -220,69 +220,20 @@ Deno.test("authoritative workflow selection can publish LLM expense candidates f
   assertEquals(__test__.isSourceBackedExpenseRule(selected.expense_rules[0]), true);
 });
 
-Deno.test("authoritative workflow selection can build fallback rules from LLM dynamic CAM evidence", () => {
+Deno.test("fallback rule builders are disabled for lease expense publication", () => {
   const quote = "Tenant shall pay its pro rata share of common area maintenance expenses annually.";
-  const selected = getAuthoritativeWorkflowOutput(
-    {},
-    {
-      ui_review_payload: {
-        metadata: {
-          extractionDebug: {
-            openai_fact_ledger: {
-              expense_rule_candidates: [],
-              dynamic_items: [{
-                field_key: "cam_reimbursement_clause",
-                business_area: "cam_rules",
-                value: "Tenant pays CAM pro rata",
-                exact_source_text: quote,
-                source_text: quote,
-                source_page: 6,
-                confidence: 0.88,
-              }],
-            },
-          },
-        },
-      },
-    },
-  );
-
-  const fallbackRules = __test__.fallbackExpenseRulesFromWorkflowEvidence(selected);
-  assertEquals(selected.expense_rule_source, "whole_document_llm_debug_evidence");
-  assertEquals(fallbackRules.length, 1);
-  assertEquals(fallbackRules[0].expense_category, "common_area_maintenance");
-  assertEquals(__test__.isSourceBackedExpenseRule(fallbackRules[0]), true);
-});
-
-Deno.test("approved publication fallback can build rules from stored raw document text", () => {
-  const rules = __test__.fallbackExpenseRulesFromRawDocument({
-    docling_raw: {
-      pages: [{
-        page: 7,
-        text: "Tenant shall pay Tenant's pro rata share of Common Area Maintenance, real estate taxes, and property insurance as Additional Rent.",
-      }],
-      text_blocks: [],
-    },
+  const dynamicFallbackRules = __test__.fallbackExpenseRulesFromWorkflowEvidence({
+    dynamic_items: [{ exact_source_text: quote, source_page: 6 }],
+  });
+  const rawFallbackRules = __test__.fallbackExpenseRulesFromRawDocument({
+    docling_raw: { pages: [{ page: 7, text: quote }], text_blocks: [] },
   });
 
-  assert(rules.length >= 3);
-  assert(rules.some((rule) => rule.expense_category === "common_area_maintenance"));
-  assert(rules.some((rule) => rule.expense_category === "real_estate_taxes"));
-  assert(rules.some((rule) => rule.expense_category === "property_insurance"));
-  assertEquals(rules[0].source_page, 7);
-  assertEquals(__test__.isSourceBackedExpenseRule(rules[0]), true);
+  assertEquals(dynamicFallbackRules, []);
+  assertEquals(rawFallbackRules, []);
 });
 
-Deno.test("approved publication does not turn tenant liability insurance limits into property-insurance expenses", () => {
-  const sourceText = "Tenant shall maintain commercial general liability insurance with limits of not less than $2,000,000 per occurrence and name Landlord as additional insured.";
-  const fallbackRules = __test__.fallbackExpenseRulesFromRawDocument({
-    docling_raw: {
-      pages: [{ page: 7, text: sourceText }],
-      text_blocks: [],
-    },
-  });
-
-  assertEquals(fallbackRules.some((rule) => rule.expense_category === "property_insurance"), false);
-
+Deno.test("prepared lease expense rules preserve extracted semantics but remain review-needed", () => {
   const prepared = __test__.prepareRulePayload(
     {
       id: "11111111-1111-4111-8111-111111111111",
@@ -294,61 +245,16 @@ Deno.test("approved publication does not turn tenant liability insurance limits 
     },
     "22222222-2222-4222-8222-222222222222",
     {
-      expense_category: "property_insurance",
-      source_clause: sourceText,
-      source_page: 7,
-      confidence_score: 0.98,
+      expense_category: "real_estate_taxes",
+      source_clause: "Tenant shall pay Tenant's proportionate share of real estate taxes as Additional Rent.",
+      source_page: 8,
       recoverable_from_tenant: "yes",
       cam_eligible: "yes",
       payment_treatment: "reimbursable",
-      explicit_charge_amount: "$2,000,000",
-      cap_amount: "$2,000,000",
-      estimated_annual_amount: "$2,000,000",
+      recovery_method: "pro_rata_share",
+      actual_expense_expected: "yes",
+      generation_source: "whole_document_llm_expense_obligation_v1",
     },
-  );
-
-  assert(prepared);
-  assertEquals(prepared.rule.recoverable_from_tenant, "no");
-  assertEquals(prepared.rule.cam_eligible, "no");
-  assertEquals(prepared.rule.payment_treatment, "tenant_direct_contract");
-  assertEquals(prepared.rule.operational_responsibility, "tenant");
-  assertEquals(prepared.rule.published_to_cam, false);
-  assertEquals(prepared.rule.cap_amount, null);
-  assertEquals(prepared.rule.estimated_annual_amount, null);
-  assertEquals(prepared.value, null);
-});
-
-Deno.test("approved publication keeps Additional Charges taxes and landlord insurance recoverable", () => {
-  const sourceText = "As Additional Charges, Tenant shall pay Tenant's proportionate share of all real estate taxes levied against the Property and premiums for Landlord's property insurance incurred by Landlord.";
-  const fallbackRules = __test__.fallbackExpenseRulesFromRawDocument({
-    docling_raw: {
-      pages: [{ page: 9, text: sourceText }],
-      text_blocks: [],
-    },
-  });
-  const taxRule = fallbackRules.find((rule) => rule.expense_category === "real_estate_taxes");
-  const insuranceRule = fallbackRules.find((rule) => rule.expense_category === "property_insurance");
-
-  assert(taxRule);
-  assert(insuranceRule);
-  assertEquals(taxRule.recoverable_from_tenant, true);
-  assertEquals(taxRule.cam_eligible, true);
-  assertEquals(taxRule.recovery_method, "pro_rata_share");
-  assertEquals(insuranceRule.recoverable_from_tenant, true);
-  assertEquals(insuranceRule.cam_eligible, true);
-  assertEquals(insuranceRule.recovery_method, "pro_rata_share");
-
-  const prepared = __test__.prepareRulePayload(
-    {
-      id: "11111111-1111-4111-8111-111111111111",
-      tenant_id: null,
-      property_id: null,
-      building_id: null,
-      unit_id: null,
-      abstract_approved_at: "2026-08-06T12:00:00Z",
-    },
-    "22222222-2222-4222-8222-222222222222",
-    taxRule,
   );
 
   assert(prepared);
@@ -356,8 +262,10 @@ Deno.test("approved publication keeps Additional Charges taxes and landlord insu
   assertEquals(prepared.rule.cam_eligible, "yes");
   assertEquals(prepared.rule.payment_treatment, "reimbursable");
   assertEquals(prepared.rule.recovery_method, "pro_rata_share");
+  assertEquals(prepared.rule.review_status, "needs_review");
+  assertEquals(prepared.rule.approval_status, "draft");
+  assertEquals(prepared.rule.published_to_cam, false);
 });
-
 Deno.test("approved publication materializes approved lease rules into CAM policies", async () => {
   const ruleOne = "11111111-1111-4111-8111-111111111111";
   const ruleTwo = "22222222-2222-4222-8222-222222222222";

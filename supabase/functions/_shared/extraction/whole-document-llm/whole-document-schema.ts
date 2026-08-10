@@ -2,8 +2,8 @@
 
 import type { FieldDef } from "../schemas.ts";
 
-export const WHOLE_DOCUMENT_SCHEMA_VERSION = "lease-whole-document-v4-expense-obligations";
-export const WHOLE_DOCUMENT_SCHEMA_NAME = "lease_whole_document_v4_expense_obligations";
+export const WHOLE_DOCUMENT_SCHEMA_VERSION = "lease-whole-document-v5-expense-rules-v1";
+export const WHOLE_DOCUMENT_SCHEMA_NAME = "lease_whole_document_v5_expense_rules_v1";
 
 export type WholeDocumentFieldStatus =
   | "found"
@@ -48,6 +48,12 @@ export interface WholeDocumentExpenseRuleCandidate {
   obligationKind: "cam" | "operating_expense" | "tax" | "insurance" | "utility" | "repair_maintenance" | "service" | "other";
   responsibleParty: "tenant" | "landlord" | "shared" | "third_party" | "conditional" | "not_stated";
   paymentTreatment: "included_in_base_rent" | "reimbursable" | "tenant_direct_contract" | "separately_billed" | "not_applicable" | "conditional" | "not_stated";
+  recoveryTreatment: "pooled_recovery" | "direct_recovery" | "direct_bill" | "tenant_direct" | "included_in_rent" | "compliance_only" | "nonrecoverable" | "conditional" | "not_stated";
+  appliesWhen: string | null;
+  amountFormula: string | null;
+  landlordExpenseExpected: "yes" | "no" | "conditional" | "not_stated";
+  vendorPaymentParty: "landlord" | "tenant" | "third_party" | "mixed" | "not_stated";
+  ruleScope: string | null;
   recoverableFromTenant: "yes" | "no" | "conditional" | "not_stated";
   camEligible: "yes" | "no" | "conditional" | "not_stated";
   recoveryMethod: "included_in_rent" | "pro_rata_share" | "base_year" | "expense_stop" | "fixed_amount" | "actual_usage" | "direct_bill" | "reconciliation" | "tenant_direct_contract" | "other" | "not_stated";
@@ -64,8 +70,15 @@ export interface WholeDocumentExpenseRuleCandidate {
   capPercent: number | null;
   grossUpPercent: number | null;
   adminFeePercent: number | null;
+  effectiveStartDate: string | null;
+  effectiveEndDate: string | null;
   reconciliationRequired: "yes" | "no" | "conditional" | "not_stated";
   reconciliationFrequency: string | null;
+  billingFrequency: string | null;
+  auditRight: string | null;
+  inclusions: string[];
+  exclusions: string[];
+  blockingReason: string | null;
   status: "found" | "ambiguous" | "conflicting" | "illegible";
   sourceNodeIds: string[];
   sourceQuote: string | null;
@@ -213,6 +226,12 @@ export function buildWholeDocumentJsonSchema(
             "obligationKind",
             "responsibleParty",
             "paymentTreatment",
+            "recoveryTreatment",
+            "appliesWhen",
+            "amountFormula",
+            "landlordExpenseExpected",
+            "vendorPaymentParty",
+            "ruleScope",
             "recoverableFromTenant",
             "camEligible",
             "recoveryMethod",
@@ -229,8 +248,15 @@ export function buildWholeDocumentJsonSchema(
             "capPercent",
             "grossUpPercent",
             "adminFeePercent",
+            "effectiveStartDate",
+            "effectiveEndDate",
             "reconciliationRequired",
             "reconciliationFrequency",
+            "billingFrequency",
+            "auditRight",
+            "inclusions",
+            "exclusions",
+            "blockingReason",
             "status",
             "sourceNodeIds",
             "sourceQuote",
@@ -252,6 +278,21 @@ export function buildWholeDocumentJsonSchema(
               type: "string",
               enum: ["included_in_base_rent", "reimbursable", "tenant_direct_contract", "separately_billed", "not_applicable", "conditional", "not_stated"],
             },
+            recoveryTreatment: {
+              type: "string",
+              enum: ["pooled_recovery", "direct_recovery", "direct_bill", "tenant_direct", "included_in_rent", "compliance_only", "nonrecoverable", "conditional", "not_stated"],
+            },
+            appliesWhen: { anyOf: [{ type: "string" }, { type: "null" }] },
+            amountFormula: { anyOf: [{ type: "string" }, { type: "null" }] },
+            landlordExpenseExpected: {
+              type: "string",
+              enum: ["yes", "no", "conditional", "not_stated"],
+            },
+            vendorPaymentParty: {
+              type: "string",
+              enum: ["landlord", "tenant", "third_party", "mixed", "not_stated"],
+            },
+            ruleScope: { anyOf: [{ type: "string" }, { type: "null" }] },
             recoverableFromTenant: {
               type: "string",
               enum: ["yes", "no", "conditional", "not_stated"],
@@ -283,11 +324,18 @@ export function buildWholeDocumentJsonSchema(
             capPercent: { anyOf: [{ type: "number" }, { type: "null" }] },
             grossUpPercent: { anyOf: [{ type: "number" }, { type: "null" }] },
             adminFeePercent: { anyOf: [{ type: "number" }, { type: "null" }] },
+            effectiveStartDate: { anyOf: [{ type: "string" }, { type: "null" }] },
+            effectiveEndDate: { anyOf: [{ type: "string" }, { type: "null" }] },
             reconciliationRequired: {
               type: "string",
               enum: ["yes", "no", "conditional", "not_stated"],
             },
             reconciliationFrequency: { anyOf: [{ type: "string" }, { type: "null" }] },
+            billingFrequency: { anyOf: [{ type: "string" }, { type: "null" }] },
+            auditRight: { anyOf: [{ type: "string" }, { type: "null" }] },
+            inclusions: { type: "array", items: { type: "string" } },
+            exclusions: { type: "array", items: { type: "string" } },
+            blockingReason: { anyOf: [{ type: "string" }, { type: "null" }] },
             status: {
               type: "string",
               enum: ["found", "ambiguous", "conflicting", "illegible"],
@@ -328,7 +376,7 @@ assume a market-standard term, infer a customary obligation, or improve unfavora
 MISSION
 
 You receive one complete compact document produced by Azure Document Intelligence. Read the entire
-JSON document before answering. You—not the caller—decide which pages, table rows, definitions,
+JSON document before answering. Youâ€”not the callerâ€”decide which pages, table rows, definitions,
 exceptions, exhibits, schedules, riders, amendments, and cross-references are relevant.
 
 Perform these review passes silently before producing the JSON response:
@@ -521,11 +569,34 @@ stable snake_case business category such as common_area_maintenance, operating_e
 real_estate_taxes, property_insurance, electricity, water, sewer, hvac, janitorial,
 roof_repairs, or capital_replacements. Use subcategory when the clause is narrower.
 
+For every candidate, fill the frozen Lease Expense Rules V1 business fields from the cited lease text:
+- recoveryTreatment must be exactly one of pooled_recovery, direct_recovery, direct_bill,
+  tenant_direct, included_in_rent, compliance_only, nonrecoverable, conditional, or not_stated.
+- appliesWhen is the plain-English condition that makes this rule apply, such as separately
+  metered, not separately metered, tenant-caused damage, expense exceeds base year, during lease
+  term, on assignment, payment overdue, or always. If the clause is unconditional, use Always or
+  During lease term. If the evidence is unclear, use null and explain uncertaintyReason.
+- amountFormula is the exact lease amount/share/formula/cap/base-year/expense-stop wording, such
+  as 10% share, tenant RSF / building RSF, 100% of actual cost, $500/month, 5% of overdue amount,
+  $8.50/RSF expense stop, 2025 base year, actual usage, landlord-determined share, or null when
+  nothing is stated. Never invent a percentage or convert this into an actual accounting expense.
+- landlordExpenseExpected is yes only when the lease indicates the landlord normally incurs the
+  cost/invoice/GL expense first, no when the tenant pays vendors directly or the rule is only
+  compliance/billing, conditional when the landlord cost exists only after a triggering event, and
+  not_stated when the document does not say.
+- vendorPaymentParty, ruleScope, effectiveStartDate, effectiveEndDate, billingFrequency,
+  auditRight, inclusions, exclusions, and blockingReason must come only from lease language.
+- CAM participation follows the route: tenant_direct, included_in_rent, compliance_only,
+  direct_bill, and nonrecoverable are not CAM inputs. CAM/recovery rules that lack required
+  allocation basis, premises/scope, area, effective dates, or have conflicting policy language
+  should be conditional/not_stated with blockingReason explaining what review must resolve.
+- Keep one candidate per real contractual rule or condition. Do not group rules by category.
+
 For every candidate:
 - Quote the complete controlling sentence, table row, or label/value line verbatim.
 - Provide only sourceNodeIds printed in the compact document.
 - Determine responsibility and economic treatment from the cited language, definitions, and
-  controlling cross-references—not from the general lease type or market custom.
+  controlling cross-referencesâ€”not from the general lease type or market custom.
 - Use not_stated or conditional when the evidence does not establish an attribute.
 - Never treat landlord-paid costs as tenant-recoverable without explicit pass-through language.
 - Never treat tenant-direct obligations as CAM reimbursements.

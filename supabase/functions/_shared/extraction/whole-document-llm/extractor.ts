@@ -57,7 +57,7 @@ function maxWholeDocumentPromptChars(): number {
  * means truncated JSON, but nothing in the extraction path ever checked it.
  * A truncated strict response still parses (the structured-output layer
  * repairs/validates the envelope), so it arrived here looking like a normal
- * success that merely happened to mention very few fields — the difference
+ * success that merely happened to mention very few fields â€” the difference
  * between "the lease genuinely says nothing about these 47 fields" and "the
  * answer was cut off after 3" was invisible, and the run was surfaced to the
  * user as "Extraction ready".
@@ -78,10 +78,10 @@ function isTruncatedFinishReason(finishReason: unknown): boolean {
  * silently publishes a near-empty extraction as a completed review.
  *
  * Default 0.5 is deliberately permissive so this cannot fail runs that were
- * previously fine — the observed failure omitted 47 of 50 fields (94%).
+ * previously fine â€” the observed failure omitted 47 of 50 fields (94%).
  */
 function maxOmittedFieldRatio(): number {
-  // A blank/whitespace-only value must mean "unset", not 0 — Number("") is 0,
+  // A blank/whitespace-only value must mean "unset", not 0 â€” Number("") is 0,
   // which would silently switch the guard into its strictest mode and fail
   // every run over a single stray omission. A var that exists but is empty is
   // a very common deployment state, so this is checked before parsing.
@@ -640,6 +640,16 @@ function buildExpenseRuleCandidates(args: {
       candidate.camEligible === "not_stated"
         ? "conditional"
         : candidate.camEligible;
+    const extractedRecoveryTreatment = candidate.recoveryTreatment && candidate.recoveryTreatment !== "not_stated" ? candidate.recoveryTreatment : null;
+    const extractedVendorPaymentParty = candidate.vendorPaymentParty && candidate.vendorPaymentParty !== "not_stated" ? candidate.vendorPaymentParty : null;
+    const extractedActualExpenseExpected = candidate.landlordExpenseExpected && candidate.landlordExpenseExpected !== "not_stated" ? candidate.landlordExpenseExpected : null;
+    const extractedCamParticipation = candidate.camEligible === "yes"
+      ? "eligible"
+      : candidate.camEligible === "no"
+        ? "not_applicable"
+        : candidate.camEligible === "conditional"
+          ? "conditional"
+          : null;
     const reconciliationRequired =
       candidate.reconciliationRequired === "yes"
         ? true
@@ -675,6 +685,21 @@ function buildExpenseRuleCandidates(args: {
           : candidate.paymentTreatment,
       recoverable_from_tenant: recoverable,
       recoverable_flag: recoverable === "yes",
+      recovery_treatment: extractedRecoveryTreatment,
+      cam_participation: extractedCamParticipation,
+      actual_expense_expected: extractedActualExpenseExpected,
+      vendor_payment_party: extractedVendorPaymentParty,
+      amount_formula: candidate.amountFormula || null,
+      applies_when: candidate.appliesWhen || null,
+      scope: candidate.ruleScope || null,
+      scope_level: candidate.ruleScope || null,
+      effective_start_date: candidate.effectiveStartDate || null,
+      effective_end_date: candidate.effectiveEndDate || null,
+      audit_right: candidate.auditRight || null,
+      inclusions: Array.isArray(candidate.inclusions) ? candidate.inclusions : [],
+      exclusions: Array.isArray(candidate.exclusions) ? candidate.exclusions : [],
+      blocking_reason: candidate.blockingReason || null,
+      cam_blocking_reason: candidate.blockingReason || null,
       cam_eligible: camEligible,
       included_in_base_rent: includedInBaseRent,
       included_in_rent: includedInBaseRent,
@@ -686,9 +711,10 @@ function buildExpenseRuleCandidates(args: {
       explicit_charge_amount: amount,
       fixed_monthly_amount: candidate.amountFrequency === "monthly" ? amount : null,
       billing_frequency:
-        candidate.amountFrequency === "not_stated"
+        candidate.billingFrequency ||
+        (candidate.amountFrequency === "not_stated"
           ? null
-          : candidate.amountFrequency,
+          : candidate.amountFrequency),
       tenant_share_percent: candidate.tenantSharePercent,
       base_year: candidate.baseYear,
       base_year_amount: candidate.baseYearAmount,
@@ -719,10 +745,12 @@ function buildExpenseRuleCandidates(args: {
       editable: true,
       requires_review: true,
       review_reason:
+        candidate.blockingReason ||
         candidate.uncertaintyReason ||
         "LLM-extracted lease expense obligation requires approval before downstream publication.",
-      notes: candidate.uncertaintyReason,
+      notes: [candidate.blockingReason, candidate.uncertaintyReason].filter(Boolean).join(" ") || null,
       generation_source: "whole_document_llm_expense_obligation_v1",
+      extraction_contract_version: "lease_expense_rules_v1",
       extraction_method: "whole_document_llm_v2",
       quote_verified: true,
       source_evidence_recovered: Boolean(evidence.quoteRecoveredFromUncitedNode),
@@ -1139,7 +1167,7 @@ async function runWholeDocumentLlmOnCompact(args: {
   }
 
   // Mass-omission guard. A response that never mentions most of the schema is
-  // not a lease that happens to be silent — a genuinely silent field is
+  // not a lease that happens to be silent â€” a genuinely silent field is
   // reported in notStatedFieldKeys and is NOT counted here. This is the
   // signature of an answer that was truncated or abandoned, and without this
   // check it reached the user as a completed review carrying a handful of

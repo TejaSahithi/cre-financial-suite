@@ -9,6 +9,7 @@ ALTER TABLE public.expenses
   ADD COLUMN IF NOT EXISTS lease_id UUID REFERENCES public.leases(id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES public.tenants(id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS tenant_name TEXT,
+  ADD COLUMN IF NOT EXISTS expense_category_id UUID REFERENCES public.expense_categories(id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS expense_subcategory TEXT,
   ADD COLUMN IF NOT EXISTS vendor_name TEXT,
   ADD COLUMN IF NOT EXISTS vendor_id UUID REFERENCES public.vendors(id) ON DELETE SET NULL,
@@ -65,6 +66,7 @@ DECLARE
   v_audit_log_id UUID;
   v_key TEXT;
   v_property_id UUID;
+  v_expense_category_id UUID;
   v_building_id UUID;
   v_unit_id UUID;
   v_vendor_id UUID;
@@ -78,7 +80,7 @@ DECLARE
   v_recovery_status TEXT;
   v_source TEXT;
   v_allowed_keys TEXT[] := ARRAY[
-    'date', 'expense_date', 'amount', 'category', 'expense_subcategory',
+    'date', 'expense_date', 'amount', 'category', 'expense_category_id', 'expense_subcategory',
     'vendor', 'vendor_name', 'vendor_id', 'description', 'classification', 'recovery_status',
     'portfolio_id', 'property_id', 'building_id', 'unit_id', 'lease_id', 'tenant_id', 'tenant_name',
     'attachment_url', 'gl_code', 'invoice_number', 'source', 'source_type', 'source_file_id',
@@ -102,6 +104,7 @@ BEGIN
   v_date := COALESCE(NULLIF(p_expense->>'date', '')::DATE, NULLIF(p_expense->>'expense_date', '')::DATE);
   v_amount := NULLIF(p_expense->>'amount', '')::NUMERIC;
   v_property_id := NULLIF(p_expense->>'property_id', '')::UUID;
+  v_expense_category_id := NULLIF(p_expense->>'expense_category_id', '')::UUID;
   v_building_id := NULLIF(p_expense->>'building_id', '')::UUID;
   v_unit_id := NULLIF(p_expense->>'unit_id', '')::UUID;
   v_vendor_id := NULLIF(p_expense->>'vendor_id', '')::UUID;
@@ -119,6 +122,9 @@ BEGIN
   IF NULLIF(trim(COALESCE(p_expense->>'category', '')), '') IS NULL THEN RAISE EXCEPTION 'category is required'; END IF;
   IF NULLIF(trim(COALESCE(p_expense->>'vendor', '')), '') IS NULL THEN RAISE EXCEPTION 'vendor is required'; END IF;
   IF v_property_id IS NULL THEN RAISE EXCEPTION 'property_id is required'; END IF;
+  IF v_expense_category_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.expense_categories WHERE id = v_expense_category_id AND (org_id IS NULL OR org_id = p_org_id)) THEN
+    RAISE EXCEPTION 'Expense category not found for this organization';
+  END IF;
 
   IF NOT EXISTS (SELECT 1 FROM public.properties WHERE id = v_property_id AND org_id = p_org_id) THEN
     RAISE EXCEPTION 'Property not found for this organization';
@@ -146,7 +152,7 @@ BEGIN
 
   INSERT INTO public.expenses (
     org_id, portfolio_id, property_id, building_id, unit_id, lease_id, tenant_id, tenant_name,
-    category, expense_subcategory, amount, classification, recovery_status,
+    category, expense_category_id, expense_subcategory, amount, classification, recovery_status,
     vendor, vendor_name, vendor_id, gl_code, invoice_number,
     fiscal_year, month, date, expense_date, billing_period_start, billing_period_end,
     service_period_start, service_period_end, source, source_type, source_file_id,
@@ -154,7 +160,7 @@ BEGIN
     confidence_score, is_controllable
   ) VALUES (
     p_org_id, v_portfolio_id, v_property_id, v_building_id, v_unit_id, v_lease_id, v_tenant_id, NULLIF(p_expense->>'tenant_name', ''),
-    p_expense->>'category', NULLIF(p_expense->>'expense_subcategory', ''), v_amount, NULLIF(p_expense->>'classification', ''), v_recovery_status,
+    p_expense->>'category', v_expense_category_id, NULLIF(p_expense->>'expense_subcategory', ''), v_amount, NULLIF(p_expense->>'classification', ''), v_recovery_status,
     p_expense->>'vendor', COALESCE(NULLIF(p_expense->>'vendor_name', ''), NULLIF(p_expense->>'vendor', '')), v_vendor_id, NULLIF(p_expense->>'gl_code', ''), NULLIF(p_expense->>'invoice_number', ''),
     NULLIF(p_expense->>'fiscal_year', '')::INT, COALESCE(NULLIF(p_expense->>'month', '')::INT, EXTRACT(MONTH FROM v_date)::INT),
     v_date, COALESCE(NULLIF(p_expense->>'expense_date', '')::DATE, v_date),
@@ -201,6 +207,7 @@ DECLARE
   v_audit_log_id UUID;
   v_key TEXT;
   v_property_id UUID;
+  v_expense_category_id UUID;
   v_building_id UUID;
   v_unit_id UUID;
   v_vendor_id UUID;
@@ -214,7 +221,7 @@ DECLARE
   v_recovery_status TEXT;
   v_source TEXT;
   v_allowed_keys TEXT[] := ARRAY[
-    'date', 'expense_date', 'amount', 'category', 'expense_subcategory',
+    'date', 'expense_date', 'amount', 'category', 'expense_category_id', 'expense_subcategory',
     'vendor', 'vendor_name', 'vendor_id', 'description', 'classification', 'recovery_status',
     'portfolio_id', 'property_id', 'building_id', 'unit_id', 'lease_id', 'tenant_id', 'tenant_name',
     'attachment_url', 'gl_code', 'invoice_number', 'source', 'source_type', 'source_file_id',
@@ -242,6 +249,7 @@ BEGIN
   v_date := COALESCE(NULLIF(p_expense->>'date', '')::DATE, NULLIF(p_expense->>'expense_date', '')::DATE, v_before.date);
   v_amount := COALESCE(NULLIF(p_expense->>'amount', '')::NUMERIC, v_before.amount);
   v_property_id := COALESCE(NULLIF(p_expense->>'property_id', '')::UUID, v_before.property_id);
+  v_expense_category_id := CASE WHEN p_expense ? 'expense_category_id' THEN NULLIF(p_expense->>'expense_category_id', '')::UUID ELSE v_before.expense_category_id END;
   v_building_id := CASE WHEN p_expense ? 'building_id' THEN NULLIF(p_expense->>'building_id', '')::UUID ELSE v_before.building_id END;
   v_unit_id := CASE WHEN p_expense ? 'unit_id' THEN NULLIF(p_expense->>'unit_id', '')::UUID ELSE v_before.unit_id END;
   v_vendor_id := CASE WHEN p_expense ? 'vendor_id' THEN NULLIF(p_expense->>'vendor_id', '')::UUID ELSE v_before.vendor_id END;
@@ -259,6 +267,9 @@ BEGIN
   IF NULLIF(trim(COALESCE(p_expense->>'category', v_before.category, '')), '') IS NULL THEN RAISE EXCEPTION 'category is required'; END IF;
   IF NULLIF(trim(COALESCE(p_expense->>'vendor', v_before.vendor, '')), '') IS NULL THEN RAISE EXCEPTION 'vendor is required'; END IF;
   IF v_property_id IS NULL THEN RAISE EXCEPTION 'property_id is required'; END IF;
+  IF v_expense_category_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.expense_categories WHERE id = v_expense_category_id AND (org_id IS NULL OR org_id = p_org_id)) THEN
+    RAISE EXCEPTION 'Expense category not found for this organization';
+  END IF;
 
   IF NOT EXISTS (SELECT 1 FROM public.properties WHERE id = v_property_id AND org_id = p_org_id) THEN
     RAISE EXCEPTION 'Property not found for this organization';
@@ -291,6 +302,7 @@ BEGIN
     tenant_id = v_tenant_id,
     tenant_name = CASE WHEN p_expense ? 'tenant_name' THEN NULLIF(p_expense->>'tenant_name', '') ELSE tenant_name END,
     category = COALESCE(NULLIF(p_expense->>'category', ''), category),
+    expense_category_id = v_expense_category_id,
     expense_subcategory = CASE WHEN p_expense ? 'expense_subcategory' THEN NULLIF(p_expense->>'expense_subcategory', '') ELSE expense_subcategory END,
     amount = v_amount,
     classification = CASE WHEN p_expense ? 'classification' THEN NULLIF(p_expense->>'classification', '') ELSE classification END,
@@ -355,7 +367,7 @@ AS $$
 DECLARE
   v_now TIMESTAMPTZ := now();
   v_allowed_keys TEXT[] := ARRAY[
-    'date', 'expense_date', 'amount', 'category', 'expense_subcategory',
+    'date', 'expense_date', 'amount', 'category', 'expense_category_id', 'expense_subcategory',
     'vendor', 'vendor_name', 'description', 'classification', 'recovery_status',
     'portfolio_id', 'property_id', 'building_id', 'unit_id', 'lease_id', 'tenant_id', 'tenant_name',
     'gl_code', 'invoice_number', 'source', 'source_type', 'source_file_id',
@@ -369,6 +381,7 @@ DECLARE
   i INT;
   v_amount NUMERIC;
   v_property_id UUID;
+  v_expense_category_id UUID;
   v_building_id UUID;
   v_unit_id UUID;
   v_lease_id UUID;
@@ -404,12 +417,16 @@ BEGIN
     IF v_row ? 'date' AND NULLIF(v_row ->> 'date', '') IS NOT NULL THEN PERFORM (v_row ->> 'date')::DATE; END IF;
 
     v_property_id := NULLIF(v_row ->> 'property_id', '')::UUID;
+    v_expense_category_id := NULLIF(v_row ->> 'expense_category_id', '')::UUID;
     v_building_id := NULLIF(v_row ->> 'building_id', '')::UUID;
     v_unit_id := NULLIF(v_row ->> 'unit_id', '')::UUID;
     v_lease_id := NULLIF(v_row ->> 'lease_id', '')::UUID;
     v_tenant_id := NULLIF(v_row ->> 'tenant_id', '')::UUID;
     v_portfolio_id := NULLIF(v_row ->> 'portfolio_id', '')::UUID;
 
+    IF v_expense_category_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.expense_categories WHERE id = v_expense_category_id AND (org_id IS NULL OR org_id = p_org_id)) THEN
+      RAISE EXCEPTION 'row %: Expense category not found for this organization', i + 1;
+    END IF;
     IF v_property_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.properties WHERE id = v_property_id AND org_id = p_org_id) THEN
       RAISE EXCEPTION 'row %: Property not found for this organization', i + 1;
     END IF;
@@ -435,7 +452,7 @@ BEGIN
   WITH inserted AS (
     INSERT INTO public.expenses (
       org_id, portfolio_id, property_id, building_id, unit_id, lease_id, tenant_id, tenant_name,
-      category, expense_subcategory, amount, classification, recovery_status,
+      category, expense_category_id, expense_subcategory, amount, classification, recovery_status,
       vendor, vendor_name, gl_code, invoice_number,
       fiscal_year, month, date, expense_date, billing_period_start, billing_period_end,
       service_period_start, service_period_end, source, source_type, source_file_id,
@@ -452,6 +469,7 @@ BEGIN
       NULLIF(elem ->> 'tenant_id', '')::UUID,
       NULLIF(elem ->> 'tenant_name', ''),
       elem ->> 'category',
+      NULLIF(elem ->> 'expense_category_id', '')::UUID,
       NULLIF(elem ->> 'expense_subcategory', ''),
       (elem ->> 'amount')::NUMERIC,
       NULLIF(elem ->> 'classification', ''),

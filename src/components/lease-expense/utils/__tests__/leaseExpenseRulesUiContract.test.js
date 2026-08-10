@@ -76,6 +76,54 @@ describe("Lease Expense Rules UI Contract v1", () => {
     expect(view.camReason).toBe("Allocation basis is required before CAM recovery can proceed.");
   });
 
+  it("displays persisted V1 business semantics without inventing amounts", () => {
+    const tax = {
+      recovery_treatment: "pooled_recovery",
+      cam_eligible: "yes",
+      actual_expense_expected: "yes",
+      amount_formula: "100% of Actual Cost",
+      applies_when: "During lease term",
+      approval_status: "approved",
+      review_status: "approved",
+    };
+    const taxView = getSimplifiedRuleView(tax);
+    expect(taxView.treatmentLabel).toBe("Pooled Recovery");
+    expect(taxView.actualExpenseLabel).toBe("Yes");
+    expect(getAmountFormulaLabel(tax)).toBe("100% of Actual Cost");
+
+    const liability = {
+      recovery_treatment: "compliance_only",
+      actual_expense_expected: "no",
+      coverage_requirement_amount: 1000000,
+    };
+    const liabilityView = getSimplifiedRuleView(liability);
+    expect(liabilityView.treatmentLabel).toBe("Compliance Only");
+    expect(liabilityView.camLabel).toBe("N/A");
+    expect(liabilityView.actualExpenseLabel).toBe("No");
+    expect(getAmountFormulaLabel(liability)).toBe("$1,000,000 Coverage Requirement");
+  });
+
+  it("shows Direct Bill and Tenant Direct outside CAM", () => {
+    const lateCharge = {
+      recovery_treatment: "direct_bill",
+      actual_expense_expected: "no",
+      amount_formula: "5% of overdue amount",
+      applies_when: "Payment overdue",
+    };
+    expect(getSimplifiedRuleView(lateCharge).treatmentLabel).toBe("Direct Bill");
+    expect(getSimplifiedRuleView(lateCharge).camLabel).toBe("N/A");
+    expect(getAmountFormulaLabel(lateCharge)).toBe("5% of overdue amount");
+
+    const utilities = {
+      recovery_treatment: "tenant_direct",
+      actual_expense_expected: "no",
+      amount_formula: "Tenant pays vendor",
+    };
+    expect(getSimplifiedRuleView(utilities).treatmentLabel).toBe("Tenant Direct");
+    expect(getSimplifiedRuleView(utilities).camLabel).toBe("N/A");
+    expect(getAmountFormulaLabel(utilities)).toBe("Tenant pays vendor");
+  });
+
   it("uses one frozen contract status badge", () => {
     expect(getContractStatus({ approval_status: "approved", review_status: "approved" }).label).toBe("Approved");
     expect(getContractStatus({ approval_status: "rejected", review_status: "rejected" }).label).toBe("Rejected");

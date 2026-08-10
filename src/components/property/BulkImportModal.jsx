@@ -160,14 +160,26 @@ const MODULE_FIELDS = {
     { key: 'date',          label: 'Date',           required: true,  placeholder: 'YYYY-MM-DD' },
     { key: 'amount',        label: 'Amount ($)',      required: true,  placeholder: '1250.00' },
     { key: 'category',      label: 'Category',       required: false, placeholder: 'maintenance' },
+    { key: 'expense_category_id', label: 'Canonical Category ID', required: false, placeholder: 'Auto / existing UUID' },
     { key: 'vendor',        label: 'Vendor',         required: false, placeholder: 'ABC Services' },
     { key: 'description',   label: 'Description',    required: false, placeholder: '' },
     { key: 'classification',label: 'Classification', required: false, placeholder: 'recoverable / non_recoverable' },
     { key: 'gl_code',       label: 'GL Code',        required: false, placeholder: '5100' },
+    { key: 'property_id',   label: 'Property UUID',  required: false, placeholder: 'Auto / existing UUID' },
+    { key: 'property_id_code', label: 'Property ID', required: false, placeholder: 'PROP-1001' },
     { key: 'property_name', label: 'Property',       required: false, placeholder: '' },
+    { key: 'building_id',   label: 'Building UUID',  required: false, placeholder: 'Auto / existing UUID' },
+    { key: 'building_id_code', label: 'Building ID', required: false, placeholder: 'BLDG-2001' },
+    { key: 'building_name', label: 'Building',       required: false, placeholder: '' },
+    { key: 'unit_id',       label: 'Unit UUID',      required: false, placeholder: 'Auto / existing UUID' },
+    { key: 'unit_number',   label: 'Unit / Suite',   required: false, placeholder: 'Unit / Suite' },
     { key: 'invoice_number',label: 'Invoice #',      required: false, placeholder: '' },
     { key: 'fiscal_year',   label: 'Fiscal Year',    required: false, placeholder: '2024' },
-    { key: 'month',         label: 'Month (1–12)',   required: false, placeholder: '3' },
+    { key: 'month',         label: 'Month (1-12)',   required: false, placeholder: '3' },
+    { key: 'source',        label: 'Source',         required: false, placeholder: 'invoice / statement' },
+    { key: 'allocation_type', label: 'Allocation Type', required: false, placeholder: 'property_pool' },
+    { key: 'allocation_meta', label: 'Allocation Metadata', required: false, placeholder: '{}' },
+    { key: 'notes',         label: 'Notes',          required: false, placeholder: '' },
   ],
   revenue: [
     { key: 'amount',        label: 'Amount ($)',    required: true,  placeholder: '5000.00' },
@@ -316,6 +328,56 @@ function getCellText(value) {
 
 function isBlankCell(value) {
   return getCellText(value) === '';
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function normalizeImportLookup(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function importLookupCandidates(value) {
+  const raw = String(value || '').trim();
+  const normalized = normalizeImportLookup(raw);
+  if (!normalized) return [];
+
+  return [...new Set([
+    normalized,
+    normalizeImportLookup(raw.replace(/[-_/]+/g, ' ')),
+  ].filter(Boolean))];
+}
+
+function resolveExpenseCategoryIdForImport(row = {}, categories = []) {
+  const suppliedId = String(row.expense_category_id || '').trim();
+  if (UUID_RE.test(suppliedId)) return suppliedId;
+
+  const candidates = new Set([
+    ...importLookupCandidates(row.category),
+    ...importLookupCandidates(row.expense_category),
+    ...importLookupCandidates(row.raw_category),
+    ...importLookupCandidates(row.expense_subcategory),
+  ]);
+  if (candidates.size === 0) return null;
+
+  const matches = (categories || []).filter((category) => {
+    const terms = [
+      category.id,
+      category.normalized_key,
+      category.category_name,
+      category.subcategory_name,
+      [category.category_name, category.subcategory_name].filter(Boolean).join(' '),
+    ].flatMap(importLookupCandidates);
+    return terms.some((term) => candidates.has(term));
+  });
+
+  const uniqueIds = [...new Set(matches.map((category) => category.id).filter(Boolean))];
+  return uniqueIds.length === 1 ? uniqueIds[0] : null;
 }
 
 function scoreHeaderRow(row) {
@@ -885,14 +947,26 @@ export default function BulkImportModal({
         invoice_status: 'status',
       },
       expense: {
-        expense_date: 'date', transaction_date: 'date', paid_date: 'date',
-        expense_amount: 'amount', total_amount: 'amount', cost: 'amount',
-        expense_category: 'category', type: 'category',
-        vendor_name: 'vendor', payee: 'vendor', supplier: 'vendor',
-        expense_description: 'description', detail: 'description',
-        recovery_type: 'classification', recoverable: 'classification',
-        gl_account: 'gl_code', account_code: 'gl_code', account: 'gl_code',
-        property: 'property_name', building: 'property_name',
+        expense_date: 'date', transaction_date: 'date', paid_date: 'date', service_date: 'date',
+        expense_amount: 'amount', total_amount: 'amount', cost: 'amount', invoice_amount: 'amount',
+        expense_category: 'category', category_name: 'category', raw_category: 'category', type: 'category',
+        canonical_category_id: 'expense_category_id', category_id: 'expense_category_id', expense_category_id: 'expense_category_id',
+        vendor_name: 'vendor', payee: 'vendor', supplier: 'vendor', vendor: 'vendor',
+        expense_description: 'description', detail: 'description', memo: 'description',
+        recovery_type: 'classification', recoverable: 'classification', recovery_status: 'classification',
+        gl_account: 'gl_code', account_code: 'gl_code', account: 'gl_code', gl: 'gl_code',
+        property_id: 'property_id', property_uuid: 'property_id',
+        property_code: 'property_id_code', property_id_code: 'property_id_code', asset_id: 'property_id_code',
+        property: 'property_name', property_name: 'property_name', asset_name: 'property_name',
+        building_id: 'building_id', building_uuid: 'building_id',
+        building_code: 'building_id_code', building_id_code: 'building_id_code',
+        building: 'building_name', building_name: 'building_name',
+        unit_id: 'unit_id', unit_uuid: 'unit_id', suite: 'unit_number', suite_number: 'unit_number',
+        unit: 'unit_number', unit_number: 'unit_number', unit_no: 'unit_number', space: 'unit_number',
+        invoice_no: 'invoice_number', inv_number: 'invoice_number', invoice_num: 'invoice_number',
+        source_type: 'source', source: 'source',
+        allocation_method: 'allocation_type', allocation_type: 'allocation_type', allocation_meta: 'allocation_meta',
+        import_notes: 'notes', notes: 'notes',
         year: 'fiscal_year',
       },
       revenue: {
@@ -1131,6 +1205,14 @@ export default function BulkImportModal({
       String(row.building_name || '').trim()
     );
   };
+  const rowHasUnitReference = (row) => {
+    if (!row) return false;
+    return Boolean(
+      String(row.unit_id || '').trim() ||
+      String(row.unit_id_code || '').trim() ||
+      String(row.unit_number || '').trim()
+    );
+  };
 
   const rowsMissingPropertyReference =
     ['building', 'unit'].includes(moduleType) &&
@@ -1245,7 +1327,8 @@ export default function BulkImportModal({
     const buildingIdCache = new Map();
     let importPropertyOptions = propertyOptions;
     let importBuildingOptions = buildingOptions;
-    const importUnitOptions = moduleType === 'unit' ? await UnitService.list() : [];
+    let importExpenseCategoryOptions = [];
+    const importUnitOptions = ['unit', 'expense'].includes(moduleType) ? await UnitService.list() : [];
     let count = 0, skipped = 0;
     const failures = [];
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1271,6 +1354,19 @@ export default function BulkImportModal({
       return importBuildingOptions;
     };
 
+    const ensureExpenseCategoryOptions = async () => {
+      if (Array.isArray(importExpenseCategoryOptions) && importExpenseCategoryOptions.length > 0) {
+        return importExpenseCategoryOptions;
+      }
+      const { data, error } = await supabase
+        .from('expense_categories')
+        .select('id, category_name, subcategory_name, normalized_key, org_id')
+        .order('display_order', { ascending: true });
+      if (error) throw error;
+      importExpenseCategoryOptions = Array.isArray(data) ? data : [];
+      return importExpenseCategoryOptions;
+    };
+
     const resolvePropertyIdForRow = async (data) => {
       const existingId = String(data.property_id || '').trim();
       if (uuidRegex.test(existingId)) return existingId;
@@ -1293,7 +1389,7 @@ export default function BulkImportModal({
         ? properties.find((property) => normalizeLookupValue(property.address) === propertyName)
         : null;
 
-      const match = byCode || byName || byAddress || (properties.length === 1 ? properties[0] : null);
+      const match = byCode || byName || byAddress || null;
       propertyIdCache.set(cacheKey, match?.id || null);
       return match?.id || null;
     };
@@ -1324,6 +1420,19 @@ export default function BulkImportModal({
       buildingIdCache.set(cacheKey, match?.id || null);
       return match?.id || null;
     };
+    const resolveUnitIdForRow = async (data, resolvedPropertyId, resolvedBuildingId) => {
+      const existingId = String(data.unit_id || '').trim();
+      if (uuidRegex.test(existingId)) return existingId;
+
+      const unitNumber = normalizeLookupValue(data.unit_number || data.unit_id_code);
+      if (!unitNumber) return null;
+
+      return (importUnitOptions || []).find((unit) => {
+        if (resolvedPropertyId && unit.property_id !== resolvedPropertyId) return false;
+        if (resolvedBuildingId && unit.building_id !== resolvedBuildingId) return false;
+        return normalizeLookupValue(unit.unit_number || unit.unit_id_code) === unitNumber;
+      })?.id || null;
+    };
 
     for (const row of rows) {
       const { _row, ...data } = row;
@@ -1337,9 +1446,8 @@ export default function BulkImportModal({
         }
       }
 
-      // Attach property_id from context (page-level) OR modal selection.
-      // Page context wins; modal selection is the fallback.
-      if (effectivePropertyId) {
+      // Attach page scope only when the row does not carry its own explicit scope.
+      if (effectivePropertyId && !(moduleType === 'expense' && rowHasPropertyReference(data))) {
         const rowPropId = String(data.property_id || '').trim();
         if (!rowPropId || !uuidRegex.test(rowPropId)) {
           data.property_id = effectivePropertyId;
@@ -1350,22 +1458,21 @@ export default function BulkImportModal({
         data.address = selectedPropertyAddress;
       }
 
-      // Attach the building selected in the page or modal.
-      if (effectiveBuildingId) {
+      // Attach page building only when the row does not carry its own building.
+      if (effectiveBuildingId && !(moduleType === 'expense' && rowHasBuildingReference(data))) {
         const rowBldId = String(data.building_id || '').trim();
         if (!rowBldId || !uuidRegex.test(rowBldId)) {
           data.building_id = effectiveBuildingId;
         }
       }
 
-      if (unitId) {
+      if (unitId && !(moduleType === 'expense' && rowHasUnitReference(data))) {
         const rowUnitId = String(data.unit_id || '').trim();
         if (!rowUnitId || !uuidRegex.test(rowUnitId)) {
           data.unit_id = unitId;
         }
       }
-
-      // ── Apply Cleanup ──────────────────────────────────────────────────
+      // Apply cleanup before resolving/importing the row.
       const cleanData = normalizeImportedDateFields({ ...data });
       delete cleanData.id;    // Always fresh UUID from service
       delete cleanData._row;  // UI-only index
@@ -1377,6 +1484,123 @@ export default function BulkImportModal({
         }
       });
 
+      if (moduleType === 'expense') {
+        const hasPropertyRef = rowHasPropertyReference(cleanData);
+        const hasBuildingRef = rowHasBuildingReference(cleanData);
+        const hasUnitRef = rowHasUnitReference(cleanData);
+
+        let resolvedPropertyId = cleanData.property_id || null;
+        if (!resolvedPropertyId || !uuidRegex.test(String(resolvedPropertyId))) {
+          resolvedPropertyId = hasPropertyRef ? await resolvePropertyIdForRow(cleanData) : null;
+        }
+        if (!resolvedPropertyId && effectivePropertyId && !hasPropertyRef) {
+          resolvedPropertyId = effectivePropertyId;
+        }
+        if (hasPropertyRef && !resolvedPropertyId) {
+          const propertyReference = cleanData.property_id_code || cleanData.property_name || cleanData.property_id || 'missing';
+          failures.push({
+            row: _row,
+            message: `Could not match expense property "${propertyReference}". Import the correct property/building/unit first or remove the conflicting scope from the file.`,
+          });
+          skipped++;
+          continue;
+        }
+        if (effectivePropertyId && hasPropertyRef && resolvedPropertyId && resolvedPropertyId !== effectivePropertyId) {
+          failures.push({
+            row: _row,
+            message: 'Expense row property does not match the selected page scope. Clear the page scope or use a matching file.',
+          });
+          skipped++;
+          continue;
+        }
+
+        let resolvedBuildingId = cleanData.building_id || null;
+        if (!resolvedBuildingId || !uuidRegex.test(String(resolvedBuildingId))) {
+          resolvedBuildingId = hasBuildingRef ? await resolveBuildingIdForRow(cleanData, resolvedPropertyId) : null;
+        }
+        if (!resolvedBuildingId && effectiveBuildingId && !hasBuildingRef) {
+          resolvedBuildingId = effectiveBuildingId;
+        }
+        if (hasBuildingRef && !resolvedBuildingId) {
+          const buildingReference = cleanData.building_id_code || cleanData.building_name || cleanData.building_id || 'missing';
+          failures.push({
+            row: _row,
+            message: `Could not match expense building "${buildingReference}" within the resolved property.`,
+          });
+          skipped++;
+          continue;
+        }
+        if (effectiveBuildingId && hasBuildingRef && resolvedBuildingId && resolvedBuildingId !== effectiveBuildingId) {
+          failures.push({
+            row: _row,
+            message: 'Expense row building does not match the selected page scope. Clear the page scope or use a matching file.',
+          });
+          skipped++;
+          continue;
+        }
+
+        if (resolvedBuildingId && !resolvedPropertyId) {
+          const buildings = await ensureBuildingOptions();
+          const matchedBuilding = buildings.find((building) => building.id === resolvedBuildingId);
+          resolvedPropertyId = matchedBuilding?.property_id || null;
+        }
+
+        let resolvedUnitId = cleanData.unit_id || null;
+        if (!resolvedUnitId || !uuidRegex.test(String(resolvedUnitId))) {
+          resolvedUnitId = hasUnitRef ? await resolveUnitIdForRow(cleanData, resolvedPropertyId, resolvedBuildingId) : null;
+        }
+        if (!resolvedUnitId && unitId && !hasUnitRef) {
+          resolvedUnitId = unitId;
+        }
+        if (hasUnitRef && !resolvedUnitId) {
+          const unitReference = cleanData.unit_number || cleanData.unit_id || 'missing';
+          failures.push({
+            row: _row,
+            message: `Could not match expense unit/suite "${unitReference}" within the resolved property/building.`,
+          });
+          skipped++;
+          continue;
+        }
+        if (unitId && hasUnitRef && resolvedUnitId && resolvedUnitId !== unitId) {
+          failures.push({
+            row: _row,
+            message: 'Expense row unit does not match the selected page scope. Clear the page scope or use a matching file.',
+          });
+          skipped++;
+          continue;
+        }
+
+        if (resolvedUnitId && (!resolvedPropertyId || !resolvedBuildingId)) {
+          const matchedUnit = (importUnitOptions || []).find((unit) => unit.id === resolvedUnitId);
+          resolvedPropertyId = resolvedPropertyId || matchedUnit?.property_id || null;
+          resolvedBuildingId = resolvedBuildingId || matchedUnit?.building_id || null;
+        }
+
+        if (resolvedPropertyId) cleanData.property_id = resolvedPropertyId;
+        if (resolvedBuildingId) cleanData.building_id = resolvedBuildingId;
+        if (resolvedUnitId) cleanData.unit_id = resolvedUnitId;
+
+        if (!uuidRegex.test(String(cleanData.expense_category_id || ''))) {
+          const categories = await ensureExpenseCategoryOptions();
+          const categoryId = resolveExpenseCategoryIdForImport(cleanData, categories);
+          if (categoryId) cleanData.expense_category_id = categoryId;
+          else delete cleanData.expense_category_id;
+        }
+
+        const importedClassification = cleanData.classification || cleanData.recovery_status;
+        if (importedClassification) {
+          const note = `Imported classification hint: ${importedClassification}`;
+          cleanData.notes = [cleanData.notes, note].filter(Boolean).join(' | ');
+        }
+        delete cleanData.classification;
+        delete cleanData.recovery_status;
+        delete cleanData.property_name;
+        delete cleanData.property_id_code;
+        delete cleanData.building_name;
+        delete cleanData.building_id_code;
+        delete cleanData.unit_number;
+        delete cleanData.unit_id_code;
+      }
       if (moduleType === 'building' && !effectivePropertyId) {
         const resolvedPropertyId = await resolvePropertyIdForRow(cleanData);
         if (resolvedPropertyId) {

@@ -122,39 +122,8 @@ export const WEAK_SOURCE_PATTERNS = [
   /billable exception charge under/i,
 ];
 
-export const CATEGORY_EVIDENCE_PATTERNS = {
-  common_area_maintenance: [/common\s+area\s+maintenance/i, /\bcam\b/i, /operating\s+expenses?/i],
-  operating_expenses: [/operating\s+expenses?/i, /common\s+area\s+maintenance/i, /\bcam\b/i],
-  real_estate_taxes: [/real\s+estate\s+tax/i, /property\s+tax/i, /\btaxes\b/i, /assessment/i],
-  property_insurance: [/property\s+insurance/i, /\binsurance\b/i],
-  utilities: [/utilit/i, /electric/i, /water/i, /gas/i, /sewer/i],
-  janitorial: [/janitorial/i, /cleaning/i],
-  trash_removal: [/trash/i, /refuse/i, /garbage/i],
-  security: [/security\s+(?:service|services|patrol|guard|monitoring)/i],
-  landscaping: [/landscap/i],
-  snow_removal: [/(?:snow|ice)[\s\S]{0,80}removal/i, /snow\s+plowing/i],
-  parking: [/parking[\s\S]{0,120}(?:maintenance|repair|lighting|sweeping|striping|snow|common\s+area|operating\s+expense|cam)/i],
-  administrative_fees: [/admin(?:istrative)?\s+fee/i],
-  management_fees: [/management\s+fee/i, /property\s+management/i],
-  capital_expenditures: [/capital[\s\S]{0,120}(?:expenditure|improvement|replacement|amorti|useful\s+life|cost[-\s]?saving|legally\s+required)/i],
-  tenant_insurance: [/tenant\b[\s\S]{0,120}\b(?:insurance|liability|certificate)/i, /commercial\s+general\s+liability/i],
-  alterations: [/alteration/i, /tenant\s+improvement/i],
-  percentage_rent: [/percentage\s+rent/i, /gross\s+sales/i],
-  late_fees: [/late\s+(?:fee|charge)/i, /delinquent/i],
-  interest: [/default\s+interest/i, /interest\s+on\s+(?:late|delinquent|overdue)/i],
-  legal_enforcement_fees: [/legal/i, /attorney/i, /enforcement/i],
-  tenant_caused_damage: [/tenant[-\s]?specific/i, /tenant[-\s]?caused/i, /damage/i, /direct\s+billed/i],
-  merchant_association_dues: [/merchant\s+association/i, /marketing\s+fund/i],
-};
-
-export const CATEGORY_REJECTION_PATTERNS = {
-  security: [/security\s+deposit/i, /deposit/i],
-  parking: [/premises\s+known\s+as/i, /parking\s+rights/i],
-  property_insurance: [/tenant\s+(?:shall|must|will|agrees).{0,80}(?:maintain|carry|obtain).{0,80}insurance/i],
-  tenant_insurance: [/landlord.{0,80}property\s+insurance/i, /property\s+insurance.{0,80}(?:reimburs|recover)/i],
-  interest: [/capital\s+expenditure/i, /assignment/i],
-};
-
+export const CATEGORY_EVIDENCE_PATTERNS = {};
+export const CATEGORY_REJECTION_PATTERNS = {};
 export function isSupersededRule(rule) {
   return [rule?.row_status, rule?.status, rule?.extraction_status]
     .some((value) => normalizeRuleToken(value) === "superseded");
@@ -701,8 +670,6 @@ export function getAmountFormulaLabel(rule) {
   if (allocation.includes("usage")) return "Actual Usage";
   if (allocation.includes("rsf") || allocation.includes("square footage") || allocation.includes("pro rata")) return "Tenant RSF / Building RSF";
 
-  if (treatment === "tenant_direct") return "Tenant pays vendor";
-  if (treatment === "direct_recovery") return "100% of Actual Cost";
   return "Not Specified";
 }
 
