@@ -91,6 +91,9 @@ export const FIELD_ALIASES = {
   // Insurance
   commercial_general_liability: ["commercial_general_liability", "cgl", "general_liability"],
   property_insurance: ["property_insurance"],
+  tenant_insurance_required: ["tenant_insurance_required", "tenant_insurance", "tenant_property_insurance_required", "commercial_general_liability_required", "insurance_required"],
+  waiver_of_subrogation: ["waiver_of_subrogation"],
+  additional_insureds_required: ["additional_insureds_required", "additional_insured", "additional_insured_required"],
 
   // Legal / Notices
   late_fee_percent: ["late_fee_percent", "late_fee", "late_charge_percent"],

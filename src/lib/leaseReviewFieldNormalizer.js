@@ -1198,7 +1198,7 @@ function describeApprovalImpact(contract) {
 // Revisit if this precedence list stops being sufficient.
 function computeFieldStatus({ hasValue, evidenceVerified, confidenceBucket, reviewStatus, extractionStatus }) {
   if (reviewStatus === REVIEW_STATUSES.EDITED) return "manually_edited";
-  if (extractionStatus === EXTRACTION_STATUSES.CONFLICT) return "needs_review";
+  if (extractionStatus === EXTRACTION_STATUSES.CONFLICT || String(extractionStatus || "").toLowerCase().includes("conflict")) return "needs_review";
   if (!hasValue) {
     if (extractionStatus === EXTRACTION_STATUSES.NOT_FOUND) return "not_found";
     if (reviewStatus === REVIEW_STATUSES.N_A) return "not_applicable";
@@ -1417,7 +1417,23 @@ export function normalizeStandardFields(lease, { fieldReviews, allowNoProviderCo
         validationErrors.push(`${canonicalKey}_failed_validation`);
         const preservedSourceText = evidence?.sourceText || evidence?.sourceClause || null;
         evidenceOverrideReason = supportValidation.reason || "Extracted value failed field/source validation.";
-        if (fallbackSourceProvider === "source_text_missing_value_recovery") {
+        const supportFailureIsConflict =
+          String(evidence?.extractionStatus ?? evidence?.extraction_status ?? "").toLowerCase().includes("conflict") ||
+          String(evidence?.evidenceType ?? evidence?.evidence_type ?? "").toLowerCase().includes("conflict") ||
+          String(evidence?.sourceTextQuality ?? evidence?.source_text_quality ?? "").toLowerCase().includes("conflict");
+        if (supportFailureIsConflict) {
+          statusOverride = "needs_review";
+          evidence = {
+            ...(evidence || {}),
+            sourceText: preservedSourceText,
+            source_text: preservedSourceText,
+            requiresReview: true,
+            reviewReason: evidenceOverrideReason,
+            review_reason: evidenceOverrideReason,
+            validationErrors,
+            validation_errors: validationErrors,
+          };
+        } else if (fallbackSourceProvider === "source_text_missing_value_recovery") {
           statusOverride = "needs_review";
           evidence = {
             ...(evidence || {}),

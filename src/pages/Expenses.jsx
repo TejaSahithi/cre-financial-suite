@@ -28,9 +28,14 @@ import ScopeSelector from "@/components/ScopeSelector";
 import VendorSpendAnalysis from "@/components/expenses/VendorSpendAnalysis";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import useExpenseCategories from "@/hooks/useExpenseCategories";
+import { useAuth } from "@/lib/AuthContext";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { ExpenseService } from "@/services/api";
 import { expenseService } from "@/services/expenseService";
+import {
+  recordModuleApprovalAction,
+  submitOrReuseModuleApprovalWorkflow,
+} from "@/services/moduleApprovalWorkflowBridge";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -264,6 +269,7 @@ function ActualExpenseDetailDrawer({ expense, open, onOpenChange }) {
 }
 
 export default function Expenses() {
+  const { user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
@@ -576,7 +582,17 @@ export default function Expenses() {
           approved_at: new Date().toISOString(),
         },
       },
-      { onSuccess: () => toast.success("Expense approved") },
+      {
+        onSuccess: async () => {
+          try {
+            await submitOrReuseModuleApprovalWorkflow({ workflowType: "expense", entity: expense, user, metadata: { source: "expenses_page_direct_approve" } });
+            await recordModuleApprovalAction({ workflowType: "expense", entity: expense, user, action: "approve", metadata: { source: "expenses_page_direct_approve" } });
+          } catch (error) {
+            console.warn("[Expenses] Generic approval workflow sync failed:", error?.message || error);
+          }
+          toast.success("Expense approved");
+        },
+      },
     );
   };
 
@@ -590,7 +606,25 @@ export default function Expenses() {
           review_status: "rejected",
         },
       },
-      { onSuccess: () => toast.success("Expense rejected") },
+      {
+        onSuccess: async () => {
+          try {
+            await submitOrReuseModuleApprovalWorkflow({ workflowType: "expense", entity: expense, user, metadata: { source: "expenses_page_direct_reject" } });
+            await recordModuleApprovalAction({
+              workflowType: "expense",
+              entity: expense,
+              user,
+              action: "reject",
+              comments: "Rejected from Actual Expenses.",
+              rejectionReason: "Expense rejected during accounting review",
+              metadata: { source: "expenses_page_direct_reject" },
+            });
+          } catch (error) {
+            console.warn("[Expenses] Generic approval workflow sync failed:", error?.message || error);
+          }
+          toast.success("Expense rejected");
+        },
+      },
     );
   };
 
@@ -1004,4 +1038,3 @@ export default function Expenses() {
     </div>
   );
 }
-

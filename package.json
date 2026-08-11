@@ -37,6 +37,7 @@
     "verify:backups": "node scripts/verify-backups.mjs",
     "verify:disaster-recovery": "node scripts/verify-disaster-recovery.mjs",
     "verify:legacy-retirement": "node scripts/verify-legacy-retirement.mjs",
+    "check:enterprise-rbac-readiness": "node scripts/check-enterprise-rbac-readiness.mjs",
     "check:release11-readiness": "node scripts/check-release11-readiness.mjs"
   },
   "dependencies": {

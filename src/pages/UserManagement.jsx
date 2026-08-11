@@ -6,6 +6,7 @@ import { useModuleAccess } from "@/lib/ModuleAccessContext";
 import { getStoredActingOrgId, setStoredActingOrgId } from "@/lib/actingOrg";
 import { getActiveMembershipForUser } from "@/lib/userPermissions";
 import { logAudit } from "@/services/audit";
+import { ensureInlineCustomRoleDefinition } from "@/services/customRoleService";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -273,6 +274,30 @@ const DEFAULT_SIGNING = Object.fromEntries(DOCUMENT_TYPES.map(d => [d.key, 0]));
 const DEFAULT_ROLES = [];
 const DEFAULT_DATA_SCOPE = { allPortfolios: false, allProperties: false, portfolios: [], properties: [] };
 
+const APPROVAL_AUTHORITY_TYPES = [
+  { key: "expense", label: "Expense Approval" },
+  { key: "budget", label: "Budget Approval" },
+  { key: "cam", label: "CAM Approval" },
+  { key: "lease", label: "Lease Approval" },
+];
+
+const DEFAULT_APPROVAL_AUTHORITY = Object.fromEntries(
+  APPROVAL_AUTHORITY_TYPES.map((type) => [type.key, { enabled: false, unlimited: false, amount: "" }])
+);
+
+const ENTERPRISE_NOTIFICATION_OPTIONS = [
+  { key: "expense_approval_requests", label: "Expense approval requests" },
+  { key: "lease_rejections", label: "Lease rejection notifications" },
+  { key: "critical_date_escalations", label: "Critical-date escalations" },
+  { key: "budget_submission_alerts", label: "Budget submission alerts" },
+  { key: "cam_review_requests", label: "CAM review requests" },
+  { key: "tenant_email_events", label: "Tenant email events" },
+];
+
+const DEFAULT_ENTERPRISE_NOTIFICATION_PREFERENCES = Object.fromEntries(
+  ENTERPRISE_NOTIFICATION_OPTIONS.map((option) => [option.key, false])
+);
+
 const STATUS_CONFIG = {
   active:    { label: "Active",    badgeClass: "bg-emerald-100 text-emerald-700", Icon: CheckCircle2 },
   invited:   { label: "Invited",   badgeClass: "bg-amber-100 text-amber-700",    Icon: Mail },
@@ -352,6 +377,8 @@ function normalizeCapabilities(capabilities) {
     roles: normalizeArray(parsed.roles),
     signing_privileges: normalizeObject(parsed.signing_privileges, {}),
     permissions: normalizeObject(parsed.permissions, {}),
+    approval_limits: normalizeObject(parsed.approval_limits, {}),
+    notification_preferences: normalizeObject(parsed.notification_preferences, {}),
   };
 }
 
@@ -363,6 +390,60 @@ function getMemberRoles(member) {
 
 function getMemberSigningPrivileges(member) {
   return { ...DEFAULT_SIGNING, ...normalizeObject(member?.capabilities?.signing_privileges, {}) };
+}
+
+function cloneDefaultApprovalAuthority() {
+  return Object.fromEntries(
+    Object.entries(DEFAULT_APPROVAL_AUTHORITY).map(([key, value]) => [key, { ...value }])
+  );
+}
+
+function approvalAuthorityFromLimits(rawLimits = {}) {
+  const limits = normalizeObject(rawLimits, {});
+  return APPROVAL_AUTHORITY_TYPES.reduce((acc, type) => {
+    if (!Object.prototype.hasOwnProperty.call(limits, type.key)) {
+      acc[type.key] = { ...DEFAULT_APPROVAL_AUTHORITY[type.key] };
+      return acc;
+    }
+
+    const value = limits[type.key];
+    acc[type.key] = {
+      enabled: true,
+      unlimited: value === null,
+      amount: value === null ? "" : String(value ?? ""),
+    };
+    return acc;
+  }, {});
+}
+
+function serializeApprovalAuthority(authority = {}) {
+  return APPROVAL_AUTHORITY_TYPES.reduce((acc, type) => {
+    const row = authority[type.key] || {};
+    if (!row.enabled) return acc;
+    acc[type.key] = row.unlimited ? null : Number(row.amount || 0);
+    return acc;
+  }, {});
+}
+
+function getMemberApprovalAuthority(member) {
+  const capabilities = normalizeCapabilities(member?.capabilities);
+  return approvalAuthorityFromLimits({
+    ...capabilities.approval_limits,
+    ...normalizeObject(member?.approval_limits, {}),
+  });
+}
+
+function cloneDefaultEnterpriseNotificationPreferences() {
+  return { ...DEFAULT_ENTERPRISE_NOTIFICATION_PREFERENCES };
+}
+
+function getMemberEnterpriseNotificationPreferences(member) {
+  const capabilities = normalizeCapabilities(member?.capabilities);
+  return {
+    ...DEFAULT_ENTERPRISE_NOTIFICATION_PREFERENCES,
+    ...capabilities.notification_preferences,
+    ...normalizeObject(member?.notification_preferences, {}),
+  };
 }
 
 function getMemberNotificationPermissions(member) {
@@ -496,13 +577,43 @@ async function syncUserAccessGrants({ userId, orgId, dataScope, role }) {
     })),
   ];
 
-  if (rows.length === 0) return;
+  if (rows.length > 0) {
+    const { error: insertError } = await supabase
+      .from("user_access")
+      .insert(rows);
 
-  const { error: insertError } = await supabase
-    .from("user_access")
-    .insert(rows);
+    if (insertError) throw insertError;
+  }
 
-  if (insertError) throw insertError;
+  try {
+    await supabase
+      .from("user_scope_assignments")
+      .delete()
+      .eq("user_id", userId)
+      .eq("org_id", orgId);
+
+    const generalizedRows = rows.map((row) => ({
+      user_id: row.user_id,
+      org_id: row.org_id,
+      role_key: role,
+      scope_type: row.scope,
+      scope_id: row.scope_id,
+      access_level: row.role === "manager" ? "write" : row.role === "editor" ? "write" : "read",
+      is_active: true,
+    }));
+
+    if (generalizedRows.length > 0) {
+      const { error: generalizedError } = await supabase
+        .from("user_scope_assignments")
+        .insert(generalizedRows);
+      if (generalizedError) throw generalizedError;
+    }
+  } catch (error) {
+    if (!/schema cache|does not exist|Could not find the table|relation .* does not exist/i.test(error?.message || "")) {
+      throw error;
+    }
+    console.warn("[UserManagement] user_scope_assignments unavailable until RBAC migration is applied.");
+  }
 }
 
 function CustomRolePermissionMatrix({ permissions, onChange, readonly = false }) {
@@ -541,6 +652,100 @@ function CustomRolePermissionMatrix({ permissions, onChange, readonly = false })
               ))}
             </div>
           </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ApprovalAuthorityEditor({ value, onChange, readonly = false }) {
+  const setRow = (key, patch) => {
+    onChange({
+      ...value,
+      [key]: {
+        ...(value?.[key] || DEFAULT_APPROVAL_AUTHORITY[key]),
+        ...patch,
+      },
+    });
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-3">
+      <div>
+        <p className="text-xs font-bold text-slate-700">Approval Authority</p>
+        <p className="text-[11px] text-slate-500 mt-1">
+          Set explicit monetary authority. Disabled rows grant no approval authority for that workflow.
+        </p>
+      </div>
+      <div className="space-y-2">
+        {APPROVAL_AUTHORITY_TYPES.map((type) => {
+          const row = value?.[type.key] || DEFAULT_APPROVAL_AUTHORITY[type.key];
+          return (
+            <div key={type.key} className="rounded-xl border border-slate-200 bg-white p-3">
+              <div className="flex items-start justify-between gap-3">
+                <label className="flex items-center gap-2 text-xs font-semibold text-slate-800">
+                  <Checkbox
+                    checked={Boolean(row.enabled)}
+                    disabled={readonly}
+                    onCheckedChange={(checked) => setRow(type.key, { enabled: Boolean(checked) })}
+                  />
+                  {type.label}
+                </label>
+                <label className={`flex items-center gap-2 text-xs text-slate-600 ${!row.enabled ? "opacity-50" : ""}`}>
+                  <Checkbox
+                    checked={Boolean(row.unlimited)}
+                    disabled={readonly || !row.enabled}
+                    onCheckedChange={(checked) => setRow(type.key, { unlimited: Boolean(checked), amount: checked ? "" : row.amount })}
+                  />
+                  Unlimited
+                </label>
+              </div>
+              <div className={`mt-3 ${!row.enabled || row.unlimited ? "opacity-50 pointer-events-none" : ""}`}>
+                <Input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  disabled={readonly || !row.enabled || row.unlimited}
+                  value={row.amount}
+                  onChange={(event) => setRow(type.key, { amount: event.target.value })}
+                  placeholder="Approval limit"
+                  className="h-9 text-sm"
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function NotificationPreferencesEditor({ value, onChange, readonly = false }) {
+  const setPreference = (key, checked) => {
+    onChange({
+      ...value,
+      [key]: Boolean(checked),
+    });
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-3">
+      <div>
+        <p className="text-xs font-bold text-slate-700">Notification Preferences</p>
+        <p className="text-[11px] text-slate-500 mt-1">
+          These preferences feed approval, critical-date, and tenant-email recipient routing.
+        </p>
+      </div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {ENTERPRISE_NOTIFICATION_OPTIONS.map((option) => (
+          <label key={option.key} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-xs font-medium text-slate-700">
+            <Checkbox
+              checked={Boolean(value?.[option.key])}
+              disabled={readonly}
+              onCheckedChange={(checked) => setPreference(option.key, checked)}
+            />
+            {option.label}
+          </label>
         ))}
       </div>
     </div>
@@ -992,7 +1197,7 @@ function ScopeSummary({ member }) {
 
 function RoleBadges({ member, maxVisible = 2 }) {
   const roles = getMemberRoles(member);
-  const customName = member.capabilities?.custom_role;
+  const customName = member.capabilities?.custom_role_label || member.capabilities?.custom_role;
   if (roles.length === 0) return <span className="text-xs text-slate-400 italic">No role</span>;
   const visible = roles.slice(0, maxVisible);
   const rest = roles.length - maxVisible;
@@ -1029,9 +1234,11 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState("roles");
   const [selectedRoles, setSelectedRoles] = useState(getMemberRoles(member));
-  const [customRoleName, setCustomRoleName] = useState(member.capabilities?.custom_role || "");
+  const [customRoleName, setCustomRoleName] = useState(member.capabilities?.custom_role_label || member.capabilities?.custom_role || "");
   const [customRoleDescription, setCustomRoleDescription] = useState(member.capabilities?.custom_role_description || "");
   const [notificationPermissions, setNotificationPermissions] = useState(getMemberNotificationPermissions(member));
+  const [approvalAuthority, setApprovalAuthority] = useState(getMemberApprovalAuthority(member));
+  const [notificationPreferences, setNotificationPreferences] = useState(getMemberEnterpriseNotificationPreferences(member));
   const [pagePerms, setPagePerms] = useState(getMemberPagePerms(member));
   const [signingPrivs, setSigningPrivs] = useState(getMemberSigningPrivileges(member));
   const [dataScope, setDataScope] = useState(DEFAULT_DATA_SCOPE);
@@ -1043,9 +1250,11 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
     .split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
 
   const TABS = [
-    { key: "roles",    label: "Roles" },
-    { key: "access",   label: "Page Access" },
-    { key: "data",     label: "Data Scope" },
+    { key: "roles",    label: "Role" },
+    { key: "data",     label: "Scope" },
+    { key: "access",   label: "Permissions" },
+    { key: "authority", label: "Authority" },
+    { key: "notify",   label: "Notifications" },
     { key: "signing",  label: "Signing" },
   ];
 
@@ -1067,9 +1276,11 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
 
   useEffect(() => {
     setSelectedRoles(getMemberRoles(member));
-    setCustomRoleName(member.capabilities?.custom_role || "");
+    setCustomRoleName(member.capabilities?.custom_role_label || member.capabilities?.custom_role || "");
     setCustomRoleDescription(member.capabilities?.custom_role_description || "");
     setNotificationPermissions(getMemberNotificationPermissions(member));
+    setApprovalAuthority(getMemberApprovalAuthority(member));
+    setNotificationPreferences(getMemberEnterpriseNotificationPreferences(member));
     setPagePerms(getMemberPagePerms(member));
     setSigningPrivs(getMemberSigningPrivileges(member));
   }, [member]);
@@ -1087,19 +1298,35 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
     try {
       const primaryRole = selectedRoles.find(r => r !== "custom") || selectedRoles[0] || null;
       const accessRole = deriveAccessGrantRole(selectedRoles, pagePerms);
+      const customRoleDefinition = selectedRoles.includes("custom")
+        ? await ensureInlineCustomRoleDefinition({
+          orgId,
+          customRoleName,
+          customRoleDescription,
+          permissions: notificationPermissions,
+          approvalLimits: serializeApprovalAuthority(approvalAuthority),
+          notificationPreferences,
+        })
+        : null;
+      const serializedApprovalLimits = serializeApprovalAuthority(approvalAuthority);
       const nextStatus = ["invited", "suspended", "revoked"].includes(member.status)
         ? member.status
         : (selectedRoles.length > 0 ? "active" : "no_access");
       const { error } = await supabase.from("memberships").update({
         role: primaryRole,
         page_permissions: pagePerms,
+        approval_limits: serializedApprovalLimits,
+        notification_preferences: notificationPreferences,
         status: nextStatus,
         capabilities: {
           ...(member.capabilities || {}),
           roles: selectedRoles,
-          custom_role: customRoleName || null,
+          custom_role: customRoleDefinition?.role_key || customRoleName || null,
+          custom_role_label: customRoleDefinition?.label || customRoleName || null,
           custom_role_description: customRoleDescription || null,
           permissions: notificationPermissions,
+          approval_limits: serializedApprovalLimits,
+          notification_preferences: notificationPreferences,
           signing_privileges: signingPrivs,
           scope_access: {
             all_portfolios: Boolean(dataScope.allPortfolios),
@@ -1109,7 +1336,7 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
       }).eq("user_id", member.user_id).eq("org_id", orgId);
       if (error) throw error;
       await syncUserAccessGrants({ userId: member.user_id, orgId, dataScope, role: accessRole });
-      await logAudit({ action: "update_user_permissions", target_user_id: member.user_id, details: { roles: selectedRoles, custom_role: customRoleName, signing: signingPrivs, permissions: notificationPermissions } });
+      await logAudit({ action: "update_user_permissions", target_user_id: member.user_id, details: { roles: selectedRoles, custom_role: customRoleName, signing: signingPrivs, permissions: notificationPermissions, approval_limits: serializedApprovalLimits, notification_preferences: notificationPreferences } });
       toast.success("Permissions saved");
       queryClient.invalidateQueries({ queryKey: ["org-members"] });
       queryClient.invalidateQueries({ queryKey: ["member-access-grants", member.user_id, orgId] });
@@ -1309,6 +1536,14 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
             <DataScopeEditor orgId={orgId} value={dataScope} onChange={setDataScope} readonly={readOnly} />
           )}
 
+          {activeTab === "authority" && (
+            <ApprovalAuthorityEditor value={approvalAuthority} onChange={setApprovalAuthority} readonly={readOnly} />
+          )}
+
+          {activeTab === "notify" && (
+            <NotificationPreferencesEditor value={notificationPreferences} onChange={setNotificationPreferences} readonly={readOnly} />
+          )}
+
           {activeTab === "signing" && (
             <div>
               <div className="mb-4 p-3 bg-blue-50 border border-blue-100 rounded-xl text-xs text-blue-700">
@@ -1339,6 +1574,8 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
                       role: getMemberRoles(member)[0] || null,
                       page_permissions: member.page_permissions,
                       module_permissions: member.module_permissions,
+                      approval_limits: member.approval_limits,
+                      notification_preferences: member.notification_preferences,
                       capabilities: member.capabilities,
                     });
                     toast.success("Invite resent");
@@ -1391,6 +1628,8 @@ function InviteDialog({ open, onClose, orgId }) {
   const [customRoleName, setCustomRoleName] = useState("");
   const [customRoleDescription, setCustomRoleDescription] = useState("");
   const [notificationPermissions, setNotificationPermissions] = useState(cloneDefaultNotificationPermissions());
+  const [approvalAuthority, setApprovalAuthority] = useState(cloneDefaultApprovalAuthority());
+  const [notificationPreferences, setNotificationPreferences] = useState(cloneDefaultEnterpriseNotificationPreferences());
   const [pagePerms, setPagePerms] = useState({ ...DEFAULT_PAGE_PERMS });
   const [signingPrivs, setSigningPrivs] = useState({ ...DEFAULT_SIGNING });
   const [dataScope, setDataScope] = useState({ ...DEFAULT_DATA_SCOPE });
@@ -1404,6 +1643,8 @@ function InviteDialog({ open, onClose, orgId }) {
     setCustomRoleName("");
     setCustomRoleDescription("");
     setNotificationPermissions(cloneDefaultNotificationPermissions());
+    setApprovalAuthority(cloneDefaultApprovalAuthority());
+    setNotificationPreferences(cloneDefaultEnterpriseNotificationPreferences());
     setPagePerms({ ...DEFAULT_PAGE_PERMS });
     setSigningPrivs({ ...DEFAULT_SIGNING });
     setDataScope({ ...DEFAULT_DATA_SCOPE });
@@ -1419,10 +1660,12 @@ function InviteDialog({ open, onClose, orgId }) {
 
   const TABS = [
     { key: "info",    label: "1. Contact" },
-    { key: "roles",   label: "2. Roles" },
-    { key: "access",  label: "3. Page Access" },
-    { key: "data",    label: "4. Data Scope" },
-    { key: "signing", label: "5. Signing" },
+    { key: "roles",   label: "2. Role" },
+    { key: "data",    label: "3. Scope" },
+    { key: "access",  label: "4. Permissions" },
+    { key: "authority", label: "5. Authority" },
+    { key: "notify",  label: "6. Notifications" },
+    { key: "signing", label: "7. Review" },
   ];
 
   const validate = () => {
@@ -1440,6 +1683,17 @@ function InviteDialog({ open, onClose, orgId }) {
     try {
       const primaryRole = selectedRoles.find(r => r !== "custom") || null;
       const accessRole = deriveAccessGrantRole(selectedRoles, pagePerms);
+      const customRoleDefinition = selectedRoles.includes("custom")
+        ? await ensureInlineCustomRoleDefinition({
+          orgId,
+          customRoleName,
+          customRoleDescription,
+          permissions: notificationPermissions,
+          approvalLimits: serializeApprovalAuthority(approvalAuthority),
+          notificationPreferences,
+        })
+        : null;
+      const serializedApprovalLimits = serializeApprovalAuthority(approvalAuthority);
       await invokeInviteUser({
         email: form.email.trim(),
         full_name: form.full_name.trim(),
@@ -1447,12 +1701,17 @@ function InviteDialog({ open, onClose, orgId }) {
         role: primaryRole,
         org_id: orgId,
         page_permissions: pagePerms,
+        approval_limits: serializedApprovalLimits,
+        notification_preferences: notificationPreferences,
         access_scopes: dataScope,
         capabilities: {
           roles: selectedRoles,
-          custom_role: customRoleName || null,
+          custom_role: customRoleDefinition?.role_key || customRoleName || null,
+          custom_role_label: customRoleDefinition?.label || customRoleName || null,
           custom_role_description: customRoleDescription || null,
           permissions: notificationPermissions,
+          approval_limits: serializedApprovalLimits,
+          notification_preferences: notificationPreferences,
           signing_privileges: signingPrivs,
           scope_access: {
             all_portfolios: Boolean(dataScope.allPortfolios),
@@ -1560,8 +1819,8 @@ function InviteDialog({ open, onClose, orgId }) {
               )}
               <div className="flex gap-2">
                 <Button variant="outline" className="flex-1" onClick={() => setActiveTab("info")}>← Back</Button>
-                <Button className="flex-1 bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold" onClick={() => setActiveTab("access")}>
-                  Next: Page Access →
+                <Button className="flex-1 bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold" onClick={() => setActiveTab("data")}>
+                  Next: Scope →
                 </Button>
               </div>
             </div>
@@ -1575,9 +1834,9 @@ function InviteDialog({ open, onClose, orgId }) {
                 onChange={(k, v) => setPagePerms(p => ({ ...p, [k]: v }))}
               />
               <div className="flex gap-2 pt-2">
-                <Button variant="outline" className="flex-1" onClick={() => setActiveTab("roles")}>← Back</Button>
-                <Button className="flex-1 bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold" onClick={() => setActiveTab("data")}>
-                  Next: Data Scope →
+                <Button variant="outline" className="flex-1" onClick={() => setActiveTab("data")}>← Back</Button>
+                <Button className="flex-1 bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold" onClick={() => setActiveTab("authority")}>
+                  Next: Authority →
                 </Button>
               </div>
             </div>
@@ -1587,9 +1846,33 @@ function InviteDialog({ open, onClose, orgId }) {
             <div className="space-y-4">
               <DataScopeEditor orgId={orgId} value={dataScope} onChange={setDataScope} />
               <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={() => setActiveTab("access")}>← Back</Button>
+                <Button variant="outline" className="flex-1" onClick={() => setActiveTab("roles")}>← Back</Button>
+                <Button className="flex-1 bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold" onClick={() => setActiveTab("access")}>
+                  Next: Permissions →
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "authority" && (
+            <div className="space-y-4">
+              <ApprovalAuthorityEditor value={approvalAuthority} onChange={setApprovalAuthority} />
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={() => setActiveTab("data")}>← Back</Button>
+                <Button className="flex-1 bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold" onClick={() => setActiveTab("notify")}>
+                  Next: Notifications →
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "notify" && (
+            <div className="space-y-4">
+              <NotificationPreferencesEditor value={notificationPreferences} onChange={setNotificationPreferences} />
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={() => setActiveTab("authority")}>← Back</Button>
                 <Button className="flex-1 bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold" onClick={() => setActiveTab("signing")}>
-                  Next: Signing →
+                  Next: Review →
                 </Button>
               </div>
             </div>
@@ -1602,6 +1885,9 @@ function InviteDialog({ open, onClose, orgId }) {
                 privileges={signingPrivs}
                 onChange={(k, v) => setSigningPrivs(p => ({ ...p, [k]: v }))}
               />
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={() => setActiveTab("notify")}>← Back</Button>
+              </div>
             </div>
           )}
         </div>
@@ -1838,6 +2124,8 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
   const [customRoleName, setCustomRoleName] = useState("");
   const [customRoleDescription, setCustomRoleDescription] = useState("");
   const [notificationPermissions, setNotificationPermissions] = useState(cloneDefaultNotificationPermissions());
+  const [approvalAuthority, setApprovalAuthority] = useState(cloneDefaultApprovalAuthority());
+  const [notificationPreferences, setNotificationPreferences] = useState(cloneDefaultEnterpriseNotificationPreferences());
   const [pagePerms, setPagePerms] = useState({ ...DEFAULT_PAGE_PERMS });
   const [signingPrivs, setSigningPrivs] = useState({ ...DEFAULT_SIGNING });
   const [dataScope, setDataScope] = useState({ ...DEFAULT_DATA_SCOPE });
@@ -1845,9 +2133,11 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
   const [saving, setSaving] = useState(false);
 
   const TABS = [
-    { key: "roles", label: "Roles" },
-    { key: "access", label: "Page Access" },
-    { key: "data", label: "Data Scope" },
+    { key: "roles", label: "Role" },
+    { key: "data", label: "Scope" },
+    { key: "access", label: "Permissions" },
+    { key: "authority", label: "Authority" },
+    { key: "notify", label: "Notifications" },
     { key: "signing", label: "Signing" },
   ];
 
@@ -1856,6 +2146,17 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
     try {
       const primaryRole = selectedRoles.find(r => r !== "custom") || null;
       const accessRole = deriveAccessGrantRole(selectedRoles, pagePerms);
+      const customRoleDefinition = selectedRoles.includes("custom")
+        ? await ensureInlineCustomRoleDefinition({
+          orgId,
+          customRoleName,
+          customRoleDescription,
+          permissions: notificationPermissions,
+          approvalLimits: serializeApprovalAuthority(approvalAuthority),
+          notificationPreferences,
+        })
+        : null;
+      const serializedApprovalLimits = serializeApprovalAuthority(approvalAuthority);
       for (const m of selectedMembers) {
         const nextStatus = m.status === "invited"
           ? "invited"
@@ -1863,13 +2164,18 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
         await supabase.from("memberships").update({
           role: primaryRole,
           page_permissions: pagePerms,
+          approval_limits: serializedApprovalLimits,
+          notification_preferences: notificationPreferences,
           status: nextStatus,
           capabilities: {
             ...(m.capabilities || {}),
             roles: selectedRoles,
-            custom_role: customRoleName || null,
+            custom_role: customRoleDefinition?.role_key || customRoleName || null,
+            custom_role_label: customRoleDefinition?.label || customRoleName || null,
             custom_role_description: customRoleDescription || null,
             permissions: notificationPermissions,
+            approval_limits: serializedApprovalLimits,
+            notification_preferences: notificationPreferences,
             signing_privileges: signingPrivs,
             scope_access: {
               all_portfolios: Boolean(dataScope.allPortfolios),
@@ -1879,7 +2185,7 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
         }).eq("user_id", m.user_id).eq("org_id", orgId);
         await syncUserAccessGrants({ userId: m.user_id, orgId, dataScope, role: accessRole });
       }
-      await logAudit({ action: "bulk_update_permissions", details: { count: selectedMembers.length, roles: selectedRoles, permissions: notificationPermissions } });
+      await logAudit({ action: "bulk_update_permissions", details: { count: selectedMembers.length, roles: selectedRoles, permissions: notificationPermissions, approval_limits: serializedApprovalLimits, notification_preferences: notificationPreferences } });
       toast.success(`Updated ${selectedMembers.length} users`);
       queryClient.invalidateQueries({ queryKey: ["org-members"] });
       onClose();
@@ -1937,6 +2243,12 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
           )}
           {activeTab === "data" && (
             <DataScopeEditor orgId={orgId} value={dataScope} onChange={setDataScope} />
+          )}
+          {activeTab === "authority" && (
+            <ApprovalAuthorityEditor value={approvalAuthority} onChange={setApprovalAuthority} />
+          )}
+          {activeTab === "notify" && (
+            <NotificationPreferencesEditor value={notificationPreferences} onChange={setNotificationPreferences} />
           )}
           {activeTab === "signing" && (
             <SigningPrivilegesMatrix privileges={signingPrivs} onChange={(k, v) => setSigningPrivs(p => ({ ...p, [k]: v }))} />

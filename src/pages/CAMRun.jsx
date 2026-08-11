@@ -21,9 +21,14 @@ import {
 } from "lucide-react";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
+import { useAuth } from "@/lib/AuthContext";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { createNotificationsForEvent } from "@/services/notificationService";
+import {
+  recordModuleApprovalAction,
+  submitOrReuseModuleApprovalWorkflow,
+} from "@/services/moduleApprovalWorkflowBridge";
 import { createPageUrl } from "@/utils";
 import { buildCamActiveLeaseIdSet, filterCamActiveLeases, filterRowsToCamActiveLeases } from "@/lib/activeLease";
 import PageHeader from "@/components/PageHeader";
@@ -60,6 +65,7 @@ function StatusBadge({ status }) {
 }
 
 export default function CAMRun() {
+  const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   // propertyId/periodId are derived DIRECTLY from the URL on every render,
@@ -282,7 +288,7 @@ export default function CAMRun() {
   const actionMutation = useMutation({
     mutationFn: ({ action, payload }) =>
       invokeEdgeFunction("cam-run-workflow-v2", { action, cam_run_id: activeRun?.id, ...payload }),
-    onSuccess: (result, variables) => {
+    onSuccess: async (result, variables) => {
       const eventByAction = {
         submit_for_review: "cam.final_approval_required",
         approve: "cam.approved",
@@ -290,6 +296,26 @@ export default function CAMRun() {
       };
       const eventType = eventByAction[variables?.action];
       if (eventType) notifyCamEvent(eventType, result, `cam_run_${variables.action}`);
+      const workflowEntity = { ...(activeRun || {}), ...(result || {}), id: activeRun?.id || result?.id };
+      try {
+        if (variables?.action === "submit_for_review") {
+          await submitOrReuseModuleApprovalWorkflow({ workflowType: "cam", entity: workflowEntity, user, metadata: { source: "cam_run_submit_for_review" } });
+        } else if (variables?.action === "approve") {
+          await recordModuleApprovalAction({ workflowType: "cam", entity: workflowEntity, user, action: "approve", metadata: { source: "cam_run_approve" } });
+        } else if (variables?.action === "reject") {
+          await recordModuleApprovalAction({
+            workflowType: "cam",
+            entity: workflowEntity,
+            user,
+            action: "reject",
+            comments: variables?.payload?.reason || "CAM run rejected.",
+            rejectionReason: variables?.payload?.reason || "CAM run rejected during review",
+            metadata: { source: "cam_run_reject" },
+          });
+        }
+      } catch (error) {
+        console.warn("[CAMRun] Generic approval workflow sync failed:", error?.message || error);
+      }
       refetchRuns();
       refetchStatements();
       refetchExports();

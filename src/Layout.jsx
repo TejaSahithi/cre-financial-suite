@@ -84,7 +84,12 @@ const navSections = [
       { label: "Reports & KPIs", page: "Reports" },
     ]
   },
-  { label: "Workflows", icon: GitBranch, page: "Workflows" },
+  {
+    label: "Workflows", icon: GitBranch, children: [
+      { label: "Workflow Overview", page: "Workflows" },
+      { label: "Approval Inbox", page: "Approvals" },
+    ]
+  },
   { label: "Notifications", icon: Bell, page: "Notifications" },
   { label: "Documents", icon: FolderOpen, page: "Documents" },
   { label: "Integrations", icon: Plug, page: "Integrations" },
@@ -95,6 +100,8 @@ const navSections = [
       { label: "Chart of Accounts", page: "ChartOfAccounts" },
       { label: "Field Mapping Rules", page: "FieldMappingRules" },
       { label: "Approval Workflows", page: "ApprovalWorkflows" },
+      { label: "Approval Policies", page: "ApprovalPolicies" },
+      { label: "Approval Inbox", page: "Approvals" },
       { label: "Audit Log", page: "AuditLog" },
     ]
   },

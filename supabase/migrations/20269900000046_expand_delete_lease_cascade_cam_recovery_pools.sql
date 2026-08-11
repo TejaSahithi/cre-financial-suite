@@ -289,7 +289,6 @@ BEGIN
     'lease_clauses',
     'lease_field_reviews',
     'lease_config',
-    'cam_profiles',
     'lease_abstract_versions',
     'lease_amendments',
     'lease_assignments',

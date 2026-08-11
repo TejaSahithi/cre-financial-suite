@@ -146,7 +146,7 @@ export const STANDARD_ROLE_DEFINITIONS = {
   portfolio_manager: {
     label: "Portfolio Manager",
     permissions: {
-      lease: ["view", "review", "comment"],
+      lease: ["view", "review", "reject", "comment"],
       expense: ["view", "review", "approve", "reject", "comment"],
       budget: ["view", "review", "approve", "reject", "comment"],
       cam: ["view", "review", "approve", "comment"],
@@ -160,7 +160,7 @@ export const STANDARD_ROLE_DEFINITIONS = {
   property_manager: {
     label: "Property Manager",
     permissions: {
-      lease: ["view", "review", "comment"],
+      lease: ["view", "review", "reject", "comment"],
       expense: ["view", "create", "edit", "submit", "review", "approve", "reject", "comment"],
       budget: ["view", "create", "edit", "submit", "review", "approve", "reject", "comment"],
       cam: ["view", "review", "comment"],
@@ -196,7 +196,7 @@ export const STANDARD_ROLE_DEFINITIONS = {
     permissions: {
       expense: ["view", "review", "validate", "reject", "comment", "export"],
       budget: ["view", "review", "validate", "reject", "comment", "export"],
-      cam: ["view", "create", "edit", "review", "validate", "comment", "export"],
+      cam: ["view", "create", "edit", "submit", "review", "validate", "comment", "export"],
       revenue: ["view", "export", "reconcile", "adjust"],
       rent_schedule: ["view", "review", "validate"],
       reports: ["view", "export"],
@@ -267,7 +267,7 @@ const SCOPE_RANK = {
   lease: 6,
 };
 
-function normalizeRole(role) {
+export function normalizeRole(role) {
   const locallyAliased = ROLE_ALIASES[role] || role;
   const resolved = resolveRoleForAccess(locallyAliased);
   return ROLE_ALIASES[resolved] || resolved || "auditor";
@@ -422,12 +422,15 @@ function getApprovalPayload(membership) {
 function delegationMatches(delegation = {}, user, approvalType, resource = {}) {
   const now = Date.now();
   const permission = `${approvalType}.approve`;
+  const startsAt = delegation.starts_at || delegation.start_date;
+  const endsAt = delegation.ends_at || delegation.end_date;
+  const hasScopeConstraint = Boolean(delegation.scope || delegation.scope_type);
   if (delegation.delegate_user_id && delegation.delegate_user_id !== user?.id) return false;
   if (delegation.permission && delegation.permission !== permission) return false;
   if (delegation.status && !["active", "approved"].includes(delegation.status)) return false;
-  if (delegation.start_date && new Date(delegation.start_date).getTime() > now) return false;
-  if (delegation.end_date && new Date(delegation.end_date).getTime() < now) return false;
-  return !delegation.scope || scopeGrantMatches(delegation, resource);
+  if (startsAt && new Date(startsAt).getTime() > now) return false;
+  if (endsAt && new Date(endsAt).getTime() < now) return false;
+  return !hasScopeConstraint || scopeGrantMatches(delegation, resource);
 }
 
 export function getApprovalLimit(user, approvalType, resource = {}, options = {}) {
@@ -459,8 +462,9 @@ export function canApprove(user, request = {}, options = {}) {
   const amount = Number(request.amount ?? request.total_amount ?? 0);
   if (Number.isFinite(limit) && amount > limit) return false;
 
-  if (request.current_step?.required_role) {
-    const requiredRole = normalizeRole(request.current_step.required_role);
+  const requiredStepRole = request.current_step?.required_role || request.current_step?.approver_role;
+  if (requiredStepRole && requiredStepRole !== "authorized_signatory") {
+    const requiredRole = normalizeRole(requiredStepRole);
     const actualRole = normalizeRole(getMembership(user, options)?.role || user?.role);
     if (requiredRole !== actualRole && !request.current_step.approver_user_id) return false;
   }

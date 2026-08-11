@@ -53,6 +53,8 @@ import __Layout from './Layout.jsx';
 
 const AcceptInvite = lazy(() => import('./pages/AcceptInvite'));
 const AddExpense = lazy(() => import('./pages/AddExpense'));
+const Approvals = lazy(() => import('./pages/Approvals'));
+const ApprovalPolicies = lazy(() => import('./pages/ApprovalPolicies'));
 const AuditLog = lazy(() => import('./pages/AuditLog'));
 const ApprovalWorkflows = lazy(() => import('./pages/ApprovalWorkflows'));
 const FieldMappingRules = lazy(() => import('./pages/FieldMappingRules'));
@@ -137,6 +139,8 @@ const CAMRealPropertyGate = lazy(() => import('./pages/CAMRealPropertyGate'));
 export const PAGES = {
     "AcceptInvite": AcceptInvite,
     "AddExpense": AddExpense,
+    "Approvals": Approvals,
+    "ApprovalPolicies": ApprovalPolicies,
     "AuditLog": AuditLog,
     "ApprovalWorkflows": ApprovalWorkflows,
     "FieldMappingRules": FieldMappingRules,

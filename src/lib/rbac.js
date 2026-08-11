@@ -24,9 +24,9 @@ const ROLE_PAGES = {
     "ActualsVariance", "Actuals", "Variance", "Comparison",
     "Reconciliation",
     "AnalyticsReports", "Reports", "Analytics",
-    "Workflows", "Notifications", "Documents",
+    "Workflows", "Approvals", "Notifications", "Documents",
     "Integrations",
-    "OrgSettings", "ChartOfAccounts", "FieldMappingRules", "ApprovalWorkflows",
+    "OrgSettings", "ChartOfAccounts", "FieldMappingRules", "ApprovalWorkflows", "ApprovalPolicies",
     "UserManagement", "AuditLog",
   ],
   manager: [
@@ -38,7 +38,7 @@ const ROLE_PAGES = {
     "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "BudgetReadiness",
     "Billing",
     "BudgetDashboard", "CreateBudget", "BudgetReview",
-    "Documents", "Notifications",
+    "Documents", "Workflows", "Approvals", "Notifications",
   ],
   // Legacy alias
   property_manager: [
@@ -49,7 +49,7 @@ const ROLE_PAGES = {
     "Expenses", "AddExpense", "BulkImport", "LeaseExpenseRules", "ExpenseProjection", "LeaseExpenseClassification", "ExpenseReview",
     "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "BudgetReadiness",
     "Billing",
-    "Documents", "Notifications",
+    "Documents", "Workflows", "Approvals", "Notifications",
   ],
   editor: [
     "Dashboard", "PortfolioInsights",
@@ -62,7 +62,7 @@ const ROLE_PAGES = {
     "Reconciliation",
     "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "BudgetReadiness",
     "ChartOfAccounts", "Vendors",
-    "Notifications", "Documents",
+    "Workflows", "Approvals", "Notifications", "Documents",
   ],
   // Legacy alias
   finance: [
@@ -74,7 +74,7 @@ const ROLE_PAGES = {
     "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "BudgetReadiness",
     "AnalyticsReports", "Reports", "Analytics",
     "ChartOfAccounts", "Vendors",
-    "Notifications", "Documents",
+    "Workflows", "Approvals", "Notifications", "Documents",
   ],
   viewer: [
     "Dashboard", "PortfolioInsights",
@@ -86,7 +86,7 @@ const ROLE_PAGES = {
     "Revenue", "ActualsVariance", "Actuals", "Variance", "Comparison",
     "AnalyticsReports", "Reports", "Analytics",
     "CAMDashboard", "CAMSetup", "CAMRun", "BudgetReadiness",
-    "Notifications", "Documents",
+    "Workflows", "Approvals", "Notifications", "Documents",
   ],
   // Legacy alias
   read_only: [
@@ -110,7 +110,7 @@ const ROLE_PAGES = {
     "Reconciliation",
     "AnalyticsReports", "Reports", "Analytics",
     "CAMDashboard", "CAMSetup", "CAMRun", "BudgetReadiness",
-    "Documents", "Notifications",
+    "Documents", "Workflows", "Approvals", "Notifications",
   ],
 };
 

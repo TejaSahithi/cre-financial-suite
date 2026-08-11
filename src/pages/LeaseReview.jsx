@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -95,6 +95,10 @@ import {
 } from "@/services/leaseApprovalWorkflowService";
 import { logAudit } from "@/services/audit";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
+import {
+  recordModuleApprovalAction,
+  submitOrReuseModuleApprovalWorkflow,
+} from "@/services/moduleApprovalWorkflowBridge";
 import { useAuth } from "@/lib/AuthContext";
 import { isSuperAdmin } from "@/lib/rbac";
 import { SummaryStat } from "@/components/lease-review/SummaryStat";
@@ -133,6 +137,7 @@ import {
 } from "@/components/lease-review/SpecializedTables";
 import ExtractionDebugPanel from "@/components/lease-review/ExtractionDebugPanel";
 import ExtractionTimelinePanel from "@/components/lease-review/ExtractionTimelinePanel";
+import SemanticPanelBoundary from "@/components/lease-review/SemanticPanelBoundary";
 
 import LeaseReviewTabTable from "@/components/lease-review/LeaseReviewTabTable";
 import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
@@ -145,6 +150,8 @@ import { reviewDocumentToLegacyReviewPayload, shouldBridgeReviewDocumentToLegacy
 // Minimum number of source-backed fields required before a new extraction is
 // considered "richer" than the previous one. Used only for debug diagnostics.
 const SOURCE_BACKED_MIN_THRESHOLD = 1;
+
+const DocumentFamilyTimeline = lazy(() => import("@/components/lease-review/DocumentFamilyTimeline"));
 
 function humanizeExtractionToken(value, fallback = "unknown") {
   const text = String(value ?? "").trim();
@@ -1947,6 +1954,18 @@ export default function LeaseReview() {
           ...(updateResult?.columnUpdates || {}),
           extraction_data: nextExtraction,
         });
+        await logAudit({
+          entityType: "LeaseFieldReview",
+          entityId: leaseId,
+          action: "field_accept_backfill",
+          orgId: freshLease.org_id || lease?.org_id,
+          details: {
+            field_key: key,
+            source: "review_accept",
+          },
+        }).catch((auditErr) => {
+          console.warn("[LeaseReview] accept backfill audit failed:", auditErr?.message || auditErr);
+        });
       } catch (err) {
         console.error("[LeaseReview] accept backfill failed:", err);
         toast.error(err?.message || `Could not save ${field?.label || key}`);
@@ -2300,6 +2319,33 @@ export default function LeaseReview() {
         idempotencyKey: createLeaseApprovalIdempotencyKey(lease.id),
       });
       const approvedLease = approvalResult.lease;
+
+      try {
+        await submitOrReuseModuleApprovalWorkflow({
+          workflowType: "lease",
+          entity: approvedLease || lease,
+          user,
+          metadata: {
+            source: "lease_review_approve_abstract",
+            signed_by: approvalSignedBy,
+            signed_at: approvalSignedAt,
+          },
+        });
+        await recordModuleApprovalAction({
+          workflowType: "lease",
+          entity: approvedLease || lease,
+          user,
+          action: "approve",
+          comments: approvalComments || "Lease abstract approved.",
+          metadata: {
+            source: "lease_review_approve_abstract",
+            signed_by: approvalSignedBy,
+            signed_at: approvalSignedAt,
+          },
+        });
+      } catch (error) {
+        console.warn("[LeaseReview] Generic approval workflow sync failed:", error?.message || error);
+      }
 
       // approve-lease-workflow now generates the approved rent schedule
       // synchronously (same request) instead of relying on the fiscal-year
@@ -3738,6 +3784,11 @@ export default function LeaseReview() {
 
         <TabsContent value="documents_exhibits" className="mt-4 space-y-3">
           <LeaseReviewTabTable rows={enterpriseTabs.documents_exhibits || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} />
+          <SemanticPanelBoundary>
+            <Suspense fallback={null}>
+              <DocumentFamilyTimeline documentFamily={reviewDocument?.documentFamily} />
+            </Suspense>
+          </SemanticPanelBoundary>
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-base">Source Document</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">

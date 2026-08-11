@@ -9,6 +9,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
+  ClipboardList,
   CheckCircle2,
   ClipboardCheck,
   FileText,
@@ -154,6 +155,37 @@ export default function ApprovalWorkflows() {
           </p>
         </CardContent>
       </Card>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <Card>
+          <CardContent className="flex items-center justify-between gap-4 p-4">
+            <div className="flex items-center gap-3">
+              <ClipboardList className="h-5 w-5 text-slate-500" />
+              <div>
+                <p className="text-sm font-semibold text-slate-900">Approval Policies</p>
+                <p className="text-xs text-slate-500">Thresholds, scope precedence, and approval chains.</p>
+              </div>
+            </div>
+            <Link to={createPageUrl("ApprovalPolicies")}>
+              <Button variant="outline" size="sm" className="h-8 text-xs">Open</Button>
+            </Link>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="flex items-center justify-between gap-4 p-4">
+            <div className="flex items-center gap-3">
+              <Workflow className="h-5 w-5 text-slate-500" />
+              <div>
+                <p className="text-sm font-semibold text-slate-900">Approval Inbox</p>
+                <p className="text-xs text-slate-500">Live reviewer queue across modules.</p>
+              </div>
+            </div>
+            <Link to={createPageUrl("Approvals")}>
+              <Button variant="outline" size="sm" className="h-8 text-xs">Open</Button>
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
 
       <div className="space-y-3">
         {stages.map((stage, idx) => {

@@ -2686,10 +2686,12 @@ export const expenseService = {
     }
 
     const relatedLease = updatedExpense?.lease_id ? await baseLeaseService.get(updatedExpense.lease_id) : null;
-    await this.classifyExpenses({
-      expenses: [updatedExpense],
-      leases: relatedLease ? [relatedLease] : [],
-    });
+    if (relatedLease) {
+      await this.classifyExpenses({
+        expenses: [updatedExpense],
+        leases: [relatedLease],
+      });
+    }
     return {
       ...updatedExpense,
       recovery_reason: reason,
@@ -3727,4 +3729,3 @@ export const expenseService = {
 // Named export for golden regression tests; keep service facade unchanged.
 export { scoreRuleMatch, hasCategoryRelevantMatch, buildAmountBuckets, canSendClassificationToCam };
 export default expenseService;
-

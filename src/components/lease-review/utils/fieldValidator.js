@@ -377,6 +377,15 @@ function normalizedEnumEvidenceSupportsValue(fieldKey, value, sourceText) {
   return false;
 }
 
+function booleanEvidenceSupportsValue(value, sourceText) {
+  const source = normalizeEvidenceText(sourceText);
+  if (!source) return false;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  const affirmative = typeof value === "boolean" ? value : /^(yes|true|y|1)$/.test(normalized);
+  if (!affirmative) return /\b(?:not required|no right|none|not applicable|n\/a)\b/.test(source);
+  return /\b(?:shall|must|required|maintain|carry|obtain|provide|waiver|waive|additional insured|consent|option|renewal|terminate)\b/.test(source);
+}
+
 function noticeMonthEvidenceSupportsValue(value, sourceText) {
   if (sourceContainsNumber(value, sourceText)) return true;
   const n = parseAccountingNumber(value);
@@ -464,6 +473,13 @@ export function validateFieldEvidenceSupport(fieldKey, value, evidence = {}) {
   if (RESPONSIBILITY_KEYS.has(normalizedKey)) {
     if (!responsibilityEvidenceSupportsValue(value, sourceText)) {
       return { valid: false, reason: `Source text does not support the normalized ${normalizedKey.replace(/_/g, " ")} responsibility.` };
+    }
+    return { valid: true };
+  }
+
+  if (BOOLEAN_KEYS.has(normalizedKey)) {
+    if (!booleanEvidenceSupportsValue(value, sourceText)) {
+      return { valid: false, reason: `Source text does not support the normalized ${normalizedKey.replace(/_/g, " ")} value.` };
     }
     return { valid: true };
   }

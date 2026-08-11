@@ -189,3 +189,81 @@ export function urgencyOf(date) {
   if (days <= 90) return "upcoming";
   return "future";
 }
+
+const DEFAULT_CRITICAL_DATE_RULE = Object.freeze({
+  reminder_days: [180, 120, 90, 60, 30],
+  recipient_roles: ["property_manager"],
+  escalation_roles: ["portfolio_manager", "org_admin", "org_owner"],
+});
+
+function normalizeRule(rule = {}) {
+  return {
+    reminder_days: Array.isArray(rule.reminder_days) && rule.reminder_days.length > 0
+      ? rule.reminder_days.map((day) => Number(day)).filter((day) => Number.isFinite(day)).sort((a, b) => b - a)
+      : DEFAULT_CRITICAL_DATE_RULE.reminder_days,
+    recipient_roles: Array.isArray(rule.recipient_roles) && rule.recipient_roles.length > 0
+      ? rule.recipient_roles
+      : DEFAULT_CRITICAL_DATE_RULE.recipient_roles,
+    escalation_roles: Array.isArray(rule.escalation_roles) && rule.escalation_roles.length > 0
+      ? rule.escalation_roles
+      : DEFAULT_CRITICAL_DATE_RULE.escalation_roles,
+  };
+}
+
+export function resolveCriticalDateReminderPlan(criticalDate, rule = {}) {
+  const normalizedRule = normalizeRule(rule);
+  const remainingDays = daysUntil(criticalDate?.due_date);
+  if (remainingDays === null) {
+    return { state: "unknown", recipients: [], escalationRoles: [], matchedReminderDay: null };
+  }
+
+  if (criticalDate?.status === "completed") {
+    return { state: "completed", recipients: [], escalationRoles: [], matchedReminderDay: null };
+  }
+
+  if (remainingDays < 0) {
+    return {
+      state: "overdue",
+      recipients: normalizedRule.recipient_roles,
+      escalationRoles: normalizedRule.escalation_roles,
+      matchedReminderDay: 0,
+    };
+  }
+
+  const reminderDaysAscending = [...normalizedRule.reminder_days].sort((a, b) => a - b);
+  const matchedReminderDay = reminderDaysAscending.find((day) => remainingDays <= day) ?? null;
+  if (matchedReminderDay == null) {
+    return { state: "future", recipients: [], escalationRoles: [], matchedReminderDay: null };
+  }
+
+  const escalationCutoff = reminderDaysAscending[Math.min(1, reminderDaysAscending.length - 1)] ?? 0;
+  const escalationRoles = matchedReminderDay <= escalationCutoff
+    ? normalizedRule.escalation_roles
+    : [];
+
+  return {
+    state: remainingDays === 0 ? "due_today" : "due_soon",
+    recipients: normalizedRule.recipient_roles,
+    escalationRoles,
+    matchedReminderDay,
+  };
+}
+
+export async function listCriticalDateNotificationRules({ orgId, propertyId } = {}) {
+  if (!supabase || !orgId) return [];
+  let query = supabase
+    .from("critical_date_notification_rules")
+    .select("*")
+    .eq("org_id", orgId)
+    .eq("is_active", true);
+  if (propertyId) query = query.or(`property_id.eq.${propertyId},property_id.is.null`);
+  const { data, error } = await query;
+  if (error) {
+    if (/schema cache|does not exist|Could not find the table|relation .* does not exist/i.test(error?.message || "")) {
+      console.warn("[criticalDateService] critical_date_notification_rules unavailable until RBAC migration is applied.");
+      return [];
+    }
+    throw error;
+  }
+  return data || [];
+}

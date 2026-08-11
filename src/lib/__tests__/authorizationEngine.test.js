@@ -84,8 +84,8 @@ describe("authorizationEngine", () => {
         scope: "property",
         scope_id: PROPERTY_A,
         maximum_approval_amount: 50000,
-        start_date: "2026-08-01T00:00:00Z",
-        end_date: "2026-08-15T00:00:00Z",
+        start_date: "2020-01-01T00:00:00Z",
+        end_date: "2099-12-31T23:59:59Z",
         status: "active",
       },
     ];
@@ -93,6 +93,32 @@ describe("authorizationEngine", () => {
     expect(getApprovalLimit(admin, "expense", propertyAExpense, { delegations })).toBe(50000);
     expect(canApprove(admin, { ...propertyAExpense, amount: 45000 }, { delegations })).toBe(true);
     expect(canApprove(admin, { ...propertyAExpense, amount: 55000 }, { delegations })).toBe(false);
+  });
+
+  it("matches DB-shaped delegations by starts_at/ends_at and does not leak across scope", () => {
+    const admin = user("admin", "org_admin", {
+      capabilities: {
+        permissions: {
+          expense: { approve: true },
+        },
+      },
+    });
+
+    const delegations = [
+      {
+        delegate_user_id: "admin",
+        permission: "expense.approve",
+        scope_type: "property",
+        scope_id: PROPERTY_A,
+        maximum_approval_amount: 50000,
+        starts_at: "2020-01-01T00:00:00Z",
+        ends_at: "2099-12-31T23:59:59Z",
+        status: "active",
+      },
+    ];
+
+    expect(canApprove(admin, { ...propertyAExpense, amount: 45000 }, { delegations })).toBe(true);
+    expect(canApprove(admin, { ...propertyAExpense, property_id: PROPERTY_B, amount: 45000 }, { delegations })).toBe(false);
   });
 
   it("isolates Portfolio Managers to assigned portfolios", () => {

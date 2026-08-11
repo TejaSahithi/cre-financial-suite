@@ -36,6 +36,28 @@ const AuthenticatedApp = () => {
   const currentPath = location.pathname.substring(1);
   const isPublicPage = PUBLIC_PAGES.includes(currentPath) || currentPath === "" || currentPath === mainPageKey;
 
+  // Supabase Hash Error Interceptor
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (!hash) return;
+    const pathNoSlash = window.location.pathname.replace(/^\//, '');
+    if (pathNoSlash === 'AcceptInvite') return;
+
+    const params = new URLSearchParams(hash.slice(1));
+    const errorCode = params.get('error_code') || params.get('error');
+    if (!errorCode) return;
+
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    const message =
+      errorCode === 'otp_expired'
+        ? 'Your sign-in link has expired. Please request a new one.'
+        : errorCode === 'otp_disabled'
+          ? 'This sign-in link is no longer valid. Please request a new one.'
+          : 'Your sign-in link could not be verified. Please sign in again.';
+    import('sonner').then(({ toast }) => toast.error(message, { duration: 8000 }));
+    navigateToLogin();
+  }, [navigateToLogin]);
+
   // ─── Extracted State Hooks ──────────────────────────────────────────────
   const { mfaRequired, mfaChecked, mfaNeedsEnroll, mfaError, handleMfaVerified } = useMfaStatus({
     isAuthenticated,

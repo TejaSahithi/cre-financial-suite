@@ -22,11 +22,11 @@ export const MODULE_DEFINITIONS = {
   comparison:     { label: "YoY Comparison",     pages: ["Comparison"] },
   reconciliation: { label: "Reconciliation",     pages: ["Reconciliation"] },
   analytics_reports: { label: "Analytics & Reports", pages: ["AnalyticsReports", "Reports", "Analytics", "PortfolioInsights"] },
-  workflows:      { label: "Workflows",          pages: ["Workflows"] },
+  workflows:      { label: "Workflows",          pages: ["Workflows", "Approvals"] },
   notifications:  { label: "Notifications",      pages: ["Notifications"] },
   documents:      { label: "Documents",          pages: ["Documents"] },
   integrations:   { label: "Integrations",       pages: ["Integrations"] },
-  admin:          { label: "Admin",              pages: ["SuperAdmin", "Stakeholders", "OrgSettings", "ChartOfAccounts", "FieldMappingRules", "ApprovalWorkflows", "AuditLog", "UserManagement"] },
+  admin:          { label: "Admin",              pages: ["SuperAdmin", "Stakeholders", "OrgSettings", "ChartOfAccounts", "FieldMappingRules", "ApprovalWorkflows", "ApprovalPolicies", "Approvals", "AuditLog", "UserManagement"] },
 };
 
 // All module keys

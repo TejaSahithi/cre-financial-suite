@@ -327,20 +327,24 @@ VALUES
    '{"permissions":{"lease":{"view":true,"review":true,"comment":true},"expense":{"view":true,"review":true,"comment":true},"budget":{"view":true,"review":true,"comment":true},"cam":{"view":true,"review":true,"comment":true},"revenue":{"view":true,"export":true},"critical_dates":{"view":true,"comment":true},"rent_schedule":{"view":true,"review":true},"reports":{"view":true,"export":true},"audit":{"view":true},"user":{"view":true,"create":true,"edit":true,"assign":true},"role":{"view":true,"create":true,"edit":true,"assign":true},"workflow":{"configure":true},"approval_policy":{"configure":true},"delegation":{"view":true}},"scope_access":{"all_portfolios":true,"all_properties":true}}'::jsonb,
    '{}'::jsonb, '{"escalations":true}'::jsonb, TRUE, TRUE),
   (NULL, 'portfolio_manager', 'Portfolio Manager', 'Scoped portfolio operator and selected approval layer.', 'standard',
-   '{"lease":["view","review","comment"],"expense":["view","review","approve","reject","comment"],"budget":["view","review","approve","reject","comment"],"cam":["view","review","approve","comment"],"revenue":["view","export"],"critical_dates":["view","comment"],"rent_schedule":["view","review"],"reports":["view","export"]}'::jsonb,
-   '{"permissions":{"lease":{"view":true,"review":true,"comment":true},"expense":{"view":true,"review":true,"approve":true,"reject":true,"comment":true},"budget":{"view":true,"review":true,"approve":true,"reject":true,"comment":true},"cam":{"view":true,"review":true,"approve":true,"comment":true},"revenue":{"view":true,"export":true},"critical_dates":{"view":true,"comment":true},"rent_schedule":{"view":true,"review":true},"reports":{"view":true,"export":true}},"approval_limits":{"expense":25000,"budget":250000,"cam":250000}}'::jsonb,
+   '{"lease":["view","review","reject","comment"],"expense":["view","review","approve","reject","comment"],"budget":["view","review","approve","reject","comment"],"cam":["view","review","approve","comment"],"revenue":["view","export"],"critical_dates":["view","comment"],"rent_schedule":["view","review"],"reports":["view","export"]}'::jsonb,
+   '{"permissions":{"lease":{"view":true,"review":true,"reject":true,"comment":true},"expense":{"view":true,"review":true,"approve":true,"reject":true,"comment":true},"budget":{"view":true,"review":true,"approve":true,"reject":true,"comment":true},"cam":{"view":true,"review":true,"approve":true,"comment":true},"revenue":{"view":true,"export":true},"critical_dates":{"view":true,"comment":true},"rent_schedule":{"view":true,"review":true},"reports":{"view":true,"export":true}},"approval_limits":{"expense":25000,"budget":250000,"cam":250000}}'::jsonb,
    '{"expense":25000,"budget":250000,"cam":250000}'::jsonb, '{"approval_requests":true,"escalations":true}'::jsonb, TRUE, TRUE),
   (NULL, 'property_manager', 'Property Manager', 'Scoped property operator with limited configured approval authority.', 'standard',
-   '{"lease":["view","review","comment"],"expense":["view","create","edit","submit","review","approve","reject","comment"],"budget":["view","create","edit","submit","review","approve","reject","comment"],"cam":["view","review","comment"],"revenue":["view"],"critical_dates":["view","edit","comment"],"rent_schedule":["view","review"],"reports":["view"]}'::jsonb,
-   '{"permissions":{"lease":{"view":true,"review":true,"comment":true},"expense":{"view":true,"create":true,"edit":true,"submit":true,"review":true,"approve":true,"reject":true,"comment":true},"budget":{"view":true,"create":true,"edit":true,"submit":true,"review":true,"approve":true,"reject":true,"comment":true},"cam":{"view":true,"review":true,"comment":true},"revenue":{"view":true},"critical_dates":{"view":true,"edit":true,"comment":true},"rent_schedule":{"view":true,"review":true},"reports":{"view":true}},"approval_limits":{"expense":5000,"budget":50000}}'::jsonb,
+   '{"lease":["view","review","reject","comment"],"expense":["view","create","edit","submit","review","approve","reject","comment"],"budget":["view","create","edit","submit","review","approve","reject","comment"],"cam":["view","review","comment"],"revenue":["view"],"critical_dates":["view","edit","comment"],"rent_schedule":["view","review"],"reports":["view"]}'::jsonb,
+   '{"permissions":{"lease":{"view":true,"review":true,"reject":true,"comment":true},"expense":{"view":true,"create":true,"edit":true,"submit":true,"review":true,"approve":true,"reject":true,"comment":true},"budget":{"view":true,"create":true,"edit":true,"submit":true,"review":true,"approve":true,"reject":true,"comment":true},"cam":{"view":true,"review":true,"comment":true},"revenue":{"view":true},"critical_dates":{"view":true,"edit":true,"comment":true},"rent_schedule":{"view":true,"review":true},"reports":{"view":true}},"approval_limits":{"expense":5000,"budget":50000}}'::jsonb,
    '{"expense":5000,"budget":50000}'::jsonb, '{"operational":true,"approval_requests":true}'::jsonb, TRUE, TRUE),
   (NULL, 'lease_admin', 'Lease Admin / Leasing Agent', 'Scoped lease creator and submitter without self-approval authority.', 'standard',
    '{"lease":["view","create","edit","upload","submit","comment"],"critical_dates":["view","create","edit"],"rent_schedule":["view","create","edit","submit"],"documents":["view","upload"]}'::jsonb,
    '{"permissions":{"lease":{"view":true,"create":true,"edit":true,"upload":true,"submit":true,"comment":true},"critical_dates":{"view":true,"create":true,"edit":true},"rent_schedule":{"view":true,"create":true,"edit":true,"submit":true},"documents":{"view":true,"upload":true}}}'::jsonb,
    '{}'::jsonb, '{"lease_rejections":true}'::jsonb, TRUE, TRUE),
+  (NULL, 'leasing_agent', 'Leasing Agent', 'Scoped leasing role for lease intake, upload, review comments, and critical-date support.', 'standard',
+   '{"lease":["view","create","upload","submit","comment"],"critical_dates":["view","create"],"rent_schedule":["view"],"documents":["view","upload"]}'::jsonb,
+   '{"permissions":{"lease":{"view":true,"create":true,"upload":true,"submit":true,"comment":true},"critical_dates":{"view":true,"create":true},"rent_schedule":{"view":true},"documents":{"view":true,"upload":true}}}'::jsonb,
+   '{}'::jsonb, '{"lease_rejections":true,"critical_dates":true}'::jsonb, TRUE, TRUE),
   (NULL, 'finance', 'Finance Team', 'Financial review and validation function, not default final business approver.', 'standard',
-   '{"expense":["view","review","validate","reject","comment","export"],"budget":["view","review","validate","reject","comment","export"],"cam":["view","create","edit","review","validate","comment","export"],"revenue":["view","export","reconcile","adjust"],"rent_schedule":["view","review","validate"],"reports":["view","export"]}'::jsonb,
-   '{"permissions":{"expense":{"view":true,"review":true,"validate":true,"reject":true,"comment":true,"export":true},"budget":{"view":true,"review":true,"validate":true,"reject":true,"comment":true,"export":true},"cam":{"view":true,"create":true,"edit":true,"review":true,"validate":true,"comment":true,"export":true},"revenue":{"view":true,"export":true,"reconcile":true,"adjust":true},"rent_schedule":{"view":true,"review":true,"validate":true},"reports":{"view":true,"export":true}}}'::jsonb,
+   '{"expense":["view","review","validate","reject","comment","export"],"budget":["view","review","validate","reject","comment","export"],"cam":["view","create","edit","submit","review","validate","comment","export"],"revenue":["view","export","reconcile","adjust"],"rent_schedule":["view","review","validate"],"reports":["view","export"]}'::jsonb,
+   '{"permissions":{"expense":{"view":true,"review":true,"validate":true,"reject":true,"comment":true,"export":true},"budget":{"view":true,"review":true,"validate":true,"reject":true,"comment":true,"export":true},"cam":{"view":true,"create":true,"edit":true,"submit":true,"review":true,"validate":true,"comment":true,"export":true},"revenue":{"view":true,"export":true,"reconcile":true,"adjust":true},"rent_schedule":{"view":true,"review":true,"validate":true},"reports":{"view":true,"export":true}}}'::jsonb,
    '{}'::jsonb, '{"finance_review":true}'::jsonb, TRUE, TRUE),
   (NULL, 'property_owner', 'Property Owner', 'External business owner scoped only to owned properties.', 'standard',
    '{"lease":["view","approve","reject","comment"],"expense":["view","approve","reject","comment"],"budget":["view","approve","reject","comment"],"cam":["view","approve","comment"],"revenue":["view","export"],"critical_dates":["view"],"rent_schedule":["view"],"reports":["view","export"],"documents":["view"]}'::jsonb,
@@ -760,14 +764,24 @@ CREATE POLICY "approval_steps_write" ON public.approval_workflow_steps
     EXISTS (
       SELECT 1 FROM public.approval_workflow_instances i
       WHERE i.id = approval_workflow_steps.workflow_instance_id
-        AND public.cre_has_permission(i.org_id, i.workflow_type || '.review', 'property', i.property_id)
+        AND (
+          public.cre_has_permission(i.org_id, i.workflow_type || '.review', 'property', i.property_id)
+          OR public.cre_has_permission(i.org_id, i.workflow_type || '.validate', 'property', i.property_id)
+          OR public.cre_can_approve(i.org_id, i.workflow_type, 'property', i.property_id, i.amount, i.submitted_by)
+          OR public.cre_has_permission(i.org_id, i.workflow_type || '.sign', 'property', i.property_id)
+        )
     )
   )
   WITH CHECK (
     EXISTS (
       SELECT 1 FROM public.approval_workflow_instances i
       WHERE i.id = approval_workflow_steps.workflow_instance_id
-        AND public.cre_has_permission(i.org_id, i.workflow_type || '.review', 'property', i.property_id)
+        AND (
+          public.cre_has_permission(i.org_id, i.workflow_type || '.review', 'property', i.property_id)
+          OR public.cre_has_permission(i.org_id, i.workflow_type || '.validate', 'property', i.property_id)
+          OR public.cre_can_approve(i.org_id, i.workflow_type, 'property', i.property_id, i.amount, i.submitted_by)
+          OR public.cre_has_permission(i.org_id, i.workflow_type || '.sign', 'property', i.property_id)
+        )
     )
   );
 

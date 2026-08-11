@@ -25,7 +25,12 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import useOrgQuery from "@/hooks/useOrgQuery";
+import { useAuth } from "@/lib/AuthContext";
 import { checkBudgetReadiness } from "@/services/budgetReadinessService";
+import {
+  recordModuleApprovalAction,
+  submitOrReuseModuleApprovalWorkflow,
+} from "@/services/moduleApprovalWorkflowBridge";
 
 function buildDefaultForm(scope) {
   return {
@@ -63,6 +68,7 @@ async function invalidateBudgetCaches(queryClient) {
 }
 
 export default function CreateBudget() {
+  const { user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -171,7 +177,27 @@ export default function CreateBudget() {
         fiscal_year: fiscalYear,
         reason,
       }),
-    onSuccess: async () => {
+    onSuccess: async (_result, variables) => {
+      const { action, budget, reason } = variables || {};
+      try {
+        if (action === "mark_reviewed") {
+          await submitOrReuseModuleApprovalWorkflow({ workflowType: "budget", entity: budget, user, metadata: { source: "budget_studio_mark_reviewed" } });
+        } else if (action === "approve") {
+          await recordModuleApprovalAction({ workflowType: "budget", entity: budget, user, action: "approve", metadata: { source: "budget_studio_approve" } });
+        } else if (action === "reject") {
+          await recordModuleApprovalAction({
+            workflowType: "budget",
+            entity: budget,
+            user,
+            action: "reject",
+            comments: reason || "Budget rejected from Budget Studio.",
+            rejectionReason: reason || "Budget rejected during review",
+            metadata: { source: "budget_studio_reject" },
+          });
+        }
+      } catch (error) {
+        console.warn("[CreateBudget] Generic approval workflow sync failed:", error?.message || error);
+      }
       await invalidateBudgetCaches(queryClient);
     },
     onError: (error) => {
