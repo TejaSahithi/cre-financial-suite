@@ -14,12 +14,15 @@ const SYSTEM_ROLE_ALIASES: Record<string, string> = {
 
 const SYSTEM_ROLES = new Set([
   "super_admin",
+  "org_owner",
   "org_admin",
   "manager",
   "editor",
   "viewer",
   "finance",
+  "auditor",
   "property_manager",
+  "property_owner",
   "asset_manager",
   "portfolio_manager",
   "operations_director",
@@ -35,6 +38,8 @@ const SYSTEM_ROLES = new Set([
   "acquisitions_mgr",
   "compliance_officer",
   "internal_auditor",
+  "tenant",
+  "custom_role",
 ]);
 
 function normalizeRoleValue(value: unknown) {
@@ -129,7 +134,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const { data: callerMemberships } = await adminClient.from("memberships").select("role, org_id").eq("user_id", caller.id);
-    const callerMembership = callerMemberships?.find((m: any) => ["super_admin", "org_admin"].includes(m.role));
+    const callerMembership = callerMemberships?.find((m: any) => ["super_admin", "org_owner", "org_admin"].includes(m.role));
     if (!callerMembership) {
       return new Response(JSON.stringify({ error: "Forbidden: insufficient role" }), {
         status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -139,6 +144,7 @@ Deno.serve(async (req: Request) => {
     const {
       email, full_name, role, custom_role, org_id,
       phone, module_permissions, page_permissions, capabilities,
+      approval_limits, notification_preferences,
       access_scopes, access_role
     } = await req.json();
 
@@ -149,10 +155,17 @@ Deno.serve(async (req: Request) => {
       "leasing_director", "leasing_agent", "lease_admin",
       "acquisitions_mgr", "compliance_officer", "internal_auditor",
     ];
-    const PLATFORM_ASSIGNABLE_ROLES = ["super_admin", "org_admin", "admin", "manager", "editor", "viewer", "finance", "auditor", ...CRE_ASSIGNABLE_ROLES];
-    const ORG_ASSIGNABLE_ROLES = ["org_admin", "admin", "manager", "editor", "viewer", "finance", "auditor", ...CRE_ASSIGNABLE_ROLES];
+    const PLATFORM_ASSIGNABLE_ROLES = ["super_admin", "org_owner", "org_admin", "admin", "manager", "editor", "viewer", "finance", "auditor", "property_owner", "tenant", "custom_role", ...CRE_ASSIGNABLE_ROLES];
+    const OWNER_ASSIGNABLE_ROLES = ["org_owner", "org_admin", "admin", "manager", "editor", "viewer", "finance", "auditor", "property_owner", "tenant", "custom_role", ...CRE_ASSIGNABLE_ROLES];
+    const ORG_ASSIGNABLE_ROLES = ["org_admin", "admin", "manager", "editor", "viewer", "finance", "auditor", "property_owner", "tenant", "custom_role", ...CRE_ASSIGNABLE_ROLES];
 
-    if (callerMembership.role === "org_admin" && !ORG_ASSIGNABLE_ROLES.includes(role)) {
+    const assignableRoles = callerMembership.role === "super_admin"
+      ? PLATFORM_ASSIGNABLE_ROLES
+      : callerMembership.role === "org_owner"
+        ? OWNER_ASSIGNABLE_ROLES
+        : ORG_ASSIGNABLE_ROLES;
+
+    if (role && !assignableRoles.includes(role)) {
       if (role === "super_admin") {
         const { error: auditErr } = await adminClient.from("audit_logs").insert({
           org_id: org_id || null,
@@ -167,7 +180,7 @@ Deno.serve(async (req: Request) => {
         });
         if (auditErr) throw new Error(`Audit log failed: ${auditErr.message}`);
       }
-      return new Response(JSON.stringify({ error: "Forbidden: role not assignable by org_admin" }), {
+      return new Response(JSON.stringify({ error: "Forbidden: role not assignable by your current role" }), {
         status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -277,6 +290,8 @@ Deno.serve(async (req: Request) => {
       if (phone) membershipRow.phone = phone;
       if (module_permissions && Object.keys(module_permissions).length > 0) membershipRow.module_permissions = module_permissions;
       if (page_permissions && Object.keys(page_permissions).length > 0) membershipRow.page_permissions = page_permissions;
+      if (approval_limits && typeof approval_limits === "object") membershipRow.approval_limits = approval_limits;
+      if (notification_preferences && typeof notification_preferences === "object") membershipRow.notification_preferences = notification_preferences;
       if (Object.keys(membershipCapabilities).length > 0) membershipRow.capabilities = membershipCapabilities;
 
       const { error: membershipErr } = await adminClient

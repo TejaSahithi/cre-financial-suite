@@ -4,6 +4,7 @@ import { supabase } from "@/services/supabaseClient";
 import { useAuth } from "@/lib/AuthContext";
 import { useModuleAccess } from "@/lib/ModuleAccessContext";
 import { getStoredActingOrgId, setStoredActingOrgId } from "@/lib/actingOrg";
+import { getAllowedPagesForRole, resolveRoleForAccess } from "@/lib/rbac";
 import { getActiveMembershipForUser } from "@/lib/userPermissions";
 import { logAudit } from "@/services/audit";
 import { ensureInlineCustomRoleDefinition } from "@/services/customRoleService";
@@ -270,6 +271,34 @@ const DOCUMENT_TYPES = [
 const DEFAULT_PAGE_PERMS = Object.fromEntries(
   PAGE_PERMISSION_GROUPS.flatMap(g => g.pages.map(p => [p.key, "none"]))
 );
+const ALL_PAGE_KEYS = PAGE_PERMISSION_GROUPS.flatMap((group) => group.pages.map((page) => page.key));
+
+const ROLE_PAGE_ACCESS_LEVELS = {
+  org_owner: "admin",
+  org_admin: "admin",
+  portfolio_manager: "approve",
+  asset_manager: "approve",
+  operations_director: "approve",
+  property_manager: "write",
+  facility_manager: "write",
+  construction_manager: "write",
+  finance: "write",
+  cfo_controller: "approve",
+  accounts_manager: "write",
+  financial_analyst: "read",
+  leasing_director: "approve",
+  leasing_agent: "write",
+  lease_admin: "write",
+  acquisitions_mgr: "write",
+  property_owner: "read",
+  auditor: "read",
+  compliance_officer: "read",
+  internal_auditor: "read",
+  tenant: "none",
+  custom: "read",
+  custom_role: "read",
+};
+
 const DEFAULT_SIGNING = Object.fromEntries(DOCUMENT_TYPES.map(d => [d.key, 0]));
 const DEFAULT_ROLES = [];
 const DEFAULT_DATA_SCOPE = { allPortfolios: false, allProperties: false, portfolios: [], properties: [] };
@@ -457,13 +486,59 @@ function getMemberNotificationPermissions(member) {
   }, {});
 }
 
+function normalizePageAccessLevel(level) {
+  if (level === "full") return "admin";
+  if (level === "read_only" || level === "readonly") return "read";
+  if (level === "edit") return "write";
+  if (["admin", "approve", "write", "read", "none"].includes(level)) return level;
+  return "none";
+}
+
+function maxPageAccessLevel(a = "none", b = "none") {
+  const rank = { none: 0, read: 1, write: 2, approve: 3, admin: 4 };
+  return (rank[normalizePageAccessLevel(b)] || 0) > (rank[normalizePageAccessLevel(a)] || 0)
+    ? normalizePageAccessLevel(b)
+    : normalizePageAccessLevel(a);
+}
+
+function getRoleDefaultPagePerms(selectedRoles = []) {
+  const defaults = { ...DEFAULT_PAGE_PERMS };
+  normalizeArray(selectedRoles).forEach((role) => {
+    const resolvedRole = resolveRoleForAccess(role);
+    const level = ROLE_PAGE_ACCESS_LEVELS[role] || ROLE_PAGE_ACCESS_LEVELS[resolvedRole] || "read";
+    getAllowedPagesForRole(role).forEach((pageKey) => {
+      if (Object.prototype.hasOwnProperty.call(defaults, pageKey)) {
+        defaults[pageKey] = maxPageAccessLevel(defaults[pageKey], level);
+      }
+    });
+  });
+  return defaults;
+}
+
+function mergeRoleDefaultPagePerms(selectedRoles = [], explicitPerms = {}) {
+  const roleDefaults = getRoleDefaultPagePerms(selectedRoles);
+  const explicit = normalizeObject(explicitPerms, {});
+  const hasMeaningfulExplicitPerms = Object.values(explicit)
+    .some((value) => normalizePageAccessLevel(value) !== "none");
+  return Object.fromEntries(
+    ALL_PAGE_KEYS.map((key) => [
+      key,
+      hasMeaningfulExplicitPerms && Object.prototype.hasOwnProperty.call(explicit, key)
+        ? normalizePageAccessLevel(explicit[key])
+        : roleDefaults[key] || "none",
+    ])
+  );
+}
+
 function getMemberPagePerms(member) {
-  const raw = { ...DEFAULT_PAGE_PERMS, ...normalizeObject(member?.page_permissions, {}) };
-  return Object.fromEntries(Object.entries(raw).map(([key, value]) => {
-    if (value === "full") return [key, "admin"];
-    if (value === "read_only" || value === "readonly") return [key, "read"];
-    return [key, value];
-  }));
+  return mergeRoleDefaultPagePerms(getMemberRoles(member), member?.page_permissions);
+}
+
+function getMemberExplicitPagePerms(member) {
+  return Object.fromEntries(
+    Object.entries({ ...DEFAULT_PAGE_PERMS, ...normalizeObject(member?.page_permissions, {}) })
+      .map(([key, value]) => [key, normalizePageAccessLevel(value)])
+  );
 }
 
 function getHighestSigningLevel(signingPrivs) {
@@ -507,9 +582,11 @@ function parseCSV(text) {
 function getMemberDataScope(member) {
   const grants = Array.isArray(member?.access_grants) ? member.access_grants : [];
   const scopeAccess = normalizeObject(member?.capabilities?.scope_access, {});
+  const roles = new Set(getMemberRoles(member));
+  const orgWideRole = roles.has("org_owner") || roles.has("org_admin");
   return {
-    allPortfolios: Boolean(scopeAccess.all_portfolios),
-    allProperties: Boolean(scopeAccess.all_properties),
+    allPortfolios: orgWideRole || Boolean(scopeAccess.all_portfolios),
+    allProperties: orgWideRole || Boolean(scopeAccess.all_properties),
     portfolios: grants.filter((grant) => grant.scope === "portfolio").map((grant) => grant.scope_id),
     properties: grants.filter((grant) => grant.scope === "property").map((grant) => grant.scope_id),
   };
@@ -902,7 +979,7 @@ function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameCha
             if (!readonly) setOpen(o => !o);
           }}
           disabled={readonly}
-          className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-left transition-colors ${
+          className={`w-full min-h-12 flex items-center justify-between gap-2 px-4 py-3 rounded-xl border border-slate-200 bg-white text-sm text-left transition-colors ${
             readonly ? "cursor-default opacity-80" : "hover:border-slate-300"
           }`}
         >
@@ -914,7 +991,7 @@ function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameCha
                 const def = r === "custom" ? null : CRE_ROLES[r];
                 const color = def ? ROLE_COLOR_CLASSES[def.color] : ROLE_COLOR_CLASSES.violet;
                 return (
-                  <span key={r} className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${color.badge}`}>
+                  <span key={r} className={`text-xs px-2.5 py-1 rounded-full border font-semibold ${color.badge}`}>
                     {r === "custom" ? (customRoleName || "Custom") : def?.label}
                   </span>
                 );
@@ -930,11 +1007,11 @@ function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameCha
         </button>
 
         {open && !readonly && (
-          <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 max-h-80 overflow-y-auto">
-            <div className="p-2 space-y-1">
+          <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 max-h-[520px] overflow-y-auto">
+            <div className="p-3 space-y-2">
               {grouped.map(({ category, roles: catRoles }) => (
                 <div key={category}>
-                  <div className="px-2 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">{category}</div>
+                  <div className="px-2 py-2 text-[11px] font-bold text-slate-400 uppercase tracking-wider">{category}</div>
                   {catRoles.map(([key, def]) => {
                     const isSelected = selectedRoles.includes(key);
                     const colorCls = ROLE_COLOR_CLASSES[def.color];
@@ -943,17 +1020,19 @@ function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameCha
                         key={key}
                         type="button"
                         onClick={() => toggle(key)}
-                        className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors ${isSelected ? "bg-slate-50" : "hover:bg-slate-50"}`}
+                        className={`w-full flex items-start gap-4 px-4 py-3.5 rounded-xl text-left transition-colors ${
+                          isSelected ? "bg-[#1a2744]/5 ring-1 ring-[#1a2744]/20" : "hover:bg-slate-50"
+                        }`}
                       >
-                        <div className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center ${isSelected ? "bg-[#1a2744] border-[#1a2744]" : "border-slate-300"}`}>
+                        <div className={`mt-0.5 w-5 h-5 rounded border flex-shrink-0 flex items-center justify-center ${isSelected ? "bg-[#1a2744] border-[#1a2744]" : "border-slate-300"}`}>
                           {isSelected && <CheckCircle2 className="w-3 h-3 text-white" />}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-slate-800">{def.label}</span>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-bold text-slate-800">{def.label}</span>
                             <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-semibold ${colorCls.badge}`}>{category}</span>
                           </div>
-                          <p className="text-[10px] text-slate-400 truncate">{def.description}</p>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">{def.description}</p>
                         </div>
                       </button>
                     );
@@ -966,12 +1045,15 @@ function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameCha
                 <button
                   type="button"
                   onClick={() => toggle("custom")}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors ${hasCustom ? "bg-slate-50" : "hover:bg-slate-50"}`}
+                  className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl text-left transition-colors ${hasCustom ? "bg-[#1a2744]/5 ring-1 ring-[#1a2744]/20" : "hover:bg-slate-50"}`}
                 >
-                  <div className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center ${hasCustom ? "bg-[#1a2744] border-[#1a2744]" : "border-slate-300"}`}>
+                  <div className={`w-5 h-5 rounded border flex-shrink-0 flex items-center justify-center ${hasCustom ? "bg-[#1a2744] border-[#1a2744]" : "border-slate-300"}`}>
                     {hasCustom && <CheckCircle2 className="w-3 h-3 text-white" />}
                   </div>
-                  <span className="text-sm font-medium text-slate-800">Custom Role…</span>
+                  <div>
+                    <span className="text-sm font-bold text-slate-800">Custom Role…</span>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">Define a role with its own permission matrix, approval limits, and notification preferences.</p>
+                  </div>
                 </button>
               </div>
             </div>
@@ -994,7 +1076,7 @@ function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameCha
 }
 
 // ─── PagePermissionMatrix Component ───────────────────────────────────────────
-function PagePermissionMatrix({ permissions, onChange, readonly = false }) {
+function PagePermissionMatrix({ permissions, onChange, readonly = false, inheritedPermissions = {} }) {
   const [expanded, setExpanded] = useState({ core: true, properties: true, leases: true });
 
   const toggleGroup = (key) => setExpanded(e => ({ ...e, [key]: !e[key] }));
@@ -1055,9 +1137,18 @@ function PagePermissionMatrix({ permissions, onChange, readonly = false }) {
               <div className="divide-y divide-slate-100">
                 {group.pages.map(page => {
                   const current = permissions[page.key] || "none";
+                  const inherited = inheritedPermissions[page.key] || "none";
+                  const isInheritedActive = inherited !== "none" && current === inherited;
                   return (
-                    <div key={page.key} className="flex items-center justify-between px-4 py-2">
-                      <span className="text-xs text-slate-600">{page.label}</span>
+                    <div key={page.key} className={`flex items-center justify-between gap-3 px-4 py-2 ${isInheritedActive ? "bg-emerald-50/60" : ""}`}>
+                      <div className="min-w-0">
+                        <span className="text-xs text-slate-600">{page.label}</span>
+                        {isInheritedActive && (
+                          <span className="ml-2 align-middle text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-bold uppercase tracking-wide">
+                            Role default
+                          </span>
+                        )}
+                      </div>
                       {readonly ? (
                         <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${ACCESS_LEVELS[current]?.chipClass}`}>
                           {ACCESS_LEVELS[current]?.label}
@@ -1069,7 +1160,11 @@ function PagePermissionMatrix({ permissions, onChange, readonly = false }) {
                               key={l}
                               onClick={() => onChange(page.key, l)}
                               className={`text-[9px] px-2 py-1 rounded-lg font-semibold border transition-all ${
-                                current === l ? cfg.btnActive : "bg-white border-slate-200 text-slate-500 hover:border-slate-300"
+                                current === l
+                                  ? cfg.btnActive
+                                  : inherited === l
+                                    ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                                    : "bg-white border-slate-200 text-slate-500 hover:border-slate-300"
                               }`}
                             >
                               {cfg.label}
@@ -1151,18 +1246,54 @@ function PageAccessChips({ pagePerms, maxVisible = 4 }) {
   if (active.length === 0) return <span className="text-xs text-slate-400 italic">No access</span>;
   const visible = active.slice(0, maxVisible);
   const rest = active.length - maxVisible;
+  const strongest = active.reduce((current, page) => maxPageAccessLevel(current, page.level), "none");
   return (
-    <div className="flex flex-wrap gap-1">
-      {visible.map(p => (
-        <span key={p.key} className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${ACCESS_LEVELS[p.level]?.chipClass}`}>
-          {p.label.split(" ")[0]}
-        </span>
-      ))}
-      {rest > 0 && (
-        <span className="text-[10px] px-1.5 py-0.5 rounded border bg-slate-100 text-slate-500 border-slate-200">
-          +{rest}
-        </span>
-      )}
+    <div className="space-y-1">
+      <span className={`inline-flex text-[10px] px-2 py-0.5 rounded-full border font-bold ${ACCESS_LEVELS[strongest]?.chipClass}`}>
+        {active.length} page{active.length === 1 ? "" : "s"} · {ACCESS_LEVELS[strongest]?.label}
+      </span>
+      <div className="flex flex-wrap gap-1">
+        {visible.map(p => (
+          <span key={p.key} className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${ACCESS_LEVELS[p.level]?.chipClass}`}>
+            {p.label.split(" ")[0]}
+          </span>
+        ))}
+        {rest > 0 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded border bg-slate-100 text-slate-500 border-slate-200">
+            +{rest}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AccessSourceBadge({ member }) {
+  const explicit = normalizeObject(member?.page_permissions, {});
+  const hasExplicit = Object.values(explicit).some((value) => normalizePageAccessLevel(value) !== "none");
+  if (hasExplicit) {
+    return (
+      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-bold uppercase tracking-wide">
+        Custom
+      </span>
+    );
+  }
+  if (getMemberRoles(member).length > 0) {
+    return (
+      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-bold uppercase tracking-wide">
+        Role default
+      </span>
+    );
+  }
+  return null;
+}
+
+function PageAccessCell({ member }) {
+  const pagePerms = getMemberPagePerms(member);
+  return (
+    <div className="space-y-1.5">
+      <PageAccessChips pagePerms={pagePerms} maxVisible={3} />
+      <AccessSourceBadge member={member} />
     </div>
   );
 }
@@ -1248,6 +1379,12 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
   const StatusIcon = STATUS_CONFIG[status]?.Icon || CheckCircle2;
   const initials = (member.profiles?.full_name || member.profiles?.email || "?")
     .split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+  const inheritedPagePerms = useMemo(() => getRoleDefaultPagePerms(selectedRoles), [selectedRoles]);
+
+  const handleRolesChange = (nextRoles) => {
+    setSelectedRoles(nextRoles);
+    setPagePerms(getRoleDefaultPagePerms(nextRoles));
+  };
 
   const TABS = [
     { key: "roles",    label: "Role" },
@@ -1434,12 +1571,12 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-slate-100 px-6 flex-shrink-0">
+        <div className="flex border-b border-slate-100 px-6 flex-shrink-0 overflow-x-auto">
           {TABS.map(tab => (
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`px-4 py-3 text-sm font-semibold border-b-2 transition-colors ${
+              className={`px-4 py-3 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${
                 activeTab === tab.key
                   ? "border-[#1a2744] text-[#1a2744]"
                   : "border-transparent text-slate-500 hover:text-slate-700"
@@ -1463,7 +1600,7 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
                 <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 block">CRE Roles (Multi-select)</Label>
                 <RoleSelector
                   selectedRoles={selectedRoles}
-                  onChange={setSelectedRoles}
+                  onChange={handleRolesChange}
                   customRoleName={customRoleName}
                   onCustomNameChange={setCustomRoleName}
                   readonly={readOnly}
@@ -1528,6 +1665,7 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
                 permissions={pagePerms}
                 onChange={(k, v) => setPagePerms(p => ({ ...p, [k]: v }))}
                 readonly={readOnly}
+                inheritedPermissions={inheritedPagePerms}
               />
             </div>
           )}
@@ -1667,6 +1805,12 @@ function InviteDialog({ open, onClose, orgId }) {
     { key: "notify",  label: "6. Notifications" },
     { key: "signing", label: "7. Review" },
   ];
+  const inheritedPagePerms = useMemo(() => getRoleDefaultPagePerms(selectedRoles), [selectedRoles]);
+
+  const handleRolesChange = (nextRoles) => {
+    setSelectedRoles(nextRoles);
+    setPagePerms(getRoleDefaultPagePerms(nextRoles));
+  };
 
   const validate = () => {
     const e = {};
@@ -1732,13 +1876,13 @@ function InviteDialog({ open, onClose, orgId }) {
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader className="flex-shrink-0">
           <DialogTitle className="text-lg font-bold">Invite Team Member</DialogTitle>
         </DialogHeader>
 
         {/* Step tabs */}
-        <div className="flex border-b border-slate-100 flex-shrink-0 -mx-6 px-6">
+        <div className="flex border-b border-slate-100 flex-shrink-0 -mx-6 px-6 overflow-x-auto">
           {TABS.map(tab => (
             <button
               key={tab.key}
@@ -1790,7 +1934,7 @@ function InviteDialog({ open, onClose, orgId }) {
               <div>
                 <Label className="text-sm font-medium mb-2 block">CRE Roles (select one or more)</Label>
                 <RoleSelector
-                  selectedRoles={selectedRoles} onChange={setSelectedRoles}
+                  selectedRoles={selectedRoles} onChange={handleRolesChange}
                   customRoleName={customRoleName} onCustomNameChange={setCustomRoleName}
                 />
               </div>
@@ -1832,6 +1976,7 @@ function InviteDialog({ open, onClose, orgId }) {
               <PagePermissionMatrix
                 permissions={pagePerms}
                 onChange={(k, v) => setPagePerms(p => ({ ...p, [k]: v }))}
+                inheritedPermissions={inheritedPagePerms}
               />
               <div className="flex gap-2 pt-2">
                 <Button variant="outline" className="flex-1" onClick={() => setActiveTab("data")}>← Back</Button>
@@ -1975,7 +2120,7 @@ function CSVUploadDialog({ open, onClose, orgId }) {
 
   return (
     <Dialog open={open} onOpenChange={v => { if (!v) { reset(); onClose(); } }}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader className="flex-shrink-0">
           <DialogTitle className="text-lg font-bold">Import Users from CSV</DialogTitle>
         </DialogHeader>
@@ -2140,6 +2285,12 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
     { key: "notify", label: "Notifications" },
     { key: "signing", label: "Signing" },
   ];
+  const inheritedPagePerms = useMemo(() => getRoleDefaultPagePerms(selectedRoles), [selectedRoles]);
+
+  const handleRolesChange = (nextRoles) => {
+    setSelectedRoles(nextRoles);
+    setPagePerms(getRoleDefaultPagePerms(nextRoles));
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -2205,10 +2356,10 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
           This will overwrite roles, page access, and signing privileges for all selected users.
         </div>
 
-        <div className="flex border-b border-slate-100 flex-shrink-0">
+        <div className="flex border-b border-slate-100 flex-shrink-0 overflow-x-auto">
           {TABS.map(tab => (
             <button key={tab.key} onClick={() => setActiveTab(tab.key)}
-              className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors ${activeTab === tab.key ? "border-[#1a2744] text-[#1a2744]" : "border-transparent text-slate-400 hover:text-slate-600"}`}>
+              className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap ${activeTab === tab.key ? "border-[#1a2744] text-[#1a2744]" : "border-transparent text-slate-400 hover:text-slate-600"}`}>
               {tab.label}
             </button>
           ))}
@@ -2217,7 +2368,7 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
         <div className="flex-1 overflow-y-auto py-4">
           {activeTab === "roles" && (
             <div className="space-y-4">
-              <RoleSelector selectedRoles={selectedRoles} onChange={setSelectedRoles}
+              <RoleSelector selectedRoles={selectedRoles} onChange={handleRolesChange}
                 customRoleName={customRoleName} onCustomNameChange={setCustomRoleName} />
               {selectedRoles.includes("custom") && (
                 <div className="space-y-3">
@@ -2239,7 +2390,7 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
             </div>
           )}
           {activeTab === "access" && (
-            <PagePermissionMatrix permissions={pagePerms} onChange={(k, v) => setPagePerms(p => ({ ...p, [k]: v }))} />
+            <PagePermissionMatrix permissions={pagePerms} onChange={(k, v) => setPagePerms(p => ({ ...p, [k]: v }))} inheritedPermissions={inheritedPagePerms} />
           )}
           {activeTab === "data" && (
             <DataScopeEditor orgId={orgId} value={dataScope} onChange={setDataScope} />
@@ -2531,6 +2682,8 @@ export default function UserManagement() {
         role: getMemberRoles(m)[0] || null,
         page_permissions: m.page_permissions,
         module_permissions: m.module_permissions,
+        approval_limits: m.approval_limits,
+        notification_preferences: m.notification_preferences,
         capabilities: m.capabilities,
       });
     }
@@ -2751,7 +2904,6 @@ export default function UserManagement() {
                 const status = deriveStatus(member);
                 const statusCfg = STATUS_CONFIG[status];
                 const StatusIcon = statusCfg?.Icon || CheckCircle2;
-                const pagePerms = getMemberPagePerms(member);
                 const signingPrivs = getMemberSigningPrivileges(member);
                 const highestSigning = getHighestSigningLevel(signingPrivs);
                 const highestSlvl = SIGNING_LEVELS[highestSigning] || SIGNING_LEVELS[0];
@@ -2809,7 +2961,7 @@ export default function UserManagement() {
                     <TableCell><RoleBadges member={member} maxVisible={2} /></TableCell>
 
                     {/* Page Access */}
-                    <TableCell><PageAccessChips pagePerms={pagePerms} maxVisible={3} /></TableCell>
+                    <TableCell><PageAccessCell member={member} /></TableCell>
 
                     {/* Scope */}
                     <TableCell><ScopeSummary member={member} /></TableCell>

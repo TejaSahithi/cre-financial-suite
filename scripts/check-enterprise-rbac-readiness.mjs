@@ -32,6 +32,7 @@ const files = {
   createBudgetPage: "src/pages/CreateBudget.jsx",
   leaseReviewPage: "src/pages/LeaseReview.jsx",
   camRunPage: "src/pages/CAMRun.jsx",
+  inviteUserFunction: "supabase/functions/invite-user/index.ts",
 };
 
 const requiredFiles = [
@@ -42,6 +43,7 @@ const requiredFiles = [
   "src/services/__tests__/tenantAndCriticalDateNotifications.test.js",
   "scripts/enterprise-rbac-postflight.sql",
   "docs/enterprise-rbac-production-readiness.md",
+  files.inviteUserFunction,
 ];
 
 const failures = [];
@@ -229,7 +231,8 @@ const serviceContracts = [
   [files.approvalPolicyService, ["buildApprovalPolicyPayload", "resolveApprovalChainForTransaction", "upsertApprovalPolicy", "maybeSingle", ".insert(payload)"]],
   [files.tenantEmailService, ["TENANT_EMAIL_CATEGORIES", "queueTenantEmailEventsForContacts", "tenantContactCanReceive"]],
   [files.criticalDateService, ["resolveCriticalDateReminderPlan", "listCriticalDateNotificationRules"]],
-  [files.userManagementPage, ["ensureInlineCustomRoleDefinition", "user_scope_assignments", "custom_role_label", "ApprovalAuthorityEditor", "NotificationPreferencesEditor", "serializeApprovalAuthority", "approval_limits", "notification_preferences", "7. Review"]],
+  [files.userManagementPage, ["ensureInlineCustomRoleDefinition", "user_scope_assignments", "custom_role_label", "ApprovalAuthorityEditor", "NotificationPreferencesEditor", "serializeApprovalAuthority", "ROLE_PAGE_ACCESS_LEVELS", "getRoleDefaultPagePerms", "inheritedPermissions", "Role default", "approval_limits", "notification_preferences", "7. Review"]],
+  [files.inviteUserFunction, ["org_owner", "property_owner", "approval_limits", "notification_preferences", "role not assignable by your current role"]],
 ];
 
 for (const [file, markers] of serviceContracts) {
