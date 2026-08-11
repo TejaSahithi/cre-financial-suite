@@ -11,6 +11,7 @@ function includesAll(source, needles) {
 
 const files = {
   migration: "supabase/migrations/20260907000000_enterprise_rbac_scope_approval_foundation.sql",
+  rlsRepairMigration: "supabase/migrations/20260908000000_repair_enterprise_role_write_access_and_invite_status.sql",
   authEngine: "src/lib/authorizationEngine.js",
   rbac: "src/lib/rbac.js",
   userPermissions: "src/lib/userPermissions.js",
@@ -54,6 +55,7 @@ for (const file of requiredFiles) {
 }
 
 const migration = read(files.migration);
+const rlsRepairMigration = read(files.rlsRepairMigration);
 const authEngine = read(files.authEngine);
 const rbac = read(files.rbac);
 const userPermissions = read(files.userPermissions);
@@ -123,6 +125,17 @@ for (const missing of includesAll(migration, [
   ...standardRoles.map((role) => `'${role}'`),
 ])) {
   failures.push({ gate: "migration_contract", missing });
+}
+
+for (const missing of includesAll(rlsRepairMigration, [
+  "role_default_page_access",
+  "portfolio_manager",
+  "public.can_write_page(org_id, 'Buildings')",
+  "public.can_write_page(org_id, 'Properties')",
+  "m.status = 'invited'",
+  "i.status IN ('pending', 'pending_approval')",
+])) {
+  failures.push({ gate: "rls_repair_migration_contract", missing });
 }
 
 for (const table of migrationTables) {
@@ -287,10 +300,11 @@ const phaseCoverage = [
 
 const dbVerification = {
   required: true,
-  migration: files.migration,
+  migrations: [files.migration, files.rlsRepairMigration],
   postflightSql: "scripts/enterprise-rbac-postflight.sql",
   commands: [
     "Apply supabase/migrations/20260907000000_enterprise_rbac_scope_approval_foundation.sql with your approved Supabase deployment process",
+    "Apply supabase/migrations/20260908000000_repair_enterprise_role_write_access_and_invite_status.sql with your approved Supabase deployment process",
     "psql \"$DATABASE_URL\" -f scripts/enterprise-rbac-postflight.sql",
   ],
 };

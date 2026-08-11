@@ -362,7 +362,16 @@ function formatLastActive(ts) {
 
 function deriveStatus(member) {
   if (["suspended", "revoked"].includes(member.status)) return member.status;
-  if (member.status === "invited") return "invited";
+  const profileStatus = String(member?.profiles?.status || "").toLowerCase();
+  const invitationStatus = String(member?.invitation?.status || "").toLowerCase();
+  const profileLooksActivated =
+    ["active", "approved"].includes(profileStatus) ||
+    Boolean(member?.profiles?.last_sign_in_at) ||
+    Boolean(member?.profiles?.onboarding_complete);
+
+  if (member.status === "invited" && !profileLooksActivated && invitationStatus !== "accepted") {
+    return "invited";
+  }
   const roles = getMemberRoles(member);
   if (roles.length === 0 && !member.role) return "no_access";
   return "active";
@@ -953,7 +962,7 @@ function DataScopeEditor({ orgId, value, onChange, readonly = false }) {
 }
 
 // ─── RoleSelector Component ───────────────────────────────────────────────────
-function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameChange, readonly = false }) {
+function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameChange, readonly = false, dropdownMode = "overlay" }) {
   const [open, setOpen] = useState(false);
   const grouped = ROLE_CATEGORY_ORDER.map(cat => ({
     category: cat,
@@ -1007,7 +1016,9 @@ function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameCha
         </button>
 
         {open && !readonly && (
-          <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 max-h-[520px] overflow-y-auto">
+          <div
+            className={`${dropdownMode === "inline" ? "relative mt-2" : "absolute top-full left-0 right-0 mt-2 z-50"} bg-white border border-slate-200 rounded-2xl shadow-xl max-h-[520px] overflow-y-auto`}
+          >
             <div className="p-3 space-y-2">
               {grouped.map(({ category, roles: catRoles }) => (
                 <div key={category}>
@@ -1936,6 +1947,7 @@ function InviteDialog({ open, onClose, orgId }) {
                 <RoleSelector
                   selectedRoles={selectedRoles} onChange={handleRolesChange}
                   customRoleName={customRoleName} onCustomNameChange={setCustomRoleName}
+                  dropdownMode="inline"
                 />
               </div>
               {selectedRoles.length === 0 && (
@@ -2348,7 +2360,7 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader className="flex-shrink-0">
           <DialogTitle className="text-lg font-bold">Update {selectedMembers.length} Users</DialogTitle>
         </DialogHeader>
@@ -2369,7 +2381,7 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
           {activeTab === "roles" && (
             <div className="space-y-4">
               <RoleSelector selectedRoles={selectedRoles} onChange={handleRolesChange}
-                customRoleName={customRoleName} onCustomNameChange={setCustomRoleName} />
+                customRoleName={customRoleName} onCustomNameChange={setCustomRoleName} dropdownMode="inline" />
               {selectedRoles.includes("custom") && (
                 <div className="space-y-3">
                   <div>
@@ -2510,7 +2522,7 @@ export default function UserManagement() {
             .from("invitations")
             .select("*")
             .eq("org_id", activeOrgId)
-            .in("status", ["pending", "pending_approval"]),
+            .in("status", ["pending", "pending_approval", "accepted"]),
           userIds.length > 0
             ? supabase
                 .from("user_access")
@@ -2531,6 +2543,15 @@ export default function UserManagement() {
         }
 
         const profilesById = new Map((profilesResult.data || []).map(profile => [profile.id, profile]));
+        const invitationsByEmail = new Map();
+        (invitationsResult.data || []).forEach((invitation) => {
+          const emailKey = String(invitation?.email || "").toLowerCase();
+          if (!emailKey) return;
+          const existing = invitationsByEmail.get(emailKey);
+          if (!existing || new Date(invitation.updated_at || invitation.created_at || 0) > new Date(existing.updated_at || existing.created_at || 0)) {
+            invitationsByEmail.set(emailKey, invitation);
+          }
+        });
         const accessByUserId = new Map();
         (accessResult.data || []).forEach((grant) => {
           if (!accessByUserId.has(grant.user_id)) accessByUserId.set(grant.user_id, []);
@@ -2543,6 +2564,7 @@ export default function UserManagement() {
           const profile = member.user_id ? profilesById.get(member.user_id) : null;
           const invitedEmail = capabilities.invited_email || null;
           const invitedFullName = capabilities.invited_full_name || null;
+          const email = profile?.email || invitedEmail || null;
 
           return {
             ...member,
@@ -2553,12 +2575,14 @@ export default function UserManagement() {
             profiles: {
               id: profile?.id || member.user_id || null,
               full_name: profile?.full_name || invitedFullName || null,
-              email: profile?.email || invitedEmail || null,
+              email,
               phone: profile?.phone || member.phone || null,
               status: profile?.status || null,
               last_sign_in_at: profile?.last_sign_in_at || null,
+              onboarding_complete: profile?.onboarding_complete || null,
               avatar_url: profile?.avatar_url || null,
             },
+            invitation: email ? invitationsByEmail.get(String(email).toLowerCase()) || null : null,
           };
         }).filter(Boolean);
 
@@ -2569,6 +2593,7 @@ export default function UserManagement() {
         );
 
         const invitationOnlyMembers = (invitationsResult.data || [])
+          .filter(invitation => ["pending", "pending_approval"].includes(invitation.status))
           .filter(invitation => invitation.email && !knownEmails.has(invitation.email.toLowerCase()))
           .map(invitation => ({
             id: `invitation:${invitation.id}`,
