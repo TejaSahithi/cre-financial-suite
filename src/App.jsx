@@ -36,32 +36,6 @@ const AuthenticatedApp = () => {
   const currentPath = location.pathname.substring(1);
   const isPublicPage = PUBLIC_PAGES.includes(currentPath) || currentPath === "" || currentPath === mainPageKey;
 
-  // ─── Supabase Hash Error Interceptor ────────────────────────────────────
-  useEffect(() => {
-    const hash = window.location.hash;
-    if (!hash) return;
-    const pathNoSlash = window.location.pathname.replace(/^\//, '');
-    const params = new URLSearchParams(hash.replace('#', ''));
-    const errorCode = params.get('error_code');
-    const errorDesc = params.get('error_description');
-
-    if (errorCode) {
-      window.history.replaceState(null, '', window.location.pathname);
-      let message = 'Authentication failed. Please sign in again.';
-      if (errorCode === 'otp_expired') {
-        message = 'Your confirmation link has expired. Please sign in again — we\'ll send you a new one.';
-      } else if (errorCode === 'otp_disabled') {
-        message = 'This link has already been used. Please sign in.';
-      } else if (errorDesc) {
-        message = decodeURIComponent(errorDesc.replace(/\+/g, ' '));
-      }
-      import('sonner').then(({ toast }) => toast.error(message, { duration: 8000 }));
-      navigateToLogin();
-    } else if (pathNoSlash !== 'AcceptInvite') {
-      window.history.replaceState(null, '', window.location.pathname + window.location.search);
-    }
-  }, [navigateToLogin]);
-
   // ─── Extracted State Hooks ──────────────────────────────────────────────
   const { mfaRequired, mfaChecked, mfaNeedsEnroll, mfaError, handleMfaVerified } = useMfaStatus({
     isAuthenticated,

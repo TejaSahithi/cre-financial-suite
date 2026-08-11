@@ -10,9 +10,17 @@ import {
   redirectToLogin,
   onAuthStateChange,
   resetProfileCache,
+  isSupabaseAuthCallbackHash,
 } from '@/services/auth';
 import { clearCache, resetOrgIdCache } from '@/services/api';
 import { clearStoredActingOrgId } from '@/lib/actingOrg';
+
+// How long to wait for a pending magic-link/OAuth callback (access_token
+// present in the URL hash on mount) to actually resolve into an
+// established session before treating it as a failed callback. Generous
+// enough for a real network round trip, short enough not to leave a user
+// stuck on a loading screen indefinitely.
+const AUTH_CALLBACK_TIMEOUT_MS = 8000;
 
 const AuthContext = createContext();
 
@@ -94,10 +102,50 @@ export const AuthProvider = ({ children }) => {
     // Initial profile fetch — show loading spinner only on first load
     fetchProfile(true);
 
+    // ─── Magic-link / OAuth callback bookkeeping ──────────────────────────
+    // If we landed with what looks like a pending auth callback (access_token
+    // in the URL hash), App.jsx deliberately left that hash intact so
+    // Supabase's client (detectSessionInUrl: true) can consume it. This is
+    // the single place that decides when it's safe to clean the URL: only
+    // once a session has actually been established from it (the SIGNED_IN /
+    // INITIAL_SESSION event below), or — if that never happens — after a
+    // bounded timeout, at which point the callback is treated as genuinely
+    // failed and the existing auth-error UI is surfaced instead of leaving
+    // the user stuck on a loading screen with a dead token in the URL.
+    const pathNoSlash = window.location.pathname.replace(/^\//, '');
+    const hadPendingAuthCallback =
+      pathNoSlash !== 'AcceptInvite' && isSupabaseAuthCallbackHash(window.location.hash);
+
+    const cleanCallbackHash = () => {
+      if (isSupabaseAuthCallbackHash(window.location.hash)) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    };
+
+    let callbackTimeoutId = null;
+    if (hadPendingAuthCallback) {
+      callbackTimeoutId = window.setTimeout(() => {
+        callbackTimeoutId = null;
+        cleanCallbackHash();
+        const message = "Your sign-in link couldn't be verified. Please sign in again.";
+        setAuthError({ type: 'auth_required', message });
+        import('sonner').then(({ toast }) => toast.error(message, { duration: 8000 }));
+      }, AUTH_CALLBACK_TIMEOUT_MS);
+    }
+
     // Listen for auth state changes (sign in, sign out, token refresh)
     // Use showLoading=false so subsequent auth events don't trigger the full-page spinner
     const unsubscribe = onAuthStateChange((event, session) => {
       if (import.meta.env.DEV) console.log('[AuthContext] Auth event:', event);
+
+      if (hadPendingAuthCallback && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session) {
+        if (callbackTimeoutId) {
+          window.clearTimeout(callbackTimeoutId);
+          callbackTimeoutId = null;
+        }
+        cleanCallbackHash();
+      }
+
       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
         resetProfileCache({ preserveInFlight: true });
         resetOrgIdCache();
@@ -113,7 +161,10 @@ export const AuthProvider = ({ children }) => {
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      if (callbackTimeoutId) window.clearTimeout(callbackTimeoutId);
+      unsubscribe();
+    };
   }, [fetchProfile]);
 
   // ─── Auth actions exposed to the app ─────────────────────

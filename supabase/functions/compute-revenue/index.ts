@@ -16,12 +16,23 @@ interface MonthlyProjection {
   month: number;
   year: number;
   base_rent: number;
+  base_rent_from_schedule: number;
+  base_rent_from_fallback: number;
   cam_recovery: number;
   other_income: number;
   vacancy_loss: number;
   total: number;
   active_leases: number;
 }
+
+// Rent-charge row_types an approved rent_schedules row can carry that
+// represent literal base-rent revenue (as opposed to ground_rent,
+// percentage_rent, manual, or a standalone abatement row) -- the same
+// concept leases.monthly_rent was a single flattened approximation of.
+// Ground/percentage/manual rent are distinct revenue concepts this budget
+// engine does not otherwise model and are intentionally left out rather
+// than silently folded into "base rent".
+const BASE_RENT_ROW_TYPES = new Set(["base_rent", "renewal_base_rent", "holdover_rent"]);
 
 interface RevenueSummary {
   annual_total: number;
@@ -31,6 +42,10 @@ interface RevenueSummary {
     base_rent: number;
     cam_recovery: number;
     other_income: number;
+  };
+  base_rent_source: {
+    from_rent_schedule: number;
+    from_monthly_rent_fallback: number;
   };
 }
 
@@ -54,6 +69,56 @@ function monthEnd(year: number, month: number): Date {
  */
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/**
+ * Resolves one lease's rent for one calendar month, preferring authoritative
+ * approved rent_schedules coverage over the leases.monthly_rent fallback.
+ *
+ * If ANY approved base-rent-type rent_schedules row overlaps this month for
+ * this lease, the schedule is authoritative for the ENTIRE month: every
+ * overlapping row's monthly_amount is weighted by its day-overlap with the
+ * month (so a rate change mid-month -- or the single full-month row real
+ * data uses today -- both reconcile exactly to the schedule's own numbers,
+ * with no re-application of escalation_rate/escalation_amount on top, since
+ * each row's monthly_amount already IS that phase's contracted rent).
+ * leases.monthly_rent is used ONLY when no approved schedule row overlaps
+ * this month at all for this lease -- the documented fallback, not a
+ * co-equal source.
+ */
+function monthlyRentForLease(
+  lease: Record<string, any>,
+  scheduleRows: Record<string, any>[],
+  year: number,
+  month: number
+): { amount: number; source: "rent_schedule" | "monthly_rent_fallback" } {
+  const mStart = monthStart(year, month);
+  const mEnd = monthEnd(year, month);
+  const daysInMonth = Math.round((mEnd.getTime() - mStart.getTime()) / 86400000) + 1;
+
+  const overlapping = scheduleRows.filter((row) => {
+    if (!BASE_RENT_ROW_TYPES.has(row.row_type)) return false;
+    if (!row.period_start) return false;
+    const rowStart = new Date(row.period_start + "T00:00:00Z");
+    const rowEnd = row.period_end ? new Date(row.period_end + "T00:00:00Z") : mEnd;
+    return rowStart <= mEnd && rowEnd >= mStart;
+  });
+
+  if (overlapping.length === 0) {
+    return { amount: Number(lease.monthly_rent) || 0, source: "monthly_rent_fallback" };
+  }
+
+  let total = 0;
+  for (const row of overlapping) {
+    const rowStart = new Date(row.period_start + "T00:00:00Z");
+    const rowEnd = row.period_end ? new Date(row.period_end + "T00:00:00Z") : mEnd;
+    const overlapStart = rowStart > mStart ? rowStart : mStart;
+    const overlapEnd = rowEnd < mEnd ? rowEnd : mEnd;
+    const overlapDays = Math.round((overlapEnd.getTime() - overlapStart.getTime()) / 86400000) + 1;
+    if (overlapDays <= 0) continue;
+    total += ((Number(row.monthly_amount) || 0) * overlapDays) / daysInMonth;
+  }
+  return { amount: round2(total), source: "rent_schedule" };
 }
 
 /**
@@ -83,7 +148,8 @@ function computeMonthlyProjections(
   months: { month: number; year: number }[],
   leases: Record<string, any>[],
   revenueRecords: Record<string, any>[],
-  annualCam: number
+  annualCam: number,
+  schedulesByLease: Map<string, Record<string, any>[]>
 ): MonthlyProjection[] {
   const projections: MonthlyProjection[] = [];
 
@@ -91,11 +157,18 @@ function computeMonthlyProjections(
     const activeLeases = getActiveLeasesForMonth(leases, year, month);
     const activeLeaseCount = activeLeases.length;
 
-    // --- Base rent ---
-    const baseRent = activeLeases.reduce(
-      (sum: number, lease: any) => sum + (Number(lease.monthly_rent) || 0),
-      0
-    );
+    // --- Base rent: authoritative rent_schedules when present, else the
+    // documented leases.monthly_rent fallback -- resolved per lease per
+    // month (see monthlyRentForLease). ---
+    let baseRent = 0;
+    let baseRentFromSchedule = 0;
+    let baseRentFromFallback = 0;
+    for (const lease of activeLeases) {
+      const { amount, source } = monthlyRentForLease(lease, schedulesByLease.get(lease.id) ?? [], year, month);
+      baseRent += amount;
+      if (source === "rent_schedule") baseRentFromSchedule += amount;
+      else baseRentFromFallback += amount;
+    }
 
     // --- CAM recovery ---
     // cam-legacy-scan-allow: historical note, not a live reference.
@@ -127,6 +200,8 @@ function computeMonthlyProjections(
       month,
       year,
       base_rent: round2(baseRent),
+      base_rent_from_schedule: round2(baseRentFromSchedule),
+      base_rent_from_fallback: round2(baseRentFromFallback),
       cam_recovery: round2(camRecovery),
       other_income: round2(otherIncome),
       vacancy_loss: round2(vacancyLoss),
@@ -146,6 +221,8 @@ function buildSummary(projections: MonthlyProjection[]): RevenueSummary {
   const totalCam = projections.reduce((s, p) => s + p.cam_recovery, 0);
   const totalOther = projections.reduce((s, p) => s + p.other_income, 0);
   const annualTotal = projections.reduce((s, p) => s + p.total, 0);
+  const totalFromSchedule = projections.reduce((s, p) => s + p.base_rent_from_schedule, 0);
+  const totalFromFallback = projections.reduce((s, p) => s + p.base_rent_from_fallback, 0);
 
   const monthsWithLeases = projections.filter((p) => p.active_leases > 0).length;
   const totalMonths = projections.length || 1;
@@ -160,6 +237,10 @@ function buildSummary(projections: MonthlyProjection[]): RevenueSummary {
       base_rent: round2(totalBaseRent),
       cam_recovery: round2(totalCam),
       other_income: round2(totalOther),
+    },
+    base_rent_source: {
+      from_rent_schedule: round2(totalFromSchedule),
+      from_monthly_rent_fallback: round2(totalFromFallback),
     },
   };
 }
@@ -213,6 +294,30 @@ Deno.serve(async (req: Request) => {
     }
 
     const allLeases = leases ?? [];
+
+    // ---------------------------------------------------------------
+    // 2b. Fetch approved rent_schedules for these leases -- the
+    // authoritative source for base rent (see monthlyRentForLease).
+    // leases.monthly_rent is used only as a fallback where no approved
+    // schedule row covers a given month for a given lease.
+    // ---------------------------------------------------------------
+    const leaseIds = allLeases.map((l: any) => l.id);
+    const schedulesByLease = new Map<string, Record<string, any>[]>();
+    if (leaseIds.length > 0) {
+      const { data: scheduleRows, error: scheduleErr } = await supabaseAdmin
+        .from("rent_schedules")
+        .select("id, lease_id, row_type, status, period_start, period_end, monthly_amount")
+        .eq("org_id", orgId)
+        .in("lease_id", leaseIds)
+        .eq("status", "approved");
+      if (scheduleErr) {
+        throw new Error(`Failed to fetch rent_schedules: ${scheduleErr.message}`);
+      }
+      for (const row of scheduleRows ?? []) {
+        if (!schedulesByLease.has(row.lease_id)) schedulesByLease.set(row.lease_id, []);
+        schedulesByLease.get(row.lease_id)!.push(row);
+      }
+    }
 
     // ---------------------------------------------------------------
     // 3. Fetch existing revenue records for the property + fiscal_year
@@ -291,7 +396,8 @@ Deno.serve(async (req: Request) => {
       fiscalMonths,
       allLeases,
       allRevenues,
-      annualCam
+      annualCam,
+      schedulesByLease
     );
 
     // ---------------------------------------------------------------
@@ -343,7 +449,8 @@ Deno.serve(async (req: Request) => {
       rollingMonths,
       allLeases,
       rollingRevenues,
-      annualCam
+      annualCam,
+      schedulesByLease
     );
 
     // ---------------------------------------------------------------
@@ -363,14 +470,20 @@ Deno.serve(async (req: Request) => {
         cam_available: camAvailable,
         _compute: {
           page_scope: ["Revenue"],
-          source_tables: ["properties", "leases", "revenues", "cam_runs", "cam_run_pool_results"],
+          source_tables: ["properties", "leases", "revenues", "rent_schedules", "cam_runs", "cam_run_pool_results"],
           source_row_ids: {
             leases: allLeases.map((lease: any) => lease.id).sort(),
             revenues: allRevenues.map((row: any) => row.id).sort(),
+            // Included so a rent_schedules amendment (new row, amount
+            // change, approval) changes the input fingerprint and forces a
+            // fresh computation instead of findMatchingCompletedSnapshot
+            // silently reusing a snapshot computed before the amendment.
+            rent_schedules: [...schedulesByLease.values()].flat().map((row: any) => row.id).sort(),
           },
           source_counts: {
             leases: allLeases.length,
             revenues: allRevenues.length,
+            rent_schedules: [...schedulesByLease.values()].reduce((n, rows) => n + rows.length, 0),
           },
           source_snapshot_ids: {},
           trigger_type: req.headers.get("x-compute-trigger") ?? "manual",
@@ -410,7 +523,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    await saveSnapshot(supabaseAdmin, {
+    const newSnapshotId = await saveSnapshot(supabaseAdmin, {
       org_id: orgId,
       property_id,
       engine_type: "revenue",
@@ -419,6 +532,7 @@ Deno.serve(async (req: Request) => {
       inputs: snapshotPayload.inputs,
       outputs: snapshotPayload.outputs,
     });
+    if (!newSnapshotId) throw new Error("Failed to persist revenue snapshot");
 
     // ---------------------------------------------------------------
     // Response
@@ -431,6 +545,8 @@ Deno.serve(async (req: Request) => {
         monthly_projections: monthlyProjections,
         summary,
         rolling_forecast: rollingForecast,
+        snapshot_id: newSnapshotId,
+        reused_snapshot: false,
       }),
       {
         headers: { ...corsHeaders, "Content-Type": "application/json" },

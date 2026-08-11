@@ -619,3 +619,18 @@ export function onAuthStateChange(callback) {
   const { data: { subscription } } = supabase.auth.onAuthStateChange(callback);
   return () => subscription?.unsubscribe();
 }
+
+/**
+ * True when a URL hash looks like a Supabase auth callback (a magic-link
+ * or OAuth redirect carrying access_token, or a failed-callback error) —
+ * as opposed to an unrelated app anchor hash. Shared by App.jsx (owns the
+ * error-toast UI for the failure shape) and AuthContext (owns deferring
+ * URL cleanup for the success shape until Supabase has actually consumed
+ * it) so both agree on exactly the same shape instead of two independent
+ * guesses.
+ */
+export function isSupabaseAuthCallbackHash(hash) {
+  if (!hash) return false;
+  const params = new URLSearchParams(hash.replace(/^#/, ''));
+  return params.has('access_token') || params.has('error') || params.has('error_code');
+}

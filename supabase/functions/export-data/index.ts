@@ -3,6 +3,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from "../_shared/supabase.ts";
 import { resolveBudgetIdentity } from "../_shared/budget-identity.ts";
 import { resolveBuildingUnitIds, applyBudgetScopeRowFilter } from "../_shared/budget-scope.ts";
+import { buildApprovedBudgetWorkbookPayload } from "../_shared/budget-workbook.ts";
 
 /**
  * Export Data Edge Function
@@ -950,7 +951,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const isBudgetExport = export_type === "budget" || export_type === "budget_book";
+    const isBudgetExport = export_type === "budget" || export_type === "budget_book" || export_type === "approved_budget_workbook";
 
     // ---------------------------------------------------------------
     // Budget exports (budget / budget_book): budget_id is the primary

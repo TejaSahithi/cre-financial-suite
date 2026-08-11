@@ -1,0 +1,37 @@
+-- Repairs a stray, untracked unique index on computation_snapshots,
+-- discovered while re-running compute-revenue against genuinely changed
+-- inputs (a rent_schedules amendment) for a series that already had a
+-- completed snapshot -- the exact "supersede the old completed row, insert
+-- a new one" path publish_computation_snapshot's own extensive design
+-- comments (20269900000002_snapshot_publish_rpc.sql) describe, but which
+-- had apparently never actually been exercised live before this session
+-- (every prior real caller only ever re-submitted identical inputs and hit
+-- the "reused" branch).
+--
+-- `snapshots_org_prop_engine_year_unique` -- UNIQUE (org_id, property_id,
+-- engine_type, fiscal_year), unconditional (no status filter) -- does not
+-- appear ANYWHERE in this repository's migration history (confirmed by a
+-- full-tree grep). It predates 20269900000002's scope-aware partial unique
+-- index (idx_computation_snapshots_one_completed_per_series, which
+-- correctly includes scope_level/scope_id/month and is filtered to
+-- status='completed' only) and was left behind uncleaned, exactly the same
+-- "stray untracked constraint from before a later migration's real fix"
+-- class of drift 20269900000042 already fixed once for budgets
+-- (budgets_org_prop_year_unique). Because it has no status filter, it
+-- blocks the coexistence of a freshly-superseded row and its
+-- freshly-inserted completed replacement the instant a series is
+-- recomputed with genuinely different inputs -- surfacing as
+-- `duplicate key value violates unique constraint
+-- "snapshots_org_prop_engine_year_unique"` on the RPC's own, correct
+-- supersede-then-insert INSERT.
+--
+-- idx_computation_snapshots_one_completed_per_series already provides the
+-- real invariant this table needs ("at most one completed row per exact
+-- series"); dropping this narrower, unconditional, untracked index only
+-- removes a redundant and actively incorrect restriction -- no data is
+-- touched.
+-- Backed by a table CONSTRAINT, not a bare index (confirmed live: DROP
+-- INDEX alone fails with "constraint ... requires it") -- drop the
+-- constraint, which drops its backing index with it.
+ALTER TABLE public.computation_snapshots
+  DROP CONSTRAINT IF EXISTS snapshots_org_prop_engine_year_unique;
