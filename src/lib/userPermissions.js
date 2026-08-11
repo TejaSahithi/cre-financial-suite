@@ -4,8 +4,111 @@
 import { canAccess, getAllowedPagesForRole, getPermissions, resolveRoleForAccess, isSuperAdmin, getActiveMembership, getActiveRole, isOrgAdmin } from "@/lib/rbac";
 import { MODULE_DEFINITIONS, getModuleForPage } from "@/lib/moduleConfig";
 
-// ── 6 core roles (v1 lightweight) ────────────────────────────────────────────
+// ── CRE standard roles plus legacy aliases ───────────────────────────────────
 export const ROLE_DEFINITIONS = [
+  {
+    value: "org_owner",
+    label: "Organization Owner",
+    color: "bg-amber-100 text-amber-700",
+    borderColor: "border-amber-400",
+    description: "Highest internal business authority and major approvals",
+    warning: true,
+    warningText: "High privilege: major business approval and organization-wide visibility",
+    defaultCapabilities: { export_data: true, invite_users: true, edit_leases: true, manage_vendors: true },
+  },
+  {
+    value: "org_admin",
+    label: "Organization Admin",
+    color: "bg-amber-100 text-amber-700",
+    borderColor: "border-amber-400",
+    description: "Operational administration, user assignments, and configuration",
+    warning: true,
+    warningText: "High privilege: operational administration without default final business approval",
+    defaultCapabilities: { export_data: true, invite_users: true, edit_leases: true, manage_vendors: true },
+  },
+  {
+    value: "portfolio_manager",
+    label: "Portfolio Manager",
+    color: "bg-violet-100 text-violet-700",
+    borderColor: "border-violet-400",
+    description: "Scoped portfolio visibility, reviews, and configured approvals",
+    warning: false,
+    defaultCapabilities: { export_data: true, edit_leases: true, manage_vendors: true },
+  },
+  {
+    value: "property_manager",
+    label: "Property Manager",
+    color: "bg-blue-100 text-blue-700",
+    borderColor: "border-blue-400",
+    description: "Scoped property operations, submissions, reviews, and limited approvals",
+    warning: false,
+    defaultCapabilities: { export_data: true, edit_leases: true, manage_vendors: true },
+  },
+  {
+    value: "lease_admin",
+    label: "Lease Admin",
+    color: "bg-amber-100 text-amber-700",
+    borderColor: "border-amber-400",
+    description: "Lease creation, upload, metadata, rent schedules, and submissions",
+    warning: false,
+    defaultCapabilities: { export_data: false, edit_leases: true },
+  },
+  {
+    value: "leasing_agent",
+    label: "Leasing Agent",
+    color: "bg-amber-100 text-amber-700",
+    borderColor: "border-amber-400",
+    description: "Lease drafting, tenant coordination, and lease submissions",
+    warning: false,
+    defaultCapabilities: { export_data: false, edit_leases: true },
+  },
+  {
+    value: "finance",
+    label: "Finance Team",
+    color: "bg-emerald-100 text-emerald-700",
+    borderColor: "border-emerald-400",
+    description: "Financial review, validation, reconciliation, and reporting",
+    warning: false,
+    defaultCapabilities: { export_data: true, finalize_cam: true },
+  },
+  {
+    value: "property_owner",
+    label: "Property Owner",
+    color: "bg-rose-100 text-rose-700",
+    borderColor: "border-rose-400",
+    description: "External business owner scoped only to owned properties",
+    warning: true,
+    warningText: "External role: scope must be limited to owned properties",
+    defaultCapabilities: { export_data: true },
+  },
+  {
+    value: "auditor",
+    label: "Auditor",
+    color: "bg-yellow-100 text-yellow-700",
+    borderColor: "border-yellow-400",
+    description: "Read-only financial, document, and audit-log access",
+    warning: false,
+    defaultCapabilities: { export_data: true },
+  },
+  {
+    value: "custom_role",
+    label: "Custom Role",
+    color: "bg-purple-100 text-purple-700",
+    borderColor: "border-purple-400",
+    description: "Organization-defined role using the standard permission engine",
+    warning: false,
+    defaultCapabilities: {},
+  },
+  {
+    value: "tenant",
+    label: "Tenant",
+    color: "bg-slate-100 text-slate-500",
+    borderColor: "border-slate-200",
+    description: "Future external portal role; portal access remains disabled in V1",
+    warning: true,
+    warningText: "V1 supports tenant email notifications only",
+    defaultCapabilities: {},
+  },
   {
     value: "viewer",
     label: "Viewer",
@@ -32,34 +135,6 @@ export const ROLE_DEFINITIONS = [
     description: "Manages properties, leases, and expenses",
     warning: false,
     defaultCapabilities: { export_data: true, edit_leases: true, manage_vendors: true, invite_users: false },
-  },
-  {
-    value: "finance",
-    label: "Finance",
-    color: "bg-purple-100 text-purple-700",
-    borderColor: "border-purple-400",
-    description: "Full access to financial modules and reporting",
-    warning: false,
-    defaultCapabilities: { export_data: true, approve_budget: true, finalize_cam: true },
-  },
-  {
-    value: "auditor",
-    label: "Auditor",
-    color: "bg-yellow-100 text-yellow-700",
-    borderColor: "border-yellow-400",
-    description: "Read-only financial and audit log access",
-    warning: false,
-    defaultCapabilities: { export_data: true },
-  },
-  {
-    value: "org_admin",
-    label: "Admin",
-    color: "bg-amber-100 text-amber-700",
-    borderColor: "border-amber-400",
-    description: "Full organization control — all modules, settings, users",
-    warning: true,
-    warningText: "High privilege: grants full org control including user management",
-    defaultCapabilities: { export_data: true, approve_budget: true, finalize_cam: true, invite_users: true, edit_leases: true, manage_vendors: true },
   },
 ];
 
@@ -111,7 +186,7 @@ export function parseRoles(roleStr) {
 export function getRoleDefaultModulePerms(roleStr) {
   const roles = parseRoles(roleStr);
   
-  if (roles.includes("org_admin") || roles.includes("super_admin") || roles.includes("admin")) {
+  if (roles.includes("org_owner") || roles.includes("org_admin") || roles.includes("super_admin") || roles.includes("admin")) {
     const all = {};
     Object.keys(MODULE_DEFINITIONS).forEach((k) => { all[k] = "full"; });
     return all;
@@ -251,7 +326,7 @@ function getRoleDefaultPageAccessLevel(role, pageName) {
   const resolvedRole = resolveRoleForAccess(role);
   if (!pageName || !role) return "none";
   if (["admin", "super_admin"].includes(resolvedRole)) return "admin";
-  if (resolvedRole === "org_admin") {
+  if (resolvedRole === "org_owner" || resolvedRole === "org_admin") {
     return canAccess(role, pageName) ? "admin" : "none";
   }
   if (!canAccess(role, pageName)) return "none";

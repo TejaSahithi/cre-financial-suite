@@ -39,7 +39,16 @@ export function useMfaStatus({ isAuthenticated, user, refreshProfile }) {
         const isOAuthProvider = provider === 'google' || provider === 'azure';
         if (isOAuthProvider) {
           const rawRole = user?._raw_role || user?.role || '';
-          const requiresMfaByRole = ['super_admin', 'org_admin', 'admin', 'manager'].includes(rawRole);
+          const requiresMfaByRole = [
+            'super_admin',
+            'org_owner',
+            'org_admin',
+            'admin',
+            'portfolio_manager',
+            'property_manager',
+            'finance',
+            'manager',
+          ].includes(rawRole);
           if (!requiresMfaByRole) {
             setMfaRequired(false);
             setMfaNeedsEnroll(false);

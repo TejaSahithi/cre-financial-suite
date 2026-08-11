@@ -108,7 +108,23 @@ let _cachedProfile = null;
 let _profilePromise = null;
 
 // ─── Role priority for resolving effective role ──────────────
-const ROLE_PRIORITY = ['super_admin', 'org_admin', 'manager', 'editor', 'viewer'];
+const ROLE_PRIORITY = [
+  'super_admin',
+  'org_owner',
+  'org_admin',
+  'portfolio_manager',
+  'property_manager',
+  'finance',
+  'lease_admin',
+  'leasing_agent',
+  'property_owner',
+  'auditor',
+  'custom_role',
+  'manager',
+  'editor',
+  'viewer',
+  'tenant',
+];
 const MEMBERSHIP_STATUS_PRIORITY = ['active', 'owner', 'invited'];
 
 function getMembershipStatusRank(status) {

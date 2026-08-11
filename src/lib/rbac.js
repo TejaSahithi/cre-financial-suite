@@ -116,6 +116,8 @@ const ROLE_PAGES = {
 
 const ROLE_ALIASES = {
   owner: "org_admin",
+  organization_owner: "org_owner",
+  organization_admin: "org_admin",
   admin: "org_admin",
   asset_manager: "manager",
   portfolio_manager: "manager",
@@ -132,7 +134,13 @@ const ROLE_ALIASES = {
   lease_admin: "editor",
   compliance_officer: "auditor",
   internal_auditor: "auditor",
+  custom: "custom_role",
 };
+
+ROLE_PAGES.org_owner = ROLE_PAGES.org_admin;
+ROLE_PAGES.property_owner = ROLE_PAGES.viewer;
+ROLE_PAGES.tenant = [];
+ROLE_PAGES.custom_role = ROLE_PAGES.viewer;
 
 // Pages that don't require auth / are public
 const PUBLIC_PAGES = ["Landing", "Pricing", "ContactUs", "RequestAccess", "RequestDemo", "Login", "DemoExperience", "AcceptInvite", "ResetPassword"];
@@ -332,7 +340,7 @@ export function getActiveRole(user) {
 
 export function isOrgAdmin(user) {
   const role = resolveRoleForAccess(getActiveRole(user));
-  return role === "org_admin" || role === "admin";
+  return role === "org_owner" || role === "org_admin" || role === "admin";
 }
 
 export { PUBLIC_PAGES, ADMIN_ONLY_PAGES, ROLE_PAGES, ROLE_ALIASES, MANDATORY_SETUP_PAGES, MFA_BYPASS_PAGES, LAYOUT_EXEMPT_PAGES };

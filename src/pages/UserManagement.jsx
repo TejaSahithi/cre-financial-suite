@@ -30,6 +30,9 @@ import {
 
 // ─── CRE Industry Roles ───────────────────────────────────────────────────────
 const CRE_ROLES = {
+  // Internal Authority
+  org_owner:          { label: "Organization Owner", category: "Internal Authority", color: "amber",   description: "Highest internal business authority and major approvals" },
+  org_admin:          { label: "Organization Admin", category: "Internal Authority", color: "amber",   description: "Operational administration, user assignments, and configuration" },
   // Management
   asset_manager:       { label: "Asset Manager",       category: "Management",   color: "violet",  description: "Oversees asset performance and value-add strategy" },
   portfolio_manager:   { label: "Portfolio Manager",   category: "Management",   color: "violet",  description: "Manages entire property portfolio" },
@@ -40,9 +43,12 @@ const CRE_ROLES = {
   construction_manager:{ label: "Construction Mgr.",   category: "Operations",   color: "blue",    description: "Capital improvements and construction oversight" },
   // Finance
   cfo_controller:      { label: "CFO / Controller",    category: "Finance",      color: "emerald", description: "Financial controls, accounting, and reporting" },
+  finance:             { label: "Finance Team",        category: "Finance",      color: "emerald", description: "Financial review, validation, and reporting" },
   financial_analyst:   { label: "Financial Analyst",   category: "Finance",      color: "emerald", description: "Financial modeling, analysis, and projections" },
   accounts_manager:    { label: "Accounts Manager",    category: "Finance",      color: "emerald", description: "AR/AP management and reconciliations" },
   investor_relations:  { label: "Investor Relations",  category: "Finance",      color: "emerald", description: "Investor communication and capital reporting" },
+  // Ownership
+  property_owner:      { label: "Property Owner",      category: "Ownership",    color: "rose",    description: "External business owner scoped to owned properties" },
   // Leasing
   leasing_director:    { label: "Leasing Director",    category: "Leasing",      color: "amber",   description: "Leasing strategy and broker relationships" },
   leasing_agent:       { label: "Leasing Agent",       category: "Leasing",      color: "amber",   description: "Tenant prospecting, tours, and lease execution" },
@@ -50,11 +56,12 @@ const CRE_ROLES = {
   // Acquisitions
   acquisitions_mgr:    { label: "Acquisitions Mgr.",   category: "Acquisitions", color: "rose",    description: "Deal sourcing, underwriting, and due diligence" },
   // Compliance
+  auditor:             { label: "Auditor",             category: "Compliance",   color: "slate",   description: "Read-only audit and supporting-document access" },
   compliance_officer:  { label: "Compliance Officer",  category: "Compliance",   color: "slate",   description: "Regulatory compliance and risk management" },
   internal_auditor:    { label: "Internal Auditor",    category: "Compliance",   color: "slate",   description: "Audit trail review and financial controls" },
 };
 
-const ROLE_CATEGORY_ORDER = ["Management", "Operations", "Finance", "Leasing", "Acquisitions", "Compliance"];
+const ROLE_CATEGORY_ORDER = ["Internal Authority", "Management", "Operations", "Finance", "Ownership", "Leasing", "Acquisitions", "Compliance"];
 
 const ROLE_COLOR_CLASSES = {
   violet:  { badge: "bg-violet-100 text-violet-700 border-violet-200",  dot: "bg-violet-500" },
@@ -433,6 +440,8 @@ function deriveAccessGrantRole(selectedRoles, pagePerms) {
 
   if (
     hasManagerPageAccess ||
+    selected.has("org_owner") ||
+    selected.has("org_admin") ||
     selected.has("asset_manager") ||
     selected.has("portfolio_manager") ||
     selected.has("property_manager") ||
@@ -442,6 +451,7 @@ function deriveAccessGrantRole(selectedRoles, pagePerms) {
   }
 
   if (
+    selected.has("finance") ||
     selected.has("financial_analyst") ||
     selected.has("accounts_manager") ||
     selected.has("leasing_agent") ||
@@ -1970,7 +1980,11 @@ export default function UserManagement() {
   const activeOrgMembership = isSuperAdmin
     ? null
     : (userMemberships.find((membership) => membership?.org_id === activeOrgId) || getActiveMembershipForUser(user));
-  const canManageUsers = canWritePage("UserManagement") && (isSuperAdmin || activeOrgMembership?.role === "org_admin");
+  const canManageUsers = canWritePage("UserManagement") && (
+    isSuperAdmin ||
+    ["org_owner", "org_admin"].includes(activeOrgMembership?.role) ||
+    activeOrgMembership?.status === "owner"
+  );
 
   useEffect(() => {
     if (!isSuperAdmin) return;
