@@ -95,7 +95,7 @@ export function mergeCustomRoleIntoMembershipCapabilities(capabilities = {}, rol
   const defaultCapabilities = parseObject(roleDefinition.default_capabilities);
   return {
     ...parseObject(capabilities),
-    roles: ["custom"],
+    roles: ["custom_role"],
     custom_role: roleDefinition.role_key,
     custom_role_label: roleDefinition.label,
     custom_permissions: {

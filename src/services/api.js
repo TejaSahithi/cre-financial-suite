@@ -182,7 +182,7 @@ async function getCurrentAccessScope(orgId) {
 
     const memberships = Array.isArray(user.memberships) ? user.memberships : [];
     const activeMembership = memberships.find((membership) =>
-      membership?.org_id === orgId && ['active', 'owner'].includes(membership?.status || 'active')
+      membership?.org_id === orgId && ['active', 'owner', 'approved', 'accepted'].includes(membership?.status || 'active')
     );
     const cacheKey = `${ACCESS_CACHE_PREFIX}:${user.id}:${orgId}`;
     const cached = getCached(cacheKey);

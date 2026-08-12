@@ -120,12 +120,10 @@ const ROLE_PRIORITY = [
   'property_owner',
   'auditor',
   'custom_role',
-  'manager',
-  'editor',
-  'viewer',
   'tenant',
 ];
-const MEMBERSHIP_STATUS_PRIORITY = ['active', 'owner', 'invited'];
+const ACTIVE_MEMBERSHIP_STATUSES = ['active', 'owner', 'approved', 'accepted'];
+const MEMBERSHIP_STATUS_PRIORITY = ['active', 'owner', 'approved', 'accepted', 'invited'];
 
 function getMembershipStatusRank(status) {
   const index = MEMBERSHIP_STATUS_PRIORITY.indexOf(status || 'active');
@@ -165,7 +163,7 @@ async function loadMembershipRows(userId) {
   if (error || !memberships) return [];
   return memberships.filter((membership) => {
     const status = membership?.status || 'active';
-    return ['active', 'owner', 'invited'].includes(status);
+    return [...ACTIVE_MEMBERSHIP_STATUSES, 'invited'].includes(status);
   });
 }
 
@@ -251,31 +249,31 @@ async function resolveMembership(userId) {
   const memberships = await loadMembershipRows(userId);
 
   if (!memberships.length) {
-    return { role: 'viewer', org_id: null, memberships: [] };
+    return { role: null, org_id: null, memberships: [] };
   }
 
   const preferredOrgId = getStoredActingOrgId();
   const usableMemberships = memberships;
 
   if (usableMemberships.length === 0) {
-    return { role: 'viewer', org_id: null, memberships };
+    return { role: null, org_id: null, memberships };
   }
 
   // Only a truly activated (active/owner) membership may become "primary"
   // -- the one that determines the displayed role and org context. The
   // database's RLS functions (membership_page_access, is_active_org_member,
-  // etc.) only ever recognize status IN ('active', 'owner'), never
+  // etc.) recognize activated statuses, never
   // 'invited'. If an 'invited' membership were picked as primary (e.g. it's
   // the user's only membership), the UI would show a fully privileged role
   // for an org the database has not actually granted access to yet, and
   // every write would fail with a confusing RLS error despite the client
   // believing it had permission.
   const activatedMemberships = usableMemberships.filter((m) =>
-    ['active', 'owner'].includes(m?.status || 'active')
+    ACTIVE_MEMBERSHIP_STATUSES.includes(m?.status || 'active')
   );
 
   if (activatedMemberships.length === 0) {
-    return { role: 'viewer', org_id: null, memberships: usableMemberships };
+    return { role: null, org_id: null, memberships: usableMemberships };
   }
 
   const primary = resolvePrimaryMembership(activatedMemberships, preferredOrgId);
@@ -309,7 +307,10 @@ async function buildUserObject(authUser) {
     .eq('id', authUser.id)
     .maybeSingle();
   if (refreshedProfile) profile = refreshedProfile;
-  const primaryMembership = resolvePrimaryMembership(memberships, storedActingOrgId);
+  const activatedMemberships = memberships.filter((membership) =>
+    ACTIVE_MEMBERSHIP_STATUSES.includes(membership?.status || 'active')
+  );
+  const primaryMembership = resolvePrimaryMembership(activatedMemberships, storedActingOrgId);
   if (primaryMembership) {
     role = primaryMembership.role;
     org_id = primaryMembership.role === 'super_admin' ? null : primaryMembership.org_id;

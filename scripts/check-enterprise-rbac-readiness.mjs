@@ -12,6 +12,8 @@ function includesAll(source, needles) {
 const files = {
   migration: "supabase/migrations/20260907000000_enterprise_rbac_scope_approval_foundation.sql",
   rlsRepairMigration: "supabase/migrations/20260908000000_repair_enterprise_role_write_access_and_invite_status.sql",
+  roleDefaultsRepairMigration: "supabase/migrations/20260908000100_repair_cre_role_defaults_from_capabilities.sql",
+  canonicalRolesMigration: "supabase/migrations/20260908000200_canonical_cre_roles_only.sql",
   authEngine: "src/lib/authorizationEngine.js",
   rbac: "src/lib/rbac.js",
   userPermissions: "src/lib/userPermissions.js",
@@ -56,6 +58,8 @@ for (const file of requiredFiles) {
 
 const migration = read(files.migration);
 const rlsRepairMigration = read(files.rlsRepairMigration);
+const roleDefaultsRepairMigration = read(files.roleDefaultsRepairMigration);
+const canonicalRolesMigration = read(files.canonicalRolesMigration);
 const authEngine = read(files.authEngine);
 const rbac = read(files.rbac);
 const userPermissions = read(files.userPermissions);
@@ -136,6 +140,29 @@ for (const missing of includesAll(rlsRepairMigration, [
   "i.status IN ('pending', 'pending_approval')",
 ])) {
   failures.push({ gate: "rls_repair_migration_contract", missing });
+}
+
+for (const missing of includesAll(roleDefaultsRepairMigration, [
+  "jsonb_array_elements_text",
+  "capability_roles",
+  "portfolio_manager",
+  "public.can_write_page(org_id, 'Properties')",
+  "public.can_write_page(org_id, 'BuildingsUnits')",
+])) {
+  failures.push({ gate: "role_defaults_repair_migration_contract", missing });
+}
+
+for (const missing of includesAll(canonicalRolesMigration, [
+  "Canonical CRE roles only",
+  "super_admin",
+  "portfolio_manager",
+  "property_manager",
+  "custom_role",
+  "CREATE OR REPLACE FUNCTION public.cre_normalize_role",
+  "CREATE OR REPLACE FUNCTION public.membership_page_access",
+  "public.can_write_page(org_id, 'Properties')",
+])) {
+  failures.push({ gate: "canonical_roles_migration_contract", missing });
 }
 
 for (const table of migrationTables) {
@@ -300,11 +327,13 @@ const phaseCoverage = [
 
 const dbVerification = {
   required: true,
-  migrations: [files.migration, files.rlsRepairMigration],
+  migrations: [files.migration, files.rlsRepairMigration, files.roleDefaultsRepairMigration, files.canonicalRolesMigration],
   postflightSql: "scripts/enterprise-rbac-postflight.sql",
   commands: [
     "Apply supabase/migrations/20260907000000_enterprise_rbac_scope_approval_foundation.sql with your approved Supabase deployment process",
     "Apply supabase/migrations/20260908000000_repair_enterprise_role_write_access_and_invite_status.sql with your approved Supabase deployment process",
+    "Apply supabase/migrations/20260908000100_repair_cre_role_defaults_from_capabilities.sql with your approved Supabase deployment process",
+    "Apply supabase/migrations/20260908000200_canonical_cre_roles_only.sql with your approved Supabase deployment process",
     "psql \"$DATABASE_URL\" -f scripts/enterprise-rbac-postflight.sql",
   ],
 };

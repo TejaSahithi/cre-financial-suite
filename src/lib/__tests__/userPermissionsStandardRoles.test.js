@@ -62,15 +62,15 @@ describe("standard CRE roles in userPermissions", () => {
     expect(getPageAccessLevel(propertyOwner, "UserManagement")).toBe("none");
   });
 
-  it("maps Lease Admin to existing editor page behavior", () => {
+  it("gives Lease Admin lease workflow write access", () => {
     const leaseAdmin = userWithRole("lease_admin");
 
     expect(getPageAccessLevel(leaseAdmin, "LeaseUpload")).toBe("write");
     expect(getPageAccessLevel(leaseAdmin, "LeaseReview")).toBe("write");
   });
 
-  it("keeps legacy custom role key compatible with custom_role", () => {
-    const effective = resolveEffectivePermissions("custom", {}, {}, {});
+  it("uses custom_role as the custom role key", () => {
+    const effective = resolveEffectivePermissions("custom_role", {}, {}, {});
 
     expect(effective.effectiveModule.dashboard).toBe("full");
   });

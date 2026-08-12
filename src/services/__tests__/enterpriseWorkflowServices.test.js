@@ -88,7 +88,7 @@ describe("enterprise workflow services", () => {
       }
     );
 
-    expect(merged.roles).toEqual(["custom"]);
+    expect(merged.roles).toEqual(["custom_role"]);
     expect(merged.custom_role).toBe("regional_finance_manager");
     expect(merged.custom_role_label).toBe("Regional Finance Manager");
     expect(merged.custom_permissions.expense.review).toBe(true);

@@ -4,7 +4,7 @@
 import { canAccess, getAllowedPagesForRole, getPermissions, resolveRoleForAccess, isSuperAdmin, getActiveMembership, getActiveRole, isOrgAdmin } from "@/lib/rbac";
 import { MODULE_DEFINITIONS, getModuleForPage } from "@/lib/moduleConfig";
 
-// ── CRE standard roles plus legacy aliases ───────────────────────────────────
+// ── Canonical CRE standard roles ──────────────────────────────────────────────
 export const ROLE_DEFINITIONS = [
   {
     value: "org_owner",
@@ -109,33 +109,8 @@ export const ROLE_DEFINITIONS = [
     warningText: "V1 supports tenant email notifications only",
     defaultCapabilities: {},
   },
-  {
-    value: "viewer",
-    label: "Viewer",
-    color: "bg-slate-100 text-slate-600",
-    borderColor: "border-slate-300",
-    description: "Read-only access to assigned modules",
-    warning: false,
-    defaultCapabilities: { export_data: false },
-  },
-  {
-    value: "editor",
-    label: "Editor",
-    color: "bg-emerald-100 text-emerald-700",
-    borderColor: "border-emerald-400",
-    description: "Can create and modify data across assigned modules",
-    warning: false,
-    defaultCapabilities: { export_data: true, edit_leases: true, manage_vendors: true },
-  },
-  {
-    value: "manager",
-    label: "Manager",
-    color: "bg-blue-100 text-blue-700",
-    borderColor: "border-blue-400",
-    description: "Manages properties, leases, and expenses",
-    warning: false,
-    defaultCapabilities: { export_data: true, edit_leases: true, manage_vendors: true, invite_users: false },
-  },
+  // Deferred legacy roles: viewer, editor, manager. Use one of the canonical
+  // roles above, or create an organization custom_role.
 ];
 
 // ── Capabilities (workflow-level permissions) ─────────────────────────────────

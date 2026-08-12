@@ -1,15 +1,8 @@
-// Centralized RBAC configuration
-// Maps each role to the pages they can access.
-// "admin" (SuperAdmin) can access ALL pages — not listed here, handled in code.
-//
-// Roles stored in `memberships.role`:
-//   super_admin → mapped to "admin" in auth.js for legacy compat
-//   org_admin   → full org control
-//   manager     → manage properties and leases
-//   editor      → modify data
-//   viewer      → read-only
-//
-// Legacy compatibility: property_manager, finance, read_only, auditor are also supported.
+// Centralized RBAC configuration.
+// Active roles are intentionally limited to:
+// super_admin, org_owner, org_admin, portfolio_manager, property_manager,
+// lease_admin, leasing_agent, finance, property_owner, auditor, tenant,
+// custom_role.
 
 const ROLE_PAGES = {
   org_admin: [
@@ -29,8 +22,26 @@ const ROLE_PAGES = {
     "OrgSettings", "ChartOfAccounts", "FieldMappingRules", "ApprovalWorkflows", "ApprovalPolicies",
     "UserManagement", "AuditLog",
   ],
-  manager: [
+  org_owner: [
+    "Dashboard", "Portfolios", "PortfolioInsights",
+    "Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail",
+    "Tenants", "TenantDetail", "Vendors", "VendorProfile",
+    "Leases", "LeaseDetail", "LeaseRentSchedule", "LeaseUpload", "LeaseReview", "RentProjection", "CriticalDates",
+    "Expenses", "AddExpense", "BulkImport", "LeaseExpenseRules", "ExpenseProjection", "LeaseExpenseClassification", "ExpenseReview",
+    "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "BudgetReadiness",
+    "Billing", "Revenue",
+    "BudgetDashboard", "CreateBudget", "BudgetReview",
+    "ActualsVariance", "Actuals", "Variance", "Comparison",
+    "Reconciliation",
+    "AnalyticsReports", "Reports", "Analytics",
+    "Workflows", "Approvals", "Notifications", "Documents",
+    "Integrations",
+    "OrgSettings", "ChartOfAccounts", "FieldMappingRules", "ApprovalWorkflows", "ApprovalPolicies",
+    "UserManagement", "AuditLog",
+  ],
+  portfolio_manager: [
     "Dashboard",
+    "Portfolios", "PortfolioInsights",
     "Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail",
     "Tenants", "TenantDetail", "Vendors", "VendorProfile",
     "Leases", "LeaseDetail", "LeaseRentSchedule", "LeaseUpload", "LeaseReview", "RentProjection", "CriticalDates",
@@ -40,7 +51,6 @@ const ROLE_PAGES = {
     "BudgetDashboard", "CreateBudget", "BudgetReview",
     "Documents", "Workflows", "Approvals", "Notifications",
   ],
-  // Legacy alias
   property_manager: [
     "Dashboard",
     "Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail",
@@ -51,7 +61,7 @@ const ROLE_PAGES = {
     "Billing",
     "Documents", "Workflows", "Approvals", "Notifications",
   ],
-  editor: [
+  lease_admin: [
     "Dashboard", "PortfolioInsights",
     "Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail",
     "Tenants", "TenantDetail",
@@ -64,7 +74,18 @@ const ROLE_PAGES = {
     "ChartOfAccounts", "Vendors",
     "Workflows", "Approvals", "Notifications", "Documents",
   ],
-  // Legacy alias
+  leasing_agent: [
+    "Dashboard", "PortfolioInsights",
+    "Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail",
+    "Tenants", "TenantDetail",
+    "Leases", "LeaseDetail", "LeaseRentSchedule", "LeaseUpload", "LeaseReview", "CriticalDates",
+    "BudgetDashboard", "CreateBudget", "BudgetReview",
+    "Billing", "Revenue", "ActualsVariance", "Actuals", "Variance", "Comparison",
+    "Reconciliation",
+    "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "BudgetReadiness",
+    "Vendors",
+    "Workflows", "Approvals", "Notifications", "Documents",
+  ],
   finance: [
     "Dashboard", "PortfolioInsights",
     "Expenses", "AddExpense", "BulkImport", "LeaseExpenseRules", "ExpenseProjection", "LeaseExpenseClassification", "ExpenseReview",
@@ -76,7 +97,7 @@ const ROLE_PAGES = {
     "ChartOfAccounts", "Vendors",
     "Workflows", "Approvals", "Notifications", "Documents",
   ],
-  viewer: [
+  property_owner: [
     "Dashboard", "PortfolioInsights",
     "Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail",
     "Tenants", "TenantDetail",
@@ -87,19 +108,6 @@ const ROLE_PAGES = {
     "AnalyticsReports", "Reports", "Analytics",
     "CAMDashboard", "CAMSetup", "CAMRun", "BudgetReadiness",
     "Workflows", "Approvals", "Notifications", "Documents",
-  ],
-  // Legacy alias
-  read_only: [
-    "Dashboard", "PortfolioInsights",
-    "Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail",
-    "Tenants", "TenantDetail",
-    "Leases", "LeaseDetail", "LeaseRentSchedule", "LeaseReview", "CriticalDates",
-    "Expenses", "Billing", "LeaseExpenseRules", "ExpenseProjection", "LeaseExpenseClassification", "ExpenseReview",
-    "BudgetDashboard",
-    "Revenue", "ActualsVariance", "Actuals", "Variance", "Comparison",
-    "AnalyticsReports", "Reports", "Analytics",
-    "CAMDashboard", "CAMSetup", "CAMRun", "BudgetReadiness",
-    "Notifications", "Documents",
   ],
   auditor: [
     "Dashboard", "PortfolioInsights",
@@ -115,32 +123,15 @@ const ROLE_PAGES = {
 };
 
 const ROLE_ALIASES = {
-  owner: "org_admin",
+  owner: "org_owner",
   organization_owner: "org_owner",
   organization_admin: "org_admin",
   admin: "org_admin",
-  asset_manager: "manager",
-  portfolio_manager: "manager",
-  operations_director: "manager",
-  facility_manager: "manager",
-  construction_manager: "manager",
-  acquisitions_mgr: "manager",
-  cfo_controller: "finance",
-  accounts_manager: "finance",
-  financial_analyst: "editor",
-  investor_relations: "viewer",
-  leasing_director: "manager",
-  leasing_agent: "editor",
-  lease_admin: "editor",
-  compliance_officer: "auditor",
-  internal_auditor: "auditor",
   custom: "custom_role",
 };
 
-ROLE_PAGES.org_owner = ROLE_PAGES.org_admin;
-ROLE_PAGES.property_owner = ROLE_PAGES.viewer;
 ROLE_PAGES.tenant = [];
-ROLE_PAGES.custom_role = ROLE_PAGES.viewer;
+ROLE_PAGES.custom_role = ROLE_PAGES.auditor;
 
 // Pages that don't require auth / are public
 const PUBLIC_PAGES = ["Landing", "Pricing", "ContactUs", "RequestAccess", "RequestDemo", "Login", "DemoExperience", "AcceptInvite", "ResetPassword"];
@@ -194,11 +185,14 @@ export function canAccess(role, pageName, user = null) {
  */
 export function getPermissions(role) {
   const resolvedRole = resolveRoleForAccess(role);
+  if (!resolvedRole) {
+    return { canRead: false, canWrite: false, canManage: false, canAdmin: false };
+  }
   return {
     canRead: true, // all roles can read
-    canWrite: ['admin', 'super_admin', 'org_admin', 'manager', 'editor', 'finance', 'property_manager'].includes(resolvedRole),
-    canManage: ['admin', 'super_admin', 'org_admin', 'manager', 'property_manager'].includes(resolvedRole),
-    canAdmin: ['admin', 'super_admin', 'org_admin'].includes(resolvedRole),
+    canWrite: ['admin', 'super_admin', 'org_owner', 'org_admin', 'portfolio_manager', 'property_manager', 'lease_admin', 'leasing_agent', 'finance', 'custom_role'].includes(resolvedRole),
+    canManage: ['admin', 'super_admin', 'org_owner', 'org_admin', 'portfolio_manager', 'property_manager'].includes(resolvedRole),
+    canAdmin: ['admin', 'super_admin', 'org_owner', 'org_admin'].includes(resolvedRole),
   };
 }
 
@@ -296,7 +290,7 @@ export function getDataScope(user, options = {}) {
     const hasMembership = user?.memberships?.some(
       (m) =>
         m?.org_id === explicitOrgId &&
-        (!m?.status || ["active", "owner", "approved"].includes(m?.status))
+        (!m?.status || ["active", "owner", "approved", "accepted"].includes(m?.status))
     );
     if (hasMembership) {
       return { scope: "org", orgId: explicitOrgId };
@@ -326,7 +320,7 @@ export function getActiveMembership(user) {
     user?.memberships?.find(
       (membership) =>
         membership?.org_id === activeOrgId &&
-        ["active", "owner"].includes(membership?.status)
+        ["active", "owner", "approved", "accepted"].includes(membership?.status)
     ) || null
   );
 }
@@ -335,7 +329,7 @@ export function getActiveRole(user) {
   if (isSuperAdmin(user)) return "super_admin";
 
   const activeMembership = getActiveMembership(user);
-  return activeMembership?.role || user?._raw_role || user?.role || "viewer";
+  return activeMembership?.role || user?._raw_role || user?.role || null;
 }
 
 export function isOrgAdmin(user) {
