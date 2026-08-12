@@ -80,6 +80,7 @@ const STATE_OPTIONS = [
 
 const US_ZIP_REGEX = /^\d{5}(?:-\d{4})?$/;
 const CA_POSTAL_REGEX = /^[A-Za-z]\d[A-Za-z][ -]?\d[A-Za-z]\d$/;
+const OWNER_ONBOARDING_ROLES = new Set(["super_admin", "org_owner", "org_admin", "owner", "admin"]);
 
 function formatBillingAddress({ addressLine1, city, state, postalCode, countryCode }) {
   return [
@@ -110,6 +111,12 @@ export default function Onboarding() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  const userOnboardingType = authUser?.profile?.onboarding_type || authUser?.onboarding_type;
+  const isInvitedMember = userOnboardingType === "invited" || authUser?.memberships?.some((membership) => {
+    const role = membership?.role;
+    return role && !OWNER_ONBOARDING_ROLES.has(role);
+  });
+
   const [form, setForm] = useState({
     name: "", address: "", phone: "", timezone: "America/New_York",
     currency: "USD", primary_contact_email: "", plan: "professional",
@@ -138,6 +145,13 @@ export default function Onboarding() {
         if (!authUser) {
           console.log('[Onboarding] No authenticated user, redirecting to login');
           redirectToLogin(createPageUrl("Onboarding"));
+          setLoading(false);
+          return;
+        }
+
+        if (isInvitedMember) {
+          console.log("[Onboarding] Invited team member detected; redirecting to member onboarding.");
+          navigate("/WelcomeAboard", { replace: true });
           setLoading(false);
           return;
         }
@@ -226,7 +240,7 @@ export default function Onboarding() {
 
     return () => { cancelled = true; clearTimeout(safetyTimer); };
 
-  }, [authUser, isLoadingAuth, navigate, refreshProfile]);
+  }, [authUser, isInvitedMember, isLoadingAuth, navigate, refreshProfile]);
 
   // Status Polling: Automatically check for approval while on Step 4
   useEffect(() => {

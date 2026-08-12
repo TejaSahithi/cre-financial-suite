@@ -34,6 +34,7 @@ const AuthenticatedApp = () => {
 
   const location = useLocation();
   const currentPath = location.pathname.substring(1);
+  const isInviteFlowPage = currentPath === 'AcceptInvite';
   const isPublicPage = PUBLIC_PAGES.includes(currentPath) || currentPath === "" || currentPath === mainPageKey;
 
   // Supabase Hash Error Interceptor
@@ -84,6 +85,7 @@ const AuthenticatedApp = () => {
   }
 
   if (isAuthenticated && !mfaChecked) {
+    if (isInviteFlowPage) return <AppRoutes />;
     return <LoadingScreen />;
   }
 
@@ -128,6 +130,10 @@ const AuthenticatedApp = () => {
 
   // ─── Unified Routing Logic ──────────────────────────────────────────────
   if (isAuthenticated && user) {
+    if (isInviteFlowPage) {
+      return <AppRoutes />;
+    }
+
     const { profile, activeOrg, memberships } = user;
 
     if (!profile || !memberships) {

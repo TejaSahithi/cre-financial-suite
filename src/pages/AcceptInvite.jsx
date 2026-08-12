@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { supabase } from "@/services/supabaseClient";
 import { acceptInvite } from "@/services/auth";
 import { setStoredActingOrgId } from "@/lib/actingOrg";
+import { useAuth } from "@/lib/AuthContext";
 import { toast } from "sonner";
 
 const STEPS = ["Verify Invite", "Set Password", "Your Profile", "All Set!"];
@@ -33,6 +34,7 @@ function getHashParams() {
 }
 
 export default function AcceptInvite() {
+  const { refreshProfile } = useAuth();
   const [step, setStep] = useState(0);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -200,6 +202,7 @@ export default function AcceptInvite() {
       if (result?.primary_org_id) {
         setStoredActingOrgId(result.primary_org_id);
       }
+      await refreshProfile(false);
       setStep(3);
     } catch (err) {
       toast.error(`Failed to save profile: ${err.message || "Unknown error"}`);

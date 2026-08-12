@@ -357,6 +357,14 @@ async function buildUserObject(authUser) {
     }
   }
 
+  const effectiveOnboardingType = profile?.onboarding_type
+    || authUser.user_metadata?.onboarding_type
+    || authUser.app_metadata?.onboarding_type
+    || 'owner';
+  const effectiveProfile = profile
+    ? { ...profile, onboarding_type: profile.onboarding_type || effectiveOnboardingType }
+    : { status: 'onboarding', onboarding_type: effectiveOnboardingType };
+
   return {
     id: authUser.id,
     email: authUser.email,
@@ -370,10 +378,10 @@ async function buildUserObject(authUser) {
     _raw_role: role,
     org_id,
     onboarding_complete: profile?.onboarding_complete ?? false,
-    onboarding_type: profile?.onboarding_type || authUser.user_metadata?.onboarding_type || 'owner',
+    onboarding_type: effectiveOnboardingType,
     first_login: profile?.first_login ?? true,
     memberships,
-    profile: profile || { status: 'onboarding' },
+    profile: effectiveProfile,
     activeOrg,
     _blocked,
   };
