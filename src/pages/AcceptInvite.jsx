@@ -143,7 +143,7 @@ export default function AcceptInvite() {
           cleanupAuthUrl();
           setStep((currentStep) => {
             if (currentStep !== 0) return currentStep;
-            return isExistingUserInvite ? 2 : 1;
+            return isExistingUserInvite || !hasInviteAuthCallback ? 2 : 1;
           });
         }
       } catch (err) {
@@ -169,9 +169,15 @@ export default function AcceptInvite() {
           setIsVerifyingInvite(false);
           const searchParams = new URLSearchParams(window.location.search);
           const isExistingUserInvite = searchParams.get("existing") === "1";
+          const hashParams = getHashParams();
+          const hasInviteAuthCallback = Boolean(
+            searchParams.get("code") ||
+            ((searchParams.get("token_hash") || hashParams.get("token_hash")) && (searchParams.get("type") || hashParams.get("type"))) ||
+            (hashParams.get("access_token") && hashParams.get("refresh_token"))
+          );
           setStep((currentStep) => {
             if (currentStep !== 0) return currentStep;
-            return isExistingUserInvite ? 2 : 1;
+            return isExistingUserInvite || !hasInviteAuthCallback ? 2 : 1;
           });
         }
       }

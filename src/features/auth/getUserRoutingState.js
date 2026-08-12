@@ -13,15 +13,20 @@ export function getUserRoutingState(u, p, org, members) {
   const activeMemberships = Array.isArray(members)
     ? members.filter((membership) => ['active', 'owner', 'approved', 'accepted'].includes(membership?.status || 'active'))
     : [];
+  const pendingInviteMemberships = Array.isArray(members)
+    ? members.filter((membership) => membership?.status === 'invited')
+    : [];
   const onboardingType = p.onboarding_type || u.onboarding_type || u.profile?.onboarding_type || u.user_metadata?.onboarding_type;
   const isInvitedMember =
     onboardingType === 'invited' ||
+    pendingInviteMemberships.length > 0 ||
     activeMemberships.some((membership) => {
       const role = membership?.role;
       return role && !OWNER_ONBOARDING_ROLES.has(role);
     });
 
   if (isInvitedMember) {
+    if (pendingInviteMemberships.length > 0) return 'AcceptInvite';
     if (p.status === 'pending_approval' && activeMemberships.length === 0) return 'PendingApproval';
     if (p.first_login) return 'Welcome';
 

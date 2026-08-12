@@ -420,14 +420,14 @@ Deno.serve(async (req: Request) => {
       warnings.push(`invitations revoke: ${revokeExistingInvitesError.message}`);
     }
 
-    const { error: inviteLogErr } = await adminClient.from("invitations").insert({
-      email,
-      org_id,
-      role: displayRole,
-      token: "magic-link",
-      status: invitationStatus,
-      expires_at: new Date(Date.now() + 86400000).toISOString(), // 24h
-    });
+	    const { error: inviteLogErr } = await adminClient.from("invitations").insert({
+	      email,
+	      org_id,
+	      role: displayRole,
+	      token: crypto.randomUUID(),
+	      status: invitationStatus,
+	      expires_at: new Date(Date.now() + 86400000).toISOString(), // 24h
+	    });
 
     if (inviteLogErr) console.error("[invite-user] invitation log err:", inviteLogErr);
 
