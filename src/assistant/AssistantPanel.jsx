@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Bot, BrainCircuit, FileText, Send, RotateCcw, MapPin } from "lucide-react";
+import { BrainCircuit, FileText, MessageCircleQuestion, Send, RotateCcw, MapPin } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -28,28 +28,38 @@ function MessageBubble({ message }) {
   const isUser = message.role === "user";
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${isUser ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
-        <p className="whitespace-pre-wrap">{message.content}</p>
-        {!isUser && message.status && message.status !== "answered" && (
-          <Badge variant="outline" className="mt-2">{STATUS_LABEL[message.status] || message.status}</Badge>
-        )}
-        {!isUser && message.citations?.length > 0 && (
-          <div className="mt-2 space-y-1 border-t border-border/50 pt-2">
-            {message.citations.map((c, i) => (
-              <div key={i} className="text-xs text-muted-foreground">📎 {c.label}{c.page ? ` (p. ${c.page})` : ""}</div>
-            ))}
+      <div className={`flex max-w-[90%] items-start gap-2 ${isUser ? "flex-row-reverse" : ""}`}>
+        {!isUser && (
+          <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border bg-background text-primary" aria-hidden="true">
+            <MessageCircleQuestion className="h-4 w-4" />
           </div>
         )}
-        {!isUser && message.navigation?.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-2">
-            {message.navigation.map((nav, i) => (
-              <Badge key={i} variant="secondary" className="cursor-default"><MapPin className="mr-1 h-3 w-3" />{nav.label}</Badge>
-            ))}
-          </div>
-        )}
-        {!isUser && message.limitations?.length > 0 && (
-          <div className="mt-2 text-xs italic text-muted-foreground">{message.limitations.join(" ")}</div>
-        )}
+        <div className={`max-w-full rounded-lg px-3 py-2 text-sm ${isUser ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+          <p className="whitespace-pre-wrap">{message.content}</p>
+          {!isUser && message.status && message.status !== "answered" && (
+            <Badge variant="outline" className="mt-2">{STATUS_LABEL[message.status] || message.status}</Badge>
+          )}
+          {!isUser && message.citations?.length > 0 && (
+            <div className="mt-2 space-y-1 border-t border-border/50 pt-2">
+              {message.citations.map((c, i) => (
+                <div key={i} className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <FileText className="h-3 w-3" />
+                  <span>{c.label}{c.page ? ` (p. ${c.page})` : ""}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {!isUser && message.navigation?.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {message.navigation.map((nav, i) => (
+                <Badge key={i} variant="secondary" className="cursor-default"><MapPin className="mr-1 h-3 w-3" />{nav.label}</Badge>
+              ))}
+            </div>
+          )}
+          {!isUser && message.limitations?.length > 0 && (
+            <div className="mt-2 text-xs italic text-muted-foreground">{message.limitations.join(" ")}</div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -78,11 +88,16 @@ export default function AssistantPanel() {
         <BrainCircuit className="h-5 w-5" />
       </Button>
 
-      <Sheet open={isOpen} onOpenChange={setIsOpen}>
-        <SheetContent side="right" className="flex w-full flex-col sm:max-w-md">
+      <Sheet open={isOpen} onOpenChange={setIsOpen} modal={false}>
+        <SheetContent side="right" showOverlay={false} className="flex w-full flex-col border-l bg-background/95 shadow-2xl backdrop-blur sm:max-w-[420px]">
           <SheetHeader>
             <div className="flex items-center justify-between pr-6">
-              <SheetTitle className="flex items-center gap-2"><span className="flex h-7 w-7 items-center justify-center rounded-full border bg-background text-primary"><BrainCircuit className="h-4 w-4" /></span> CRE Assistant</SheetTitle>
+              <SheetTitle className="flex items-center gap-2">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full border bg-background text-primary">
+                  <BrainCircuit className="h-4 w-4" />
+                </span>
+                CRE Assistant
+              </SheetTitle>
               <Button variant="ghost" size="sm" onClick={clearConversation} title="New conversation">
                 <RotateCcw className="h-4 w-4" />
               </Button>
@@ -92,7 +107,7 @@ export default function AssistantPanel() {
           <div className="flex-1 space-y-3 overflow-y-auto py-4">
             {messages.length === 0 && (
               <div className="space-y-2">
-                <p className="text-sm text-muted-foreground">Ask about anything in the platform — what a page does, why something is blocked, or how a number was calculated.</p>
+                <p className="text-sm text-muted-foreground">Ask about anything in the platform: what a page does, why something is blocked, or how a number was calculated.</p>
                 <div className="flex flex-wrap gap-2">
                   {suggestions.map((s) => (
                     <Button key={s} variant="outline" size="sm" onClick={() => handleSend(s)} disabled={isSending}>
@@ -105,7 +120,7 @@ export default function AssistantPanel() {
             {messages.map((m, i) => (
               <MessageBubble key={i} message={m} />
             ))}
-            {isSending && <div className="text-sm text-muted-foreground">Thinking…</div>}
+            {isSending && <div className="text-sm text-muted-foreground">Thinking...</div>}
           </div>
 
           <div className="flex items-end gap-2 border-t pt-3">
@@ -118,7 +133,7 @@ export default function AssistantPanel() {
                   handleSend();
                 }
               }}
-              placeholder="Ask a question…"
+              placeholder="Ask a question..."
               className="min-h-[44px] resize-none"
               disabled={isSending}
             />

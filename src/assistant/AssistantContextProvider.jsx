@@ -34,6 +34,12 @@ export function AssistantContextProvider({ children }) {
     setMessages([]);
   }, []);
 
+  const getRoutePageName = useCallback(() => {
+    if (typeof window === "undefined") return undefined;
+    const firstSegment = window.location.pathname.split("/").filter(Boolean)[0];
+    return firstSegment || undefined;
+  }, []);
+
   const sendMessage = useCallback(
     async (text) => {
       const trimmed = (text ?? "").trim();
@@ -43,7 +49,7 @@ export function AssistantContextProvider({ children }) {
       setIsSending(true);
       try {
         const requestContext = {
-          currentPage: pageContext.page,
+          currentPage: getRoutePageName() || pageContext.page,
           route: typeof window !== "undefined" ? window.location.pathname : undefined,
           fiscalYear: typeof pageContext.fiscalYear === "number" ? pageContext.fiscalYear : undefined,
           entities: pageContext.entities ?? {},
@@ -75,7 +81,7 @@ export function AssistantContextProvider({ children }) {
         setIsSending(false);
       }
     },
-    [conversationId, pageContext, isSending],
+    [conversationId, pageContext, isSending, getRoutePageName],
   );
 
   const value = useMemo(
