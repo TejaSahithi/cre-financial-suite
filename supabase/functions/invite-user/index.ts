@@ -9,35 +9,20 @@ const corsHeaders = {
 
 const SYSTEM_ROLE_ALIASES: Record<string, string> = {
   admin: "org_admin",
-  user: "viewer",
+  custom: "custom_role",
 };
 
 const SYSTEM_ROLES = new Set([
   "super_admin",
   "org_owner",
   "org_admin",
-  "manager",
-  "editor",
-  "viewer",
-  "finance",
-  "auditor",
-  "property_manager",
-  "property_owner",
-  "asset_manager",
   "portfolio_manager",
-  "operations_director",
-  "facility_manager",
-  "construction_manager",
-  "cfo_controller",
-  "financial_analyst",
-  "accounts_manager",
-  "investor_relations",
-  "leasing_director",
-  "leasing_agent",
+  "property_manager",
   "lease_admin",
-  "acquisitions_mgr",
-  "compliance_officer",
-  "internal_auditor",
+  "leasing_agent",
+  "finance",
+  "property_owner",
+  "auditor",
   "tenant",
   "custom_role",
 ]);
@@ -54,7 +39,7 @@ function resolveMembershipRole(role: unknown, accessRole: unknown) {
   const aliasedRole = SYSTEM_ROLE_ALIASES[normalizedRole] || normalizedRole;
   if (SYSTEM_ROLES.has(aliasedRole)) return aliasedRole;
 
-  return "viewer";
+  return null;
 }
 
 function resolveDisplayRole({
@@ -148,16 +133,14 @@ Deno.serve(async (req: Request) => {
       access_scopes, access_role
     } = await req.json();
 
-    const CRE_ASSIGNABLE_ROLES = [
-      "asset_manager", "portfolio_manager", "operations_director",
-      "property_manager", "facility_manager", "construction_manager",
-      "cfo_controller", "financial_analyst", "accounts_manager", "investor_relations",
-      "leasing_director", "leasing_agent", "lease_admin",
-      "acquisitions_mgr", "compliance_officer", "internal_auditor",
+    const CANONICAL_ASSIGNABLE_ROLES = [
+      "org_owner", "org_admin", "portfolio_manager", "property_manager",
+      "lease_admin", "leasing_agent", "finance", "property_owner",
+      "auditor", "tenant", "custom_role",
     ];
-    const PLATFORM_ASSIGNABLE_ROLES = ["super_admin", "org_owner", "org_admin", "admin", "manager", "editor", "viewer", "finance", "auditor", "property_owner", "tenant", "custom_role", ...CRE_ASSIGNABLE_ROLES];
-    const OWNER_ASSIGNABLE_ROLES = ["org_owner", "org_admin", "admin", "manager", "editor", "viewer", "finance", "auditor", "property_owner", "tenant", "custom_role", ...CRE_ASSIGNABLE_ROLES];
-    const ORG_ASSIGNABLE_ROLES = ["org_admin", "admin", "manager", "editor", "viewer", "finance", "auditor", "property_owner", "tenant", "custom_role", ...CRE_ASSIGNABLE_ROLES];
+    const PLATFORM_ASSIGNABLE_ROLES = ["super_admin", ...CANONICAL_ASSIGNABLE_ROLES];
+    const OWNER_ASSIGNABLE_ROLES = CANONICAL_ASSIGNABLE_ROLES;
+    const ORG_ASSIGNABLE_ROLES = CANONICAL_ASSIGNABLE_ROLES.filter((value) => value !== "org_owner");
 
     const assignableRoles = callerMembership.role === "super_admin"
       ? PLATFORM_ASSIGNABLE_ROLES
@@ -185,7 +168,7 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    if (callerMembership.role === "super_admin" && !PLATFORM_ASSIGNABLE_ROLES.includes(role)) {
+    if (callerMembership.role === "super_admin" && role && !PLATFORM_ASSIGNABLE_ROLES.includes(role)) {
       return new Response(JSON.stringify({ error: "Forbidden: invalid role" }), {
         status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -271,6 +254,16 @@ Deno.serve(async (req: Request) => {
         invited_full_name: full_name || null,
       };
       const normalizedIncomingRole = normalizeRoleValue(role);
+      const normalizedCapabilityRoles = Array.isArray(membershipCapabilities.roles)
+        ? membershipCapabilities.roles
+          .map((value: unknown) => SYSTEM_ROLE_ALIASES[normalizeRoleValue(value)] || normalizeRoleValue(value))
+          .filter((value: string) => SYSTEM_ROLES.has(value))
+        : [];
+      if (normalizedCapabilityRoles.length > 0) {
+        membershipCapabilities.roles = [...new Set(normalizedCapabilityRoles)];
+      } else if (membershipRole) {
+        membershipCapabilities.roles = [membershipRole];
+      }
       if (
         !Array.isArray(membershipCapabilities.roles)
         && normalizedIncomingRole
@@ -347,9 +340,9 @@ Deno.serve(async (req: Request) => {
         portfolios: Array.isArray(access_scopes?.portfolios) ? [...new Set(access_scopes.portfolios.filter(Boolean))] : [],
         properties: Array.isArray(access_scopes?.properties) ? [...new Set(access_scopes.properties.filter(Boolean))] : [],
       };
-      const normalizedAccessRole = ["viewer", "editor", "manager"].includes(access_role)
-        ? access_role
-        : (["viewer", "editor", "manager"].includes(membershipRole) ? membershipRole : "viewer");
+      const normalizedAccessRole = SYSTEM_ROLES.has(normalizeRoleValue(access_role))
+        ? normalizeRoleValue(access_role)
+        : (membershipRole || "auditor");
 
       const { error: deleteAccessError } = await adminClient
         .from("user_access")

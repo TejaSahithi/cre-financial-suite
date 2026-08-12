@@ -35,35 +35,31 @@ const CRE_ROLES = {
   // Internal Authority
   org_owner:          { label: "Organization Owner", category: "Internal Authority", color: "amber",   description: "Highest internal business authority and major approvals" },
   org_admin:          { label: "Organization Admin", category: "Internal Authority", color: "amber",   description: "Operational administration, user assignments, and configuration" },
-  // Management
-  asset_manager:       { label: "Asset Manager",       category: "Management",   color: "violet",  description: "Oversees asset performance and value-add strategy" },
-  portfolio_manager:   { label: "Portfolio Manager",   category: "Management",   color: "violet",  description: "Manages entire property portfolio" },
-  operations_director: { label: "Operations Director", category: "Management",   color: "violet",  description: "Overall operations and team management" },
+  // Portfolio
+  portfolio_manager:   { label: "Portfolio Manager",   category: "Portfolio", color: "violet",  description: "Manages assigned portfolios, properties, and operating reviews" },
   // Property Operations
   property_manager:    { label: "Property Manager",    category: "Operations",   color: "blue",    description: "Day-to-day property operations and tenant relations" },
-  facility_manager:    { label: "Facility Manager",    category: "Operations",   color: "blue",    description: "Building systems, maintenance, and repairs" },
-  construction_manager:{ label: "Construction Mgr.",   category: "Operations",   color: "blue",    description: "Capital improvements and construction oversight" },
+  // Leasing
+  lease_admin:         { label: "Lease Administrator", category: "Leasing",      color: "amber",   description: "Lease abstracts, CAM, and compliance" },
+  leasing_agent:       { label: "Leasing Agent",       category: "Leasing",      color: "amber",   description: "Tenant prospecting, tours, and lease execution" },
   // Finance
-  cfo_controller:      { label: "CFO / Controller",    category: "Finance",      color: "emerald", description: "Financial controls, accounting, and reporting" },
   finance:             { label: "Finance Team",        category: "Finance",      color: "emerald", description: "Financial review, validation, and reporting" },
-  financial_analyst:   { label: "Financial Analyst",   category: "Finance",      color: "emerald", description: "Financial modeling, analysis, and projections" },
-  accounts_manager:    { label: "Accounts Manager",    category: "Finance",      color: "emerald", description: "AR/AP management and reconciliations" },
-  investor_relations:  { label: "Investor Relations",  category: "Finance",      color: "emerald", description: "Investor communication and capital reporting" },
   // Ownership
   property_owner:      { label: "Property Owner",      category: "Ownership",    color: "rose",    description: "External business owner scoped to owned properties" },
-  // Leasing
-  leasing_director:    { label: "Leasing Director",    category: "Leasing",      color: "amber",   description: "Leasing strategy and broker relationships" },
-  leasing_agent:       { label: "Leasing Agent",       category: "Leasing",      color: "amber",   description: "Tenant prospecting, tours, and lease execution" },
-  lease_admin:         { label: "Lease Administrator", category: "Leasing",      color: "amber",   description: "Lease abstracts, CAM, and compliance" },
-  // Acquisitions
-  acquisitions_mgr:    { label: "Acquisitions Mgr.",   category: "Acquisitions", color: "rose",    description: "Deal sourcing, underwriting, and due diligence" },
   // Compliance
   auditor:             { label: "Auditor",             category: "Compliance",   color: "slate",   description: "Read-only audit and supporting-document access" },
-  compliance_officer:  { label: "Compliance Officer",  category: "Compliance",   color: "slate",   description: "Regulatory compliance and risk management" },
-  internal_auditor:    { label: "Internal Auditor",    category: "Compliance",   color: "slate",   description: "Audit trail review and financial controls" },
+  // External
+  tenant:              { label: "Tenant",              category: "External",     color: "slate",   description: "External tenant notification role; portal access is disabled" },
+  // Custom
+  custom_role:         { label: "Custom Role",         category: "Custom",       color: "violet",  description: "Organization-defined role with custom permissions" },
 };
 
-const ROLE_CATEGORY_ORDER = ["Internal Authority", "Management", "Operations", "Finance", "Ownership", "Leasing", "Acquisitions", "Compliance"];
+// Deferred roles for later: asset_manager, operations_director, facility_manager,
+// construction_manager, cfo_controller, financial_analyst, accounts_manager,
+// investor_relations, leasing_director, acquisitions_mgr, compliance_officer,
+// internal_auditor.
+
+const ROLE_CATEGORY_ORDER = ["Internal Authority", "Portfolio", "Operations", "Leasing", "Finance", "Ownership", "Compliance", "External", "Custom"];
 
 const ROLE_COLOR_CLASSES = {
   violet:  { badge: "bg-violet-100 text-violet-700 border-violet-200",  dot: "bg-violet-500" },
@@ -277,23 +273,12 @@ const ROLE_PAGE_ACCESS_LEVELS = {
   org_owner: "admin",
   org_admin: "admin",
   portfolio_manager: "approve",
-  asset_manager: "approve",
-  operations_director: "approve",
   property_manager: "write",
-  facility_manager: "write",
-  construction_manager: "write",
   finance: "write",
-  cfo_controller: "approve",
-  accounts_manager: "write",
-  financial_analyst: "read",
-  leasing_director: "approve",
   leasing_agent: "write",
   lease_admin: "write",
-  acquisitions_mgr: "write",
   property_owner: "read",
   auditor: "read",
-  compliance_officer: "read",
-  internal_auditor: "read",
   tenant: "none",
   custom: "read",
   custom_role: "read",
@@ -420,10 +405,20 @@ function normalizeCapabilities(capabilities) {
   };
 }
 
+function normalizeUserManagementRole(role) {
+  const normalized = String(role || "").trim();
+  if (!normalized) return "";
+  if (normalized === "custom") return "custom_role";
+  return normalized;
+}
+
 function getMemberRoles(member) {
-  const roles = normalizeArray(member?.capabilities?.roles);
+  const roles = normalizeArray(member?.capabilities?.roles)
+    .map(normalizeUserManagementRole)
+    .filter(Boolean);
   if (roles.length > 0) return roles;
-  return member?.role ? [member.role] : [];
+  const role = normalizeUserManagementRole(member?.role);
+  return role ? [role] : [];
 }
 
 function getMemberSigningPrivileges(member) {
@@ -602,32 +597,11 @@ function getMemberDataScope(member) {
 }
 
 function deriveAccessGrantRole(selectedRoles, pagePerms) {
-  const selected = new Set(selectedRoles || []);
-  const hasManagerPageAccess = Object.values(pagePerms || {}).some((value) => ["write", "approve", "admin", "full"].includes(value));
-
-  if (
-    hasManagerPageAccess ||
-    selected.has("org_owner") ||
-    selected.has("org_admin") ||
-    selected.has("asset_manager") ||
-    selected.has("portfolio_manager") ||
-    selected.has("property_manager") ||
-    selected.has("operations_director")
-  ) {
-    return "manager";
-  }
-
-  if (
-    selected.has("finance") ||
-    selected.has("financial_analyst") ||
-    selected.has("accounts_manager") ||
-    selected.has("leasing_agent") ||
-    selected.has("lease_admin")
-  ) {
-    return "editor";
-  }
-
-  return "viewer";
+  const selected = normalizeArray(selectedRoles).map(normalizeUserManagementRole).filter(Boolean);
+  const primaryRole = selected.find((role) => role !== "custom_role") || (selected.includes("custom_role") ? "custom_role" : null);
+  if (primaryRole) return primaryRole;
+  const hasWritePageAccess = Object.values(pagePerms || {}).some((value) => ["write", "approve", "admin", "full"].includes(value));
+  return hasWritePageAccess ? "custom_role" : "auditor";
 }
 
 async function syncUserAccessGrants({ userId, orgId, dataScope, role }) {
@@ -684,7 +658,7 @@ async function syncUserAccessGrants({ userId, orgId, dataScope, role }) {
       role_key: role,
       scope_type: row.scope,
       scope_id: row.scope_id,
-      access_level: row.role === "manager" ? "write" : row.role === "editor" ? "write" : "read",
+      access_level: ["org_owner", "org_admin", "portfolio_manager", "property_manager", "lease_admin", "leasing_agent", "finance", "custom_role"].includes(row.role) ? "write" : "read",
       is_active: true,
     }));
 
@@ -977,7 +951,7 @@ function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameCha
     }
   };
 
-  const hasCustom = selectedRoles.includes("custom");
+  const hasCustom = selectedRoles.includes("custom_role");
 
   return (
     <div className="space-y-2">
@@ -997,11 +971,11 @@ function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameCha
               <span className="text-slate-400">Select roles…</span>
             ) : (
               selectedRoles.slice(0, 3).map(r => {
-                const def = r === "custom" ? null : CRE_ROLES[r];
+                const def = CRE_ROLES[r];
                 const color = def ? ROLE_COLOR_CLASSES[def.color] : ROLE_COLOR_CLASSES.violet;
                 return (
                   <span key={r} className={`text-xs px-2.5 py-1 rounded-full border font-semibold ${color.badge}`}>
-                    {r === "custom" ? (customRoleName || "Custom") : def?.label}
+                    {r === "custom_role" ? (customRoleName || "Custom Role") : def?.label}
                   </span>
                 );
               })
@@ -1050,23 +1024,6 @@ function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameCha
                   })}
                 </div>
               ))}
-              {/* Custom Role Option */}
-              <div>
-                <div className="px-2 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Custom</div>
-                <button
-                  type="button"
-                  onClick={() => toggle("custom")}
-                  className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl text-left transition-colors ${hasCustom ? "bg-[#1a2744]/5 ring-1 ring-[#1a2744]/20" : "hover:bg-slate-50"}`}
-                >
-                  <div className={`w-5 h-5 rounded border flex-shrink-0 flex items-center justify-center ${hasCustom ? "bg-[#1a2744] border-[#1a2744]" : "border-slate-300"}`}>
-                    {hasCustom && <CheckCircle2 className="w-3 h-3 text-white" />}
-                  </div>
-                  <div>
-                    <span className="text-sm font-bold text-slate-800">Custom Role…</span>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">Define a role with its own permission matrix, approval limits, and notification preferences.</p>
-                  </div>
-                </button>
-              </div>
             </div>
           </div>
         )}
@@ -1075,7 +1032,7 @@ function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameCha
       {/* Custom role name input */}
       {hasCustom && (
         <Input
-          placeholder="Enter custom role title (e.g. Senior Deal Analyst)"
+          placeholder="Enter custom role title"
           value={customRoleName}
           disabled={readonly}
           onChange={e => onCustomNameChange(e.target.value)}
@@ -1346,9 +1303,9 @@ function RoleBadges({ member, maxVisible = 2 }) {
   return (
     <div className="flex flex-wrap gap-1">
       {visible.map(r => {
-        if (r === "custom") {
+        if (r === "custom_role") {
           return (
-            <span key="custom" className="text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-purple-100 text-purple-700 border-purple-200">
+            <span key="custom_role" className="text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-purple-100 text-purple-700 border-purple-200">
               {customName || "Custom"}
             </span>
           );
@@ -1444,9 +1401,9 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
     }
     setSaving(true);
     try {
-      const primaryRole = selectedRoles.find(r => r !== "custom") || selectedRoles[0] || null;
+      const primaryRole = selectedRoles.find(r => r !== "custom_role") || (selectedRoles.includes("custom_role") ? "custom_role" : null);
       const accessRole = deriveAccessGrantRole(selectedRoles, pagePerms);
-      const customRoleDefinition = selectedRoles.includes("custom")
+      const customRoleDefinition = selectedRoles.includes("custom_role")
         ? await ensureInlineCustomRoleDefinition({
           orgId,
           customRoleName,
@@ -1622,8 +1579,8 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
                   <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 block">Selected Roles</Label>
                   <div className="space-y-2">
                     {selectedRoles.map(r => {
-                      if (r === "custom") return (
-                        <div key="custom" className="flex items-start gap-2 p-2.5 rounded-xl bg-purple-50 border border-purple-200">
+                      if (r === "custom_role") return (
+                        <div key="custom_role" className="flex items-start gap-2 p-2.5 rounded-xl bg-purple-50 border border-purple-200">
                           <div className="w-2 h-2 rounded-full bg-purple-500 mt-1.5 flex-shrink-0" />
                           <div>
                             <p className="text-xs font-semibold text-purple-800">{customRoleName || "Custom Role"}</p>
@@ -1647,7 +1604,7 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
                   </div>
                 </div>
               )}
-              {selectedRoles.includes("custom") && (
+              {selectedRoles.includes("custom_role") && (
                 <div className="space-y-3">
                   <div>
                     <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 block">Custom Role Description</Label>
@@ -1836,9 +1793,9 @@ function InviteDialog({ open, onClose, orgId }) {
     if (!validate()) { setActiveTab("info"); return; }
     setSubmitting(true);
     try {
-      const primaryRole = selectedRoles.find(r => r !== "custom") || null;
+      const primaryRole = selectedRoles.find(r => r !== "custom_role") || (selectedRoles.includes("custom_role") ? "custom_role" : null);
       const accessRole = deriveAccessGrantRole(selectedRoles, pagePerms);
-      const customRoleDefinition = selectedRoles.includes("custom")
+      const customRoleDefinition = selectedRoles.includes("custom_role")
         ? await ensureInlineCustomRoleDefinition({
           orgId,
           customRoleName,
@@ -1956,7 +1913,7 @@ function InviteDialog({ open, onClose, orgId }) {
                   No roles selected — user will be created with No Access status.
                 </p>
               )}
-              {selectedRoles.includes("custom") && (
+              {selectedRoles.includes("custom_role") && (
                 <div className="space-y-3">
                   <div>
                     <Label className="text-sm font-medium mb-2 block">Custom Role Description</Label>
@@ -2307,9 +2264,9 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const primaryRole = selectedRoles.find(r => r !== "custom") || null;
+      const primaryRole = selectedRoles.find(r => r !== "custom_role") || (selectedRoles.includes("custom_role") ? "custom_role" : null);
       const accessRole = deriveAccessGrantRole(selectedRoles, pagePerms);
-      const customRoleDefinition = selectedRoles.includes("custom")
+      const customRoleDefinition = selectedRoles.includes("custom_role")
         ? await ensureInlineCustomRoleDefinition({
           orgId,
           customRoleName,
@@ -2382,7 +2339,7 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
             <div className="space-y-4">
               <RoleSelector selectedRoles={selectedRoles} onChange={handleRolesChange}
                 customRoleName={customRoleName} onCustomNameChange={setCustomRoleName} dropdownMode="inline" />
-              {selectedRoles.includes("custom") && (
+              {selectedRoles.includes("custom_role") && (
                 <div className="space-y-3">
                   <div>
                     <Label className="text-sm font-medium mb-2 block">Custom Role Description</Label>
@@ -2653,7 +2610,7 @@ export default function UserManagement() {
       if (filterStatus !== "all" && deriveStatus(m) !== filterStatus) return false;
       if (filterCategory !== "all") {
         const roles = getMemberRoles(m);
-        const hasCategory = roles.some(r => r !== "custom" && CRE_ROLES[r]?.category === filterCategory);
+        const hasCategory = roles.some(r => CRE_ROLES[r]?.category === filterCategory);
         if (!hasCategory) return false;
       }
       return true;

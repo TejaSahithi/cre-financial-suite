@@ -250,11 +250,6 @@ export const STANDARD_ROLE_DEFINITIONS = {
 const ROLE_ALIASES = {
   owner: "org_owner",
   admin: "org_admin",
-  manager: "property_manager",
-  editor: "lease_admin",
-  viewer: "auditor",
-  read_only: "auditor",
-  asset_manager: "portfolio_manager",
   custom: "custom_role",
 };
 
