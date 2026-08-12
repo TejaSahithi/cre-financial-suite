@@ -200,7 +200,7 @@ const PAGE_PERMISSION_GROUPS = [
   {
     key: "admin", label: "Administration", icon: "⚙️",
     pages: [
-      { key: "UserManagement", label: "User Management" },
+      { key: "UserManagement", label: "Team Management" },
       { key: "OrgSettings",    label: "Org Settings" },
       { key: "AuditLog",       label: "Audit Log" },
       { key: "Documents",      label: "Documents" },
@@ -412,6 +412,18 @@ function normalizeUserManagementRole(role) {
   return normalized;
 }
 
+function normalizeAssignableRoleInput(role) {
+  const normalized = String(role || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!normalized) return "";
+  if (normalized === "custom") return "custom_role";
+  if (CRE_ROLES[normalized]) return normalized;
+
+  const matchingRole = Object.entries(CRE_ROLES).find(([, meta]) => {
+    return meta.label.toLowerCase().replace(/[\s-]+/g, "_") === normalized;
+  });
+  return matchingRole?.[0] || "";
+}
+
 function getMemberRoles(member) {
   const roles = normalizeArray(member?.capabilities?.roles)
     .map(normalizeUserManagementRole)
@@ -564,6 +576,7 @@ function parseCSV(text) {
     if (/^(full_?name|name|first_?name|contact_?name)$/.test(clean)) headerMap.full_name = i;
     else if (/^(email|email_?address)$/.test(clean)) headerMap.email = i;
     else if (/^(phone|phone_?number|mobile|cell|telephone)$/.test(clean)) headerMap.phone = i;
+    else if (/^(role|team_?role|cre_?role|access_?role)$/.test(clean)) headerMap.role = i;
   });
 
   return lines.slice(1).map(line => {
@@ -579,6 +592,7 @@ function parseCSV(text) {
       full_name: headerMap.full_name !== undefined ? vals[headerMap.full_name] || "" : "",
       email:     headerMap.email     !== undefined ? vals[headerMap.email]     || "" : "",
       phone:     headerMap.phone     !== undefined ? vals[headerMap.phone]     || "" : "",
+      role:      headerMap.role      !== undefined ? normalizeAssignableRoleInput(vals[headerMap.role]) : "",
     };
   }).filter(r => r.email && r.email.includes("@"));
 }
@@ -1396,7 +1410,7 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
 
   const handleSave = async () => {
     if (readOnly) {
-      toast.error("You have read-only access to User Management.");
+      toast.error("You have read-only access to Team Management.");
       return;
     }
     setSaving(true);
@@ -1454,7 +1468,7 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
 
   const handleStatusChange = async (nextStatus) => {
     if (readOnly) {
-      toast.error("You have read-only access to User Management.");
+      toast.error("You have read-only access to Team Management.");
       return;
     }
     setSaving(true);
@@ -1482,7 +1496,7 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
 
   const handleRemove = async () => {
     if (readOnly) {
-      toast.error("You have read-only access to User Management.");
+      toast.error("You have read-only access to Team Management.");
       return;
     }
     if (!confirm(`Remove ${member.profiles?.full_name || member.profiles?.email} from this organization?`)) return;
@@ -1923,7 +1937,7 @@ function InviteDialog({ open, onClose, orgId }) {
               {selectedRoles.length === 0 && (
                 <p className="text-xs text-amber-600 flex items-center gap-1.5">
                   <AlertTriangle className="w-3.5 h-3.5" />
-                  No roles selected — user will be created with No Access status.
+                  Select at least one team role before sending an invite.
                 </p>
               )}
               {errors.roles && <p className="text-xs text-red-500">{errors.roles}</p>}
@@ -2059,7 +2073,12 @@ function CSVUploadDialog({ open, onClose, orgId }) {
       setParseError("");
       const parsed = parseCSV(e.target.result);
       if (parsed.length === 0) {
-        setParseError("No valid rows found. Check that your CSV has email, name, and phone columns.");
+        setParseError("No valid rows found. Check that your CSV has email, full_name, phone, and role columns.");
+        return;
+      }
+      const missingRoles = parsed.filter(row => !row.role);
+      if (missingRoles.length > 0) {
+        setParseError("Every imported member must include a valid role, such as portfolio_manager, property_manager, finance, auditor, or tenant.");
         return;
       }
       setRows(parsed);
@@ -2070,10 +2089,10 @@ function CSVUploadDialog({ open, onClose, orgId }) {
 
   const downloadTemplate = () => {
     const csv = [
-      "full_name,email,phone",
-      "Jane Smith,jane@company.com,+1-555-0100",
-      "John Doe,john@company.com,+1-555-0101",
-      "Sarah Lee,sarah@company.com,+1-555-0102",
+      "full_name,email,phone,role",
+      "Jane Smith,jane@company.com,+1-555-0100,portfolio_manager",
+      "John Doe,john@company.com,+1-555-0101,property_manager",
+      "Sarah Lee,sarah@company.com,+1-555-0102,finance",
     ].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a");
@@ -2094,7 +2113,7 @@ function CSVUploadDialog({ open, onClose, orgId }) {
           full_name: row.full_name,
           phone: row.phone,
           org_id: orgId,
-          role: null,
+          role: row.role,
         });
         setProgress(p => ({ ...p, done: p.done + 1, success: p.success + 1 }));
       } catch (e) {
@@ -2112,7 +2131,7 @@ function CSVUploadDialog({ open, onClose, orgId }) {
     <Dialog open={open} onOpenChange={v => { if (!v) { reset(); onClose(); } }}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader className="flex-shrink-0">
-          <DialogTitle className="text-lg font-bold">Import Users from CSV</DialogTitle>
+          <DialogTitle className="text-lg font-bold">Import Team Members from CSV</DialogTitle>
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto space-y-4 py-2">
@@ -2120,8 +2139,8 @@ function CSVUploadDialog({ open, onClose, orgId }) {
           <div className="flex items-start gap-3 p-3 bg-blue-50 border border-blue-100 rounded-xl text-xs text-blue-700">
             <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-blue-500" />
             <span>
-              <strong>CSV must contain: full_name, email, phone columns.</strong>{" "}
-              No roles are assigned during import. Users are created with <strong>No Access</strong> status — assign roles individually after import.
+              <strong>CSV must contain: full_name, email, phone, role columns.</strong>{" "}
+              Each row sends a team invite using one canonical role, for example <strong>portfolio_manager</strong>, <strong>property_manager</strong>, <strong>finance</strong>, <strong>auditor</strong>, or <strong>tenant</strong>.
             </span>
           </div>
 
@@ -2138,7 +2157,7 @@ function CSVUploadDialog({ open, onClose, orgId }) {
                 onClick={() => fileInputRef.current?.click()}
               >
                 <Upload className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                <p className="text-sm font-semibold text-slate-600 mb-1">Drop your CSV file here</p>
+                <p className="text-sm font-semibold text-slate-600 mb-1">Drop your team CSV file here</p>
                 <p className="text-xs text-slate-400">or click to browse — accepts .csv only</p>
                 <input
                   ref={fileInputRef}
@@ -2160,7 +2179,7 @@ function CSVUploadDialog({ open, onClose, orgId }) {
           {rows.length > 0 && !progress && (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-semibold text-slate-700">{rows.length} users ready to import</p>
+                <p className="text-sm font-semibold text-slate-700">{rows.length} members ready to invite</p>
                 <button className="text-xs text-slate-400 hover:text-slate-600 underline" onClick={reset}>
                   Clear & re-upload
                 </button>
@@ -2173,7 +2192,7 @@ function CSVUploadDialog({ open, onClose, orgId }) {
                       <th className="px-3 py-2.5 text-left text-slate-500 font-semibold">Full Name</th>
                       <th className="px-3 py-2.5 text-left text-slate-500 font-semibold">Email</th>
                       <th className="px-3 py-2.5 text-left text-slate-500 font-semibold">Phone</th>
-                      <th className="px-3 py-2.5 text-left text-slate-500 font-semibold">Status After Import</th>
+                      <th className="px-3 py-2.5 text-left text-slate-500 font-semibold">Role</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -2184,7 +2203,9 @@ function CSVUploadDialog({ open, onClose, orgId }) {
                         <td className="px-3 py-2 text-slate-600">{r.email}</td>
                         <td className="px-3 py-2 text-slate-500">{r.phone || <span className="text-slate-400 italic">—</span>}</td>
                         <td className="px-3 py-2">
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-semibold">No Access</span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold">
+                            {CRE_ROLES[r.role]?.label || r.role}
+                          </span>
                         </td>
                       </tr>
                     ))}
@@ -2193,7 +2214,7 @@ function CSVUploadDialog({ open, onClose, orgId }) {
               </div>
               <p className="text-[10px] text-amber-700 mt-2 flex items-center gap-1">
                 <AlertTriangle className="w-3 h-3" />
-                Roles must be assigned manually after import from the Users table.
+                Only canonical team roles are accepted. Custom roles should be created from Team Management first.
               </p>
             </div>
           )}
@@ -2656,7 +2677,7 @@ export default function UserManagement() {
 
   const handleBulkRemove = async () => {
     if (!canManageUsers) {
-      toast.error("You have read-only access to User Management.");
+      toast.error("You have read-only access to Team Management.");
       return;
     }
     if (!confirm(`Remove ${selectedMembers.length} members?`)) return;
@@ -2671,7 +2692,7 @@ export default function UserManagement() {
 
   const handleBulkResend = async () => {
     if (!canManageUsers) {
-      toast.error("You have read-only access to User Management.");
+      toast.error("You have read-only access to Team Management.");
       return;
     }
     const targets = selectedMembers.filter(m => deriveStatus(m) === "invited");
@@ -2699,9 +2720,9 @@ export default function UserManagement() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-[28px] font-black text-slate-900">User Management</h1>
+          <h1 className="text-[28px] font-black text-slate-900">Team Management</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            {isSuperAdmin ? "Manage users across all organizations" : "Manage your team's roles, access, and signing authority"}
+            {isSuperAdmin ? "Manage teams across all organizations" : "Manage your team's roles, access, and signing authority"}
           </p>
         </div>
         <div className="flex gap-2">

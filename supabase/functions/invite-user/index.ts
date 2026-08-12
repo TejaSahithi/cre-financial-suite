@@ -191,9 +191,14 @@ Deno.serve(async (req: Request) => {
       accessRole: access_role,
     });
 
-    // role is optional: null/omitted means user is imported with no role (no_access)
     if (!email || !org_id) {
       return new Response(JSON.stringify({ error: "Missing required fields: email, org_id" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (!membershipRole) {
+      return new Response(JSON.stringify({ error: "A valid team role is required before sending an invite" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -311,8 +316,8 @@ Deno.serve(async (req: Request) => {
         .upsert(membershipRow, { onConflict: "user_id,org_id" });
       if (membershipErr) {
         console.error("[invite-user] membership upsert error:", membershipErr);
-        // Auth user already exists at this point — don't 500 on a missing
-        // optional column. Surface the warning so the client can show it.
+        // Keep backward compatibility with older schemas that may be missing
+        // optional metadata columns, but still require the core invite row.
         const { error: fallbackMembershipErr } = await adminClient
           .from("memberships")
           .upsert(
@@ -320,13 +325,20 @@ Deno.serve(async (req: Request) => {
               user_id: userId,
               org_id,
               role: membershipRole,
+              status: nextMembershipStatus,
             },
             { onConflict: "user_id,org_id" },
           );
 
         if (fallbackMembershipErr) {
           console.error("[invite-user] fallback membership upsert error:", fallbackMembershipErr);
-          warnings.push(`membership: ${fallbackMembershipErr.message}`);
+          return new Response(JSON.stringify({
+            error: "Failed to create team membership. Invite email was not sent.",
+            details: fallbackMembershipErr.message,
+          }), {
+            status: 500,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
         } else {
           warnings.push(`membership metadata: ${membershipErr.message}`);
         }
@@ -339,9 +351,9 @@ Deno.serve(async (req: Request) => {
         .eq("id", userId)
         .maybeSingle();
 
-      const nextProfileStatus = ["active", "approved", "onboarding", "under_review"].includes(existingProfile?.status)
+      const nextProfileStatus = ["active", "suspended"].includes(existingProfile?.status)
         ? existingProfile.status
-        : "pending_approval";
+        : "invited";
 
       const { error: profileErr } = await adminClient.from("profiles").upsert({
         id: userId,
@@ -353,7 +365,16 @@ Deno.serve(async (req: Request) => {
         first_login: existingProfile?.first_login ?? true,
       }, { onConflict: "id" });
       
-      if (profileErr) console.error("[invite-user] profile upsert:", profileErr);
+      if (profileErr) {
+        console.error("[invite-user] profile upsert:", profileErr);
+        return new Response(JSON.stringify({
+          error: "Failed to prepare invited member profile. Invite email was not sent.",
+          details: profileErr.message,
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
 
       const normalizedScope = {
         portfolios: Array.isArray(access_scopes?.portfolios) ? [...new Set(access_scopes.portfolios.filter(Boolean))] : [],
@@ -417,19 +438,34 @@ Deno.serve(async (req: Request) => {
 
     if (revokeExistingInvitesError) {
       console.error("[invite-user] revoke existing invites error:", revokeExistingInvitesError);
-      warnings.push(`invitations revoke: ${revokeExistingInvitesError.message}`);
+      return new Response(JSON.stringify({
+        error: "Failed to reset previous pending invites. Invite email was not sent.",
+        details: revokeExistingInvitesError.message,
+      }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-	    const { error: inviteLogErr } = await adminClient.from("invitations").insert({
-	      email,
-	      org_id,
-	      role: displayRole,
-	      token: crypto.randomUUID(),
-	      status: invitationStatus,
-	      expires_at: new Date(Date.now() + 86400000).toISOString(), // 24h
-	    });
+    const { error: inviteLogErr } = await adminClient.from("invitations").insert({
+      email,
+      org_id,
+      role: displayRole,
+      token: crypto.randomUUID(),
+      status: invitationStatus,
+      expires_at: new Date(Date.now() + 86400000).toISOString(), // 24h
+    });
 
-    if (inviteLogErr) console.error("[invite-user] invitation log err:", inviteLogErr);
+    if (inviteLogErr) {
+      console.error("[invite-user] invitation log err:", inviteLogErr);
+      return new Response(JSON.stringify({
+        error: "Failed to log team invitation. Invite email was not sent.",
+        details: inviteLogErr.message,
+      }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     // ── Send Branded Email via Resend ──────────────────────────────────────────
     const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
