@@ -220,6 +220,7 @@ Deno.serve(async (req: Request) => {
             full_name: full_name || "",
             role: displayRole,
             app_role: membershipRole,
+            onboarding_type: "invited",
             org_id,
             org_name: orgName,
             invited_by: caller.id,

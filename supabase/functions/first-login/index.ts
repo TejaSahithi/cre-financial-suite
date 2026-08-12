@@ -58,7 +58,7 @@ Deno.serve(async (req) => {
           .from('invitations')
           .select('id')
           .ilike('email', user.email)
-          .in('status', ['pending', 'pending_approval'])
+          .in('status', ['pending', 'pending_approval', 'accepted'])
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle(),
@@ -110,7 +110,7 @@ Deno.serve(async (req) => {
         .from('invitations')
         .select('id')
         .ilike('email', user.email)
-        .in('status', ['pending', 'pending_approval'])
+        .in('status', ['pending', 'pending_approval', 'accepted'])
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle(),

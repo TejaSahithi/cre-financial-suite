@@ -1785,9 +1785,21 @@ function InviteDialog({ open, onClose, orgId }) {
     if (!form.full_name.trim()) e.full_name = "Required";
     if (!form.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = "Valid email required";
     if (!form.phone.trim()) e.phone = "Required";
+    if (selectedRoles.length === 0) e.roles = "Select at least one role";
+    if (selectedRoles.includes("custom_role") && !customRoleName.trim()) e.customRoleName = "Custom role title required";
     setErrors(e);
     return Object.keys(e).length === 0;
   };
+
+  const contactComplete =
+    Boolean(form.full_name.trim()) &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim()) &&
+    Boolean(form.phone.trim());
+  const rolesComplete = selectedRoles.length > 0 && (!selectedRoles.includes("custom_role") || Boolean(customRoleName.trim()));
+  const permissionsComplete = Object.values(pagePerms || {}).some((level) => normalizePageAccessLevel(level) !== "none")
+    || selectedRoles.includes("tenant");
+  const reachedReviewStep = activeTab === "signing";
+  const canSendInvite = contactComplete && rolesComplete && permissionsComplete && reachedReviewStep && !submitting;
 
   const handleSubmit = async () => {
     if (!validate()) { setActiveTab("info"); return; }
@@ -1891,6 +1903,7 @@ function InviteDialog({ open, onClose, orgId }) {
                 {errors.phone && <p className="text-xs text-red-500 mt-1">{errors.phone}</p>}
               </div>
               <Button className="w-full bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold"
+                disabled={!contactComplete}
                 onClick={() => setActiveTab("roles")}>
                 Next: Assign Roles →
               </Button>
@@ -1913,10 +1926,12 @@ function InviteDialog({ open, onClose, orgId }) {
                   No roles selected — user will be created with No Access status.
                 </p>
               )}
+              {errors.roles && <p className="text-xs text-red-500">{errors.roles}</p>}
               {selectedRoles.includes("custom_role") && (
                 <div className="space-y-3">
                   <div>
                     <Label className="text-sm font-medium mb-2 block">Custom Role Description</Label>
+                    {errors.customRoleName && <p className="text-xs text-red-500 mb-1">{errors.customRoleName}</p>}
                     <Input
                       value={customRoleDescription}
                       onChange={(event) => setCustomRoleDescription(event.target.value)}
@@ -1932,7 +1947,7 @@ function InviteDialog({ open, onClose, orgId }) {
               )}
               <div className="flex gap-2">
                 <Button variant="outline" className="flex-1" onClick={() => setActiveTab("info")}>← Back</Button>
-                <Button className="flex-1 bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold" onClick={() => setActiveTab("data")}>
+                <Button className="flex-1 bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold" disabled={!rolesComplete} onClick={() => setActiveTab("data")}>
                   Next: Scope →
                 </Button>
               </div>
@@ -1947,9 +1962,15 @@ function InviteDialog({ open, onClose, orgId }) {
                 onChange={(k, v) => setPagePerms(p => ({ ...p, [k]: v }))}
                 inheritedPermissions={inheritedPagePerms}
               />
+              {!permissionsComplete && (
+                <p className="text-xs text-amber-600 flex items-center gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  Give this user at least one page permission before review.
+                </p>
+              )}
               <div className="flex gap-2 pt-2">
                 <Button variant="outline" className="flex-1" onClick={() => setActiveTab("data")}>← Back</Button>
-                <Button className="flex-1 bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold" onClick={() => setActiveTab("authority")}>
+                <Button className="flex-1 bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold" disabled={!permissionsComplete} onClick={() => setActiveTab("authority")}>
                   Next: Authority →
                 </Button>
               </div>
@@ -2008,9 +2029,9 @@ function InviteDialog({ open, onClose, orgId }) {
 
         <DialogFooter className="gap-2 flex-shrink-0 pt-2 border-t border-slate-100">
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button className="bg-[#1a2744] hover:bg-[#1a2744]/90 text-white gap-2" onClick={handleSubmit} disabled={submitting}>
+          <Button className="bg-[#1a2744] hover:bg-[#1a2744]/90 text-white gap-2" onClick={handleSubmit} disabled={!canSendInvite}>
             {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
-            Send Invite
+            {reachedReviewStep ? "Send Invite" : "Complete All Steps"}
           </Button>
         </DialogFooter>
       </DialogContent>

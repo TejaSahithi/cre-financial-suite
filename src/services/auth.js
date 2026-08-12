@@ -227,7 +227,7 @@ async function acceptInviteOnServer(payload = {}) {
 }
 
 async function reconcileSignedInInvite(authUser, profile, memberships = []) {
-  const invitedMemberships = memberships.filter((membership) => membership?.status === 'invited');
+  const invitedMemberships = memberships.filter((membership) => ['invited', 'accepted', 'approved'].includes(membership?.status));
   const shouldAutoActivate = profile?.first_login === false || profile?.status === 'active';
   if (!authUser?.id || invitedMemberships.length === 0 || !shouldAutoActivate) return memberships;
 
@@ -370,7 +370,7 @@ async function buildUserObject(authUser) {
     _raw_role: role,
     org_id,
     onboarding_complete: profile?.onboarding_complete ?? false,
-    onboarding_type: profile?.onboarding_type || 'owner',
+    onboarding_type: profile?.onboarding_type || authUser.user_metadata?.onboarding_type || 'owner',
     first_login: profile?.first_login ?? true,
     memberships,
     profile: profile || { status: 'onboarding' },

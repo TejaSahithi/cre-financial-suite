@@ -59,23 +59,27 @@ Deno.serve(async (req: Request) => {
       throw membershipsError;
     }
 
-    const invitedMemberships = (memberships || []).filter((membership: any) => membership?.status === "invited");
-    const invitedOrgIds = [...new Set(invitedMemberships.map((membership: any) => membership?.org_id).filter(Boolean))];
-    if (invitedOrgIds.length === 0) {
+    const acceptableInviteStatuses = new Set(["invited", "accepted", "approved"]);
+    const activeStatuses = new Set(["active", "owner"]);
+    const eligibleMemberships = (memberships || []).filter((membership: any) =>
+      acceptableInviteStatuses.has(membership?.status) || activeStatuses.has(membership?.status || "active")
+    );
+    const eligibleOrgIds = [...new Set(eligibleMemberships.map((membership: any) => membership?.org_id).filter(Boolean))];
+    if (eligibleOrgIds.length === 0) {
       return new Response(JSON.stringify({ error: "No pending invitation found for this account" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    if (requestedOrgId && !invitedOrgIds.includes(requestedOrgId)) {
+    if (requestedOrgId && !eligibleOrgIds.includes(requestedOrgId)) {
       return new Response(JSON.stringify({ error: "The requested organization does not have a pending invite for this account" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const targetOrgIds = requestedOrgId ? [requestedOrgId] : invitedOrgIds;
+    const targetOrgIds = requestedOrgId ? [requestedOrgId] : eligibleOrgIds;
 
     const membershipPayload: Record<string, unknown> = {
       status: "active",
@@ -88,14 +92,22 @@ Deno.serve(async (req: Request) => {
       .update(membershipPayload)
       .eq("user_id", user.id)
       .in("org_id", targetOrgIds)
-      .eq("status", "invited")
+      .in("status", ["invited", "accepted", "approved"])
       .select("org_id");
 
     if (membershipError) {
       throw membershipError;
     }
 
-    const activatedOrgIds = [...new Set((activatedMemberships || []).map((membership: any) => membership?.org_id).filter(Boolean))];
+    const alreadyActiveOrgIds = eligibleMemberships
+      .filter((membership: any) =>
+        targetOrgIds.includes(membership?.org_id) && activeStatuses.has(membership?.status || "active")
+      )
+      .map((membership: any) => membership.org_id);
+    const activatedOrgIds = [...new Set([
+      ...(activatedMemberships || []).map((membership: any) => membership?.org_id).filter(Boolean),
+      ...alreadyActiveOrgIds,
+    ])];
     if (activatedOrgIds.length === 0) {
       return new Response(JSON.stringify({ error: "No invited memberships were activated" }), {
         status: 409,
