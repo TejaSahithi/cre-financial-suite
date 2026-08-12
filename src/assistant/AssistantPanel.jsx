@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { BrainCircuit, FileText, MessageCircleQuestion, Send, RotateCcw, MapPin } from "lucide-react";
+import { FileText, Send, RotateCcw, MapPin } from "lucide-react";
+import assistantMark from "@/assets/cre-assistant-mark.svg";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -30,8 +31,8 @@ function MessageBubble({ message }) {
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div className={`flex max-w-[90%] items-start gap-2 ${isUser ? "flex-row-reverse" : ""}`}>
         {!isUser && (
-          <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border bg-background text-primary" aria-hidden="true">
-            <MessageCircleQuestion className="h-4 w-4" />
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full" aria-hidden="true">
+            <img src={assistantMark} alt="" className="h-6 w-6 rounded-full" />
           </div>
         )}
         <div className={`max-w-full rounded-lg px-3 py-2 text-sm ${isUser ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
@@ -82,10 +83,10 @@ export default function AssistantPanel() {
     <>
       <Button
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 z-40 h-12 w-12 rounded-full shadow-lg p-0"
+        className="fixed bottom-6 right-6 z-40 h-14 w-14 rounded-full bg-transparent p-0 shadow-lg hover:bg-transparent"
         aria-label="Open CRE Assistant"
       >
-        <BrainCircuit className="h-5 w-5" />
+        <img src={assistantMark} alt="" className="h-10 w-10 rounded-full" />
       </Button>
 
       <Sheet open={isOpen} onOpenChange={setIsOpen} modal={false}>
@@ -93,8 +94,8 @@ export default function AssistantPanel() {
           <SheetHeader>
             <div className="flex items-center justify-between pr-6">
               <SheetTitle className="flex items-center gap-2">
-                <span className="flex h-7 w-7 items-center justify-center rounded-full border bg-background text-primary">
-                  <BrainCircuit className="h-4 w-4" />
+                <span className="flex h-8 w-8 items-center justify-center rounded-full">
+                  <img src={assistantMark} alt="" className="h-6 w-6 rounded-full" />
                 </span>
                 CRE Assistant
               </SheetTitle>
