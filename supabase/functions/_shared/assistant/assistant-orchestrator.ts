@@ -68,7 +68,7 @@ function normalizeQuestion(value: string): string {
 
 function isGenericProductKnowledgeQuestion(normalized: string): boolean {
   const asksForExplanation = /\b(what|explain|describe|tell|how|why|purpose|used)\b/.test(normalized);
-  const asksAboutProductSurface = /\b(module|page|feature|workflow|doing|does|do|used for|purpose)\b/.test(normalized);
+  const asksAboutProductSurface = /\b(module|page|feature|workflow|flow|platform|system|app|application|doing|does|do|used for|purpose)\b/.test(normalized);
   return asksForExplanation && asksAboutProductSurface;
 }
 
@@ -110,6 +110,28 @@ function getModuleCapabilities(moduleName: string): any[] {
   return PLATFORM_CAPABILITIES.filter((capability: any) => capability.module === moduleName && capability.sensitivity === "product");
 }
 
+function isPlatformFlowQuestion(normalized: string): boolean {
+  return /\b(business flow|end to end|entire platform|whole platform|platform flow|how the platform works|what can you do|what does the platform do|platform doing)\b/.test(normalized);
+}
+
+function maybeAnswerPlatformFlowQuestion(normalized: string): OrchestratorResult | null {
+  if (!isPlatformFlowQuestion(normalized)) return null;
+
+  const capabilityIds = ["properties", "leases", "lease_review", "lease_expense_rules", "expenses", "lease_expense_classification", "cam_setup", "cam_run", "revenue", "budget_dashboard", "variance", "reconciliation", "approvals"];
+  const byId = new Map(PLATFORM_CAPABILITIES.map((capability: any) => [capability.id, capability]));
+  const capabilities = capabilityIds.map((id) => byId.get(id)).filter((capability: any) => capability?.sensitivity === "product");
+  const workflowSummary = PLATFORM_WORKFLOWS.map((workflow: any) => `${workflow.label}: ${workflow.description}`).join(" ");
+
+  return buildProductKnowledgeResult(
+    capabilities,
+    [
+      "End to end, the platform turns property, lease, expense, CAM, revenue, and budget data into an auditable CRE financial workflow.",
+      "Typical flow: set up properties, buildings, units, and tenants; upload and review leases; approve canonical lease terms and recovery rules; record or import expenses; classify expenses against lease rules; send approved recoverable expenses into CAM; run, review, approve, and post CAM; then use approved lease, CAM, revenue, actuals, and budget data for reporting, variance, reconciliation, and approvals.",
+      `Important workflows: ${workflowSummary}`,
+      "The assistant can explain these modules generically from product knowledge. For record-specific answers, it must use authorized tools so it only reads data the signed-in user can access.",
+    ].join("\n\n"),
+  );
+}
 function buildProductKnowledgeResult(capabilities: any[], answer: string): OrchestratorResult {
   return {
     status: "answered",
@@ -126,6 +148,9 @@ function buildProductKnowledgeResult(capabilities: any[], answer: string): Orche
 function maybeAnswerProductKnowledgeQuestion(userMessage: string, requestContext?: AssistantRequestContext): OrchestratorResult | null {
   const normalized = normalizeQuestion(userMessage);
   if (!isGenericProductKnowledgeQuestion(normalized)) return null;
+
+  const platformFlowAnswer = maybeAnswerPlatformFlowQuestion(normalized);
+  if (platformFlowAnswer) return platformFlowAnswer;
 
   const capability = findRequestedCapability(normalized, requestContext);
   if (capability) {

@@ -32,3 +32,16 @@ Deno.test("runAssistantOrchestrator answers current-page product questions from 
   assertEquals(result.toolRuns.length, 0);
   assertEquals(result.citations.some((citation) => citation.label === "Platform capability: Lease Review"), true);
 });
+Deno.test("runAssistantOrchestrator answers broad end-to-end business flow questions", async () => {
+  const result = await runAssistantOrchestrator(
+    "explain business flow end to end",
+    {},
+    { req: new Request("https://example.test"), orgId: "org", userId: "user", supabaseAdmin: {} },
+  );
+
+  assertEquals(result.status, "answered");
+  assertStringIncludes(result.answer, "End to end");
+  assertStringIncludes(result.answer, "upload and review leases");
+  assertStringIncludes(result.answer, "CAM");
+  assertEquals(result.toolRuns.length, 0);
+});

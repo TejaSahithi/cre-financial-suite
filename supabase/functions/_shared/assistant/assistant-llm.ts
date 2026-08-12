@@ -186,20 +186,58 @@ async function postToAssistantDeployment(config: AssistantLLMConfig, body: Recor
   return { response, responseBody, requestId };
 }
 
-function extractAssistantMessageContent(content: unknown): string {
+function stringifyStructuredValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object") return JSON.stringify(value);
+  return "";
+}
+
+function extractContentPartText(part: unknown): string {
+  if (typeof part === "string") return part;
+  if (!part || typeof part !== "object") return "";
+  const record = part as Record<string, unknown>;
+  if (typeof record.text === "string") return record.text;
+  if (typeof record.output_text === "string") return record.output_text;
+  if (record.text && typeof record.text === "object" && typeof (record.text as any).value === "string") return (record.text as any).value;
+  return "";
+}
+
+function extractAssistantMessageContent(message: unknown): string {
+  if (!message || typeof message !== "object") return "";
+  const record = message as Record<string, unknown>;
+  const parsed = stringifyStructuredValue(record.parsed);
+  if (parsed) return parsed;
+
+  const content = record.content;
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
+  return content.map(extractContentPartText).join("");
+}
 
-  return content
-    .map((part) => {
-      if (typeof part === "string") return part;
-      if (!part || typeof part !== "object") return "";
-      const record = part as Record<string, unknown>;
-      if (typeof record.text === "string") return record.text;
-      if (typeof record.output_text === "string") return record.output_text;
-      return "";
-    })
-    .join("");
+function extractJsonObjectText(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) return trimmed;
+
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenced?.[1]?.trim().startsWith("{")) return fenced[1].trim();
+
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start >= 0 && end > start) return trimmed.slice(start, end + 1);
+  return null;
+}
+
+function parseAssistantJson<T>(content: string): T | null {
+  const candidates = [content.trim(), extractJsonObjectText(content)].filter((candidate): candidate is string => Boolean(candidate));
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate) as T;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
 }
 /** Call the Assistant's own Azure OpenAI deployment under strict json_schema
  * structured-outputs mode. This is the ONLY call shape the orchestrator uses
@@ -298,11 +336,10 @@ export async function callAssistantLLMStructured<T = unknown>(
       };
     }
 
-    const content = extractAssistantMessageContent(choice?.message?.content);
-    let data: T;
-    try {
-      data = JSON.parse(content) as T;
-    } catch {
+    const content = extractAssistantMessageContent(choice?.message);
+    const data = parseAssistantJson<T>(content);
+    if (!data) {
+      console.error(`[assistant-llm] schema parse failed: model=${model} finish_reason=${choice?.finish_reason ?? "unknown"} content_preview=${content.slice(0, 300)}`);
       return {
         status: "schema_error",
         data: null,
