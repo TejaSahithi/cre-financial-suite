@@ -51,6 +51,12 @@ function resolveSignupOnboardingType(verifiedRole) {
   return "member";
 }
 
+function getSafeReturnUrl() {
+  const returnUrl = new URLSearchParams(window.location.search).get("returnUrl");
+  if (!returnUrl || !returnUrl.startsWith("/") || returnUrl.startsWith("//")) return "/";
+  return returnUrl;
+}
+
 export default function Login() {
   const navigate = useNavigate();
   const { login, loginWithGoogle } = useAuth();
@@ -97,7 +103,7 @@ export default function Login() {
     setLoading(true);
     try {
       await login(email, password);
-      navigate("/");
+      navigate(getSafeReturnUrl());
     } catch (err) {
       console.error("[DEBUG LOGIN ERROR]:", err);
       setError(err.message || "Invalid email or password.");

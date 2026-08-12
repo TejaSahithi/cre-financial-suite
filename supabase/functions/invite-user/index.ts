@@ -84,6 +84,14 @@ function formatRoleLabel(role: unknown) {
   return String(role || "team member").replaceAll("_", " ");
 }
 
+function buildAcceptInviteUrl(frontendUrl: string, params: Record<string, string>) {
+  const url = new URL("/AcceptInvite", frontendUrl);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) url.searchParams.set(key, value);
+  });
+  return url.toString();
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   const authorization = req.headers.get("Authorization");
@@ -207,7 +215,10 @@ Deno.serve(async (req: Request) => {
     const frontendUrl = Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL") || "http://localhost:5173";
     let userId = existingUser?.id;
     let isNewUser = !userId;
-    let inviteLink = `${frontendUrl}/Login`;
+    let inviteLink = buildAcceptInviteUrl(frontendUrl, {
+      existing: "1",
+      org_id,
+    });
 
     if (isNewUser) {
       // Use generateLink to get a secure signup URL without sending the system email
@@ -229,7 +240,13 @@ Deno.serve(async (req: Request) => {
       });
       if (linkErr) throw linkErr;
       userId = linkData.user.id;
-      inviteLink = linkData.properties.action_link;
+      inviteLink = linkData.properties?.hashed_token
+        ? buildAcceptInviteUrl(frontendUrl, {
+          token_hash: linkData.properties.hashed_token,
+          type: "invite",
+          org_id,
+        })
+        : linkData.properties.action_link;
     }
 
     // ── Upsert membership record (status: invited) ────────────────────────────

@@ -33,6 +33,11 @@ function getHashParams() {
   return new URLSearchParams(window.location.hash.replace(/^#/, ""));
 }
 
+function redirectToLoginForInvite() {
+  const returnUrl = `${window.location.pathname}${window.location.search}`;
+  window.location.href = `/Login?returnUrl=${encodeURIComponent(returnUrl)}`;
+}
+
 export default function AcceptInvite() {
   const { refreshProfile } = useAuth();
   const [step, setStep] = useState(0);
@@ -65,6 +70,7 @@ export default function AcceptInvite() {
         let activeSession = null;
         const searchParams = new URLSearchParams(window.location.search);
         const hashParams = getHashParams();
+        const isExistingUserInvite = searchParams.get("existing") === "1";
 
         const sessionResult = await supabase.auth.getSession();
         activeSession = sessionResult.data?.session || null;
@@ -112,13 +118,20 @@ export default function AcceptInvite() {
         }
 
         if (!activeSession) {
+          if (isExistingUserInvite) {
+            redirectToLoginForInvite();
+            return;
+          }
           throw new Error("This invite link could not be verified. Please request a new invite.");
         }
 
         if (!cancelled) {
           setSession(activeSession);
           cleanupAuthUrl();
-          setStep((currentStep) => (currentStep === 0 ? 1 : currentStep));
+          setStep((currentStep) => {
+            if (currentStep !== 0) return currentStep;
+            return isExistingUserInvite ? 2 : 1;
+          });
         }
       } catch (err) {
         const message = err?.message || "This invite link could not be verified. Please request a new invite.";
@@ -141,7 +154,12 @@ export default function AcceptInvite() {
           setSession(nextSession);
           setInviteError("");
           setIsVerifyingInvite(false);
-          setStep((currentStep) => (currentStep === 0 ? 1 : currentStep));
+          const searchParams = new URLSearchParams(window.location.search);
+          const isExistingUserInvite = searchParams.get("existing") === "1";
+          setStep((currentStep) => {
+            if (currentStep !== 0) return currentStep;
+            return isExistingUserInvite ? 2 : 1;
+          });
         }
       }
     });
@@ -197,7 +215,7 @@ export default function AcceptInvite() {
       const result = await acceptInvite({
         full_name: fullName || undefined,
         phone: phone || undefined,
-        org_id: session.user.user_metadata?.org_id || undefined,
+        org_id: session.user.user_metadata?.org_id || new URLSearchParams(window.location.search).get("org_id") || undefined,
       });
       if (result?.primary_org_id) {
         setStoredActingOrgId(result.primary_org_id);
