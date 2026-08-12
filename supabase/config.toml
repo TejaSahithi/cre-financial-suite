@@ -69,7 +69,7 @@ verify_jwt = true
 enabled = true
 verify_jwt = true
 
-# Internal background worker — called by ingest-file using the service role key.
+# Internal background worker â€” called by ingest-file using the service role key.
 # verify_jwt=false because Supabase's platform JWT check rejects service-role
 # Bearer tokens issued from within another edge function; auth is handled
 # internally via WORKER_INTERNAL_SECRET / SUPABASE_SERVICE_ROLE_KEY check.
@@ -240,6 +240,13 @@ entrypoint = "./functions/stripe-webhook/index.ts"
 # Explicit app-called function routing.
 # These endpoints are invoked through src/services/edgeFunctions.js, which
 # refreshes and forwards the user's Supabase JWT before every call.
+[functions.assistant-chat-v1]
+enabled = true
+# Browser OPTIONS preflights do not carry Authorization, so the Supabase
+# gateway must let the function answer CORS. The handler still authenticates
+# every POST via resolveAssistantContext/verifyUser before reading or writing
+# assistant conversation data or executing any business-data tool.
+verify_jwt = false
 [functions.approve-cam-profile]
 enabled = true
 verify_jwt = true
