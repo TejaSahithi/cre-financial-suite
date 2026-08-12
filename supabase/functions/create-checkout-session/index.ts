@@ -47,7 +47,7 @@ Deno.serve(async (req: Request) => {
     // 2. Validate membership
     const { data: memberships, error: memError } = await supabaseAdmin
       .from('memberships')
-      .select('role')
+      .select('role, status')
       .eq('user_id', user.id)
       .eq('org_id', orgId);
 
@@ -55,15 +55,21 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ error: 'Forbidden: You are not a member of this organization' }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    const role = memberships[0].role;
-    if (role !== 'org_admin' && role !== 'super_admin' && role !== 'owner') {
-      return new Response(JSON.stringify({ error: 'Forbidden: Must be org_admin or owner to initiate payment' }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    const activeMembership = memberships.find((membership: any) =>
+      ['active', 'owner', 'approved', 'accepted'].includes(membership?.status || 'active')
+    ) || memberships[0];
+    const role = activeMembership.role;
+    if (!['org_owner', 'org_admin', 'super_admin', 'owner', 'admin'].includes(role)) {
+      return new Response(JSON.stringify({
+        error: 'Forbidden: Must be org_owner, org_admin, or super_admin to initiate payment',
+        role,
+      }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     // 3. Validate org state
     const { data: orgData, error: orgError } = await supabaseAdmin
       .from('organizations')
-      .select('status')
+      .select('status, plan, billing_cycle, stripe_customer_id, stripe_sub_id')
       .eq('id', orgId)
       .single();
 
@@ -71,8 +77,8 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ error: 'Organization not found' }), { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    if (orgData.status === 'active') {
-      return new Response(JSON.stringify({ error: 'Organization is already active' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (orgData.stripe_sub_id || (orgData.plan && orgData.billing_cycle && orgData.stripe_customer_id)) {
+      return new Response(JSON.stringify({ error: 'Organization already has an active billing subscription' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     // 4. Map planKey + billingCycle to Stripe Price ID

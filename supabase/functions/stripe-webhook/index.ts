@@ -125,11 +125,16 @@ Deno.serve(async (req: Request) => {
       // Update Org to under_review
       const orgUpdate: any = {
         status: 'under_review',
+        plan: metadata.plan_key || null,
+        billing_cycle: metadata.billing_cycle || null,
         updated_at: new Date().toISOString(),
       };
       
       if (session.customer) {
         orgUpdate.stripe_customer_id = typeof session.customer === 'string' ? session.customer : session.customer.id;
+      }
+      if (session.subscription) {
+        orgUpdate.stripe_sub_id = typeof session.subscription === 'string' ? session.subscription : session.subscription.id;
       }
 
       const { error: orgError } = await supabaseAdmin

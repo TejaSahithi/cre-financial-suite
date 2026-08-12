@@ -733,6 +733,20 @@ function PaymentStep({ user, form, setForm, org, onBack }) {
   const displayPrice = getPrice(selectedPlan.price);
   const yearlyTotal = displayPrice * 12;
 
+  const getFunctionErrorMessage = async (fnError, data) => {
+    if (data?.error) return data.error;
+    const response = fnError?.context;
+    if (response && typeof response.json === "function") {
+      try {
+        const payload = await response.json();
+        if (payload?.error) return payload.error;
+      } catch {
+        /* fall back to the Supabase error message */
+      }
+    }
+    return fnError?.message || "Failed to create checkout session";
+  };
+
   const handlePayment = async (e) => {
     e.preventDefault();
     setError("");
@@ -748,7 +762,9 @@ function PaymentStep({ user, form, setForm, org, onBack }) {
         headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
       });
       
-      if (fnError || data?.error) throw new Error(fnError?.message || data?.error || 'Failed to create checkout session');
+      if (fnError || data?.error) {
+        throw new Error(await getFunctionErrorMessage(fnError, data));
+      }
 
       if (data?.url) {
         window.location.href = data.url;
@@ -834,4 +850,3 @@ function PaymentStep({ user, form, setForm, org, onBack }) {
     </div>
   );
 }
-
