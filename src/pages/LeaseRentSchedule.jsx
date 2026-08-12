@@ -12,6 +12,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import PageHeader from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -143,6 +144,12 @@ export default function LeaseRentSchedule() {
   const buildingById = useMemo(() => new Map(buildings.map((item) => [item.id, item])), [buildings]);
   const unitById = useMemo(() => new Map(units.map((item) => [item.id, item])), [units]);
   const leaseRow = useMemo(() => buildLeaseProjectionRow(lease), [lease]);
+
+  useAssistantPageContext({
+    page: "LeaseRentSchedule",
+    entities: { leaseId: leaseId || undefined, propertyId: lease?.property_id || undefined },
+    fiscalYear,
+  });
 
   const { data: rentScheduleRows = [], isLoading: schedulesLoading, refetch } = useQuery({
     queryKey: ["lease-rent-schedule", leaseId],

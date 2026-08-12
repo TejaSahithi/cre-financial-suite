@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import { Link, useLocation } from "react-router-dom";
 import { Loader2, ArrowUpRight, ArrowDownRight, Minus, AlertTriangle, Info, Download, ArrowRight, FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
@@ -176,6 +177,11 @@ export default function BudgetReview() {
     setScopeBuilding(scope.buildingId || "all");
     setScopeUnit(scope.unitId || "all");
   }, [scope.propertyId, scope.buildingId, scope.unitId]);
+
+  useAssistantPageContext({
+    page: "BudgetReview",
+    entities: { propertyId: scope.propertyId || undefined, portfolioId: scope.portfolioId || undefined },
+  });
 
   const scopedBudgets = budgets.filter(b =>
     matchesHierarchyScope(b, scope, { portfolioKey: "portfolio_id", propertyKey: "property_id", buildingKey: "building_id", unitKey: "unit_id" })

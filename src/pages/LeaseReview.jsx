@@ -25,6 +25,7 @@ import {
 } from "@/services/leaseService";
 import { NotificationService } from "@/services/api";
 import { expenseService } from "@/services/expenseService";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useComputeTrigger } from "@/hooks/useComputeTrigger";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -405,6 +406,12 @@ export default function LeaseReview() {
   // Fetch the source uploaded_file so readFieldValue can resolve extraction
   // data from ui_review_payload (the pipeline stores extracted fields there,
   // not on lease.extraction_data, until the abstract is approved).
+  useAssistantPageContext({
+    page: "LeaseReview",
+    entities: { leaseId: leaseId || undefined, propertyId: lease?.property_id || undefined },
+    selectedTab: activeTab,
+  });
+
   const resolvedSourceFileId = lease?.source_file_id ?? lease?.extraction_data?.source_file_id ?? null;
   const { data: uploadedFile } = useQuery({
     queryKey: ["uploaded_file_for_lease", resolvedSourceFileId],

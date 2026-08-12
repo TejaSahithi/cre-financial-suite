@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { FileText, Zap, TrendingUp, ArrowRight, Loader2, CheckCircle2, Lock, X, MessageSquare, AlertTriangle, XCircle } from "lucide-react";
@@ -115,6 +116,12 @@ export default function CreateBudget() {
       scope: scope.unitId ? "unit" : scope.buildingId ? "building" : current.scope || "property",
     }));
   }, [scope.portfolioId, scope.propertyId, scope.buildingId, scope.unitId]);
+
+  useAssistantPageContext({
+    page: "CreateBudget",
+    entities: { propertyId: form.property_id || undefined, portfolioId: form.portfolio_id || undefined, buildingId: form.building_id || undefined },
+    fiscalYear: form.budget_year || undefined,
+  });
 
   // The official/persisted budget is created entirely server-side by
   // compute-budget (gated, audited, snapshot-versioned) instead of a direct

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import { Link, useLocation } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRightCircle, CheckCircle2, ChevronDown, ClipboardCheck, Download, Eye, FileText, Loader2, MoreHorizontal, RefreshCw, Search, ShieldAlert } from "lucide-react";
@@ -173,6 +174,11 @@ export default function ExpenseReview() {
     setScopeBuilding(scope.buildingId || "all");
     setScopeUnit(scope.unitId || "all");
   }, [scope.propertyId, scope.buildingId, scope.unitId]);
+
+  useAssistantPageContext({
+    page: "ExpenseReview",
+    entities: { propertyId: scope.propertyId || undefined, portfolioId: scope.portfolioId || undefined },
+  });
 
   const scopedLeases = useMemo(() => leases.filter((lease) => {
     if (!matchesHierarchyScope(lease, scope, { portfolioKey: "portfolio_id", propertyKey: "property_id", buildingKey: "building_id", unitKey: "unit_id" })) return false;

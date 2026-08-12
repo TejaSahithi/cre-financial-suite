@@ -1,4 +1,6 @@
-import React from "react";
+import React, { useState } from "react";
+import { useLocation } from "react-router-dom";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import { budgetService } from "@/services/budgetService";
 import { expenseService } from "@/services/expenseService";
 import { leaseService } from "@/services/leaseService";
@@ -9,6 +11,10 @@ import ActualsTab from "@/components/financials/ActualsTab";
 import VarianceTab from "@/components/financials/VarianceTab";
 
 export default function ActualsVariance() {
+  const location = useLocation();
+  const [activeTab, setActiveTab] = useState("actuals");
+  const fiscalYear = new Date().getFullYear();
+  useAssistantPageContext({ page: "ActualsVariance", route: location.pathname + location.search, fiscalYear, uiState: { selectedTab: activeTab } });
   const { data: expenses = [] } = useQuery({ queryKey: ['expenses'], queryFn: () => expenseService.list() });
   const { data: leases = [] } = useQuery({ queryKey: ['leases'], queryFn: () => leaseService.list() });
   const { data: budgets = [] } = useQuery({ queryKey: ['budgets'], queryFn: () => budgetService.list() });
@@ -20,7 +26,7 @@ export default function ActualsVariance() {
         <p className="text-sm text-slate-500">Actual financial performance and budget variance analysis</p>
       </div>
 
-      <Tabs defaultValue="actuals" className="space-y-4">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList>
           <TabsTrigger value="actuals" className="gap-1.5"><Layers className="w-3.5 h-3.5" />Actuals</TabsTrigger>
           <TabsTrigger value="variance" className="gap-1.5"><Target className="w-3.5 h-3.5" />Variance</TabsTrigger>

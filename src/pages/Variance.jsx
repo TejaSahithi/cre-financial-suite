@@ -1,4 +1,6 @@
 import React from "react";
+import { useLocation } from "react-router-dom";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import { budgetService } from "@/services/budgetService";
 import { expenseService } from "@/services/expenseService";
 import { useQuery } from "@tanstack/react-query";
@@ -9,6 +11,9 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { AlertTriangle, TrendingUp, TrendingDown, Target } from "lucide-react";
 
 export default function Variance() {
+  const location = useLocation();
+  const fiscalYear = new Date().getFullYear();
+  useAssistantPageContext({ page: "Variance", route: location.pathname + location.search, fiscalYear });
   const { data: budgets = [] } = useQuery({
     queryKey: ['budgets'],
     queryFn: () => budgetService.list(),

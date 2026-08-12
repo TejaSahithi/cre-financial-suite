@@ -11,6 +11,7 @@ import { Upload, AlertTriangle, Loader2, CheckCircle2, Calculator } from "lucide
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { toast } from "sonner";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 
 export default function Reconciliation() {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
@@ -23,6 +24,11 @@ export default function Reconciliation() {
   const { data: leases = [] } = useOrgQuery("Lease");
 
   const activePropertyId = selectedPropertyId !== "all" ? selectedPropertyId : null;
+  useAssistantPageContext({
+    page: "Reconciliation",
+    entities: { propertyId: activePropertyId || undefined },
+    fiscalYear: selectedYear || undefined,
+  });
   const {
     outputs,
     computedAt,

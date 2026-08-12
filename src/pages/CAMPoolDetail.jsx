@@ -12,6 +12,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Layers, ArrowLeft } from "lucide-react";
 
 import { supabase } from "@/services/supabaseClient";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import { createPageUrl } from "@/utils";
 import PageHeader from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,10 +31,20 @@ export default function CAMPoolDetail() {
   const camRunId = searchParams.get("cam_run_id") || "";
   const poolResultId = searchParams.get("pool_result_id") || "";
 
+  const { data: run } = useQuery({
+    queryKey: ["cam-pool-detail-run", camRunId],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("cam_runs").select("id, scope_type, scope_id, recovery_period_id").eq("id", camRunId).single();
+      if (error) throw error;
+      return data;
+    },
+    enabled: Boolean(camRunId),
+  });
+
   const { data: poolResult, isLoading } = useQuery({
     queryKey: ["cam-pool-detail-result", poolResultId],
     queryFn: async () => {
-      const { data, error } = await supabase.from("cam_run_pool_results").select("*, recovery_pools(name, pool_type, scope_type, default_gross_up_target_pct, recovery_pool_categories(expense_category_id, inclusion_mode))").eq("id", poolResultId).single();
+      const { data, error } = await supabase.from("cam_run_pool_results").select("*, recovery_pools(name, pool_type, scope_type, property_id, default_gross_up_target_pct, recovery_pool_categories(expense_category_id, inclusion_mode))").eq("id", poolResultId).single();
       if (error) throw error;
       return data;
     },
@@ -52,6 +63,17 @@ export default function CAMPoolDetail() {
       return data || [];
     },
     enabled: Boolean(poolResultId),
+  });
+
+  const propertyId = run?.scope_type === "property" ? run.scope_id : poolResult?.recovery_pools?.property_id || null;
+  useAssistantPageContext({
+    page: "CAMPoolDetail",
+    route: window.location.pathname + window.location.search,
+    entities: {
+      propertyId: propertyId || undefined,
+      camRunId: camRunId || undefined,
+      camPoolResultId: poolResultId || undefined,
+    },
   });
 
   const participatingLeases = React.useMemo(() => {
@@ -171,3 +193,5 @@ export default function CAMPoolDetail() {
     </div>
   );
 }
+
+

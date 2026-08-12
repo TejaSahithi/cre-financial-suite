@@ -21,6 +21,7 @@ import { createPageUrl } from "@/utils";
 import { useModuleAccess } from "@/lib/ModuleAccessContext";
 import { useAuth } from "@/lib/AuthContext";
 import { assertCanWritePage, isPagePermissionError } from "@/lib/userPermissions";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 
 import PropertyExpensesTab from "@/components/property/PropertyExpensesTab";
 import PropertyCAMTab from "@/components/property/PropertyCAMTab";
@@ -43,6 +44,7 @@ export default function PropertyDetail() {
   const location = useLocation();
   const urlParams = new URLSearchParams(location.search);
   const propertyId = urlParams.get("id");
+  useAssistantPageContext({ page: "PropertyDetail", entities: { propertyId: propertyId || undefined } });
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const { canWritePage } = useModuleAccess();

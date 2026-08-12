@@ -8,6 +8,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import {
   AlertTriangle,
   Loader2,
@@ -161,6 +162,17 @@ export default function LeaseExpenseRules() {
   const [scopeProperty, setScopeProperty] = useState(scope.propertyId || "all");
   const [scopeBuilding, setScopeBuilding] = useState(scope.buildingId || "all");
   const [scopeUnit, setScopeUnit] = useState(scope.unitId || "all");
+
+  const contextLease = useMemo(() => leases.find((l) => l.id === leaseIdParam) || null, [leases, leaseIdParam]);
+  useAssistantPageContext({
+    page: "LeaseExpenseRules",
+    entities: {
+      leaseId: leaseIdParam || undefined,
+      propertyId: scope.propertyId || contextLease?.property_id || undefined,
+    },
+    selectedTab: displayMode,
+    filters: { statusFilter },
+  });
 
   useEffect(() => {
     setScopeProperty(scope.propertyId || "all");

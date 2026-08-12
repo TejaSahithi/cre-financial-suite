@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 
 function fmtCurrency(value) {
   const num = Number(value);
@@ -53,6 +54,11 @@ export default function CAMApproval() {
       return data;
     },
     enabled: Boolean(camRunId),
+  });
+
+  useAssistantPageContext({
+    page: "CAMApproval",
+    entities: { camRunId: camRunId || undefined, propertyId: (run?.scope_type === "property" ? run?.scope_id : undefined) || undefined },
   });
 
   const { data: leaseResults = [] } = useQuery({

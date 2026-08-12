@@ -1,5 +1,7 @@
 import React from "react";
 import { InvoiceService, LeaseService, TenantService } from "@/services/api";
+import { supabase } from "@/services/supabaseClient";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
@@ -48,6 +50,16 @@ export default function TenantDetail() {
   const tenantInvoices = tenantEntity?.id ? invoices.filter(inv => inv.tenant_id === tenantEntity.id) : [];
 
   const activeLeases = leases.filter(l => l.status !== 'expired');
+  const primaryLease = activeLeases[0] || leases[0] || null;
+  useAssistantPageContext({
+    page: "TenantDetail",
+    route: location.pathname + location.search,
+    entities: {
+      tenantId: tenantEntity?.id || undefined,
+      propertyId: primaryLease?.property_id || undefined,
+      leaseId: primaryLease?.id || undefined,
+    },
+  });
   const totalRent = leases.reduce((s, l) => s + Number(l.annual_rent || (Number(l.monthly_rent || 0) * 12) || 0), 0);
   const totalCAM = camCalcs.reduce((s, c) => s + (c.annual_cam || 0), 0);
 
@@ -223,3 +235,4 @@ export default function TenantDetail() {
     </div>
   );
 }
+

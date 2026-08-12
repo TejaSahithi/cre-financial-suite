@@ -20,6 +20,7 @@
 import React, { useMemo, useState } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import { toast } from "sonner";
 import {
   AlertTriangle, CheckCircle2, XCircle, ChevronRight, ChevronLeft,
@@ -167,6 +168,17 @@ export default function CAMSetup() {
   const explicitView = searchParams.get("view");
   const workbenchView = explicitView === "advanced" ? false : explicitView === "workbench" ? true : !searchParams.has("step");
   const workbenchTab = searchParams.get("wtab") || "expenses";
+
+  useAssistantPageContext({
+    page: "CAMSetup",
+    entities: {
+      propertyId: propertyId || undefined,
+      buildingId: buildingId || undefined,
+      unitId: unitId || undefined,
+      recoveryPeriodId: periodId || undefined,
+    },
+    selectedTab: workbenchView ? workbenchTab : `step-${step}`,
+  });
 
   function updateParams(patch) {
     const next = new URLSearchParams(searchParams);

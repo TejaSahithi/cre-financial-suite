@@ -21,6 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 
 function fmtCurrency(value) {
   const num = Number(value);
@@ -33,6 +34,11 @@ export default function CAMLeaseDetail() {
   const camRunId = searchParams.get("cam_run_id") || "";
   const leaseResultIdParam = searchParams.get("lease_result_id") || "";
   const leaseIdParam = searchParams.get("lease_id") || "";
+
+  useAssistantPageContext({
+    page: "CAMLeaseDetail",
+    entities: { camRunId: camRunId || undefined, leaseId: leaseIdParam || undefined },
+  });
 
   const { data: leaseResult, isLoading } = useQuery({
     queryKey: ["cam-lease-detail-result", camRunId, leaseResultIdParam, leaseIdParam],

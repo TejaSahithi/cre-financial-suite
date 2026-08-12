@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { AlertTriangle, ArrowLeft, Send } from "lucide-react";
 
 import { supabase } from "@/services/supabaseClient";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { createPageUrl } from "@/utils";
 import PageHeader from "@/components/PageHeader";
@@ -95,6 +96,15 @@ export default function CAMExceptionReview() {
   });
 
   const blockingOpen = exceptions.filter((e) => e.severity === "blocking" && e.resolution_status === "open");
+  const propertyId = run?.scope_type === "property" ? run.scope_id : null;
+  useAssistantPageContext({
+    page: "CAMExceptionReview",
+    route: window.location.pathname + window.location.search,
+    entities: {
+      propertyId: propertyId || undefined,
+      camRunId: camRunId || undefined,
+    },
+  });
 
   return (
     <div className="space-y-6 p-6">
@@ -190,3 +200,5 @@ export default function CAMExceptionReview() {
     </div>
   );
 }
+
+

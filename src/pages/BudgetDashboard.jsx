@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import { Link, useLocation } from "react-router-dom";
 import { Plus, Download, Mail, Loader2, CheckCircle2, Lock, X, Info } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -471,6 +472,11 @@ export default function BudgetDashboard() {
   const selectedBudget = visibleBudgets.find((budget) => budget.id === selectedBudgetId) || visibleBudgets[0] || null;
   const selectedPropertyId = scopeProperty !== "all" ? scopeProperty : scope.propertyId || selectedBudget?.property_id || null;
   const selectedBudgetScopeLabel = selectedBudget ? getBudgetScopeLabel(selectedBudget, scope) : "Selected scope";
+  useAssistantPageContext({
+    page: "BudgetDashboard",
+    entities: { propertyId: selectedPropertyId || undefined, budgetId: selectedBudget?.id || undefined },
+    fiscalYear: selectedBudget ? getBudgetYear(selectedBudget) : undefined,
+  });
   const { computedAt: budgetSnapshotComputedAt, hasSnapshot: hasBudgetSnapshot } = useSnapshotQuery({
     engineType: "budget",
     propertyId: selectedBudget?.property_id ?? null,

@@ -28,6 +28,7 @@ import { createNotificationsForEvent } from "@/services/notificationService";
 import { useAuth } from "@/lib/AuthContext";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { createPageUrl } from "@/utils";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -153,6 +154,17 @@ export default function LeaseExpenseClassification() {
     () => buildHierarchyScope({ search: "", portfolios: [], properties, buildings, units }),
     [properties, buildings, units]
   );
+
+  useAssistantPageContext({
+    page: "LeaseExpenseClassification",
+    entities: {
+      propertyId: scope.propertyId || (scopeProperty !== "all" ? scopeProperty : undefined),
+      leaseId: scopeLease !== "all" ? scopeLease : undefined,
+      tenantId: scopeTenant !== "all" ? scopeTenant : undefined,
+    },
+    selectedTab: activeTab,
+    selectedIds: [...selectedIds],
+  });
 
   const scopedLeases = useMemo(() => {
     return leases.filter((lease) => {

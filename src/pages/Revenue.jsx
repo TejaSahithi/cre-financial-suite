@@ -18,6 +18,7 @@ import { PropertyService, LeaseService, UnitService, BuildingService, PortfolioS
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { Button } from "@/components/ui/button";
 import { downloadCSV, createPageUrl } from "@/utils";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 
 export default function Revenue() {
   const location = useLocation();
@@ -152,6 +153,20 @@ export default function Revenue() {
   const tenantData = Object.values(tenantMap);
 
   const selectedPropertyId = scopeProperty !== "all" ? scopeProperty : scope.propertyId || null;
+  const fiscalYear = new Date().getFullYear();
+
+  useAssistantPageContext({
+    page: "Revenue",
+    route: location.pathname + location.search,
+    fiscalYear,
+    entities: {
+      portfolioId: scope.activePortfolio?.id || undefined,
+      propertyId: selectedPropertyId || undefined,
+      buildingId: scopeBuilding !== "all" ? scopeBuilding : undefined,
+      unitId: scopeUnit !== "all" ? scopeUnit : undefined,
+    },
+    uiState: { filters: { scopeProperty, scopeBuilding, scopeUnit } },
+  });
 
   const subtitleScope = getScopeSubtitle(scope, {
     default: "Portfolio revenue breakdown, property drill-down, and tenant analysis",
@@ -223,7 +238,7 @@ export default function Revenue() {
       </PageHeader>
 
       {selectedPropertyId ? (
-        <PipelineActions propertyId={selectedPropertyId} fiscalYear={new Date().getFullYear()} actions={REVENUE_ACTIONS} />
+        <PipelineActions propertyId={selectedPropertyId} fiscalYear={fiscalYear} actions={REVENUE_ACTIONS} />
       ) : (
         <div className="text-xs text-slate-500">Select a property scope to run revenue compute/export actions.</div>
       )}
@@ -258,3 +273,5 @@ export default function Revenue() {
     </div>
   );
 }
+
+

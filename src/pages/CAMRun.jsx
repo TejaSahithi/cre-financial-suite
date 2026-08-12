@@ -15,6 +15,7 @@ import React, { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import {
   Calculator, RefreshCw, Send, ExternalLink, FileDown,
   CheckCircle2, XCircle, AlertTriangle, Package, Lock,
@@ -165,6 +166,15 @@ export default function CAMRun() {
   });
 
   const activeRun = runs.find((r) => r.status !== "voided" && r.status !== "superseded") || runs[0] || null;
+
+  useAssistantPageContext({
+    page: "CAMRun",
+    entities: {
+      propertyId: propertyId || undefined,
+      recoveryPeriodId: periodId || undefined,
+      camRunId: activeRun?.id || undefined,
+    },
+  });
 
   const { data: poolResults = [] } = useQuery({
     queryKey: ["cam-run-pool-results", activeRun?.id],

@@ -14,6 +14,7 @@ import {
   Search, User, Layers, ArrowLeftRight, Sun, Moon
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import AssistantPanel from "@/assistant/AssistantPanel";
 
 const navSections = [
   { label: "Dashboard", icon: LayoutDashboard, page: "Dashboard" },
@@ -344,6 +345,7 @@ export default function Layout({ children, currentPageName }) {
         </header>
         <main className="cre-main flex-1">{children}</main>
       </div>
+      <AssistantPanel />
     </div>
   );
 }

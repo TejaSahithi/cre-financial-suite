@@ -4,6 +4,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClientInstance } from '@/lib/query-client';
 import { AuthProvider } from '@/lib/AuthContext';
 import { ModuleAccessProvider } from '@/lib/ModuleAccessContext';
+import { AssistantContextProvider } from '@/assistant/AssistantContextProvider';
 import ErrorBoundary from './ErrorBoundary';
 
 export default function AppProviders({ children }) {
@@ -12,7 +13,9 @@ export default function AppProviders({ children }) {
       <AuthProvider>
         <QueryClientProvider client={queryClientInstance}>
           <ModuleAccessProvider>
-            {children}
+            <AssistantContextProvider>
+              {children}
+            </AssistantContextProvider>
           </ModuleAccessProvider>
           <Toaster />
         </QueryClientProvider>
