@@ -140,6 +140,41 @@ Deno.test("callAssistantLLMStructured: real HTTP call uses the Assistant credent
   assertEquals(capturedRequests[0].body.model, "gpt-5.4-mini-3");
 });
 
+
+Deno.test("callAssistantLLMStructured: accepts Azure content-part arrays for structured JSON", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        choices: [{ message: { content: [{ type: "text", text: JSON.stringify({ ok: true }) }] }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+        model: "gpt-5.4-mini-3",
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    )) as typeof fetch;
+
+  try {
+    await withEnv(
+      {
+        ASSISTANT_AZURE_OPENAI_ENDPOINT: "https://assistant-resource.openai.azure.com",
+        ASSISTANT_AZURE_OPENAI_API_KEY: "assistant-key-correct",
+        ASSISTANT_AZURE_OPENAI_DEPLOYMENT: "gpt-5.4-mini-3",
+      },
+      async () => {
+        const result = await callAssistantLLMStructured({
+          systemPrompt: "test",
+          userPrompt: "test",
+          schemaName: "test_schema",
+          schema: { type: "object", properties: { ok: { type: "boolean" } }, additionalProperties: false, required: ["ok"] },
+        });
+        assertEquals(result.status, "success");
+        assertEquals(result.data, { ok: true });
+      },
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
 Deno.test("structural isolation: assistant-llm.ts does not import _shared/llm.ts, and vice versa", async () => {
   const assistantLlmSource = await Deno.readTextFile(new URL("../_shared/assistant/assistant-llm.ts", import.meta.url));
   const extractionLlmSource = await Deno.readTextFile(new URL("../_shared/llm.ts", import.meta.url));

@@ -25,6 +25,7 @@ import {
 import { getToolNames, getTool } from "./tools/tool-registry.ts";
 import { authorizeAndRunTool, type ToolBrokerOutcome, type ToolRunRecord } from "./tools/tool-broker.ts";
 import { shapeFinalResponse } from "./grounding/response-shaper.ts";
+import { PLATFORM_CAPABILITIES, PLATFORM_WORKFLOWS } from "./capabilities/platform-capability-registry.ts";
 
 const MAX_TOOL_ITERATIONS = 6;
 
@@ -39,6 +40,126 @@ export interface OrchestratorResult {
   completionTokens: number;
 }
 
+const MODULE_HIGHLIGHT_IDS: Record<string, string[]> = {
+  leases: ["leases", "lease_upload", "lease_review", "lease_detail", "lease_expense_rules", "rent_projection", "critical_dates"],
+  expenses: ["expenses", "add_expense", "bulk_import", "lease_expense_classification", "lease_expense_rules"],
+  cam: ["cam_dashboard", "cam_setup", "cam_run", "cam_lease_detail", "cam_pool_detail", "cam_approval", "cam_posting"],
+  budgets: ["budget_dashboard", "create_budget", "budget_review", "variance", "reconciliation"],
+  properties: ["properties", "property_detail", "buildings", "units"],
+  tenants: ["tenants", "tenant_detail", "billing"],
+  revenue: ["revenue", "rent_projection"],
+  admin: ["organization_settings", "user_management", "audit_log", "chart_of_accounts"],
+};
+
+const MODULE_ALIASES: Array<{ module: string; terms: string[] }> = [
+  { module: "leases", terms: ["lease module", "leases module", "leasing module", "lease feature", "leases feature"] },
+  { module: "expenses", terms: ["expense module", "expenses module", "expense feature", "expenses feature"] },
+  { module: "cam", terms: ["cam module", "cam feature", "cam workflow", "common area maintenance module"] },
+  { module: "budgets", terms: ["budget module", "budgets module", "budgeting module", "budget feature"] },
+  { module: "properties", terms: ["property module", "properties module", "property feature"] },
+  { module: "tenants", terms: ["tenant module", "tenants module", "tenant feature"] },
+  { module: "revenue", terms: ["revenue module", "revenue feature"] },
+  { module: "admin", terms: ["admin module", "administration module", "settings module"] },
+];
+
+function normalizeQuestion(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function isGenericProductKnowledgeQuestion(normalized: string): boolean {
+  const asksForExplanation = /\b(what|explain|describe|tell|how|why|purpose|used)\b/.test(normalized);
+  const asksAboutProductSurface = /\b(module|page|feature|workflow|doing|does|do|used for|purpose)\b/.test(normalized);
+  return asksForExplanation && asksAboutProductSurface;
+}
+
+function findRequestedModule(normalized: string): string | null {
+  for (const entry of MODULE_ALIASES) {
+    if (entry.terms.some((term) => normalized.includes(term))) return entry.module;
+  }
+  return null;
+}
+
+function findRequestedCapability(normalized: string, requestContext?: AssistantRequestContext): any | null {
+  const asksAboutCurrentPage = /\b(this page|current page|here)\b/.test(normalized);
+  if (asksAboutCurrentPage && requestContext?.currentPage) {
+    const current = PLATFORM_CAPABILITIES.find((capability: any) => capability.page === requestContext.currentPage);
+    if (current?.sensitivity === "product") return current;
+  }
+
+  const candidates = [...PLATFORM_CAPABILITIES]
+    .filter((capability: any) => capability.sensitivity === "product")
+    .sort((a: any, b: any) => Math.max(b.page.length, b.label.length) - Math.max(a.page.length, a.label.length));
+
+  for (const capability of candidates) {
+    const terms = [
+      capability.page,
+      capability.label,
+      `${capability.label} page`,
+      `${capability.label} feature`,
+    ].map(normalizeQuestion);
+    if (terms.some((term) => term.length >= 4 && normalized.includes(term))) return capability;
+  }
+  return null;
+}
+
+function getModuleCapabilities(moduleName: string): any[] {
+  const ids = MODULE_HIGHLIGHT_IDS[moduleName] ?? [];
+  const byId = new Map(PLATFORM_CAPABILITIES.map((capability: any) => [capability.id, capability]));
+  const highlighted = ids.map((id) => byId.get(id)).filter(Boolean);
+  if (highlighted.length > 0) return highlighted;
+  return PLATFORM_CAPABILITIES.filter((capability: any) => capability.module === moduleName && capability.sensitivity === "product");
+}
+
+function buildProductKnowledgeResult(capabilities: any[], answer: string): OrchestratorResult {
+  return {
+    status: "answered",
+    answer,
+    citations: capabilities.slice(0, 6).map((capability: any) => ({ type: "capability", label: `Platform capability: ${capability.label}` })),
+    navigation: capabilities.slice(0, 4).map((capability: any) => ({ label: `Open ${capability.label}`, page: capability.page })),
+    limitations: ["Generic product explanation only; no customer lease, property, expense, CAM, revenue, or budget records were read."],
+    toolRuns: [],
+    promptTokens: 0,
+    completionTokens: 0,
+  };
+}
+
+function maybeAnswerProductKnowledgeQuestion(userMessage: string, requestContext?: AssistantRequestContext): OrchestratorResult | null {
+  const normalized = normalizeQuestion(userMessage);
+  if (!isGenericProductKnowledgeQuestion(normalized)) return null;
+
+  const capability = findRequestedCapability(normalized, requestContext);
+  if (capability) {
+    const details = [
+      capability.prerequisites?.length ? `Prerequisites: ${capability.prerequisites.join(" ")}` : "",
+      capability.downstreamEffects?.length ? `Downstream effects: ${capability.downstreamEffects.join(" ")}` : "",
+      capability.relatedPages?.length ? `Related pages: ${capability.relatedPages.join(", ")}.` : "",
+    ].filter(Boolean).join("\n\n");
+    return buildProductKnowledgeResult(
+      [capability],
+      [`${capability.label} is used for ${capability.purpose.replace(/\.$/, "").toLowerCase()}. ${capability.description}`, details].filter(Boolean).join("\n\n"),
+    );
+  }
+
+  const moduleName = findRequestedModule(normalized);
+  if (!moduleName) return null;
+
+  const capabilities = getModuleCapabilities(moduleName).filter((item: any) => item?.sensitivity === "product");
+  if (capabilities.length === 0) return null;
+
+  const primary = capabilities[0];
+  const highlights = capabilities.slice(1, 6).map((item: any) => `${item.label}: ${item.purpose.replace(/\.$/, "")}.`);
+  const workflows = PLATFORM_WORKFLOWS.filter((workflow: any) => workflow.relatedPages?.some((page: string) => capabilities.some((item: any) => item.page === page))).slice(0, 2);
+  const workflowText = workflows.length > 0 ? ` It also connects into workflows like ${workflows.map((workflow: any) => workflow.label).join(" and ")}.` : "";
+
+  return buildProductKnowledgeResult(
+    capabilities,
+    [
+      `The ${primary.label} module centers on ${primary.purpose.replace(/\.$/, "").toLowerCase()}. ${primary.description}`,
+      highlights.length > 0 ? `Key parts: ${highlights.join(" ")}` : "",
+      `Approved or finalized outputs from this area can feed downstream modules such as expense classification, CAM, revenue, budgets, and reporting when those workflows depend on them.${workflowText}`,
+    ].filter(Boolean).join("\n\n"),
+  );
+}
 function truncate(value: unknown, maxLen = 1800): string {
   const s = JSON.stringify(value);
   if (!s) return "null";
@@ -78,6 +199,9 @@ export async function runAssistantOrchestrator(
   toolCtx: { req: Request; orgId: string; userId: string; supabaseAdmin: any },
   priorTurns?: PriorTurn[],
 ): Promise<OrchestratorResult> {
+  const productKnowledgeAnswer = maybeAnswerProductKnowledgeQuestion(userMessage, requestContext);
+  if (productKnowledgeAnswer) return productKnowledgeAnswer;
+
   if (!isAssistantLLMConfigured()) {
     return {
       status: "error",

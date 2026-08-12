@@ -186,6 +186,21 @@ async function postToAssistantDeployment(config: AssistantLLMConfig, body: Recor
   return { response, responseBody, requestId };
 }
 
+function extractAssistantMessageContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (!part || typeof part !== "object") return "";
+      const record = part as Record<string, unknown>;
+      if (typeof record.text === "string") return record.text;
+      if (typeof record.output_text === "string") return record.output_text;
+      return "";
+    })
+    .join("");
+}
 /** Call the Assistant's own Azure OpenAI deployment under strict json_schema
  * structured-outputs mode. This is the ONLY call shape the orchestrator uses
  * (both for tool-call turns and the final answer turn) — kept singular
@@ -283,7 +298,7 @@ export async function callAssistantLLMStructured<T = unknown>(
       };
     }
 
-    const content = choice?.message?.content ?? "";
+    const content = extractAssistantMessageContent(choice?.message?.content);
     let data: T;
     try {
       data = JSON.parse(content) as T;
