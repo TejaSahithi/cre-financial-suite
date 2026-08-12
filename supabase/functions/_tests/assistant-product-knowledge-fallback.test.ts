@@ -45,3 +45,15 @@ Deno.test("runAssistantOrchestrator answers broad end-to-end business flow quest
   assertStringIncludes(result.answer, "CAM");
   assertEquals(result.toolRuns.length, 0);
 });
+Deno.test("runAssistantOrchestrator answers short lease approval workflow phrases", async () => {
+  const result = await runAssistantOrchestrator(
+    "lease module approval workflow",
+    {},
+    { req: new Request("https://example.test"), orgId: "org", userId: "user", supabaseAdmin: {} },
+  );
+
+  assertEquals(result.status, "answered");
+  assertStringIncludes(result.answer, "Lease approval to CAM-ready");
+  assertStringIncludes(result.answer, "Reviewer approves the abstract");
+  assertEquals(result.toolRuns.length, 0);
+});

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Sparkles, Send, RotateCcw, MapPin } from "lucide-react";
+import { Bot, BrainCircuit, FileText, Send, RotateCcw, MapPin } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -73,16 +73,16 @@ export default function AssistantPanel() {
       <Button
         onClick={() => setIsOpen(true)}
         className="fixed bottom-6 right-6 z-40 h-12 w-12 rounded-full shadow-lg p-0"
-        aria-label="Open Assistant"
+        aria-label="Open CRE Assistant"
       >
-        <Sparkles className="h-5 w-5" />
+        <BrainCircuit className="h-5 w-5" />
       </Button>
 
       <Sheet open={isOpen} onOpenChange={setIsOpen}>
         <SheetContent side="right" className="flex w-full flex-col sm:max-w-md">
           <SheetHeader>
             <div className="flex items-center justify-between pr-6">
-              <SheetTitle className="flex items-center gap-2"><Sparkles className="h-4 w-4" /> Assistant</SheetTitle>
+              <SheetTitle className="flex items-center gap-2"><span className="flex h-7 w-7 items-center justify-center rounded-full border bg-background text-primary"><BrainCircuit className="h-4 w-4" /></span> CRE Assistant</SheetTitle>
               <Button variant="ghost" size="sm" onClick={clearConversation} title="New conversation">
                 <RotateCcw className="h-4 w-4" />
               </Button>

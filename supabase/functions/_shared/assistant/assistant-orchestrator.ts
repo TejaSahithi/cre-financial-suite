@@ -69,7 +69,11 @@ function normalizeQuestion(value: string): string {
 function isGenericProductKnowledgeQuestion(normalized: string): boolean {
   const asksForExplanation = /\b(what|explain|describe|tell|how|why|purpose|used)\b/.test(normalized);
   const asksAboutProductSurface = /\b(module|page|feature|workflow|flow|platform|system|app|application|doing|does|do|used for|purpose)\b/.test(normalized);
-  return asksForExplanation && asksAboutProductSurface;
+  const productNounPhrase = /\b(module|page|feature|workflow|flow|platform|system|app|application)\b/.test(normalized);
+  const namesKnownModule = findRequestedModule(normalized) !== null;
+  const namesKnownWorkflow = findRequestedWorkflow(normalized) !== null;
+  const namesKnownCapability = findRequestedCapability(normalized) !== null;
+  return (asksForExplanation && asksAboutProductSurface) || productNounPhrase || namesKnownModule || namesKnownWorkflow || namesKnownCapability;
 }
 
 function findRequestedModule(normalized: string): string | null {
@@ -79,6 +83,24 @@ function findRequestedModule(normalized: string): string | null {
   return null;
 }
 
+function findRequestedWorkflow(normalized: string): any | null {
+  if (/\b(lease|leases|leasing)\b/.test(normalized) && /\b(approval|approve|review|workflow|cam ready|cam)\b/.test(normalized)) {
+    return PLATFORM_WORKFLOWS.find((workflow: any) => workflow.id === "lease_to_cam_ready") ?? null;
+  }
+  if (/\b(cam|common area maintenance)\b/.test(normalized) && /\b(approval|approve|workflow|lifecycle|posting|posted)\b/.test(normalized)) {
+    return PLATFORM_WORKFLOWS.find((workflow: any) => workflow.id === "cam_run_lifecycle") ?? null;
+  }
+  if (/\b(budget|budgets|budgeting)\b/.test(normalized) && /\b(approval|approve|workflow|lifecycle|lock|locked)\b/.test(normalized)) {
+    return PLATFORM_WORKFLOWS.find((workflow: any) => workflow.id === "budget_lifecycle") ?? null;
+  }
+
+  const candidates = [...PLATFORM_WORKFLOWS].sort((a: any, b: any) => b.label.length - a.label.length);
+  for (const workflow of candidates) {
+    const terms = [workflow.id, workflow.label, `${workflow.label} workflow`].map(normalizeQuestion);
+    if (terms.some((term) => term.length >= 4 && normalized.includes(term))) return workflow;
+  }
+  return null;
+}
 function findRequestedCapability(normalized: string, requestContext?: AssistantRequestContext): any | null {
   const asksAboutCurrentPage = /\b(this page|current page|here)\b/.test(normalized);
   if (asksAboutCurrentPage && requestContext?.currentPage) {
@@ -151,6 +173,19 @@ function maybeAnswerProductKnowledgeQuestion(userMessage: string, requestContext
 
   const platformFlowAnswer = maybeAnswerPlatformFlowQuestion(normalized);
   if (platformFlowAnswer) return platformFlowAnswer;
+
+  const workflow = findRequestedWorkflow(normalized);
+  if (workflow) {
+    const relatedCapabilities = PLATFORM_CAPABILITIES.filter((capability: any) => workflow.relatedPages?.includes(capability.page) && capability.sensitivity === "product");
+    return buildProductKnowledgeResult(
+      relatedCapabilities,
+      [
+        `${workflow.label} is the workflow for ${workflow.description.toLowerCase()}`,
+        `Steps: ${workflow.steps.join(" ")}`,
+        workflow.relatedPages?.length ? `Related pages: ${workflow.relatedPages.join(", ")}.` : "",
+      ].filter(Boolean).join("\n\n"),
+    );
+  }
 
   const capability = findRequestedCapability(normalized, requestContext);
   if (capability) {
