@@ -19,33 +19,33 @@ AS $$
     );
 $$;
 
-CREATE OR REPLACE FUNCTION public.role_default_page_access(role_key text, page_name text)
+CREATE OR REPLACE FUNCTION public.role_default_page_access(role_name text, page_name text)
 RETURNS text
 LANGUAGE sql IMMUTABLE
 AS $$
   SELECT CASE
-    WHEN lower(COALESCE(role_key, '')) IN ('super_admin', 'org_owner', 'org_admin', 'owner', 'admin')
+    WHEN lower(COALESCE(role_name, '')) IN ('super_admin', 'org_owner', 'org_admin', 'owner', 'admin')
       THEN 'admin'
-    WHEN lower(COALESCE(role_key, '')) IN ('asset_manager', 'portfolio_manager', 'operations_director')
+    WHEN lower(COALESCE(role_name, '')) IN ('asset_manager', 'portfolio_manager', 'operations_director')
       AND page_name IN (
         'Dashboard', 'PortfolioOverview', 'PortfolioInsights', 'Portfolios',
         'Properties', 'Buildings', 'Units', 'BuildingsUnits', 'PropertyDetail',
         'Leases', 'LeaseUpload', 'LeaseReview', 'RentProjection'
       )
       THEN 'write'
-    WHEN lower(COALESCE(role_key, '')) IN ('property_manager', 'facility_manager', 'construction_manager')
+    WHEN lower(COALESCE(role_name, '')) IN ('property_manager', 'facility_manager', 'construction_manager')
       AND page_name IN (
         'Properties', 'Buildings', 'Units', 'BuildingsUnits', 'PropertyDetail',
         'Leases', 'LeaseUpload', 'LeaseReview', 'RentProjection'
       )
       THEN 'write'
-    WHEN lower(COALESCE(role_key, '')) IN ('leasing_agent', 'lease_admin')
+    WHEN lower(COALESCE(role_name, '')) IN ('leasing_agent', 'lease_admin')
       AND page_name IN ('Leases', 'LeaseUpload', 'LeaseReview', 'RentProjection')
       THEN 'write'
-    WHEN lower(COALESCE(role_key, '')) IN ('finance', 'cfo', 'controller', 'accounts_manager')
+    WHEN lower(COALESCE(role_name, '')) IN ('finance', 'cfo', 'controller', 'accounts_manager')
       AND page_name IN ('Expenses', 'AddExpense', 'ExpenseReview', 'Revenue', 'Billing', 'BudgetDashboard', 'CreateBudget', 'CAMDashboard', 'CAMRun')
       THEN 'write'
-    WHEN lower(COALESCE(role_key, '')) IN ('financial_analyst', 'analyst', 'auditor', 'property_owner')
+    WHEN lower(COALESCE(role_name, '')) IN ('financial_analyst', 'analyst', 'auditor', 'property_owner')
       THEN 'read'
     ELSE 'none'
   END;
