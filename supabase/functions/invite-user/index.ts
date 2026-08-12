@@ -218,6 +218,7 @@ Deno.serve(async (req: Request) => {
     let inviteLink = buildAcceptInviteUrl(frontendUrl, {
       existing: "1",
       org_id,
+      email,
     });
 
     if (isNewUser) {

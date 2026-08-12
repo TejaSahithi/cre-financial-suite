@@ -71,23 +71,21 @@ export default function AcceptInvite() {
         const searchParams = new URLSearchParams(window.location.search);
         const hashParams = getHashParams();
         const isExistingUserInvite = searchParams.get("existing") === "1";
+        const invitedEmail = (searchParams.get("email") || "").trim().toLowerCase();
+        const code = searchParams.get("code");
+        const tokenHash = searchParams.get("token_hash") || hashParams.get("token_hash");
+        const type = searchParams.get("type") || hashParams.get("type");
+        const accessToken = hashParams.get("access_token");
+        const refreshToken = hashParams.get("refresh_token");
+        const hasInviteAuthCallback = Boolean(code || (tokenHash && type) || (accessToken && refreshToken));
 
-        const sessionResult = await supabase.auth.getSession();
-        activeSession = sessionResult.data?.session || null;
-
-        if (!activeSession) {
-          const code = searchParams.get("code");
-          if (code) {
-            const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-            if (error) throw error;
-            activeSession = data?.session || null;
-          }
+        if (code) {
+          const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) throw error;
+          activeSession = data?.session || null;
         }
 
         if (!activeSession) {
-          const tokenHash = searchParams.get("token_hash") || hashParams.get("token_hash");
-          const type = searchParams.get("type") || hashParams.get("type");
-
           if (tokenHash && type && OTP_TYPES.has(type)) {
             const { data, error } = await supabase.auth.verifyOtp({
               token_hash: tokenHash,
@@ -99,9 +97,6 @@ export default function AcceptInvite() {
         }
 
         if (!activeSession) {
-          const accessToken = hashParams.get("access_token");
-          const refreshToken = hashParams.get("refresh_token");
-
           if (accessToken && refreshToken) {
             const { data, error } = await supabase.auth.setSession({
               access_token: accessToken,
@@ -112,8 +107,26 @@ export default function AcceptInvite() {
           }
         }
 
+        if (!activeSession && !hasInviteAuthCallback) {
+          const sessionResult = await supabase.auth.getSession();
+          activeSession = sessionResult.data?.session || null;
+        }
+
+        if (
+          activeSession &&
+          isExistingUserInvite &&
+          invitedEmail &&
+          activeSession.user?.email?.toLowerCase() !== invitedEmail
+        ) {
+          await supabase.auth.signOut();
+          redirectToLoginForInvite();
+          return;
+        }
+
         if (!activeSession) {
-          const retrySession = await supabase.auth.getSession();
+          const retrySession = hasInviteAuthCallback
+            ? await supabase.auth.getSession()
+            : { data: { session: null } };
           activeSession = retrySession.data?.session || null;
         }
 
