@@ -32,6 +32,7 @@ import {
   recordModuleApprovalAction,
   submitOrReuseModuleApprovalWorkflow,
 } from "@/services/moduleApprovalWorkflowBridge";
+import { createNotificationsForEvent } from "@/services/notificationService";
 
 function buildDefaultForm(scope) {
   return {
@@ -154,7 +155,28 @@ export default function CreateBudget() {
         ai_insights: aiInsights || null,
       });
     },
-    onSuccess: () => navigate(createPageUrl("BudgetDashboard") + location.search),
+    onSuccess: (result, variables) => {
+      createNotificationsForEvent({
+        org_id: orgId,
+        event_type: "budget.generated",
+        entity_type: "budget",
+        entity_id: result?.budget_id,
+        entity_label: form.name || `${variables?.fiscalYear || form.budget_year} Budget`,
+        portfolio_id: result?.portfolio_id || null,
+        property_id: result?.property_id || variables?.propertyId || null,
+        action_url: createPageUrl("BudgetDashboard") + location.search,
+        metadata: {
+          source: "create_budget_generate",
+          fiscal_year: result?.fiscal_year || variables?.fiscalYear || form.budget_year,
+          scope: result?.scope || variables?.scope || form.scope,
+          status: result?.status || null,
+          reused_snapshot: result?.reused_snapshot === true,
+        },
+      }).catch((error) => {
+        console.warn("[CreateBudget] budget.generated notification failed:", error?.message || error);
+      });
+      navigate(createPageUrl("BudgetDashboard") + location.search);
+    },
     onError: (error) => {
       toast.error(error?.message || "Failed to generate budget");
     },
@@ -890,6 +912,7 @@ export default function CreateBudget() {
             budget via planning_source mode on compute-budget. */}
         <TabsContent value="planning" className="mt-4">
           <BudgetPlanningPanel
+            orgId={orgId}
             propertyId={form.property_id || scope.propertyId || null}
             fiscalYear={form.budget_year}
           />

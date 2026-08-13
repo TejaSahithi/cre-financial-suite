@@ -14,8 +14,10 @@ import { toast } from "sonner";
 import { CSV_TEMPLATES } from "@/services/parsingEngine";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction, invokeEdgeFunctionFormData } from "@/services/edgeFunctions";
+import { createNotificationsForEvent } from "@/services/notificationService";
 import { normalizeImportedDateFields } from "@/lib/importDates";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
+import { createPageUrl } from "@/utils";
 import {
   BuildingService, UnitService, RevenueService, ExpenseService,
   PropertyService, LeaseService, TenantService, GLAccountService, InvoiceService, VendorService,
@@ -1326,6 +1328,28 @@ export default function BulkImportModal({
   };
 
   // ── Import execution ──────────────────────────────────────────────────────
+  const notifyPropertyBulkImport = (eventType, metadata = {}) => {
+    if (moduleType !== "property") return;
+    const notificationOrgId = contextOrgId || metadata.org_id;
+    if (!notificationOrgId) return;
+
+    createNotificationsForEvent({
+      org_id: notificationOrgId,
+      event_type: eventType,
+      entity_type: "property",
+      entity_label: "Property Bulk Import",
+      action_url: createPageUrl("Properties"),
+      metadata: {
+        source: "property_bulk_import_modal",
+        module_type: moduleType,
+        method,
+        ...metadata,
+      },
+    }).catch((error) => {
+      console.warn("[BulkImportModal] property import notification failed:", error?.message || error);
+    });
+  };
+
   const executeImport = async () => {
     if (!canImport) return;
 
@@ -1348,10 +1372,25 @@ export default function BulkImportModal({
             edited_rows: editedRows,
           });
           if (data?.error) throw new Error(data.message || 'Review approval failed.');
+          notifyPropertyBulkImport("property.bulk_import_completed", {
+            imported_count: editedRows.length,
+            file_id: pipelineFileId,
+            review_required: true,
+          });
           toast.success(`Approved and imported ${editedRows.length} ${title}.`);
         } else if (pipelineStored) {
+          notifyPropertyBulkImport("property.bulk_import_completed", {
+            imported_count: rows.length,
+            file_id: pipelineFileId,
+            pipeline_stored: true,
+          });
           toast.success(`${title} already imported through the canonical pipeline.`);
         } else {
+          notifyPropertyBulkImport("property.bulk_import_completed", {
+            imported_count: rows.length,
+            file_id: pipelineFileId,
+            pipeline_processed: true,
+          });
           toast.success(`${title} processed through the canonical pipeline.`);
         }
 
@@ -1374,6 +1413,11 @@ export default function BulkImportModal({
         onClose();
         reset();
       } catch (err) {
+        notifyPropertyBulkImport("property.bulk_import_failed", {
+          failed_count: rows?.length || 0,
+          file_id: pipelineFileId,
+          error_message: err?.message || String(err),
+        });
         toast.error(err.message || 'Failed to finalize pipeline import.');
       } finally {
         setImporting(false);
@@ -1806,6 +1850,22 @@ export default function BulkImportModal({
       toast.warning(`Imported ${count}. ${skipped} rows failed — check console for details.`);
     } else {
       toast.success(`Successfully imported ${count} ${title}!`);
+    }
+
+    if (count > 0) {
+      notifyPropertyBulkImport("property.bulk_import_completed", {
+        org_id: writableOrgId,
+        imported_count: count,
+        failed_count: skipped,
+      });
+    }
+    if (skipped > 0) {
+      notifyPropertyBulkImport("property.bulk_import_failed", {
+        org_id: writableOrgId,
+        imported_count: count,
+        failed_count: skipped,
+        failures: failures.slice(0, 5),
+      });
     }
 
     // Invalidate every consumer cache for the affected entity. We invalidate both

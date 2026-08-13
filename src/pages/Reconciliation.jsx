@@ -11,7 +11,9 @@ import { Upload, AlertTriangle, Loader2, CheckCircle2, Calculator } from "lucide
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { toast } from "sonner";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { createNotificationsForEvent } from "@/services/notificationService";
 import { useAssistantPageContext } from "@/assistant/useAssistantContext";
+import { createPageUrl } from "@/utils";
 
 export default function Reconciliation() {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
@@ -24,6 +26,7 @@ export default function Reconciliation() {
   const { data: leases = [] } = useOrgQuery("Lease");
 
   const activePropertyId = selectedPropertyId !== "all" ? selectedPropertyId : null;
+  const activeProperty = properties.find((property) => property.id === activePropertyId) || null;
   useAssistantPageContext({
     page: "Reconciliation",
     entities: { propertyId: activePropertyId || undefined },
@@ -142,8 +145,28 @@ export default function Reconciliation() {
         fiscal_year: selectedYear,
       });
     },
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       await refetch();
+      if (activeProperty?.org_id) {
+        createNotificationsForEvent({
+          org_id: activeProperty.org_id,
+          event_type: "cam.reconciliation_ready",
+          entity_type: "cam_reconciliation",
+          entity_id: result?.reconciliation_id || result?.snapshot_id || activePropertyId,
+          entity_label: `${activeProperty.name || "Property"} ${selectedYear} CAM Reconciliation`,
+          portfolio_id: activeProperty.portfolio_id || null,
+          property_id: activePropertyId,
+          action_url: createPageUrl("Reconciliation"),
+          metadata: {
+            source: "reconciliation_compute",
+            fiscal_year: selectedYear,
+            reconciliation_id: result?.reconciliation_id || null,
+            snapshot_id: result?.snapshot_id || null,
+          },
+        }).catch((error) => {
+          console.warn("[Reconciliation] cam.reconciliation_ready notification failed:", error?.message || error);
+        });
+      }
       toast.success("Reconciliation completed");
     },
     onError: (error) => {
@@ -160,7 +183,7 @@ export default function Reconciliation() {
   const summary = currentData.summary || {};
   const hasExpenseData = filteredExpenses.length > 0;
   const propertyLabel =
-    properties.find((property) => property.id === activePropertyId)?.name ||
+    activeProperty?.name ||
     "selected property";
 
   return (

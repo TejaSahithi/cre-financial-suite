@@ -163,12 +163,29 @@ export function resolveWorkflowActionTransition({ workflow = {}, action }) {
   };
 }
 
-function eventTypeFor(workflowType, action) {
-  if (action === "approve") return `${workflowType}.approved`;
-  if (action === "reject") return `${workflowType}.rejected`;
-  if (action === "return_for_changes") return `${workflowType}.correction_required`;
-  if (action === "submit" || action === "resubmit") return `${workflowType}.review_required`;
-  return `${workflowType}.${action}`;
+function approvalStageEventTypesFor(workflowType, transition = {}) {
+  if (!transition.nextStep) return [`${workflowType}.approved`];
+
+  if (workflowType === "lease") {
+    const nextRole = normalizeRole(transition.nextStep.approver_role || transition.nextStep.required_role);
+    if (nextRole === "org_owner") return ["lease.org_owner_approval_required"];
+    if (nextRole === "asset_owner" || nextRole === "property_owner") return ["lease.pm_approved", "lease.asset_owner_approval_required"];
+    return ["lease.ready_for_approval"];
+  }
+
+  if (["expense", "cam", "budget"].includes(workflowType)) {
+    return [`${workflowType}.final_approval_required`];
+  }
+
+  return [`${workflowType}.approved`];
+}
+
+function eventTypesFor(workflowType, action, transition = {}) {
+  if (action === "approve") return approvalStageEventTypesFor(workflowType, transition);
+  if (action === "reject") return [`${workflowType}.rejected`];
+  if (action === "return_for_changes") return [`${workflowType}.correction_required`];
+  if (action === "submit" || action === "resubmit") return [`${workflowType}.review_required`];
+  return [`${workflowType}.${action}`];
 }
 
 export function buildWorkflowSteps({ approvalType, amount = 0, resource = {}, policies = [] }) {
@@ -445,15 +462,17 @@ export async function recordWorkflowAction({
     details: actionPayload,
   });
 
-  await createNotificationsForEvent({
-    org_id: workflow.org_id,
-    event_type: eventTypeFor(workflow.workflow_type, effectiveAction),
-    entity_type: workflow.entity_type,
-    entity_id: workflow.entity_id,
-    portfolio_id: workflow.portfolio_id || null,
-    property_id: workflow.property_id || null,
-    metadata: { workflow_instance_id: workflow.id, action_id: data.id },
-  });
+  for (const eventType of eventTypesFor(workflow.workflow_type, effectiveAction, transition)) {
+    await createNotificationsForEvent({
+      org_id: workflow.org_id,
+      event_type: eventType,
+      entity_type: workflow.entity_type,
+      entity_id: workflow.entity_id,
+      portfolio_id: workflow.portfolio_id || null,
+      property_id: workflow.property_id || null,
+      metadata: { workflow_instance_id: workflow.id, action_id: data.id },
+    });
+  }
 
   return data;
 }
