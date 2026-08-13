@@ -85,7 +85,7 @@ export default function AssistantPanel() {
         className="fixed bottom-6 right-6 z-40 h-16 w-16 rounded-full border border-[var(--pf-shell-border)] bg-gradient-to-br from-white to-[var(--pf-blue-soft)] p-0 text-[var(--accent)] shadow-[0_16px_34px_rgba(20,86,199,.28)] hover:from-white hover:to-[var(--pf-blue-soft)]"
         aria-label="Open ProForma Assistant"
       >
-        <Bot className="h-9 w-9" />
+        <Bot className="!h-11 !w-11" strokeWidth={2.4} />
       </Button>
 
       <Sheet open={isOpen} onOpenChange={setIsOpen} modal={false}>

@@ -129,6 +129,9 @@ function buildPageLabelMap(items, map = {}) {
 }
 
 const PAGE_LABELS = buildPageLabelMap(navSections);
+const SIDEBAR_MIN_WIDTH = 236;
+const SIDEBAR_MAX_WIDTH = 360;
+const SIDEBAR_COLLAPSED_WIDTH = 78;
 
 function NavItem({ item, currentPageName, collapsed, onNavigate }) {
   const [open, setOpen] = useState(false);
@@ -186,6 +189,7 @@ function NavItem({ item, currentPageName, collapsed, onNavigate }) {
 
 export default function Layout({ children, currentPageName }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(263);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [theme, setTheme] = useState(() => {
     if (typeof window === "undefined") return "light";
@@ -221,12 +225,43 @@ export default function Layout({ children, currentPageName }) {
     }
   }, [theme]);
 
+  const handleSidebarResizeStart = (event) => {
+    if (!sidebarOpen || (event.pointerType === "mouse" && event.button !== 0)) return;
+    event.preventDefault();
+
+    const handlePointerMove = (moveEvent) => {
+      const nextWidth = Math.min(
+        SIDEBAR_MAX_WIDTH,
+        Math.max(SIDEBAR_MIN_WIDTH, Math.round(moveEvent.clientX))
+      );
+      setSidebarWidth(nextWidth);
+    };
+
+    const handlePointerUp = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+      document.body.classList.remove("cre-sidebar-resizing");
+    };
+
+    document.body.classList.add("cre-sidebar-resizing");
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
+  };
+
+  const shellStyle = {
+    "--sidebar-width": `${sidebarOpen ? sidebarWidth : SIDEBAR_COLLAPSED_WIDTH}px`,
+  };
   if (LAYOUT_EXEMPT_PAGES.includes(currentPageName)) {
     return <>{children}</>;
   }
 
   return (
-    <div className={`cre-shell ${sidebarOpen ? '' : 'cre-shell-collapsed'} ${assistantOpen ? 'cre-shell-assistant-open' : ''}`}>
+    <div
+      className={`cre-shell ${sidebarOpen ? '' : 'cre-shell-collapsed'} ${assistantOpen ? 'cre-shell-assistant-open' : ''}`}
+      style={shellStyle}
+    >
       {/* Sidebar */}
       <aside className="cre-sidebar hidden lg:flex">
         <div className="cre-brand">
@@ -278,6 +313,15 @@ export default function Layout({ children, currentPageName }) {
             )}
           </div>
         </div>
+        {sidebarOpen && (
+          <button
+            type="button"
+            className="cre-sidebar-resizer"
+            onPointerDown={handleSidebarResizeStart}
+            aria-label="Resize sidebar"
+            title="Drag to resize navigation"
+          />
+        )}
       </aside>
 
       {/* Mobile sidebar */}
