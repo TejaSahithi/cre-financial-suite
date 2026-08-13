@@ -437,7 +437,7 @@ export default function BudgetDashboard() {
     draft: "Draft",
     ai_generated: "AI Generated",
     under_review: "Under Review",
-    reviewed: "Reviewed",
+    reviewed: "Pending Approval",
     approved: "Approved",
     signed: "Signed",
     locked: "Approved & Locked",
@@ -705,7 +705,7 @@ export default function BudgetDashboard() {
                         ) : (
                           <CheckCircle2 className="mr-2 h-4 w-4" />
                         )}
-                        Mark as Reviewed
+                        Send for Approval
                       </Button>
                     )}
                     {selectedBudget.status === "reviewed" && (

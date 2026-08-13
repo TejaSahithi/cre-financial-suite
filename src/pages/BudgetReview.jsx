@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import { Link, useLocation } from "react-router-dom";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, ArrowUpRight, ArrowDownRight, Minus, AlertTriangle, Info, Download, ArrowRight, FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -11,7 +12,9 @@ import {
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useSnapshotQuery } from "@/hooks/useSnapshotQuery";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { submitOrReuseModuleApprovalWorkflow } from "@/services/moduleApprovalWorkflowBridge";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
+import { useAuth } from "@/lib/AuthContext";
 import ScopeSelector from "@/components/ScopeSelector";
 import PageHeader from "@/components/PageHeader";
 import SendForApprovalButton from "@/components/approvals/SendForApprovalButton";
@@ -156,6 +159,8 @@ function buildCategoryComparison(currExpenses, prevExpenses) {
 
 export default function BudgetReview() {
   const location = useLocation();
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
 
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
@@ -355,6 +360,53 @@ export default function BudgetReview() {
     ? `${approvalProperty.name} Budget FY ${currentYear}`
     : `Budget Review FY ${currentYear}`;
   const budgetApprovalEntityId = currentBudget?.id || (scopeProperty !== "all" && scopeProperty) || orgId;
+  const markBudgetReviewedMutation = useMutation({
+    mutationFn: ({ budget, fiscalYear }) =>
+      invokeEdgeFunction("compute-budget", {
+        action: "mark_reviewed",
+        budget_id: budget?.id,
+        scope: budget?.scope,
+        portfolio_id: budget?.portfolio_id || undefined,
+        property_id: budget?.property_id || undefined,
+        building_id: budget?.building_id || undefined,
+        unit_id: budget?.unit_id || undefined,
+        fiscal_year: fiscalYear,
+      }),
+    onSuccess: async (_result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["Budget"] });
+      queryClient.invalidateQueries({ queryKey: ["budgets"] });
+      if (variables?.budget) {
+        try {
+          await submitOrReuseModuleApprovalWorkflow({
+            workflowType: "budget",
+            entity: variables.budget,
+            user,
+            metadata: { source: "budget_review_manual_send_for_approval" },
+          });
+        } catch (error) {
+          console.warn("[BudgetReview] Generic approval workflow sync failed:", error?.message || error);
+        }
+      }
+    },
+  });
+
+  const markBudgetPendingApproval = async () => {
+    if (!currentBudget?.id) throw new Error("Select a budget before sending for approval.");
+    if (["draft", "ai_generated", "under_review"].includes(currentBudget.status)) {
+      await markBudgetReviewedMutation.mutateAsync({ budget: currentBudget, fiscalYear: currentYear });
+    }
+    return {
+      entity: {
+        ...currentBudget,
+        status: "reviewed",
+      },
+      metadata: {
+        approval_status: "reviewed",
+        display_status: "pending_approval",
+        record_status_updated: true,
+      },
+    };
+  };
   const subtitleScope = getScopeSubtitle(scope, {
     default: `${filteredBudgets.length} budgets across the active scope`,
     portfolio: (portfolio) => `${filteredBudgets.length} budgets in ${portfolio.name}`,
@@ -741,7 +793,8 @@ export default function BudgetReview() {
               portfolioId={scope.portfolioId || currentBudget?.portfolio_id || null}
               propertyId={approvalProperty?.id || currentBudget?.property_id || null}
               actionUrl={createPageUrl("BudgetReview") + location.search}
-              disabled={!budgetApprovalEntityId || orgId === "__none__" || !hasAnyBudget}
+              disabled={!budgetApprovalEntityId || orgId === "__none__" || !hasAnyBudget || markBudgetReviewedMutation.isPending}
+              onBeforeSend={markBudgetPendingApproval}
               metadata={{
                 source: "budget_review_manual_send_for_approval",
                 fiscal_year: currentYear,

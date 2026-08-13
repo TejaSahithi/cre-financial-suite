@@ -373,7 +373,7 @@ export default function CreateBudget() {
     { label: "Draft", color: "bg-slate-500" },
     { label: "AI Generated", color: "bg-blue-500" },
     { label: "Under Review", color: "bg-red-500" },
-    { label: "Reviewed", color: "bg-amber-500" },
+    { label: "Pending Approval", color: "bg-amber-500" },
     { label: "Approved", color: "bg-emerald-500" },
     { label: "Signed", color: "bg-green-500" },
     { label: "Locked", color: "bg-slate-800" },
@@ -827,7 +827,7 @@ export default function CreateBudget() {
                             onClick={() => handleReviewed(selectedBudget)}
                           >
                             {computeBudgetActionMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
-                            Mark as Reviewed
+                            Send for Approval
                           </Button>
                         )}
                         {["reviewed"].includes(selectedBudget.status) && (

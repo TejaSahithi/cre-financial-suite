@@ -306,7 +306,7 @@ export default function CAMRun() {
         reject: "cam.review_required",
       };
       const eventType = eventByAction[variables?.action];
-      if (eventType) notifyCamEvent(eventType, result, `cam_run_${variables.action}`);
+      if (eventType && !variables?.suppressNotification) notifyCamEvent(eventType, result, `cam_run_${variables.action}`);
       const workflowEntity = { ...(activeRun || {}), ...(result || {}), id: activeRun?.id || result?.id };
       try {
         if (variables?.action === "submit_for_review") {
@@ -339,6 +339,22 @@ export default function CAMRun() {
     actionMutation.mutateAsync({ action, payload }, {
       onSuccess: () => toast.success(successMsg ?? "Done"),
     });
+
+  const markCamRunPendingApproval = async () => {
+    if (activeRun?.status === "calculated") {
+      await actionMutation.mutateAsync({ action: "submit_for_review", payload: {}, suppressNotification: true });
+    }
+    return {
+      entity: {
+        ...activeRun,
+        status: "submitted",
+      },
+      metadata: {
+        approval_status: "submitted",
+        record_status_updated: true,
+      },
+    };
+  };
 
   const canCalculate = activeRun == null || ["draft", "readiness_failed", "ready", "calculating", "calculated"].includes(activeRun.status);
   const canSubmit = activeRun?.status === "calculated";
@@ -595,7 +611,9 @@ export default function CAMRun() {
                         entityLabel={activeProperty?.name ? `${activeProperty.name} CAM Run` : "CAM Run"}
                         propertyId={propertyId || activeRun.property_id || activeRun.scope_id || null}
                         actionUrl={`${createPageUrl("CAMRun")}?property_id=${propertyId || activeRun.property_id || activeRun.scope_id || ""}&recovery_period_id=${periodId || activeRun.recovery_period_id || ""}`}
-                        disabled={!activeRun.id || activeRun.status === "approved" || activeRun.status === "posted"}
+                        disabled={!activeRun.id || !["calculated", "submitted", "under_review"].includes(activeRun.status)}
+                        onBeforeSend={markCamRunPendingApproval}
+                        onSent={() => refetchRuns()}
                         metadata={{
                           source: "cam_run_manual_send_for_approval",
                           status: activeRun.status,
