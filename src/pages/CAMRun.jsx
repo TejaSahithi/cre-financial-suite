@@ -33,6 +33,7 @@ import {
 import { createPageUrl } from "@/utils";
 import { buildCamActiveLeaseIdSet, filterCamActiveLeases, filterRowsToCamActiveLeases } from "@/lib/activeLease";
 import PageHeader from "@/components/PageHeader";
+import SendForApprovalButton from "@/components/approvals/SendForApprovalButton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -586,6 +587,21 @@ export default function CAMRun() {
                           <Send className="mr-2 h-4 w-4" /> Submit for Review
                         </Button>
                       )}
+                      <SendForApprovalButton
+                        orgId={activeRun.org_id || activeProperty?.org_id}
+                        eventType="cam.final_approval_required"
+                        entityType="cam"
+                        entityId={activeRun.id}
+                        entityLabel={activeProperty?.name ? `${activeProperty.name} CAM Run` : "CAM Run"}
+                        propertyId={propertyId || activeRun.property_id || activeRun.scope_id || null}
+                        actionUrl={`${createPageUrl("CAMRun")}?property_id=${propertyId || activeRun.property_id || activeRun.scope_id || ""}&recovery_period_id=${periodId || activeRun.recovery_period_id || ""}`}
+                        disabled={!activeRun.id || activeRun.status === "approved" || activeRun.status === "posted"}
+                        metadata={{
+                          source: "cam_run_manual_send_for_approval",
+                          status: activeRun.status,
+                          fiscal_year: activeRun.fiscal_year || activeRun.recovery_year || null,
+                        }}
+                      />
                       {(activeRun.status === "submitted" || activeRun.status === "under_review") && (
                         <>
                           <Button

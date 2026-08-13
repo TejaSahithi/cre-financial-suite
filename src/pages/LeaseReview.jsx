@@ -103,6 +103,7 @@ import {
 import { useAuth } from "@/lib/AuthContext";
 import { isSuperAdmin } from "@/lib/rbac";
 import { SummaryStat } from "@/components/lease-review/SummaryStat";
+import SendForApprovalButton from "@/components/approvals/SendForApprovalButton";
 import {
   SourceFileLink,
   findUploadedFileForLease,
@@ -4218,6 +4219,22 @@ export default function LeaseReview() {
                   {savingDraft && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
                   Save Review Draft
                 </Button>
+                <SendForApprovalButton
+                  orgId={lease.org_id}
+                  eventType="lease.ready_for_approval"
+                  entityType="lease"
+                  entityId={lease.id}
+                  entityLabel={lease.tenant_name ? `${lease.tenant_name} Lease` : "Lease Abstract"}
+                  portfolioId={lease.portfolio_id || null}
+                  propertyId={lease.property_id || null}
+                  actionUrl={`${createPageUrl("LeaseReview")}?id=${lease.id}`}
+                  disabled={!lease.id || !lease.org_id}
+                  metadata={{
+                    source: "lease_review_manual_send_for_approval",
+                    abstract_status: lease.abstract_status || null,
+                    extraction_status: lease.extraction_status || null,
+                  }}
+                />
                 <Button
                   className={
                     canApprove

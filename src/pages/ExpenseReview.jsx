@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import MetricCard from "@/components/MetricCard";
 import PageHeader from "@/components/PageHeader";
 import ScopeSelector from "@/components/ScopeSelector";
+import SendForApprovalButton from "@/components/approvals/SendForApprovalButton";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { resolveTenantForExpense } from "@/lib/tenantResolver";
@@ -157,7 +158,7 @@ export default function ExpenseReview() {
   const [scopeUnit, setScopeUnit] = useState("all");
   const [detailRow, setDetailRow] = useState(null);
 
-  const { data: leases = [] } = useOrgQuery("Lease");
+  const { data: leases = [], orgId } = useOrgQuery("Lease");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: allBuildings = [] } = useOrgQuery("Building");
   const { data: allUnits = [] } = useOrgQuery("Unit");
@@ -316,6 +317,13 @@ export default function ExpenseReview() {
     unit: (unit) => `${finalizedSummary.rows} finalized expense classifications totaling ${formatCurrency(finalizedSummary.totalFinalized)} for ${unit.unit_number || unit.unit_id_code || "selected unit"}`,
     org: () => `${finalizedSummary.rows} finalized expense classifications totaling ${formatCurrency(finalizedSummary.totalFinalized)} across the organization`,
   });
+  const approvalProperty = scopeProperty !== "all"
+    ? properties.find((property) => property.id === scopeProperty)
+    : null;
+  const expenseApprovalLabel = approvalProperty?.name
+    ? `${approvalProperty.name} Expense Review`
+    : "Expense Review";
+  const expenseApprovalEntityId = (scopeProperty !== "all" && scopeProperty) || orgId;
 
   const invalidateReviewQueries = () => {
     queryClient.invalidateQueries({ queryKey: ["expense-review-classifications"] });
@@ -495,6 +503,25 @@ export default function ExpenseReview() {
           <FinalizedExpensesTable rows={visibleFinalizedRows} isLoading={isLoadingClassifications || isLoadingCamInputs} filter={finalizedFilter} onOpenDetail={setDetailRow} onSendToCam={(row) => sendToCamMutation.mutate(row)} isSendingToCam={sendToCamMutation.isPending} />
         </CardContent>
       </Card>
+
+      <div className="flex justify-end border-t border-slate-200 pt-4">
+        <SendForApprovalButton
+          orgId={orgId}
+          eventType="expense.final_approval_required"
+          entityType="expense"
+          entityId={expenseApprovalEntityId}
+          entityLabel={expenseApprovalLabel}
+          portfolioId={scope.portfolioId || null}
+          propertyId={scopeProperty !== "all" ? scopeProperty : scope.propertyId || null}
+          actionUrl={createPageUrl("ExpenseReview") + location.search}
+          disabled={!expenseApprovalEntityId || orgId === "__none__" || finalizedSummary.rows === 0}
+          metadata={{
+            source: "expense_review_manual_send_for_approval",
+            finalized_rows: finalizedSummary.rows,
+            finalized_total: finalizedSummary.totalFinalized,
+          }}
+        />
+      </div>
 
       <ExpenseReviewDetailDrawer row={detailRow} open={Boolean(detailRow)} onOpenChange={(open) => !open && setDetailRow(null)} />
     </div>

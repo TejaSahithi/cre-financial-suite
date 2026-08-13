@@ -220,6 +220,10 @@ export async function createNotificationsForEvent(event, options = {}) {
       tenant_id: normalizedEvent.tenant_id,
       entity_label: normalizedEvent.entity_label || normalizedEvent.name || normalizedEvent.metadata?.entity_label,
       action_url: absoluteActionUrl(normalizedEvent.action_url || normalizedEvent.actionUrl || normalizedEvent.link),
+      assigned_user_id: normalizedEvent.assigned_user_id || normalizedEvent.assignedUserId,
+      assigned_user_ids: normalizedEvent.assigned_user_ids || normalizedEvent.assignedUserIds || [],
+      responsible_user_ids: normalizedEvent.responsible_user_ids || normalizedEvent.responsibleUserIds || [],
+      participant_user_ids: normalizedEvent.participant_user_ids || normalizedEvent.participantUserIds || [],
       metadata: normalizedEvent.metadata || {},
     });
   }
