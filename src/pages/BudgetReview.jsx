@@ -14,6 +14,7 @@ import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import ScopeSelector from "@/components/ScopeSelector";
 import PageHeader from "@/components/PageHeader";
+import SendForApprovalButton from "@/components/approvals/SendForApprovalButton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -160,7 +161,7 @@ export default function BudgetReview() {
   const [scopeBuilding, setScopeBuilding] = useState("all");
   const [scopeUnit, setScopeUnit] = useState("all");
 
-  const { data: budgets = [], isLoading } = useOrgQuery("Budget");
+  const { data: budgets = [], isLoading, orgId } = useOrgQuery("Budget");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
@@ -346,6 +347,14 @@ export default function BudgetReview() {
 
   const hasBothYears = currAgg.count > 0 && prevAgg.count > 0;
   const hasAnyBudget = currAgg.count > 0 || prevAgg.count > 0;
+  const currentBudget = currBudgets[0] || filteredBudgets[0] || null;
+  const approvalProperty = scopeProperty !== "all"
+    ? properties.find((property) => property.id === scopeProperty)
+    : properties.find((property) => property.id === currentBudget?.property_id) || null;
+  const budgetApprovalLabel = approvalProperty?.name
+    ? `${approvalProperty.name} Budget FY ${currentYear}`
+    : `Budget Review FY ${currentYear}`;
+  const budgetApprovalEntityId = currentBudget?.id || (scopeProperty !== "all" && scopeProperty) || orgId;
   const subtitleScope = getScopeSubtitle(scope, {
     default: `${filteredBudgets.length} budgets across the active scope`,
     portfolio: (portfolio) => `${filteredBudgets.length} budgets in ${portfolio.name}`,
@@ -721,6 +730,25 @@ export default function BudgetReview() {
               </CardContent>
             </Card>
           )}
+
+          <div className="flex justify-end border-t border-slate-200 pt-4">
+            <SendForApprovalButton
+              orgId={orgId}
+              eventType="budget.final_approval_required"
+              entityType="budget"
+              entityId={budgetApprovalEntityId}
+              entityLabel={budgetApprovalLabel}
+              portfolioId={scope.portfolioId || currentBudget?.portfolio_id || null}
+              propertyId={approvalProperty?.id || currentBudget?.property_id || null}
+              actionUrl={createPageUrl("BudgetReview") + location.search}
+              disabled={!budgetApprovalEntityId || orgId === "__none__" || !hasAnyBudget}
+              metadata={{
+                source: "budget_review_manual_send_for_approval",
+                fiscal_year: currentYear,
+                budget_count: filteredBudgets.length,
+              }}
+            />
+          </div>
         </>
       )}
     </div>

@@ -272,6 +272,7 @@ const EVENT_POLICIES = Object.freeze({
       role(ROLES.PROPERTY_MANAGER, TYPES.ACTION_REQUIRED, { permission: "lease.approve" }),
       role(ROLES.ASSET_OWNER, TYPES.ACTION_REQUIRED, { external: true, permission: "lease.approve" }),
       role(ROLES.AUDITOR, TYPES.INFORMATIONAL),
+      assigned(TYPES.APPROVAL_REQUIRED),
     ],
   },
   "lease.pm_approved": {
@@ -442,6 +443,7 @@ const EVENT_POLICIES = Object.freeze({
       role(ROLES.FINANCE, TYPES.INFORMATIONAL),
       role(ROLES.ACCOUNTING, TYPES.INFORMATIONAL),
       role(ROLES.AUDITOR, TYPES.INFORMATIONAL),
+      assigned(TYPES.APPROVAL_REQUIRED),
     ],
   },
   "expense.approved": {
@@ -528,6 +530,7 @@ const EVENT_POLICIES = Object.freeze({
       role(ROLES.FINANCE, TYPES.INFORMATIONAL),
       role(ROLES.ACCOUNTING, TYPES.INFORMATIONAL),
       role(ROLES.AUDITOR, TYPES.INFORMATIONAL),
+      assigned(TYPES.APPROVAL_REQUIRED),
     ],
   },
   "cam.approved": {
@@ -600,6 +603,7 @@ const EVENT_POLICIES = Object.freeze({
       role(ROLES.FINANCE, TYPES.INFORMATIONAL),
       role(ROLES.ACCOUNTING, TYPES.INFORMATIONAL),
       role(ROLES.AUDITOR, TYPES.INFORMATIONAL),
+      assigned(TYPES.APPROVAL_REQUIRED),
     ],
   },
   "budget.approved": {
