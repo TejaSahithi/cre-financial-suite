@@ -105,6 +105,18 @@ function sectionedRetryAfterDirectFailureEnabled(): boolean {
   return (Deno.env.get("LEASE_WHOLE_DOCUMENT_LLM_SECTIONED_RETRY_ON_INCOMPLETE") ?? "true").trim().toLowerCase() !== "false";
 }
 
+function directFieldPartitionMinDocumentChars(): number {
+  const raw = (Deno.env.get("LEASE_WHOLE_DOCUMENT_LLM_FIELD_PARTITION_MIN_DOCUMENT_CHARS") ?? "").trim().toLowerCase();
+  if (raw === "off" || raw === "false") return Number.POSITIVE_INFINITY;
+  if (raw === "") return 75_000;
+  const configured = Number(raw);
+  return Number.isFinite(configured) && configured >= 10_000 ? Math.floor(configured) : 75_000;
+}
+
+function shouldStartWithFieldPartitioned(compact: CompactLeaseDocument): boolean {
+  return compact.diagnostics.characterCount >= directFieldPartitionMinDocumentChars();
+}
+
 function rowHasMeaningfulScalarValue(row: Record<string, unknown> | null | undefined): boolean {
   if (!row || typeof row !== "object") return false;
   for (const [key, value] of Object.entries(row)) {
@@ -137,7 +149,7 @@ function shouldRetryDirectWholeDocumentWithSectioned(result: ExtractionPipelineR
   // "RESPONSE_TRUNCATED" here silently never matched the actual truncation
   // path, so the fallback never ran.
   const classification = String(debug?.failure_classification ?? "").trim();
-  if (["STRICT_RESPONSE_MASS_OMISSION", "RESPONSE_TRUNCATED", "truncated"].includes(classification)) return true;
+  if (["STRICT_RESPONSE_MASS_OMISSION", "RESPONSE_TRUNCATED", "truncated", "timeout"].includes(classification)) return true;
 
   const invalidOrOmittedCount = Number(debug?.invalid_or_omitted_claim_count ?? 0);
   const factsExtractedCount = Number(debug?.facts_extracted_count ?? 0);
@@ -165,6 +177,29 @@ function mergeDirectRetryDiagnostics(sectionedResult: ExtractionPipelineResult, 
   };
   return result;
 }
+
+function mergeFieldPartitionStartDiagnostics(
+  partitionedResult: ExtractionPipelineResult,
+  compact: CompactLeaseDocument,
+): ExtractionPipelineResult {
+  const threshold = directFieldPartitionMinDocumentChars();
+  const result = { ...partitionedResult, metadata: { ...(partitionedResult.metadata as any) } } as any;
+  result.warnings = [
+    `Large readable lease (${compact.diagnostics.characterCount} chars) used field-partitioned LLM extraction first to avoid direct-call timeout.`,
+    ...(partitionedResult.warnings ?? []),
+  ];
+  result.metadata.extractionDebug = { ...(result.metadata.extractionDebug ?? {}) };
+  result.metadata.extractionDebug.openai_fact_ledger = {
+    ...(result.metadata.extractionDebug.openai_fact_ledger ?? {}),
+    field_partition_start: {
+      reason: "large_readable_document",
+      character_count: compact.diagnostics.characterCount,
+      threshold_chars: Number.isFinite(threshold) ? threshold : null,
+    },
+  };
+  return result;
+}
+
 function failureResult(
   startedAt: number,
   message: string,
@@ -2030,6 +2065,17 @@ export async function runWholeDocumentLlmPipeline(
     });
   }
 
+  if (shouldStartWithFieldPartitioned(compact)) {
+    const partitionedResult = await runFieldPartitionedWholeDocumentLlmPipeline({
+      baseArgs: args,
+      compact,
+      fields,
+      startedAt,
+      maxInputChars,
+    });
+    return mergeFieldPartitionStartDiagnostics(partitionedResult, compact);
+  }
+
   const directResult = await runWholeDocumentLlmOnCompact({
     document: compact,
     moduleType: args.moduleType,
@@ -2068,6 +2114,8 @@ export const __test__ = {
   verifyEvidence,
   maxWholeDocumentPromptChars,
   maxWholeDocumentOutputTokens,
+  directFieldPartitionMinDocumentChars,
+  shouldStartWithFieldPartitioned,
   isTruncatedFinishReason,
   maxOmittedFieldRatio,
   maxSectionFailureRatio,

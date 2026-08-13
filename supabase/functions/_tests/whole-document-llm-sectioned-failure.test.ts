@@ -17,7 +17,7 @@ import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { __test__ } from "../_shared/extraction/whole-document-llm/extractor.ts";
 import { getSchema } from "../_shared/extraction/schemas.ts";
 
-const { maxSectionFailureRatio, mergeSectionedWholeDocumentResults, shouldRetryDirectWholeDocumentWithSectioned } = __test__;
+const { directFieldPartitionMinDocumentChars, maxSectionFailureRatio, mergeSectionedWholeDocumentResults, shouldRetryDirectWholeDocumentWithSectioned, shouldStartWithFieldPartitioned } = __test__;
 
 const FIELDS = Object.entries(getSchema("lease"))
   .filter(([, def]) => !(def as any).derived)
@@ -148,6 +148,29 @@ Deno.test("direct whole-document truncated at the transport layer (status:'trunc
   assertEquals(shouldRetryDirectWholeDocumentWithSectioned(result), true);
 });
 
+Deno.test("direct whole-document provider timeout retries with field-partitioned extraction", () => {
+  const result = {
+    rows: [],
+    method: "fallback",
+    warnings: ["Azure OpenAI request timed out after 60s"],
+    validationErrors: [],
+    metadata: {
+      extractionDebug: {
+        openai_fact_ledger: {
+          extraction_mode: "whole_document_llm_v2",
+          architecture: "llm_direct_schema",
+          failure_classification: "timeout",
+          structured_status: "provider_error",
+          facts_extracted_count: 0,
+          facts_mapped_count: 0,
+        },
+      },
+    },
+  };
+
+  assertEquals(shouldRetryDirectWholeDocumentWithSectioned(result), true);
+});
+
 Deno.test("direct whole-document valid rows do not retry with sectioned extraction", () => {
   const result = {
     rows: [{ tenant_name: "Mindful Tech Solutions, Inc." }],
@@ -169,6 +192,34 @@ Deno.test("direct whole-document valid rows do not retry with sectioned extracti
 
   assertEquals(shouldRetryDirectWholeDocumentWithSectioned(result), false);
 });
+Deno.test("large readable documents start with field-partitioned extraction by default", () => {
+  const original = Deno.env.get("LEASE_WHOLE_DOCUMENT_LLM_FIELD_PARTITION_MIN_DOCUMENT_CHARS");
+  const restore = () => {
+    if (original === undefined) Deno.env.delete("LEASE_WHOLE_DOCUMENT_LLM_FIELD_PARTITION_MIN_DOCUMENT_CHARS");
+    else Deno.env.set("LEASE_WHOLE_DOCUMENT_LLM_FIELD_PARTITION_MIN_DOCUMENT_CHARS", original);
+  };
+  try {
+    Deno.env.delete("LEASE_WHOLE_DOCUMENT_LLM_FIELD_PARTITION_MIN_DOCUMENT_CHARS");
+    const large = {
+      ...PARENT_COMPACT,
+      diagnostics: { ...PARENT_COMPACT.diagnostics, characterCount: 75_000 },
+    };
+    const small = {
+      ...PARENT_COMPACT,
+      diagnostics: { ...PARENT_COMPACT.diagnostics, characterCount: 74_999 },
+    };
+
+    assertEquals(directFieldPartitionMinDocumentChars(), 75_000);
+    assertEquals(shouldStartWithFieldPartitioned(large), true);
+    assertEquals(shouldStartWithFieldPartitioned(small), false);
+
+    Deno.env.set("LEASE_WHOLE_DOCUMENT_LLM_FIELD_PARTITION_MIN_DOCUMENT_CHARS", "off");
+    assertEquals(shouldStartWithFieldPartitioned(large), false);
+  } finally {
+    restore();
+  }
+});
+
 Deno.test("section failure ratio: default is strict (any section failure fails)", () => {
   assertEquals(maxSectionFailureRatio(), 0);
 });
