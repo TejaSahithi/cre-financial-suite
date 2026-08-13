@@ -18,7 +18,9 @@
 - Pass-through field keys must be real canonical keys from `supabase/functions/_shared/extraction/field-contract.ts` — never invented field names.
 - `resolve.ts` and `contracts/resolved-lease-terms.ts` are strict TypeScript (no `@ts-nocheck`), matching `cam-engine-v2`'s pure-core convention. `load-lease-terms-snapshot.ts` and `resolve-lease-terms/index.ts` use `// @ts-nocheck`, matching every other I/O-facing file in `supabase/functions/`.
 - No UI, no new routes, no feature flag — nothing in this phase is called by production code yet.
-- Edge function auth/org-check must byte-for-byte mirror the existing pattern in `supabase/functions/approve-lease-workflow/index.ts` (verifyUser → getUserOrgId → assertPageAccess → org-scoped lookup → 404 on miss), just with `"read"` instead of `"write"` access.
+- Edge function auth/org-check must byte-for-byte mirror the existing pattern in `supabase/functions/approve-lease-workflow/index.ts` (verifyUser → getUserOrgId → assertPageAccess → org-scoped lookup → 404 on miss), just with `"read"` instead of `"write"` access, **including** its status-code mapping in the outer catch block (401 for unauthorized/missing-auth messages, 403 for access-denied/permission messages, 500 otherwise) — never a flat 500 for every failure.
+- `rent_schedules.metadata` only ever carries derivation math (`month_key`, `overlap_days`, etc. — see `supabase/functions/_shared/rent-schedule.ts`), never a document/page/text citation. A row's real document evidence, when it has any, lives one level up on the lease's approved `monthly_rent`/`annual_rent` abstract-snapshot field — use that as the row's source evidence when `row.source === "approved_abstract"`; a `"manual"` row has no document to cite and must stay null, not fall back to guessing.
+- `premises.buildingId`/`premises.rsf` are only ever populated in lockstep with `rent` resolving (both come from the same matched `rent_schedules` row) — `premises.effectiveDatingSupported` must reflect exactly that, never inferred from a different row when the asOfDate match itself was a gap or overlap.
 
 **Known deviation from the spec's test list (stated here, not silently dropped):** the spec listed "unauthorized page access" as an edge-function-level test. `assertPageAccess` is pre-existing, shared, and enforced identically to every other edge function in this repo — re-testing it here would duplicate coverage for code this plan doesn't write. Task 5 instead does a `deno check` typecheck of the wiring and a manual diff-against-`approve-lease-workflow` review. Cross-org isolation *is* still fully covered, at the loader layer (Task 4), which is the code this plan actually owns.
 
@@ -168,6 +170,7 @@ export interface RentScheduleRow {
   unit_id: string | null;
   approved_at: string | null;
   approved_by: string | null;
+  source: string; // approved_abstract | manual — row's own provenance; approved_abstract rows chain to the lease's approved rent field for document evidence, manual rows have none
 }
 
 export interface AbstractSnapshotFieldEntry {
@@ -201,6 +204,7 @@ export interface SourceEvidenceRef {
   kind: "abstract_field" | "rent_schedule_row";
   fieldKey?: string;
   rentScheduleId?: string;
+  scheduleSource?: string; // rent_schedules.source ("approved_abstract" | "manual") — only set for kind "rent_schedule_row"
   documentId: string | null;
   sourcePage: number | null;
   sourceText: string | null;
@@ -231,6 +235,11 @@ export interface ResolvedPremises {
   buildingId: string | null;
   unitId: string | null;
   rsf: number | null;
+  // true only when buildingId/rsf came from the asOfDate-matched rent
+  // schedule row; false when rent itself was unresolved (gap/overlap) —
+  // propertyId/unitId (lease-level, not date-dependent) stay populated
+  // either way.
+  effectiveDatingSupported: boolean;
 }
 
 export interface ResolvedRecoveryPointer {
@@ -318,6 +327,7 @@ function rentRow(overrides: Partial<RentScheduleRow> = {}): RentScheduleRow {
     unit_id: "unit-1",
     approved_at: "2026-01-05T00:00:00Z",
     approved_by: "reviewer@example.test",
+    source: "approved_abstract",
     ...overrides,
   };
 }
@@ -345,7 +355,59 @@ Deno.test("resolveLeaseTerms: happy path resolves a single approved rent row", (
   assertEquals(result.rent?.effectiveDatingSupported, true);
   assertEquals(result.premises?.buildingId, "building-1");
   assertEquals(result.premises?.rsf, 5000);
+  assertEquals(result.premises?.effectiveDatingSupported, true);
   assertEquals(result.unresolvedTerms.some((u) => u.code === "RENT_SCHEDULE_GAP"), false);
+});
+
+Deno.test("resolveLeaseTerms: rent evidence cites the lease-level rent field's document for an approved_abstract row", () => {
+  const result = resolveLeaseTerms(
+    snapshot({
+      sourceDocumentId: "doc-42",
+      approvedFields: {
+        monthly_rent: {
+          value: "10000",
+          source_page: 3,
+          source_text: "Base Rent: $10,000/month",
+          reviewer: "reviewer@example.test",
+          reviewed_at: "2026-01-05T00:00:00Z",
+        },
+      },
+    }),
+    "2026-06-15",
+  );
+  const rentEvidenceEntry = result.sourceEvidence.find((e) => e.kind === "rent_schedule_row");
+  assertEquals(rentEvidenceEntry?.scheduleSource, "approved_abstract");
+  assertEquals(rentEvidenceEntry?.documentId, "doc-42");
+  assertEquals(rentEvidenceEntry?.sourcePage, 3);
+  assertEquals(rentEvidenceEntry?.sourceText, "Base Rent: $10,000/month");
+});
+
+Deno.test("resolveLeaseTerms: manual rent schedule rows carry no document evidence, even if a rent field exists", () => {
+  const rows = [rentRow({ source: "manual" })];
+  const result = resolveLeaseTerms(
+    snapshot({
+      rentScheduleRows: rows,
+      approvedFields: {
+        monthly_rent: { value: "10000", source_page: 3, source_text: "irrelevant", reviewer: null, reviewed_at: null },
+      },
+    }),
+    "2026-06-15",
+  );
+  const rentEvidenceEntry = result.sourceEvidence.find((e) => e.kind === "rent_schedule_row");
+  assertEquals(rentEvidenceEntry?.scheduleSource, "manual");
+  assertEquals(rentEvidenceEntry?.documentId, null);
+  assertEquals(rentEvidenceEntry?.sourcePage, null);
+  assertEquals(rentEvidenceEntry?.sourceText, null);
+});
+
+Deno.test("resolveLeaseTerms: premises effectiveDatingSupported is true only when the rent schedule itself resolved", () => {
+  const resolved = resolveLeaseTerms(snapshot(), "2026-06-15");
+  assertEquals(resolved.premises?.effectiveDatingSupported, true);
+
+  const gapped = resolveLeaseTerms(snapshot(), "2027-06-15");
+  assertEquals(gapped.premises?.effectiveDatingSupported, false);
+  assertEquals(gapped.premises?.propertyId, "property-1");
+  assertEquals(gapped.premises?.buildingId, null);
 });
 
 Deno.test("resolveLeaseTerms: mid-year rent change resolves each period correctly", () => {
@@ -546,14 +608,24 @@ function coversDate(row: RentScheduleRow, asOfDate: string): boolean {
   return row.period_start <= asOfDate && asOfDate <= row.period_end;
 }
 
-function rentEvidence(row: RentScheduleRow, abstractVersion: number): SourceEvidenceRef {
+function rentEvidence(row: RentScheduleRow, snapshot: LeaseTermsSnapshot): SourceEvidenceRef {
+  // rent_schedules rows are generated from the lease's approved rent value
+  // (rent-schedule.ts's metadata only ever carries derivation math — never
+  // a document/page/text citation). The real document evidence for an
+  // approved_abstract-sourced row lives one level up, on the lease's
+  // approved monthly_rent/annual_rent field entry; a manual row has no
+  // document to cite and correctly stays null.
+  const rentField = row.source === "approved_abstract"
+    ? snapshot.approvedFields["monthly_rent"] ?? snapshot.approvedFields["annual_rent"] ?? null
+    : null;
   return {
     kind: "rent_schedule_row",
     rentScheduleId: row.id,
-    documentId: null,
-    sourcePage: null,
-    sourceText: null,
-    abstractVersion,
+    scheduleSource: row.source,
+    documentId: rentField ? snapshot.sourceDocumentId : null,
+    sourcePage: rentField ? rentField.source_page : null,
+    sourceText: rentField ? rentField.source_text : null,
+    abstractVersion: snapshot.abstractVersion,
     approvedBy: row.approved_by,
     approvedAt: row.approved_at,
   };
@@ -673,8 +745,8 @@ export function resolveLeaseTerms(snapshot: LeaseTermsSnapshot, asOfDate: string
         : null,
       effectiveDatingSupported: true,
     };
-    sourceEvidence.push(rentEvidence(matchedRow, snapshot.abstractVersion));
-    for (const row of abatementRows) sourceEvidence.push(rentEvidence(row, snapshot.abstractVersion));
+    sourceEvidence.push(rentEvidence(matchedRow, snapshot));
+    for (const row of abatementRows) sourceEvidence.push(rentEvidence(row, snapshot));
   }
 
   // --- premises: sourced from the matched rent row (real numeric rsf/building_id) ---
@@ -683,6 +755,7 @@ export function resolveLeaseTerms(snapshot: LeaseTermsSnapshot, asOfDate: string
     buildingId: matchedRow?.building_id ?? null,
     unitId: matchedRow?.unit_id ?? snapshot.unitId,
     rsf: matchedRow?.rsf ?? null,
+    effectiveDatingSupported: matchedRow !== null,
   };
 
   // --- percentage rent: pointer only; Phase 5 owns the actual calculation ---
@@ -746,7 +819,7 @@ export function resolveLeaseTerms(snapshot: LeaseTermsSnapshot, asOfDate: string
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `deno test --no-check supabase/functions/_tests/lease-terms-resolve-golden.test.ts`
-Expected: PASS — all 13 tests green.
+Expected: PASS — all 16 tests green.
 
 - [ ] **Step 5: Strict typecheck**
 
@@ -829,6 +902,7 @@ Deno.test("loadLeaseTermsSnapshot: assembles a snapshot from leases + rent_sched
         status: "approved", is_abatement: false, abatement_percent: null,
         building_id: "building-1", unit_id: "unit-1",
         approved_at: "2026-01-05T00:00:00Z", approved_by: "reviewer@example.test",
+        source: "approved_abstract",
       }],
       error: null,
     },
@@ -845,6 +919,7 @@ Deno.test("loadLeaseTermsSnapshot: assembles a snapshot from leases + rent_sched
   assertEquals(snapshot?.approvedAt, "2026-01-05T00:00:00Z");
   assertEquals(snapshot?.rentScheduleRows.length, 1);
   assertEquals(snapshot?.rentScheduleRows[0].monthly_amount, 10000);
+  assertEquals(snapshot?.rentScheduleRows[0].source, "approved_abstract");
   assertEquals(snapshot?.expenseRuleSet, { id: "rule-set-1", status: "approved", approvedAt: "2026-01-05T00:00:00Z" });
   assertEquals(snapshot?.approvedFields.management_fee_basis.value, "annualized_tenant_rent");
   assertEquals(snapshot?.sourceDocumentId, "doc-1");
@@ -911,6 +986,7 @@ function toRentScheduleRow(row: any): RentScheduleRow {
     unit_id: row.unit_id,
     approved_at: row.approved_at,
     approved_by: row.approved_by,
+    source: row.source,
   };
 }
 
@@ -944,7 +1020,7 @@ export async function loadLeaseTermsSnapshot(
   const { data: rentRows, error: rentError } = await supabaseAdmin
     .from("rent_schedules")
     .select(
-      "id, row_type, phase, period_start, period_end, monthly_amount, annual_amount, rsf, status, is_abatement, abatement_percent, building_id, unit_id, approved_at, approved_by",
+      "id, row_type, phase, period_start, period_end, monthly_amount, annual_amount, rsf, status, is_abatement, abatement_percent, building_id, unit_id, approved_at, approved_by, source",
     )
     .eq("org_id", orgId)
     .eq("lease_id", leaseId);
@@ -1047,7 +1123,20 @@ Deno.serve(async (req: Request) => {
     const resolved = resolveLeaseTerms(snapshot, asOfDate);
     return jsonResponse(resolved);
   } catch (error) {
-    return jsonResponse({ error: true, message: error instanceof Error ? error.message : String(error) }, 500);
+    // Same status-code mapping as approve-lease-workflow/index.ts's outer
+    // catch: transport/auth failures (verifyUser/getUserOrgId/assertPageAccess
+    // all just `throw new Error(...)` with no status of their own) get the
+    // right HTTP status instead of a flat 500. Domain-level gaps
+    // (RENT_SCHEDULE_GAP, etc.) never reach this catch — resolveLeaseTerms
+    // returns them in a 200 response's unresolvedTerms[], it never throws
+    // for them.
+    const message = error instanceof Error ? error.message : String(error);
+    const status = /unauthorized|missing authorization/i.test(message)
+      ? 401
+      : /access denied|permission/i.test(message)
+        ? 403
+        : 500;
+    return jsonResponse({ error: true, message, error_code: "RESOLVE_LEASE_TERMS_FAILED" }, status);
   }
 });
 ```
@@ -1060,11 +1149,11 @@ Expected: no errors — confirms the imports and call signatures from Tasks 3/4 
 - [ ] **Step 3: Run the full lease-terms test suite**
 
 Run: `deno test --no-check supabase/functions/_tests/lease-terms-resolve-golden.test.ts supabase/functions/_tests/lease-terms-load-snapshot.test.ts`
-Expected: PASS — all 16 tests green, confirming Tasks 3 and 4 still work together after this task's changes.
+Expected: PASS — all 19 tests green, confirming Tasks 3 and 4 still work together after this task's changes.
 
 - [ ] **Step 4: Manual parity review**
 
-Diff `resolve-lease-terms/index.ts`'s auth block against `approve-lease-workflow/index.ts` lines 23-26 (verifyUser → getUserOrgId → assertPageAccess → org-scoped lookup). Confirm the only intentional differences are: `"read"` instead of `"write"` access, and the org-scoped lookup happening inside `loadLeaseTermsSnapshot` instead of inline.
+Diff `resolve-lease-terms/index.ts`'s auth block against `approve-lease-workflow/index.ts` lines 23-26 (verifyUser → getUserOrgId → assertPageAccess → org-scoped lookup). Confirm the only intentional differences are: `"read"` instead of `"write"` access, and the org-scoped lookup happening inside `loadLeaseTermsSnapshot` instead of inline. Also diff the outer catch block against `approve-lease-workflow/index.ts` lines 170-187: confirm the 401/403/500 message-pattern mapping is present (not a flat 500), and confirm the 404 branch's message is identical regardless of whether `leaseId` doesn't exist at all or belongs to another org — both must read "Lease not found for this organization" with no distinguishing detail, so a caller cannot probe for another org's lease IDs.
 
 - [ ] **Step 5: Commit**
 
