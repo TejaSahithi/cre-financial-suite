@@ -30,6 +30,9 @@ Deno.serve(async (req: Request) => {
     if (!leaseId) {
       return jsonResponse({ error: true, message: "leaseId is required", error_code: "LEASE_ID_REQUIRED" }, 400);
     }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) {
+      return jsonResponse({ error: true, message: "asOfDate must be an ISO date (YYYY-MM-DD)", error_code: "INVALID_AS_OF_DATE" }, 400);
+    }
 
     const snapshot = await loadLeaseTermsSnapshot(supabaseAdmin, { orgId, leaseId });
     if (!snapshot) {

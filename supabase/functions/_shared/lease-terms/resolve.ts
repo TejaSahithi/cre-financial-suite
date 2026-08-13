@@ -14,7 +14,7 @@ import type {
   UnresolvedTerm,
 } from "./contracts/resolved-lease-terms.ts";
 
-const BASE_RENT_ROW_TYPES = new Set(["base_rent", "ground_rent", "renewal_base_rent", "holdover_rent", "manual"]);
+const BASE_RENT_ROW_TYPES = new Set(["base_rent", "renewal_base_rent", "holdover_rent", "manual"]);
 
 // Curated subsets of supabase/functions/_shared/extraction/field-contract.ts
 // canonical keys — NOT a 1:1 group export. field-contract.ts's cam_rules
@@ -101,16 +101,16 @@ function passThroughSection(
 ): Record<string, unknown> | null {
   const keys = TERM_FIELD_KEYS[termName];
   const values: Record<string, unknown> = {};
-  let any = false;
+  let foundAny = false;
   for (const key of keys) {
     const entry = snapshot.approvedFields[key];
     if (!entry) continue;
     values[key] = entry.value;
-    any = true;
+    foundAny = true;
     const evidence = fieldEvidence(key, snapshot);
     if (evidence) sourceEvidence.push(evidence);
   }
-  if (!any) {
+  if (!foundAny) {
     unresolvedTerms.push({
       term: termName,
       code: `${screamingSnakeCase(termName)}_NOT_FOUND`,
@@ -144,12 +144,12 @@ function emptyResolvedLeaseTerms(leaseId: string, asOfDate: string): ResolvedLea
 }
 
 export function resolveLeaseTerms(snapshot: LeaseTermsSnapshot, asOfDate: string): ResolvedLeaseTerms {
-  if (!snapshot.approvedAt || asOfDate < snapshot.approvedAt.slice(0, 10)) {
+  if (!snapshot.approvedAt) {
     const result = emptyResolvedLeaseTerms(snapshot.leaseId, asOfDate);
     result.unresolvedTerms.push({
       term: "*",
       code: "LEASE_NOT_YET_APPROVED_AS_OF_DATE",
-      message: `Lease has no approved terms as of ${asOfDate}; earliest approval is ${snapshot.approvedAt ?? "none"}.`,
+      message: "Lease has never been approved; no authoritative terms exist for any date.",
     });
     return result;
   }
@@ -159,13 +159,19 @@ export function resolveLeaseTerms(snapshot: LeaseTermsSnapshot, asOfDate: string
 
   // --- rent: the only field group with true effective dating in v1 ---
   const baseRows = snapshot.rentScheduleRows.filter(
-    (r) => r.status === "approved" && BASE_RENT_ROW_TYPES.has(r.row_type) && coversDate(r, asOfDate),
-  );
-  const abatementRows = snapshot.rentScheduleRows.filter(
-    (r) => r.status === "approved" && (r.row_type === "abatement" || r.is_abatement) && coversDate(r, asOfDate),
+    (r) =>
+      r.status === "approved" && BASE_RENT_ROW_TYPES.has(r.row_type) && r.abstract_version === snapshot.abstractVersion &&
+      coversDate(r, asOfDate),
   );
   const percentageRows = snapshot.rentScheduleRows.filter(
-    (r) => r.status === "approved" && r.row_type === "percentage_rent" && coversDate(r, asOfDate),
+    (r) =>
+      r.status === "approved" && r.row_type === "percentage_rent" && r.abstract_version === snapshot.abstractVersion &&
+      coversDate(r, asOfDate),
+  );
+  const groundRentRows = snapshot.rentScheduleRows.filter(
+    (r) =>
+      r.status === "approved" && r.row_type === "ground_rent" && r.abstract_version === snapshot.abstractVersion &&
+      coversDate(r, asOfDate),
   );
 
   let rent: ResolvedRent | null = null;
@@ -180,6 +186,16 @@ export function resolveLeaseTerms(snapshot: LeaseTermsSnapshot, asOfDate: string
     });
   } else {
     matchedRow = baseRows[0];
+    const overlayAbatementRows = snapshot.rentScheduleRows.filter(
+      (r) =>
+        r.status === "approved" && r.row_type === "abatement" && r.id !== matchedRow!.id &&
+        r.abstract_version === snapshot.abstractVersion && coversDate(r, asOfDate),
+    );
+    const abatementApplied = matchedRow.is_abatement
+      ? { percent: matchedRow.abatement_percent, monthlyAmount: matchedRow.monthly_amount }
+      : overlayAbatementRows.length > 0
+        ? { percent: overlayAbatementRows[0].abatement_percent, monthlyAmount: overlayAbatementRows[0].monthly_amount }
+        : null;
     rent = {
       monthlyAmount: matchedRow.monthly_amount,
       annualAmount: matchedRow.annual_amount,
@@ -187,13 +203,11 @@ export function resolveLeaseTerms(snapshot: LeaseTermsSnapshot, asOfDate: string
       phase: matchedRow.phase,
       periodStart: matchedRow.period_start,
       periodEnd: matchedRow.period_end,
-      abatementApplied: abatementRows.length > 0
-        ? { percent: abatementRows[0].abatement_percent, monthlyAmount: abatementRows[0].monthly_amount }
-        : null,
+      abatementApplied,
       effectiveDatingSupported: true,
     };
     sourceEvidence.push(rentEvidence(matchedRow, snapshot));
-    for (const row of abatementRows) sourceEvidence.push(rentEvidence(row, snapshot));
+    for (const row of overlayAbatementRows) sourceEvidence.push(rentEvidence(row, snapshot));
   }
 
   // --- premises: sourced from the matched rent row (real numeric rsf/building_id) ---
@@ -214,6 +228,19 @@ export function resolveLeaseTerms(snapshot: LeaseTermsSnapshot, asOfDate: string
       term: "percentageRent",
       code: "PERCENTAGE_RENT_NOT_FOUND",
       message: "No percentage rent schedule rows found for this period.",
+    });
+  }
+
+  // --- ground rent: additive to base rent (rent-schedule.ts emits both rows
+  // for the same period when ground rent applies), not a competing
+  // alternative — never counts toward RENT_SCHEDULE_OVERLAP. Not resolved
+  // as its own field in v1 (no groundRent field on ResolvedLeaseTerms yet),
+  // but its existence must stay visible rather than silently dropped.
+  if (groundRentRows.length > 0) {
+    unresolvedTerms.push({
+      term: "groundRent",
+      code: "GROUND_RENT_NOT_RESOLVED",
+      message: `${groundRentRows.length} approved ground rent schedule row(s) cover ${asOfDate}; this facade does not resolve ground rent as a separate term in v1.`,
     });
   }
 

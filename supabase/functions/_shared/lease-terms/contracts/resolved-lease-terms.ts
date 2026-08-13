@@ -23,7 +23,8 @@ export interface RentScheduleRow {
   unit_id: string | null;
   approved_at: string | null;
   approved_by: string | null;
-  source: string; // approved_abstract | manual — row's own provenance; approved_abstract rows chain to the lease's approved rent field for document evidence, manual rows have none
+  abstract_version: number;
+  source: string; // approved_abstract | manual | assumption — "assumption" rows (buildAssumedRenewalRows) are in-memory only today, never persisted, and would get no document evidence if that changes
 }
 
 export interface AbstractSnapshotFieldEntry {

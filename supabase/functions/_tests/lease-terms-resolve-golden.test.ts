@@ -22,6 +22,7 @@ function rentRow(overrides: Partial<RentScheduleRow> = {}): RentScheduleRow {
     unit_id: "unit-1",
     approved_at: "2026-01-05T00:00:00Z",
     approved_by: "reviewer@example.test",
+    abstract_version: 1,
     source: "approved_abstract",
     ...overrides,
   };
@@ -154,6 +155,16 @@ Deno.test("resolveLeaseTerms: abatement row overlays base rent instead of causin
   assertEquals(result.unresolvedTerms.some((u) => u.code === "RENT_SCHEDULE_OVERLAP"), false);
 });
 
+Deno.test("resolveLeaseTerms: inline is_abatement on the matched base row (the real production shape) does not duplicate evidence", () => {
+  const rows = [
+    rentRow({ is_abatement: true, abatement_percent: 100, monthly_amount: 0 }),
+  ];
+  const result = resolveLeaseTerms(snapshot({ rentScheduleRows: rows }), "2026-01-15");
+  assertEquals(result.rent?.monthlyAmount, 0);
+  assertEquals(result.rent?.abatementApplied, { percent: 100, monthlyAmount: 0 });
+  assertEquals(result.sourceEvidence.filter((e) => e.kind === "rent_schedule_row").length, 1);
+});
+
 Deno.test("resolveLeaseTerms: percentage rent row coexists without causing a false overlap", () => {
   const rows = [
     rentRow({ id: "rent-base" }),
@@ -163,6 +174,17 @@ Deno.test("resolveLeaseTerms: percentage rent row coexists without causing a fal
   assertEquals(result.rent?.rowType, "base_rent");
   assertEquals(result.unresolvedTerms.some((u) => u.code === "RENT_SCHEDULE_OVERLAP"), false);
   assertEquals(result.percentageRent, { hasScheduledPercentageRentRows: true, rowCount: 1, effectiveDatingSupported: false });
+});
+
+Deno.test("resolveLeaseTerms: ground_rent row coexists with base_rent without causing a false overlap", () => {
+  const rows = [
+    rentRow({ id: "rent-base" }),
+    rentRow({ id: "rent-ground", row_type: "ground_rent", monthly_amount: 500, annual_amount: 6000 }),
+  ];
+  const result = resolveLeaseTerms(snapshot({ rentScheduleRows: rows }), "2026-06-15");
+  assertEquals(result.rent?.rowType, "base_rent");
+  assertEquals(result.unresolvedTerms.some((u) => u.code === "RENT_SCHEDULE_OVERLAP"), false);
+  assertEquals(result.unresolvedTerms.some((u) => u.code === "GROUND_RENT_NOT_RESOLVED"), true);
 });
 
 Deno.test("resolveLeaseTerms: draft and superseded rows are never selected", () => {
@@ -175,11 +197,35 @@ Deno.test("resolveLeaseTerms: draft and superseded rows are never selected", () 
   assertEquals(result.unresolvedTerms.some((u) => u.code === "RENT_SCHEDULE_GAP"), true);
 });
 
-Deno.test("resolveLeaseTerms: asOfDate before lease approval is wholly unresolved", () => {
+Deno.test("resolveLeaseTerms: a rent row from a stale abstract_version is excluded, not silently used", () => {
+  const rows = [rentRow({ abstract_version: 1 })];
+  const result = resolveLeaseTerms(snapshot({ abstractVersion: 2, rentScheduleRows: rows }), "2026-06-15");
+  assertEquals(result.rent, null);
+  assertEquals(result.unresolvedTerms.some((u) => u.code === "RENT_SCHEDULE_GAP"), true);
+});
+
+Deno.test("resolveLeaseTerms: asOfDate before any rent schedule data falls through to RENT_SCHEDULE_GAP, not a blanket approval gate", () => {
   const result = resolveLeaseTerms(snapshot(), "2025-12-01");
+  assertEquals(result.rent, null);
+  assertEquals(result.unresolvedTerms.some((u) => u.term === "rent" && u.code === "RENT_SCHEDULE_GAP"), true);
+  assertEquals(result.unresolvedTerms.some((u) => u.code === "LEASE_NOT_YET_APPROVED_AS_OF_DATE"), false);
+});
+
+Deno.test("resolveLeaseTerms: a never-approved lease (no approvedAt) is wholly unresolved", () => {
+  const result = resolveLeaseTerms(snapshot({ approvedAt: null }), "2026-06-15");
   assertEquals(result.rent, null);
   assertEquals(result.premises, null);
   assertEquals(result.unresolvedTerms.some((u) => u.code === "LEASE_NOT_YET_APPROVED_AS_OF_DATE"), true);
+});
+
+Deno.test("resolveLeaseTerms: re-approval does not blank historical rent that predates it", () => {
+  const rows = [rentRow({ period_start: "2026-01-01", period_end: "2026-06-30" })];
+  const result = resolveLeaseTerms(
+    snapshot({ approvedAt: "2026-08-01T00:00:00Z", rentScheduleRows: rows }),
+    "2026-03-01",
+  );
+  assertEquals(result.rent?.monthlyAmount, 10000);
+  assertEquals(result.unresolvedTerms.some((u) => u.code === "LEASE_NOT_YET_APPROVED_AS_OF_DATE"), false);
 });
 
 Deno.test("resolveLeaseTerms: missing abstract fields surface as unresolved, not thrown errors", () => {

@@ -23,6 +23,7 @@ function toRentScheduleRow(row: any): RentScheduleRow {
     unit_id: row.unit_id,
     approved_at: row.approved_at,
     approved_by: row.approved_by,
+    abstract_version: row.abstract_version,
     source: row.source,
   };
 }
@@ -57,7 +58,7 @@ export async function loadLeaseTermsSnapshot(
   const { data: rentRows, error: rentError } = await supabaseAdmin
     .from("rent_schedules")
     .select(
-      "id, row_type, phase, period_start, period_end, monthly_amount, annual_amount, rsf, status, is_abatement, abatement_percent, building_id, unit_id, approved_at, approved_by, source",
+      "id, row_type, phase, period_start, period_end, monthly_amount, annual_amount, rsf, status, is_abatement, abatement_percent, building_id, unit_id, approved_at, approved_by, abstract_version, source",
     )
     .eq("org_id", orgId)
     .eq("lease_id", leaseId);
@@ -68,7 +69,8 @@ export async function loadLeaseTermsSnapshot(
     .select("id, status, approved_at")
     .eq("org_id", orgId)
     .eq("lease_id", leaseId)
-    .order("version", { ascending: false })
+    .neq("status", "archived")
+    .order("version", { ascending: false, nullsFirst: false })
     .limit(1);
   if (ruleSetError) throw new Error(`Failed to load lease_expense_rule_sets for lease ${leaseId}: ${ruleSetError.message}`);
 
