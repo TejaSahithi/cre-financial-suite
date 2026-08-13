@@ -934,16 +934,36 @@ function recoverReviewEntityFromSource(key, sourceText) {
   return null;
 }
 
-function recoverReviewPermittedUseFromSource(sourceText) {
-  const source = compactReviewEvidence(sourceText);
-  const match = source.match(/\bPermitted Use\s*:\s*([^.;]+?)(?=\s+\d{1,2}\.\s|\s+Brokers?\s*:|\s+ARTICLE\b|$)/i);
-  const value = String(match?.[1] || "")
+function cleanRecoveredPermittedUse(value) {
+  let text = String(value || "")
     .replace(/\s+/g, " ")
     .replace(/^[,;:\-\s]+|[,;:\-\s]+$/g, "")
     .trim();
-  if (!value || value.length > 80) return null;
-  if (/\b(?:summary|lease|landlord|tenant|shall|hereby|premises|article)\b/i.test(value)) return null;
-  return value;
+  text = text
+    .replace(/^(?:tenant\s+)?(?:shall\s+)?(?:use|occupy)\s+(?:the\s+)?(?:demised\s+|leased\s+)?premises\s+(?:solely\s+)?(?:as|for)\s+/i, "")
+    .replace(/^(?:solely\s+)?(?:as|for)\s+/i, "")
+    .replace(/^(?:an?|the)\s+use\s+of\s+/i, "")
+    .replace(/[,;:\-\s]+$/g, "")
+    .trim();
+  if (!text || text.length > 120) return null;
+  if (/\b(?:summary|lease|landlord|tenant|shall|hereby|premises|article|section|consent)\b/i.test(text)) return null;
+  if (/\b(?:common\s+areas?|parking|driveways|sidewalks|loading\s+facilities|landscaped\s+areas|as\s+is)\b/i.test(text)) return null;
+  return text;
+}
+
+function recoverReviewPermittedUseFromSource(sourceText) {
+  const source = compactReviewEvidence(sourceText);
+  if (!source) return null;
+  const candidates = [
+    source.match(/\bPermitted Use\s*:\s*([^.;]+?)(?=\s+\d{1,2}\.\s|\s+Brokers?\s*:|\s+ARTICLE\b|$)/i)?.[1],
+    source.match(/\b(?:demised\s+|leased\s+)?premises\s+shall\s+be\s+used(?:\s+and\s+occupied)?(?:\s+by\s+tenant)?\s+solely\s+(?:as|for)\s+(.+?)(?=\s*,?\s*(?:and\s+)?for\s+no\s+other\s+use\b|\s*,?\s*without\s+(?:landlord'?s\s+)?(?:prior\s+)?(?:written\s+)?consent\b|[.;]|$)/i)?.[1],
+    source.match(/\btenant\s+shall\s+(?:use|occupy)\s+(?:the\s+)?(?:demised\s+|leased\s+)?premises\s+solely\s+(?:as|for)\s+(.+?)(?=\s*,?\s*(?:and\s+)?for\s+no\s+other\s+use\b|\s*,?\s*without\s+(?:landlord'?s\s+)?(?:prior\s+)?(?:written\s+)?consent\b|[.;]|$)/i)?.[1],
+  ];
+  for (const candidate of candidates) {
+    const value = cleanRecoveredPermittedUse(candidate);
+    if (value) return value;
+  }
+  return null;
 }
 
 function recoverReviewValueFromSource(key, sourceText) {

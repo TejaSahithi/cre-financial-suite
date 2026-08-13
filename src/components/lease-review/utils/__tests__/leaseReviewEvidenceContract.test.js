@@ -394,6 +394,36 @@ describe("Lease Review evidence contract", () => {
     expect(row.requires_review).toBe(false);
     expect(row.source_text_quality).toBe("exact");
   });
+  it("recovers permitted use from a use-restriction dynamic clause", () => {
+    const lease = {
+      extraction_data: {
+        extracted_document_items: [{
+          field_key: "permitted_use_restriction",
+          label: "Permitted use restriction",
+          normalized_value: "Solely as a neighborhood cigar shop selling tobacco, vapor, cigar, and CBD products; no other use without prior written consent.",
+          source_page: 3,
+          source_text: "The Demised Premises shall be used and occupied by Tenant solely as a neighborhood cigar shop selling tobacco, vapor, cigar, and CBD products, and for no other use without Landlord's prior written consent.",
+          confidence: 0.99,
+        }],
+      },
+    };
+
+    const row = buildCanonicalLeaseReviewField(lease, {
+      key: "premises_use",
+      label: "Permitted Use",
+      required: true,
+      normalized_value: null,
+      validation_errors: ["premises_use_failed_validation"],
+      review_reason: "Required field was not found in the lease. Manual review required.",
+      requires_review: true,
+    }, "parties_premises");
+
+    expect(row.normalized_value).toBe("a neighborhood cigar shop selling tobacco, vapor, cigar, and CBD products");
+    expect(row.page_number).toBe(3);
+    expect(row.validation_errors).toEqual([]);
+    expect(row.requires_review).toBe(false);
+    expect(row.source_text_quality).toBe("exact");
+  });
   it("does not show transfer clause text as an assignee name", () => {
     const row = buildCanonicalLeaseReviewField({}, {
       key: "assignee_name",

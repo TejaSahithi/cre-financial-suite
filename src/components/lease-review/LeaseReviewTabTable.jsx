@@ -171,7 +171,14 @@ function rowMatchesBaseFilters(row, { needle = "", typeFilter = "all", statusFil
   return true;
 }
 
-export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAction, onNavigateRules, reviewFields = {} }) {
+export default function LeaseReviewTabTable({
+  rows = [],
+  onOpenDetail,
+  onQuickAction,
+  onNavigateRules,
+  reviewFields = {},
+  approvalRequiredKeys = null,
+}) {
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -269,7 +276,8 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
                 if (onQuickAction) onQuickAction(row, "view_source");
                 else onOpenDetail?.(row);
               };
-              const fKey = row.key || row.fieldKey;
+              const fKey = row.fieldKey || row.field_key || row.canonicalKey || row.key;
+              const requiredForApproval = Boolean(row.requiredForApproval || row.required || approvalRequiredKeys?.has?.(fKey));
               const reviewField = reviewFields?.[fKey] ?? null;
               const rawRowValue = row.value ?? row.normalized_value ?? row.normalizedValue;
               const displayRowValue = row.displayValue ?? row.display_value ?? rawRowValue;
@@ -290,6 +298,9 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
                 <TableRow key={row.key || row.fieldKey || `${row.rowType}-${index}`} className="align-top hover:bg-slate-50/70">
                   <TableCell className="text-xs font-medium text-slate-800">
                     {row.label || row.fieldKey || "Untitled"}
+                    {requiredForApproval && (
+                      <span className="ml-1 align-super text-red-500" title="Required for approval">*</span>
+                    )}
                     {row.rowType === "read_only_reference" && <div className="mt-1 text-[10px] font-normal text-slate-500">Read-only reference</div>}
                   </TableCell>
                   <TableCell className="max-w-[220px] text-xs text-slate-700" title={fullRowValue !== "Not extracted" ? fullRowValue : undefined}>

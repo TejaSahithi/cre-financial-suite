@@ -77,6 +77,7 @@ export default function SendForApprovalButton({
   className = "",
   variant = "outline",
   size,
+  title,
 }) {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
@@ -223,6 +224,7 @@ export default function SendForApprovalButton({
         size={size}
         className={cn("border-amber-300 text-amber-800 hover:bg-amber-50", className)}
         disabled={!canOpen || sending}
+        title={title}
         onClick={() => setOpen(true)}
       >
         <Send className="mr-2 h-4 w-4" />

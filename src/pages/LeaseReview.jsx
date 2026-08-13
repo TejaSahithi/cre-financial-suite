@@ -1659,7 +1659,6 @@ export default function LeaseReview() {
   // reviewer has resolved the current payload; server-side approval remains
   // the final gate if extraction readiness is genuinely incomplete.
   const hasReviewerResolvedReviewPayload =
-    reviewReadiness === "pending" &&
     hasDisplayableExtractedFields &&
     bulkEvaluation.validationBlockers.length === 0 &&
     bulkEvaluation.requiredBlockers.length === 0;
@@ -1695,7 +1694,11 @@ export default function LeaseReview() {
   const canApprove = approvalBlockers.length === 0;
   const approvalDisabledTooltip = canApprove
     ? "Approve the lease abstract"
-    : "Cannot approve: required fields have unresolved conflicts or require manual review. Check the Expenses/CAM tabs.";
+    : approvalBlockers.map((blocker) => blocker.title).join("; ");
+  const approvalRequiredKeySet = new Set([
+    ...bulkEvaluation.requiredBlockers,
+    ...bulkEvaluation.validationBlockers.map((blocker) => blocker.key).filter(Boolean),
+  ]);
 
   // --- Field-action helpers -----------------------------------------------
 
@@ -3760,6 +3763,7 @@ export default function LeaseReview() {
                 onOpenDetail={(row) => openDrawer(row, "view")}
                 onQuickAction={handleTabRowQuickAction}
                 reviewFields={reviewFieldByKey}
+                approvalRequiredKeys={approvalRequiredKeySet}
               />
             </TabsContent>
           ))}
@@ -3767,32 +3771,32 @@ export default function LeaseReview() {
           <div className="flex justify-end">
             <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setCustomFieldDialog({ tabKey: "rent_charges" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>+ Add Custom Field</Button>
           </div>
-          <LeaseReviewTabTable rows={enterpriseTabs.rent_charges || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} />
+          <LeaseReviewTabTable rows={enterpriseTabs.rent_charges || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} approvalRequiredKeys={approvalRequiredKeySet} />
           <RentScheduleTable leaseId={lease.id} />
         </TabsContent>
 
         <TabsContent value="expenses_recoveries" className="mt-4 space-y-4">
-          <LeaseReviewTabTable rows={enterpriseTabs.expenses_recoveries || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} reviewFields={reviewFieldByKey} />
+          <LeaseReviewTabTable rows={enterpriseTabs.expenses_recoveries || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} reviewFields={reviewFieldByKey} approvalRequiredKeys={approvalRequiredKeySet} />
         </TabsContent>
 
         <TabsContent value="cam_rules" className="mt-4 space-y-4">
-          <LeaseReviewTabTable rows={enterpriseTabs.cam_rules || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} reviewFields={reviewFieldByKey} />
+          <LeaseReviewTabTable rows={enterpriseTabs.cam_rules || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} reviewFields={reviewFieldByKey} approvalRequiredKeys={approvalRequiredKeySet} />
         </TabsContent>
 
         <TabsContent value="clause_records" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.clause_records || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} />
+          <LeaseReviewTabTable rows={enterpriseTabs.clause_records || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} approvalRequiredKeys={approvalRequiredKeySet} />
         </TabsContent>
 
         <TabsContent value="material_terms" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.material_terms || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} />
+          <LeaseReviewTabTable rows={enterpriseTabs.material_terms || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} approvalRequiredKeys={approvalRequiredKeySet} />
         </TabsContent>
 
         <TabsContent value="critical_dates" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.critical_dates || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} />
+          <LeaseReviewTabTable rows={enterpriseTabs.critical_dates || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} approvalRequiredKeys={approvalRequiredKeySet} />
         </TabsContent>
 
         <TabsContent value="documents_exhibits" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.documents_exhibits || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} />
+          <LeaseReviewTabTable rows={enterpriseTabs.documents_exhibits || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} reviewFields={reviewFieldByKey} approvalRequiredKeys={approvalRequiredKeySet} />
           <SemanticPanelBoundary>
             <Suspense fallback={null}>
               <DocumentFamilyTimeline documentFamily={reviewDocument?.documentFamily} />
@@ -3808,7 +3812,7 @@ export default function LeaseReview() {
         </TabsContent>
 
         <TabsContent value="budget_preview" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.budget_preview || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} />
+          <LeaseReviewTabTable rows={enterpriseTabs.budget_preview || []} onOpenDetail={(row) => openDrawer(row, "view")} reviewFields={reviewFieldByKey} approvalRequiredKeys={approvalRequiredKeySet} />
           <BudgetPreviewCard lease={lease} />
         </TabsContent>
 
@@ -4228,7 +4232,8 @@ export default function LeaseReview() {
                   portfolioId={lease.portfolio_id || null}
                   propertyId={lease.property_id || null}
                   actionUrl={`${createPageUrl("LeaseReview")}?id=${lease.id}`}
-                  disabled={!lease.id || !lease.org_id}
+                  disabled={!lease.id || !lease.org_id || !canApprove}
+                  title={canApprove ? "Send this lease abstract for approval" : approvalDisabledTooltip}
                   metadata={{
                     source: "lease_review_manual_send_for_approval",
                     abstract_status: lease.abstract_status || null,
@@ -4250,6 +4255,7 @@ export default function LeaseReview() {
                     }
                     setShowApproval(true);
                   }}
+                  disabled={!canApprove}
                   title={approvalDisabledTooltip}
                 >
                   <CheckCircle2 className="mr-1 h-4 w-4" />
