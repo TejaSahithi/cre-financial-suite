@@ -10,10 +10,12 @@ import PageHeader from "@/components/PageHeader";
 import ScopeSelector from "@/components/ScopeSelector";
 import SendForApprovalButton from "@/components/approvals/SendForApprovalButton";
 import useOrgQuery from "@/hooks/useOrgQuery";
+import { useAuth } from "@/lib/AuthContext";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { resolveTenantForExpense } from "@/lib/tenantResolver";
 import { expenseService } from "@/services/expenseService";
 import { resolveExpenseClassificationCondition } from "@/services/expenseClassificationWorkflowService";
+import { submitOrReuseModuleApprovalWorkflow } from "@/services/moduleApprovalWorkflowBridge";
 import { createNotificationsForEvent } from "@/services/notificationService";
 import { supabase } from "@/services/supabaseClient";
 import { Button } from "@/components/ui/button";
@@ -151,6 +153,7 @@ function exportWord(rows, tieOut) {
 export default function ExpenseReview() {
   const location = useLocation();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [search, setSearch] = useState("");
   const [finalizedFilter, setFinalizedFilter] = useState("all");
   const [scopeProperty, setScopeProperty] = useState("all");
@@ -317,14 +320,6 @@ export default function ExpenseReview() {
     unit: (unit) => `${finalizedSummary.rows} finalized expense classifications totaling ${formatCurrency(finalizedSummary.totalFinalized)} for ${unit.unit_number || unit.unit_id_code || "selected unit"}`,
     org: () => `${finalizedSummary.rows} finalized expense classifications totaling ${formatCurrency(finalizedSummary.totalFinalized)} across the organization`,
   });
-  const approvalProperty = scopeProperty !== "all"
-    ? properties.find((property) => property.id === scopeProperty)
-    : null;
-  const expenseApprovalLabel = approvalProperty?.name
-    ? `${approvalProperty.name} Expense Review`
-    : "Expense Review";
-  const expenseApprovalEntityId = (scopeProperty !== "all" && scopeProperty) || orgId;
-
   const invalidateReviewQueries = () => {
     queryClient.invalidateQueries({ queryKey: ["expense-review-classifications"] });
     queryClient.invalidateQueries({ queryKey: ["expense-review-published-cam-inputs"] });
@@ -391,6 +386,62 @@ export default function ExpenseReview() {
     },
     onError: (error) => toast.error(error?.message || "Could not send to CAM"),
   });
+
+  const markExpensePendingApproval = async (row) => {
+    const expenseId = row.actual_expense_id || row.expense_id;
+    if (!expenseId) throw new Error("This row is not linked to an actual expense.");
+
+    const updatedExpense = await expenseService.update(expenseId, {
+      approval_status: "pending",
+      approved_status: "pending",
+      review_status: "pending",
+    });
+
+    if (row.id && supabase) {
+      const { error } = await supabase
+        .from("expense_classifications")
+        .update({
+          approval_status: "pending",
+          approved_status: "pending",
+          review_status: "pending",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", row.id);
+      if (error) console.warn("[ExpenseReview] classification pending status update failed:", error?.message || error);
+    }
+
+    const workflowEntity = {
+      ...(updatedExpense || row),
+      id: expenseId,
+      org_id: row.org_id || updatedExpense?.org_id || orgId,
+      portfolio_id: row.portfolio_id || updatedExpense?.portfolio_id || null,
+      property_id: row.property_id || updatedExpense?.property_id || null,
+    };
+
+    try {
+      await submitOrReuseModuleApprovalWorkflow({
+        workflowType: "expense",
+        entity: workflowEntity,
+        user,
+        metadata: {
+          source: "expense_review_manual_send_for_approval",
+          classification_id: row.id || null,
+        },
+      });
+    } catch (error) {
+      console.warn("[ExpenseReview] Generic approval workflow sync failed:", error?.message || error);
+    }
+
+    invalidateReviewQueries();
+    return {
+      entity: workflowEntity,
+      metadata: {
+        approval_status: "pending",
+        record_status_updated: true,
+        classification_id: row.id || null,
+      },
+    };
+  };
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
@@ -500,28 +551,19 @@ export default function ExpenseReview() {
               <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search finalized expenses..." className="pl-9" />
             </div>
           </div>
-          <FinalizedExpensesTable rows={visibleFinalizedRows} isLoading={isLoadingClassifications || isLoadingCamInputs} filter={finalizedFilter} onOpenDetail={setDetailRow} onSendToCam={(row) => sendToCamMutation.mutate(row)} isSendingToCam={sendToCamMutation.isPending} />
+          <FinalizedExpensesTable
+            rows={visibleFinalizedRows}
+            isLoading={isLoadingClassifications || isLoadingCamInputs}
+            filter={finalizedFilter}
+            orgId={orgId}
+            locationSearch={location.search}
+            onOpenDetail={setDetailRow}
+            onSendToCam={(row) => sendToCamMutation.mutate(row)}
+            onMarkPendingApproval={markExpensePendingApproval}
+            isSendingToCam={sendToCamMutation.isPending}
+          />
         </CardContent>
       </Card>
-
-      <div className="flex justify-end border-t border-slate-200 pt-4">
-        <SendForApprovalButton
-          orgId={orgId}
-          eventType="expense.final_approval_required"
-          entityType="expense"
-          entityId={expenseApprovalEntityId}
-          entityLabel={expenseApprovalLabel}
-          portfolioId={scope.portfolioId || null}
-          propertyId={scopeProperty !== "all" ? scopeProperty : scope.propertyId || null}
-          actionUrl={createPageUrl("ExpenseReview") + location.search}
-          disabled={!expenseApprovalEntityId || orgId === "__none__" || finalizedSummary.rows === 0}
-          metadata={{
-            source: "expense_review_manual_send_for_approval",
-            finalized_rows: finalizedSummary.rows,
-            finalized_total: finalizedSummary.totalFinalized,
-          }}
-        />
-      </div>
 
       <ExpenseReviewDetailDrawer row={detailRow} open={Boolean(detailRow)} onOpenChange={(open) => !open && setDetailRow(null)} />
     </div>
@@ -609,7 +651,7 @@ function ExceptionAction({ row, onOpenDetail, onResolveCondition, isResolving })
   );
 }
 
-function FinalizedExpensesTable({ rows, isLoading, filter, onOpenDetail, onSendToCam, isSendingToCam }) {
+function FinalizedExpensesTable({ rows, isLoading, filter, orgId, locationSearch, onOpenDetail, onSendToCam, onMarkPendingApproval, isSendingToCam }) {
   if (isLoading) return <LoadingState label="Loading finalized expenses..." />;
   if (rows.length === 0) return <FinalizedEmptyState filter={filter} />;
 
@@ -643,7 +685,17 @@ function FinalizedExpensesTable({ rows, isLoading, filter, onOpenDetail, onSendT
               </TableCell>
               <TableCell className="text-xs text-slate-600">{formatDate(row.finalized_at || row.reviewed_at || row.updated_at)}</TableCell>
               <TableCell className="max-w-[220px] text-xs text-slate-600"><Badge variant="outline" className={`mb-1 text-[10px] font-semibold ${v1BadgeClassName(row.v1PolicyEvidence?.tone)}`}>{row.v1PolicyEvidence?.label}</Badge><div className="truncate" title={row.evidence_text || row.recovery_reason || ""}>{row.evidence_text || row.recovery_reason || "-"}</div></TableCell>
-              <TableCell className="text-right"><FinalizedActions row={row} onOpenDetail={onOpenDetail} onSendToCam={onSendToCam} isSendingToCam={isSendingToCam} /></TableCell>
+              <TableCell className="text-right">
+                <FinalizedActions
+                  row={row}
+                  orgId={orgId}
+                  locationSearch={locationSearch}
+                  onOpenDetail={onOpenDetail}
+                  onSendToCam={onSendToCam}
+                  onMarkPendingApproval={onMarkPendingApproval}
+                  isSendingToCam={isSendingToCam}
+                />
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -652,16 +704,39 @@ function FinalizedExpensesTable({ rows, isLoading, filter, onOpenDetail, onSendT
   );
 }
 
-function FinalizedActions({ row, onOpenDetail, onSendToCam, isSendingToCam }) {
+function FinalizedActions({ row, orgId, locationSearch, onOpenDetail, onSendToCam, onMarkPendingApproval, isSendingToCam }) {
+  const expenseId = row.actual_expense_id || row.expense_id;
+  const label = row.vendor_name || row.vendor || row.category || "Expense";
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-slate-100"><MoreHorizontal className="h-4 w-4 text-slate-500" /></Button></DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuItem onClick={() => onOpenDetail(row)}><Eye className="mr-2 h-4 w-4 text-slate-500" />Details</DropdownMenuItem>
-        <DropdownMenuItem asChild><Link to={createPageUrl("Expenses", { expense_id: row.actual_expense_id || row.expense_id })}><FileText className="mr-2 h-4 w-4 text-slate-500" />View Actual Expense</Link></DropdownMenuItem>
-        {row.v1CanSendToCam && <><DropdownMenuSeparator /><DropdownMenuItem onClick={() => onSendToCam(row)} disabled={isSendingToCam}><ArrowRightCircle className="mr-2 h-4 w-4 text-blue-600" />Send to CAM</DropdownMenuItem></>}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <div className="flex items-center justify-end gap-1">
+      <SendForApprovalButton
+        orgId={row.org_id || orgId}
+        eventType="expense.final_approval_required"
+        entityType="expense"
+        entityId={expenseId}
+        entityLabel={label}
+        portfolioId={row.portfolio_id || null}
+        propertyId={row.property_id || null}
+        actionUrl={createPageUrl("ExpenseReview") + (locationSearch || "")}
+        size="sm"
+        className="h-8 text-xs"
+        disabled={!expenseId || !(row.org_id || orgId)}
+        onBeforeSend={() => onMarkPendingApproval(row)}
+        metadata={{
+          source: "expense_review_row_manual_send_for_approval",
+          classification_id: row.id || null,
+          amount: row.amount || null,
+        }}
+      />
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-slate-100"><MoreHorizontal className="h-4 w-4 text-slate-500" /></Button></DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-52">
+          <DropdownMenuItem onClick={() => onOpenDetail(row)}><Eye className="mr-2 h-4 w-4 text-slate-500" />Details</DropdownMenuItem>
+          <DropdownMenuItem asChild><Link to={createPageUrl("Expenses", { expense_id: row.actual_expense_id || row.expense_id })}><FileText className="mr-2 h-4 w-4 text-slate-500" />View Actual Expense</Link></DropdownMenuItem>
+          {row.v1CanSendToCam && <><DropdownMenuSeparator /><DropdownMenuItem onClick={() => onSendToCam(row)} disabled={isSendingToCam}><ArrowRightCircle className="mr-2 h-4 w-4 text-blue-600" />Send to CAM</DropdownMenuItem></>}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }
 

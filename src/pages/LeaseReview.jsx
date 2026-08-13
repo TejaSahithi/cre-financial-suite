@@ -3088,6 +3088,24 @@ export default function LeaseReview() {
     }
   };
 
+  const markLeasePendingApproval = async () => {
+    const pendingPatch = {
+      abstract_status: "pending_review",
+      status: "pending_review",
+    };
+    const updatedLease = await leaseService.update(lease.id, pendingPatch);
+    updateLeaseQueryCache(queryClient, leaseId, updatedLease || { ...lease, ...pendingPatch });
+    queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+    queryClient.invalidateQueries({ queryKey: ["leases"] });
+    return {
+      entity: updatedLease || { ...lease, ...pendingPatch },
+      metadata: {
+        approval_status: "pending_review",
+        record_status_updated: true,
+      },
+    };
+  };
+
   const sendSignatureRequest = async () => {
     const recipient = signatureRecipients.find((s) => s.id === signatureRecipientId);
     if (!recipient) {
@@ -4234,6 +4252,7 @@ export default function LeaseReview() {
                   actionUrl={`${createPageUrl("LeaseReview")}?id=${lease.id}`}
                   disabled={!lease.id || !lease.org_id || !canApprove}
                   title={canApprove ? "Send this lease abstract for approval" : approvalDisabledTooltip}
+                  onBeforeSend={markLeasePendingApproval}
                   metadata={{
                     source: "lease_review_manual_send_for_approval",
                     abstract_status: lease.abstract_status || null,

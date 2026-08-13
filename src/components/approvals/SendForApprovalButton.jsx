@@ -73,6 +73,8 @@ export default function SendForApprovalButton({
   propertyId = null,
   actionUrl = "",
   metadata = {},
+  onBeforeSend = null,
+  onSent = null,
   disabled = false,
   className = "",
   variant = "outline",
@@ -182,15 +184,25 @@ export default function SendForApprovalButton({
 
     setSending(true);
     try {
+      const beforeSendResult = typeof onBeforeSend === "function"
+        ? await onBeforeSend({
+            selectedIds,
+            selectedMembers,
+            note: note.trim(),
+          })
+        : {};
+      const updatedEntity = beforeSendResult?.entity || {};
+      const updatedMetadata = beforeSendResult?.metadata || {};
+
       await createNotificationsForEvent({
         org_id: orgId,
         event_type: eventType,
         entity_type: entityType,
         entity_id: entityId,
-        entity_label: entityLabel,
-        portfolio_id: portfolioId,
-        property_id: propertyId,
-        action_url: actionUrl,
+        entity_label: updatedEntity.entityLabel || updatedEntity.name || entityLabel,
+        portfolio_id: updatedEntity.portfolio_id || portfolioId,
+        property_id: updatedEntity.property_id || propertyId,
+        action_url: updatedEntity.actionUrl || actionUrl,
         assigned_user_ids: selectedIds,
         title: `${entityLabel || "This item"} needs approval`,
         message: note.trim()
@@ -198,6 +210,7 @@ export default function SendForApprovalButton({
           : `${entityLabel || "This item"} was sent for approval.`,
         metadata: {
           ...metadata,
+          ...updatedMetadata,
           source: metadata.source || "manual_send_for_approval",
           approval_note: note.trim() || null,
           approval_recipient_ids: selectedIds,
@@ -205,6 +218,14 @@ export default function SendForApprovalButton({
       });
 
       toast.success(`Sent for approval to ${selectedIds.length} member${selectedIds.length === 1 ? "" : "s"}.`);
+      if (typeof onSent === "function") {
+        await onSent({
+          selectedIds,
+          selectedMembers,
+          note: note.trim(),
+          result: beforeSendResult,
+        });
+      }
       setOpen(false);
       setNote("");
       setSelectedIds([]);
