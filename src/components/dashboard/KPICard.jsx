@@ -6,9 +6,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import CountUpValue from "@/components/ui/count-up-value";
 
 const gradients = {
-  blue: "from-blue-600 to-blue-500",
+  blue: "from-blue-700 via-blue-600 to-blue-500",
   emerald: "from-emerald-600 to-emerald-500",
-  violet: "from-violet-600 to-violet-500",
+  violet: "from-blue-700 via-blue-600 to-blue-500",
   amber: "from-amber-500 to-orange-500",
   rose: "from-rose-600 to-pink-500",
 };
@@ -16,7 +16,7 @@ const gradients = {
 const hoverBorders = {
   blue: "hover:border-blue-300",
   emerald: "hover:border-emerald-300",
-  violet: "hover:border-violet-300",
+  violet: "hover:border-blue-300",
   amber: "hover:border-amber-300",
   rose: "hover:border-rose-300",
 };
@@ -43,7 +43,7 @@ export default function KPICard({ icon: Icon, label, value, prefix = "$", change
   return (
     <>
       <div
-        className={`relative flex min-h-[246px] flex-col overflow-hidden rounded-[10px] border border-slate-200/80 bg-white shadow-[var(--card-shadow)] transition-[border,box-shadow,transform] duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 ${isClickable ? `cursor-pointer hover:-translate-y-[3px] hover:shadow-[var(--card-hover-shadow)] active:translate-y-0 active:scale-[.98] ${hoverBorders[color] || hoverBorders.blue}` : ""}`}
+        className={`relative flex min-h-[246px] flex-col overflow-hidden rounded-[10px] border border-[var(--border-cre)] bg-[var(--pf-surface-card)] shadow-[var(--card-shadow)] backdrop-blur-xl transition-[border,box-shadow,transform] duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 ${isClickable ? `cursor-pointer hover:-translate-y-[3px] hover:shadow-[var(--card-hover-shadow)] active:translate-y-0 active:scale-[.98] ${hoverBorders[color] || hoverBorders.blue}` : ""}`}
         onClick={() => isClickable ? setShowBreakdown(true) : null}
         onKeyDown={(event) => {
           if (!isClickable || (event.key !== "Enter" && event.key !== " ")) return;
@@ -60,11 +60,11 @@ export default function KPICard({ icon: Icon, label, value, prefix = "$", change
               <div className={`flex h-11 w-11 items-center justify-center rounded-[10px] border border-white/30 bg-gradient-to-br ${gradients[color]} shadow-sm transition-[filter] duration-200 group-hover:saturate-125`}>
                 <Icon className="h-5 w-5 text-white" strokeWidth={2} />
               </div>
-              <span className="pt-1 text-[13px] font-bold uppercase leading-tight tracking-wide text-slate-600">{label}</span>
+              <span className="pt-1 text-[13px] font-bold uppercase leading-tight tracking-wide text-[var(--muted)]">{label}</span>
             </div>
             {breakdown && <ChevronRight className="w-3.5 h-3.5 text-slate-300 group-hover:text-slate-500 transition-colors" />}
           </div>
-          <p className="text-[30px] font-extrabold text-slate-950 tabular-nums tracking-normal leading-tight">
+          <p className="text-[30px] font-extrabold text-[var(--ink)] tabular-nums tracking-normal leading-tight">
             <CountUpValue value={formattedValue} />
           </p>
           <div className="mt-3 flex min-h-[24px] items-center justify-between">
@@ -88,13 +88,13 @@ export default function KPICard({ icon: Icon, label, value, prefix = "$", change
               {secondaryMetrics.map((m, i) => (
                 <div key={i} className="flex items-baseline justify-between">
                   <span className="text-xs text-slate-400 truncate">{m.label}</span>
-                  <span className="text-xs font-bold text-slate-700 tabular-nums ml-1">{m.value}</span>
+                  <span className="text-xs font-bold text-[var(--ink)] tabular-nums ml-1">{m.value}</span>
                 </div>
               ))}
             </div>
           )}
           {insight && (
-            <p className="mt-auto border-t border-dashed border-slate-100 pt-2 text-xs leading-snug text-slate-600">
+            <p className="mt-auto border-t border-dashed border-slate-100 pt-2 text-xs leading-snug text-[var(--muted)]">
               💡 {insight}
             </p>
           )}
@@ -128,8 +128,8 @@ export default function KPICard({ icon: Icon, label, value, prefix = "$", change
                 </div>
               </div>
               {insight && (
-                <div className="px-5 py-2 bg-slate-50 border-b border-slate-100 text-xs text-slate-600">
-                  <span className="font-semibold text-slate-700">CFO Insight:</span> {insight}
+                <div className="px-5 py-2 bg-slate-50 border-b border-slate-100 text-xs text-[var(--muted)]">
+                  <span className="font-semibold text-[var(--ink)]">CFO Insight:</span> {insight}
                 </div>
               )}
               <div className="p-4 space-y-0 max-h-[55vh] overflow-y-auto">
@@ -139,7 +139,7 @@ export default function KPICard({ icon: Icon, label, value, prefix = "$", change
                       <div className={`w-1.5 h-6 rounded-full bg-gradient-to-b ${gradients[color]} flex-shrink-0`} />
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <p className="text-sm font-medium text-slate-700 truncate">{item.label}</p>
+                          <p className="text-sm font-medium text-[var(--ink)] truncate">{item.label}</p>
                           {item.link && (
                             <Link to={item.link} className="text-blue-500 hover:text-blue-600 flex-shrink-0" onClick={() => setShowBreakdown(false)}>
                               <ExternalLink className="w-3 h-3" />

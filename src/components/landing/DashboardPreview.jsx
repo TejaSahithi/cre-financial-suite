@@ -37,12 +37,12 @@ export default function DashboardPreview({ onRequestAccess }) {
                   <Building2 className="h-4 w-4" />
                 </div>
                 <div>
-                  <p className="text-sm font-bold text-[var(--ink)]">CRE Platform</p>
+                  <p className="text-sm font-bold text-[var(--ink)]">ProForma OS</p>
                   <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Budgeting & CAM</p>
                 </div>
               </div>
               <div className="hidden rounded-[8px] border border-[var(--border-cre)] bg-[var(--surface)] px-3 py-1.5 text-xs text-[var(--muted)] md:block">
-                app.creplatform.io/dashboard
+                app.proformaos.ai/dashboard
               </div>
             </div>
 

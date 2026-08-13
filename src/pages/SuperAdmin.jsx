@@ -551,9 +551,9 @@ export default function SuperAdmin() {
                   </TableCell>
                   <TableCell>
                     {r.request_type === 'demo'
-                      ? <Badge className="bg-violet-100 text-violet-700 text-[10px] border-none font-bold">🎥 DEMO</Badge>
+                      ? <Badge className="bg-blue-100 text-blue-700 text-[10px] border-none font-bold">🎥 DEMO</Badge>
                       : r.request_type === 'contact' 
-                        ? <Badge className="bg-indigo-100 text-indigo-700 text-[10px] border-none font-bold">✉️ CONTACT</Badge>
+                        ? <Badge className="bg-blue-100 text-blue-700 text-[10px] border-none font-bold">✉️ CONTACT</Badge>
                         : <Badge className="bg-emerald-100 text-emerald-700 text-[10px] border-none font-bold italic">⚡ ACCESS</Badge>
                     }
                   </TableCell>
@@ -718,7 +718,7 @@ export default function SuperAdmin() {
               <h1 className="text-[28px] font-bold text-slate-900">SuperAdmin Console</h1>
               {pendingCount > 0 && <Badge className="bg-amber-100 text-amber-700">{pendingCount} pending approval</Badge>}
             </div>
-            <p className="text-sm text-slate-500">Platform-wide management · CRE Platform v2.4.1 · All organizations</p>
+            <p className="text-sm text-slate-500">Platform-wide management � ProForma OS v2.4.1 � All organizations</p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -730,7 +730,7 @@ export default function SuperAdmin() {
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4">
         <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Total Organizations</p><p className="text-2xl font-bold">{orgs.length}</p><p className="text-[10px] text-emerald-500">+3 this month</p></CardContent></Card>
-        <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Demo Requests</p><p className="text-2xl font-bold">{demoRequests.length}</p><p className="text-[10px] text-violet-500">{demoRequests.filter(r => r.demo_viewed).length} viewed</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Demo Requests</p><p className="text-2xl font-bold">{demoRequests.length}</p><p className="text-[10px] text-blue-500">{demoRequests.filter(r => r.demo_viewed).length} viewed</p></CardContent></Card>
         <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">MRR</p><p className="text-2xl font-bold">$124,800</p><p className="text-[10px] text-emerald-500">+8.2% MoM</p></CardContent></Card>
         <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Pending Approvals</p><p className="text-2xl font-bold">{pendingCount}</p><p className="text-[10px] text-slate-400">{pendingOrgCount > 0 ? `${pendingOrgCount} org${pendingOrgCount > 1 ? 's' : ''} awaiting activation` : 'Access and contact requests'}</p></CardContent></Card>
       </div>
@@ -784,14 +784,14 @@ export default function SuperAdmin() {
                     <TableRow key={r.id}>
                       <TableCell>
                         <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-full bg-violet-100 flex items-center justify-center text-xs font-bold text-violet-700">{r.full_name?.substring(0, 2).toUpperCase()}</div>
+                          <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-xs font-bold text-blue-700">{r.full_name?.substring(0, 2).toUpperCase()}</div>
                           <div><p className="text-sm font-medium">{r.full_name}</p><p className="text-xs text-slate-400">{r.email}</p></div>
                         </div>
                       </TableCell>
                       <TableCell className="text-sm">{r.company_name || '—'}</TableCell>
                       <TableCell className="text-sm text-slate-500">{r.phone || '—'}</TableCell>
                       <TableCell className="text-sm">
-                        {r.plan ? <Badge variant="outline" className="text-[10px] capitalize bg-violet-50 text-violet-700 border-violet-100">{r.plan}</Badge> : '—'}
+                        {r.plan ? <Badge variant="outline" className="text-[10px] capitalize bg-blue-50 text-blue-700 border-blue-100">{r.plan}</Badge> : '—'}
                       </TableCell>
                       <TableCell>
                         <Badge className={r.demo_viewed ? 'bg-emerald-100 text-emerald-700 border-none text-[10px]' : 'bg-slate-100 text-slate-500 border-none text-[10px]'}>
@@ -878,7 +878,7 @@ export default function SuperAdmin() {
                     className="pl-8 h-8 w-48 text-xs"
                   />
                 </div>
-                <Button onClick={() => setShowPlatformInviteModal(true)} size="sm" className="bg-purple-600 hover:bg-purple-700 h-8 text-xs">
+                <Button onClick={() => setShowPlatformInviteModal(true)} size="sm" className="bg-blue-600 hover:bg-blue-700 h-8 text-xs">
                   <Shield className="w-3.5 h-3.5 mr-1.5" /> Invite SuperAdmin
                 </Button>
                 <Button onClick={() => { setShowInviteModal(true); setInviteEmail(""); setInviteSuccess(false); }} size="sm" className="bg-blue-600 hover:bg-blue-700 h-8 text-xs">
@@ -950,7 +950,7 @@ export default function SuperAdmin() {
                       <TableCell className="text-sm font-medium text-slate-800">{u.org_name}</TableCell>
                       <TableCell>
                         <Badge className={`text-[10px] uppercase font-semibold ${
-                          u.role === "super_admin" ? "bg-purple-100 text-purple-700" :
+                          u.role === "super_admin" ? "bg-blue-100 text-blue-700" :
                           u.role === "org_admin" ? "bg-emerald-100 text-emerald-700" :
                           "bg-blue-100 text-blue-700"
                         }`}>
@@ -1361,7 +1361,7 @@ export default function SuperAdmin() {
               <Label className="text-sm font-semibold text-slate-700">Email Address</Label>
               <Input
                 type="email"
-                placeholder="admin@cresuite.io"
+                placeholder="admin@proformaos.ai"
                 value={platformInviteEmail}
                 onChange={e => setPlatformInviteEmail(e.target.value)}
                 className="mt-1"

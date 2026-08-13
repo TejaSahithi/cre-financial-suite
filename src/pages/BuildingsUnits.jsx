@@ -352,7 +352,7 @@ export default function BuildingsUnits({ mode = "combined" }) {
         icon={showingUnits ? DoorOpen : Building2}
         title={pageTitle}
         subtitle={subtitleParts.join(" · ")}
-        iconColor="from-purple-500 to-purple-700"
+        iconColor="from-blue-700 to-blue-600"
       >
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => downloadCSV(showingUnits ? filteredUnits : scopedBuildings, showingUnits ? "units.csv" : "buildings.csv")}>
@@ -387,14 +387,14 @@ export default function BuildingsUnits({ mode = "combined" }) {
               size="sm"
               disabled={!canManageBuildings}
               onClick={() => setShowCreateBuilding(true)}
-              className="border-purple-200 text-purple-700 hover:bg-purple-50"
+              className="border-blue-200 text-blue-700 hover:bg-blue-50"
             >
               <Plus className="w-4 h-4 mr-1" />
               Add Building
             </Button>
           )}
           {showingUnits && (
-            <Button size="sm" disabled={!canManageUnits} onClick={() => setShowCreateUnit(true)} className="bg-gradient-to-r from-purple-600 to-purple-700 shadow-sm">
+            <Button size="sm" disabled={!canManageUnits} onClick={() => setShowCreateUnit(true)} className="bg-gradient-to-r from-blue-700 to-blue-600 shadow-sm">
               <Plus className="w-4 h-4 mr-1" />
               Add Unit
             </Button>
@@ -403,7 +403,7 @@ export default function BuildingsUnits({ mode = "combined" }) {
       </PageHeader>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <MetricCard label="Buildings" value={displayBuildingCount} icon={Building2} color="bg-purple-50 text-purple-600" />
+        <MetricCard label="Buildings" value={displayBuildingCount} icon={Building2} color="bg-blue-50 text-blue-600" />
         <MetricCard label="Total Units" value={displayUnitCount} icon={DoorOpen} color="bg-blue-50 text-blue-600" />
         <MetricCard label="Leased" value={displayLeasedCount} icon={Users} color="bg-emerald-50 text-emerald-600" />
         <MetricCard label="Vacant" value={displayVacantCount} icon={Layers} color="bg-amber-50 text-amber-600" />
@@ -619,8 +619,8 @@ export default function BuildingsUnits({ mode = "combined" }) {
                       onCheckedChange={() => toggleBuildingSelection(building.id)}
                       className="mt-1"
                     />
-                    <div className="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center flex-shrink-0">
-                      <Building2 className="w-6 h-6 text-purple-500" />
+                    <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                      <Building2 className="w-6 h-6 text-blue-500" />
                     </div>
                     <div className="min-w-0 flex-1">
                       <h3 className="text-base font-bold text-slate-900">{building.name}</h3>
@@ -705,8 +705,8 @@ export default function BuildingsUnits({ mode = "combined" }) {
                     checked={selectedBuildingIds.includes(building.id)}
                     onCheckedChange={() => toggleBuildingSelection(building.id)}
                   />
-                  <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <Building2 className="w-5 h-5 text-purple-500" />
+                  <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <Building2 className="w-5 h-5 text-blue-500" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <h3 className="text-sm font-bold text-slate-900 truncate">{building.name}</h3>
@@ -777,8 +777,8 @@ export default function BuildingsUnits({ mode = "combined" }) {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
-                          <Building2 className="w-4 h-4 text-purple-500" />
+                        <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+                          <Building2 className="w-4 h-4 text-blue-500" />
                         </div>
                         <span className="text-sm font-semibold text-slate-900">{building.name}</span>
                       </div>

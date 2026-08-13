@@ -142,7 +142,7 @@ export default function ApprovalWorkflows() {
         icon={Workflow}
         title="Approval Workflows"
         subtitle="Documented gates from lease intake through billing"
-        iconColor="from-purple-500 to-indigo-700"
+        iconColor="from-blue-700 to-blue-600"
       />
 
       <Card className="border-blue-200 bg-blue-50">

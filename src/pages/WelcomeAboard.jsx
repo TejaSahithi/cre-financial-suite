@@ -16,14 +16,14 @@ const MODULE_RICH = {
     icon: BarChart2,
     label: "Executive Dashboard",
     desc: "High-level KPIs, rent collection trends, occupancy rates, and NOI tracking at a glance. Your command center for the entire portfolio.",
-    color: "from-[var(--accent)] to-indigo-600",
+    color: "from-[var(--accent)] to-blue-600",
     badge: "Core"
   },
   portfolio: {
     icon: Layers,
     label: "Portfolio Overview",
     desc: "Manage and analyze all properties and holdings in one view. View portfolio-level metrics, asset allocation, and performance benchmarks.",
-    color: "from-violet-500 to-purple-600",
+    color: "from-blue-700 to-blue-600",
     badge: "Core"
   },
   properties: {
@@ -86,7 +86,7 @@ const MODULE_RICH = {
     icon: GitMerge,
     label: "Financial Reconciliation",
     desc: "Reconcile bank statements, rent rolls, and payable ledgers against your operational data.",
-    color: "from-indigo-500 to-[var(--accent)]",
+    color: "from-blue-500 to-[var(--accent)]",
     badge: "Financial"
   },
   workflows: {
@@ -124,7 +124,7 @@ const SUPER_ADMIN_FEATURES = [
     icon: BarChart2,
     label: "Cross-Portfolio Analytics",
     desc: "Aggregate and compare performance metrics across all client organizations for internal review.",
-    color: "from-[var(--accent)] to-indigo-700",
+    color: "from-[var(--accent)] to-blue-700",
     badge: "Insights"
   },
   {
@@ -138,12 +138,12 @@ const SUPER_ADMIN_FEATURES = [
     icon: Settings,
     label: "Platform Configuration",
     desc: "Configure system defaults, module availability flags, email templates, and security settings across the platform.",
-    color: "from-violet-600 to-purple-700",
+    color: "from-blue-700 to-blue-600",
     badge: "Admin"
   },
   {
     icon: Star,
-    label: "Full CRE Suite Access",
+    label: "Full ProForma OS Access",
     desc: "All modules are available to you across every client organization.",
     color: "from-emerald-600 to-teal-600",
     badge: "All Access"
@@ -154,7 +154,7 @@ const badgeColors = {
   Admin: "bg-rose-100 text-rose-700",
   Core: "bg-[var(--accent-soft)] text-[var(--accent)]",
   Financial: "bg-[var(--success-soft)] text-[var(--success)]",
-  Smart: "bg-violet-100 text-violet-700",
+  Smart: "bg-blue-100 text-blue-700",
   Insights: "bg-[var(--warning-soft)] text-[var(--warning)]",
   Operations: "bg-teal-100 text-teal-700",
   "All Access": "bg-[var(--accent)] text-white",
@@ -246,7 +246,7 @@ export default function WelcomeAboard() {
           </div>
           <p className="text-[var(--muted)] text-base max-w-2xl mx-auto leading-relaxed">
             {isSuperAdmin
-              ? "You have full SuperAdmin access to the CRE Financial Suite platform. Monitor all organizations, manage users, and configure the platform from your console."
+              ? "You have full SuperAdmin access to the ProForma OS platform. Monitor all organizations, manage users, and configure the platform from your console."
               : isOrgAdmin
               ? `Your entire workspace for ${orgName} is ready. As Organization Admin, you have access to all modules in the suite.`
               : `Your workspace for ${orgName} is ready. Your assigned modules and pages are listed below so you can jump straight into the areas your administrator enabled.`}
@@ -350,7 +350,7 @@ export default function WelcomeAboard() {
             )}
           </Button>
           <p className="text-[var(--muted)] text-[11px] font-medium tracking-wider uppercase mt-8 opacity-60">
-            CRE Financial Suite · Enterprise Real Estate Intelligence
+            ProForma OS · Enterprise Real Estate Intelligence
           </p>
         </div>
       </div>

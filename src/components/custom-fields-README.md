@@ -1,6 +1,6 @@
 # Custom Fields UI Components
 
-This directory contains a complete set of React components for managing custom fields in the CRE Financial Suite application. These components integrate with the backend custom fields system to provide dynamic field creation, management, and data entry capabilities.
+This directory contains a complete set of React components for managing custom fields in the ProForma OS application. These components integrate with the backend custom fields system to provide dynamic field creation, management, and data entry capabilities.
 
 ## Components Overview
 

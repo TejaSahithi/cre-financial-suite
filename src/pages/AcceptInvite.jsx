@@ -301,7 +301,7 @@ export default function AcceptInvite() {
               <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" />
             </svg>
           </div>
-          <h1 className="text-[28px] font-bold text-[var(--ink)]">Welcome to CRE Suite</h1>
+          <h1 className="text-[28px] font-bold text-[var(--ink)]">Welcome to ProForma OS</h1>
           <p className="text-[var(--muted)] text-sm mt-1">Let&apos;s get your invited account ready</p>
         </div>
 
@@ -412,7 +412,7 @@ export default function AcceptInvite() {
                 </p>
               </div>
               <Button onClick={handleFinish} className="w-full h-11 bg-[var(--ink)] hover:bg-[var(--ink)]">
-                Enter CRE Suite <ArrowRight className="w-4 h-4 ml-2" />
+                Enter ProForma OS <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
             </div>
           )}

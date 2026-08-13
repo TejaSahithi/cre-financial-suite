@@ -36,7 +36,7 @@ export const REVIEW_STATUS_STYLES = {
   [REVIEW_STATUSES.EDITED]: "bg-blue-100 text-blue-700",
   [REVIEW_STATUSES.REJECTED]: "bg-red-100 text-red-700",
   [REVIEW_STATUSES.N_A]: "bg-slate-200 text-slate-600",
-  [REVIEW_STATUSES.NEEDS_LEGAL]: "bg-purple-100 text-purple-700",
+  [REVIEW_STATUSES.NEEDS_LEGAL]: "bg-blue-100 text-blue-700",
   [REVIEW_STATUSES.MANUAL_REQUIRED]: "bg-amber-100 text-amber-800",
 };
 
@@ -1177,12 +1177,12 @@ export const EXTRACTION_STATUS_STYLES = {
   extracted_no_confidence: "bg-slate-100 text-slate-700",
   not_found: "bg-amber-50 text-amber-700",
   needs_review: "bg-amber-100 text-amber-800",
-  manual_required: "bg-purple-50 text-purple-700",
+  manual_required: "bg-blue-50 text-blue-700",
   missing: "bg-slate-100 text-slate-600",
   missing_source_evidence: "bg-amber-100 text-amber-800",
   calculated: "bg-blue-50 text-blue-700",
   derived: "bg-blue-50 text-blue-700",
-  inferred: "bg-purple-50 text-purple-700",
+  inferred: "bg-blue-50 text-blue-700",
   conflict_detected: "bg-red-100 text-red-700",
   conflict: "bg-red-100 text-red-700",
   not_stated: "bg-slate-100 text-slate-600",

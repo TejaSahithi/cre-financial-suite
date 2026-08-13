@@ -272,9 +272,9 @@ export default function CAMPosting() {
             ))}
             {lineage.restatements.map((r) => (
               <div key={r.id} className="flex items-center gap-2 text-sm">
-                <RefreshCw className="w-3.5 h-3.5 text-purple-500" />
+                <RefreshCw className="w-3.5 h-3.5 text-blue-500" />
                 <span>Restatement run: </span>
-                <Link to={createPageUrl("CAMRun") + `?cam_run_id=${r.restatement_run_id}`} className="text-purple-600 underline underline-offset-2 text-xs">
+                <Link to={createPageUrl("CAMRun") + `?cam_run_id=${r.restatement_run_id}`} className="text-blue-600 underline underline-offset-2 text-xs">
                   {r.restatement_run_id.slice(0, 8)}…
                 </Link>
                 <span className="text-slate-400 text-xs">Reason: {r.reason}</span>

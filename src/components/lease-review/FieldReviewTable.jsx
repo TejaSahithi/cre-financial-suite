@@ -102,11 +102,11 @@ const SOURCE_QUALITY_BADGE = {
   exact:   { label: "Exact",     cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
   partial: { label: "Partial",   cls: "bg-amber-50 text-amber-700 border-amber-200" },
   derived: { label: "Derived",   cls: "bg-blue-50 text-blue-700 border-blue-200" },
-  inferred: { label: "Inferred", cls: "bg-purple-50 text-purple-700 border-purple-200" },
+  inferred: { label: "Inferred", cls: "bg-blue-50 text-blue-700 border-blue-200" },
   conflict: { label: "Conflict", cls: "bg-red-50 text-red-700 border-red-200" },
   missing: { label: "No source", cls: "bg-red-50 text-red-600 border-red-200" },
   inconsistent: { label: "Evidence mismatch", cls: "bg-orange-50 text-orange-700 border-orange-200" },
-  manual_required: { label: "Manual Review", cls: "bg-purple-50 text-purple-700 border-purple-200" },
+  manual_required: { label: "Manual Review", cls: "bg-blue-50 text-blue-700 border-blue-200" },
 };
 
 // §4: confidence badge colors, keyed off the same classifyConfidence()
@@ -352,7 +352,7 @@ export default function FieldReviewTable({
                         Manual Required
                       </DropdownMenuItem>
                       <DropdownMenuItem onSelect={() => onQuickAction(field, "legal")}>
-                        <Gavel className="mr-2 h-3.5 w-3.5 text-purple-600" />
+                        <Gavel className="mr-2 h-3.5 w-3.5 text-blue-600" />
                         Needs Legal
                       </DropdownMenuItem>
                     </DropdownMenuContent>

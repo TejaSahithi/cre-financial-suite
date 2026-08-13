@@ -487,7 +487,7 @@ export default function Portfolios() {
         icon={Briefcase}
         title="Portfolio Overview"
         subtitle={`${visiblePortfolios.length} portfolios · ${totals.properties} properties in view`}
-        iconColor="from-blue-500 to-indigo-600"
+        iconColor="from-blue-700 to-blue-600"
       >
         <div className="flex items-center gap-2">
           <Button
@@ -501,7 +501,7 @@ export default function Portfolios() {
           <Button
             onClick={openCreateModal}
             disabled={!canEditPortfolios}
-            className="bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 shadow-sm"
+            className="bg-gradient-to-r from-blue-700 to-blue-600 hover:from-blue-700 hover:to-blue-800 shadow-sm"
           >
             <Plus className="w-4 h-4 mr-2" />
             Create Portfolio
@@ -518,12 +518,12 @@ export default function Portfolios() {
       )}
 
       {isAdmin && organizations.length > 0 && (
-        <Card className="border-violet-200 bg-violet-50/40">
+        <Card className="border-blue-200 bg-blue-50/40">
           <CardContent className="p-4">
             <div className="flex items-center gap-4 flex-wrap">
-              <div className="text-sm font-bold text-violet-700">SuperAdmin Org Context</div>
+              <div className="text-sm font-bold text-blue-700">SuperAdmin Org Context</div>
               <Select value={selectedOrgId} onValueChange={handleSelectedOrgChange}>
-                <SelectTrigger className="w-72 bg-white border-violet-200">
+                <SelectTrigger className="w-72 bg-white border-blue-200">
                   <SelectValue placeholder="All organizations" />
                 </SelectTrigger>
                 <SelectContent>
@@ -535,7 +535,7 @@ export default function Portfolios() {
                   ))}
                 </SelectContent>
               </Select>
-              <span className="text-xs bg-violet-100 text-violet-700 px-3 py-1.5 rounded-lg font-medium">
+              <span className="text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg font-medium">
                 Viewing:{" "}
                 <strong>{selectedOrgId === "all" ? "All Organizations" : (orgNameById[selectedOrgId] || "Unknown")}</strong>
               </span>
@@ -547,7 +547,7 @@ export default function Portfolios() {
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <MetricCard label="Portfolios" value={visiblePortfolios.length} icon={Briefcase} color="bg-blue-50 text-blue-600" />
         <MetricCard label="Properties" value={totals.properties} icon={Home} color="bg-emerald-50 text-emerald-600" />
-        <MetricCard label="Buildings" value={totals.buildings} icon={Building2} color="bg-purple-50 text-purple-600" />
+        <MetricCard label="Buildings" value={totals.buildings} icon={Building2} color="bg-blue-50 text-blue-600" />
         <MetricCard label="Total Units" value={totals.units} icon={Users} color="bg-amber-50 text-amber-600" />
         <MetricCard label="Total SF" value={`${(totals.totalSF / 1000000).toFixed(1)}M`} icon={MapPin} color="bg-slate-100 text-slate-600" />
       </div>
@@ -611,7 +611,7 @@ export default function Portfolios() {
                       onCheckedChange={() => togglePortfolioSelection(portfolio.id)}
                       className="mt-1"
                     />
-                    <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-sm">
+                    <div className="w-12 h-12 bg-gradient-to-br from-blue-700 to-blue-600 rounded-xl flex items-center justify-center shadow-sm">
                       <Briefcase className="w-6 h-6 text-white" />
                     </div>
                     <div>
@@ -668,7 +668,7 @@ export default function Portfolios() {
                     >
                       <div className="flex items-center gap-1.5">
                         {property.structure_type === "multi" ? (
-                          <Building2 className="w-3 h-3 text-purple-500" />
+                          <Building2 className="w-3 h-3 text-blue-500" />
                         ) : (
                           <Home className="w-3 h-3 text-blue-500" />
                         )}
@@ -697,7 +697,7 @@ export default function Portfolios() {
                   disabled={!canEditPortfolios}
                   onCheckedChange={() => togglePortfolioSelection(portfolio.id)}
                 />
-                <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                <div className="w-10 h-10 bg-gradient-to-br from-blue-700 to-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
                   <Briefcase className="w-5 h-5 text-white" />
                 </div>
                 <div className="flex-1 min-w-0">
@@ -772,7 +772,7 @@ export default function Portfolios() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
+                      <div className="w-8 h-8 bg-gradient-to-br from-blue-700 to-blue-600 rounded-lg flex items-center justify-center">
                         <Briefcase className="w-4 h-4 text-white" />
                       </div>
                       <div>
@@ -1043,7 +1043,7 @@ export default function Portfolios() {
                 });
               }}
               disabled={!canEditPortfolios || createDisabled}
-              className="bg-gradient-to-r from-blue-600 to-indigo-700"
+              className="bg-gradient-to-r from-blue-700 to-blue-600"
             >
               {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
               Create

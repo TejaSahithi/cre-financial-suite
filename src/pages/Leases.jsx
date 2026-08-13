@@ -433,7 +433,7 @@ export default function Leases() {
         icon={FileText}
         title="Leases"
         subtitle={subtitleScope}
-        iconColor="from-blue-600 to-indigo-700"
+        iconColor="from-blue-700 to-blue-600"
       >
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => downloadCSV(filtered, "leases.csv")}>

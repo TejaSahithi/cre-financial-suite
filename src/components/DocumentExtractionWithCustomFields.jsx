@@ -133,7 +133,7 @@ export default function DocumentExtractionWithCustomFields({
         </Card>
         <Card>
           <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-purple-600">{processing_summary.suggestions_count}</div>
+            <div className="text-2xl font-bold text-blue-600">{processing_summary.suggestions_count}</div>
             <div className="text-sm text-gray-600">Suggestions</div>
           </CardContent>
         </Card>

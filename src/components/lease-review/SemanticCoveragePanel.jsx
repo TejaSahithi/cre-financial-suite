@@ -22,7 +22,7 @@ export default function SemanticCoveragePanel({ semanticCoverage, definitions = 
       <CardHeader className="border-b border-slate-100 bg-slate-50/50 pb-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="flex items-center gap-2 text-base font-semibold text-slate-800">
-            <Network className="h-4 w-4 text-indigo-600" /> Semantic Coverage
+            <Network className="h-4 w-4 text-blue-600" /> Semantic Coverage
           </CardTitle>
           <Badge variant="outline" className={unresolved > 0 ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}>
             {unresolved > 0 ? `${unresolved} open semantic issue${unresolved === 1 ? "" : "s"}` : "Semantics resolved"}

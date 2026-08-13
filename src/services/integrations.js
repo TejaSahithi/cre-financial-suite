@@ -32,11 +32,11 @@ function withCrePlatformBranding(content) {
           <div class="brand-icon">
             <span style="font-size: 13px; font-weight: 800; color: #1a2744; letter-spacing: -0.04em;">CP</span>
           </div>
-          <span class="brand-name">CRE Platform</span>
+          <span class="brand-name">ProForma OS</span>
         </div>
       </div>
       <div class="content">${content}</div>
-      <div class="footer">CRE Platform &middot; support@cresuite.org</div>
+      <div class="footer">ProForma OS &middot; support@proformaos.ai</div>
     </div>
   </body>
   </html>`;

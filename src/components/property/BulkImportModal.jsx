@@ -240,7 +240,7 @@ function methodLabel(method) {
 
 function methodBadgeClass(method) {
   if (method === 'review_required') return 'bg-amber-100 text-amber-700 border-amber-200';
-  if (['gemini_vision', 'hybrid'].includes(method)) return 'bg-purple-100 text-purple-700 border-purple-200';
+  if (['gemini_vision', 'hybrid'].includes(method)) return 'bg-blue-100 text-blue-700 border-blue-200';
   return 'bg-blue-100 text-blue-700 border-blue-200';
 }
 
@@ -1979,7 +1979,7 @@ export default function BulkImportModal({
                 </Button>
               </label>
               <p className="text-[10px] text-slate-400 mt-4 flex items-center justify-center gap-1">
-                <Sparkles className="w-3 h-3 text-violet-400"/>PDF & Word to Azure Document Intelligence + OpenAI extraction
+                <Sparkles className="w-3 h-3 text-blue-400"/>PDF & Word to Azure Document Intelligence + OpenAI extraction
               </p>
             </div>
           )}
@@ -1988,7 +1988,7 @@ export default function BulkImportModal({
           {loading && (
             <div className="flex flex-col items-center justify-center py-16 gap-3">
               {file?.name?.match(/\.(pdf|docx|doc)$/i)
-                ? <Sparkles className="w-8 h-8 text-violet-500 animate-pulse"/>
+                ? <Sparkles className="w-8 h-8 text-blue-500 animate-pulse"/>
                 : <Loader2 className="w-8 h-8 animate-spin text-blue-600"/>}
               <p className="text-sm font-medium text-slate-600">
                 {file?.name?.match(/\.(pdf|docx|doc)$/i)

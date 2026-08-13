@@ -105,7 +105,7 @@ export default function ChartOfAccounts() {
 
   return (
     <div className="p-4 lg:p-6 space-y-4">
-      <PageHeader icon={BookOpen} title="Chart of Accounts" subtitle={`${accounts.length} GL accounts · Map expense categories to general ledger codes`} iconColor="from-blue-500 to-blue-700">
+      <PageHeader icon={BookOpen} title="Chart of Accounts" subtitle={`${accounts.length} GL accounts · Map expense categories to general ledger codes`} iconColor="from-blue-700 to-blue-600">
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => downloadCSV(accounts, 'chart_of_accounts.csv')}><Download className="w-3.5 h-3.5 mr-1 text-slate-500" />Export</Button>
           <Button variant="outline" size="sm" onClick={() => setShowImport(true)}><Upload className="w-3.5 h-3.5 mr-1" />Import</Button>

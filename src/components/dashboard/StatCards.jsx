@@ -7,7 +7,7 @@ export default function StatCards({ propertyCount = 0, leasedSF = 0, totalBudget
     { icon: Building2, label: "Total Properties", value: propertyCount, color: "bg-slate-100 text-slate-600" },
     { icon: BarChart3, label: "Total Leased SF", value: leasedSF ? `${(leasedSF / 1000000).toFixed(1)}M` : "—", color: "bg-blue-50 text-blue-600" },
     { icon: DollarSign, label: "Total Budget", value: totalBudget ? `$${(totalBudget / 1000000).toFixed(1)}M` : "—", color: "bg-emerald-50 text-emerald-600" },
-    { icon: Calculator, label: "CAM Pool", value: camPool ? `$${(camPool / 1000).toFixed(0)}K` : "—", color: "bg-violet-50 text-violet-600" },
+    { icon: Calculator, label: "CAM Pool", value: camPool ? `$${(camPool / 1000).toFixed(0)}K` : "—", color: "bg-blue-50 text-blue-600" },
   ];
 
   return (

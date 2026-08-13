@@ -16,7 +16,7 @@ const statusConfig = {
   under_review: { label: "Review", color: "bg-amber-100 text-amber-700" },
   reviewed: { label: "Reviewed", color: "bg-blue-100 text-blue-700" },
   approved: { label: "Approved", color: "bg-emerald-100 text-emerald-700" },
-  signed: { label: "Signed", color: "bg-purple-100 text-purple-700" },
+  signed: { label: "Signed", color: "bg-blue-100 text-blue-700" },
   locked: { label: "Locked", color: "bg-slate-200 text-slate-800" },
   ai_generated: { label: "AI Generated", color: "bg-cyan-100 text-cyan-700" },
   extracted: { label: "Extracted", color: "bg-blue-100 text-blue-700" },
@@ -58,7 +58,7 @@ export default function Workflows() {
           <div><p className="text-[10px] font-semibold text-slate-500 uppercase">Lease Approvals</p><p className="text-xl font-bold">{leasePending.length} pending</p></div>
         </CardContent></Card>
         <Card><CardContent className="p-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-purple-50 flex items-center justify-center"><DollarSign className="w-5 h-5 text-purple-600" /></div>
+          <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center"><DollarSign className="w-5 h-5 text-blue-600" /></div>
           <div><p className="text-[10px] font-semibold text-slate-500 uppercase">Reconciliation Reviews</p><p className="text-xl font-bold">{reconPending.length} pending</p></div>
         </CardContent></Card>
       </div>

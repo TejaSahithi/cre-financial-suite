@@ -59,7 +59,7 @@ function StatusBadge({ status }) {
     status === "posted"      ? "bg-emerald-100 text-emerald-700"
     : status === "approved"  ? "bg-emerald-100 text-emerald-700"
     : status === "submitted" || status === "under_review" ? "bg-amber-100 text-amber-800"
-    : status === "calculated" ? "bg-indigo-100 text-indigo-700"
+    : status === "calculated" ? "bg-blue-100 text-blue-700"
     : status === "readiness_failed" ? "bg-red-100 text-red-700"
     : "bg-slate-100 text-slate-600";
   return <Badge className={`text-xs uppercase font-semibold ${tone}`}>{status}</Badge>;
@@ -353,7 +353,7 @@ export default function CAMRun() {
         icon={Calculator}
         title="CAM Runs"
         subtitle="Execute, review, approve, and issue CAM recovery runs"
-        iconColor="from-blue-500 to-indigo-600"
+        iconColor="from-blue-700 to-blue-600"
       />
 
       {/* Selectors */}
@@ -748,8 +748,8 @@ export default function CAMRun() {
                       </div>
                     ))}
                     {lineage.restatements?.map((r) => (
-                      <div key={r.id} className="flex items-center gap-2 p-2 bg-purple-50 rounded">
-                        <RefreshCw className="w-4 h-4 text-purple-600" />
+                      <div key={r.id} className="flex items-center gap-2 p-2 bg-blue-50 rounded">
+                        <RefreshCw className="w-4 h-4 text-blue-600" />
                         <span>Restatement Run: <code>{r.restatement_run_id.slice(0, 8)}…</code></span>
                         <span className="text-slate-400 text-xs">Reason: {r.reason}</span>
                       </div>

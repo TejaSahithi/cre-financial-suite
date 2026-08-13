@@ -910,7 +910,7 @@ export default function LeaseExpenseRules() {
         <StatCard label="Actionable Rules" value={coverageSummary.rule_candidates} accent="border-l-amber-500 bg-amber-50" />
         <StatCard label="Contract Approved" value={coverageSummary.contract_approved} accent="border-l-emerald-500 bg-emerald-50" />
         <StatCard label="CAM Eligible" value={coverageSummary.cam_enabled} accent="border-l-blue-500 bg-blue-50" />
-        <StatCard label="Landlord Expense Expected" value={coverageSummary.actual_expected} accent="border-l-purple-500 bg-purple-50" />
+        <StatCard label="Landlord Expense Expected" value={coverageSummary.actual_expected} accent="border-l-blue-500 bg-blue-50" />
         <StatCard label="Evidence Only" value={coverageSummary.evidence_only} accent="border-l-slate-400 bg-slate-50" />
       </div>
 

@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { validateEmail, validatePhone } from "@/components/landing/ContactSection";
 import { supabase } from "@/services/supabaseClient";
+import ProFormaBrand from "@/components/ProFormaBrand";
 
 export default function ContactUs() {
   const [form, setForm] = useState({ name: "", email: "", phone: "", company: "", message: "", department: "" });
@@ -71,11 +72,8 @@ export default function ContactUs() {
       {/* Nav */}
       <nav className="bg-[var(--ink)] px-6 py-4">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <a href="/" className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-[color-mix(in_srgb,var(--surface)_18%,transparent)] rounded-lg flex items-center justify-center">
-              <Building2 className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-white font-bold text-lg">CRE PLATFORM</span>
+          <a href="/" className="flex items-center">
+            <ProFormaBrand tone="light" className="pf-page-brand" />
           </a>
           <a href="/" className="text-white/70 hover:text-white text-sm">← Back to Home</a>
         </div>
@@ -84,7 +82,7 @@ export default function ContactUs() {
       <div className="max-w-6xl mx-auto px-6 py-16">
         <div className="text-center mb-12">
           <h1 className="text-[28px] font-bold text-[var(--ink)] mb-3">Contact Us</h1>
-          <p className="text-lg text-[var(--muted)] max-w-xl mx-auto">Have questions about CRE Platform? Our team is here to help.</p>
+          <p className="text-lg text-[var(--muted)] max-w-xl mx-auto">Have questions about ProForma OS? Our team is here to help.</p>
         </div>
 
         <div className="grid lg:grid-cols-2 gap-12">
@@ -99,7 +97,7 @@ export default function ContactUs() {
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-[var(--ink)]">Email</p>
-                    <a href="mailto:support@cresuite.org" className="text-[var(--accent)] hover:underline text-sm">support@cresuite.org</a>
+                    <a href="mailto:support@proformaos.ai" className="text-[var(--accent)] hover:underline text-sm">support@proformaos.ai</a>
                     <p className="text-xs text-[var(--muted)] mt-0.5">For general inquiries and support</p>
                   </div>
                 </div>
@@ -114,13 +112,13 @@ export default function ContactUs() {
                   </div>
                 </div>
                 <div className="flex items-start gap-4">
-                  <div className="w-10 h-10 bg-purple-100 rounded-[8px] flex items-center justify-center flex-shrink-0">
+                  <div className="w-10 h-10 bg-blue-100 rounded-[8px] flex items-center justify-center flex-shrink-0">
                     <MapPin className="w-5 h-5 text-[var(--info)]" />
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-[var(--ink)]">Headquarters</p>
                     <p className="text-sm text-[var(--muted)]">101 Park Avenue, Suite 2600</p>
-                    <p className="text-sm text-[var(--muted)]">New York, NY 10178</p>
+                    <p className="text-sm text-[var(--muted)]">Knoxville, TN</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-4">

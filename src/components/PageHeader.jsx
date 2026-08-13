@@ -1,6 +1,6 @@
 import React from "react";
 
-export default function PageHeader({ icon: Icon, title, subtitle, iconColor = "from-blue-500 to-blue-700", children }) {
+export default function PageHeader({ icon: Icon, title, subtitle, iconColor = "from-blue-700 to-blue-600", children }) {
   return (
     <div className="mb-4 flex items-start justify-between flex-wrap gap-5">
       <div className="flex items-center gap-3">

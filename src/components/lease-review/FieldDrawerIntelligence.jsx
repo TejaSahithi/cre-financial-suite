@@ -29,16 +29,16 @@ export function FieldDrawerIntelligence({ field }) {
   const reviewerAction = field.reviewerAction || { state: "none", reason: null };
 
   return (
-    <section className="mt-4 overflow-hidden rounded-md border border-indigo-100 bg-indigo-50/30">
+    <section className="mt-4 overflow-hidden rounded-md border border-blue-100 bg-blue-50/30">
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="flex w-full items-center justify-between bg-indigo-50/70 p-3 text-left transition-colors hover:bg-indigo-100/50"
+        className="flex w-full items-center justify-between bg-blue-50/70 p-3 text-left transition-colors hover:bg-blue-100/50"
         aria-expanded={isOpen}
       >
         <div className="flex items-center gap-2">
-          <Cpu className="h-4 w-4 text-indigo-600" />
-          <span className="text-xs font-semibold text-indigo-900">Canonical Review Intelligence</span>
+          <Cpu className="h-4 w-4 text-blue-600" />
+          <span className="text-xs font-semibold text-blue-900">Canonical Review Intelligence</span>
           <ReviewFieldStatus status={field.status} />
           {field.blocking && (
             <Badge variant="outline" className="border-red-200 bg-red-50 text-[10px] text-red-700">
@@ -46,14 +46,14 @@ export function FieldDrawerIntelligence({ field }) {
             </Badge>
           )}
         </div>
-        <div className="flex items-center gap-1.5 text-xs font-medium text-indigo-700">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-blue-700">
           <span>{isOpen ? "Hide" : "Show Details"}</span>
           {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         </div>
       </button>
 
       {isOpen && (
-        <div className="space-y-4 border-t border-indigo-100 bg-white p-3.5 text-xs">
+        <div className="space-y-4 border-t border-blue-100 bg-white p-3.5 text-xs">
           <div className="grid gap-3 rounded border border-slate-100 bg-slate-50 p-2.5 sm:grid-cols-3">
             <div>
               <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Authoritative Source</span>
@@ -103,7 +103,7 @@ export function FieldDrawerIntelligence({ field }) {
 
           <div className="space-y-2">
             <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
-              <FileText className="h-3.5 w-3.5 text-indigo-600" />
+              <FileText className="h-3.5 w-3.5 text-blue-600" />
               Canonical Evidence References ({field.evidence?.length || 0})
             </span>
             <ReviewFieldEvidence evidence={field.evidence || []} />

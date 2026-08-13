@@ -87,7 +87,7 @@ function matchStatusBadgeClassName(tone) {
 const V1_TONE_CLASSNAME = {
   emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
   blue: "border-blue-200 bg-blue-50 text-blue-700",
-  indigo: "border-indigo-200 bg-indigo-50 text-indigo-700",
+  indigo: "border-blue-200 bg-blue-50 text-blue-700",
   amber: "border-amber-200 bg-amber-50 text-amber-700",
   red: "border-rose-200 bg-rose-50 text-rose-700",
   slate: "border-slate-300 bg-slate-100 text-slate-700",
@@ -984,9 +984,9 @@ export default function LeaseExpenseClassification() {
                 <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700">Direct Recovery</p>
                 <p className="mt-1 text-lg font-bold text-blue-900">{fmt(totals.directRecovery)}</p>
               </div>
-              <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">Direct Bill</p>
-                <p className="mt-1 text-lg font-bold text-indigo-900">{fmt(totals.directBill)}</p>
+              <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700">Direct Bill</p>
+                <p className="mt-1 text-lg font-bold text-blue-900">{fmt(totals.directBill)}</p>
               </div>
             </div>
             <div className="mt-3 grid gap-2 text-xs text-slate-600 md:grid-cols-4">
@@ -1017,7 +1017,7 @@ export default function LeaseExpenseClassification() {
               <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
               Run Classification
             </Button>
-            <Button size="sm" variant="outline" className="h-9 border-indigo-200 text-xs text-indigo-700 hover:bg-indigo-50" onClick={() => finalizeMutation.mutate(selectedIds)} disabled={finalizeMutation.isPending || selectedActionCounts.finalize === 0}>
+            <Button size="sm" variant="outline" className="h-9 border-blue-200 text-xs text-blue-700 hover:bg-blue-50" onClick={() => finalizeMutation.mutate(selectedIds)} disabled={finalizeMutation.isPending || selectedActionCounts.finalize === 0}>
               <Check className="mr-1.5 h-3.5 w-3.5" />
               Finalize ({selectedActionCounts.finalize})
             </Button>
@@ -1054,7 +1054,7 @@ export default function LeaseExpenseClassification() {
                   <TabsTrigger
                     key={tab.value}
                     value={tab.value}
-                    className="rounded-full border border-transparent px-3 py-1 text-xs font-medium data-[state=active]:border-slate-200 data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm"
+                    className="rounded-full border border-transparent px-3 py-1 text-xs font-medium data-[state=active]:border-slate-200 data-[state=active]:bg-white data-[state=active]:text-blue-700 data-[state=active]:shadow-sm"
                   >
                     {`${tab.label} (${counts[tab.value] || 0})`}
                   </TabsTrigger>
@@ -1101,7 +1101,7 @@ export default function LeaseExpenseClassification() {
                           <span>Actions</span>
                           <input
                             type="checkbox"
-                            className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                             checked={actionableFilteredIds.length > 0 && selectedIds.size === actionableFilteredIds.length}
                             onChange={(event) => toggleAll(event.target.checked)}
                           />
@@ -1155,7 +1155,7 @@ export default function LeaseExpenseClassification() {
                         const matchStatus = resolveMatchStatus(row);
 
                         return (
-                          <TableRow key={row.id} className="group border-b-slate-100 transition-colors hover:bg-indigo-50/30">
+                          <TableRow key={row.id} className="group border-b-slate-100 transition-colors hover:bg-blue-50/30">
                             <TableCell className={`text-xs font-medium ${hasActualExpense ? "text-slate-800" : "text-slate-600"}`}>
                               <div>{expenseDateLabel}</div>
                               <div className="mt-0.5 text-[11px] text-slate-500">{vendorLabel}</div>
@@ -1203,7 +1203,7 @@ export default function LeaseExpenseClassification() {
                                 <input
                                   type="checkbox"
                                   disabled={!row.actualExpenseId}
-                                  className="h-4 w-4 cursor-pointer rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
+                                  className="h-4 w-4 cursor-pointer rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
                                   checked={isSelected}
                                   onChange={() => toggleRow(row.id)}
                                   aria-label={`Select classification row ${row.id}`}
@@ -1217,7 +1217,7 @@ export default function LeaseExpenseClassification() {
                                   <DropdownMenuContent align="end" className="w-48">
                                     {row.canFinalize && (
                                       <DropdownMenuItem onClick={() => finalizeMutation.mutate(new Set([row.id]))}>
-                                        <Check className="mr-2 h-4 w-4 text-indigo-600" />
+                                        <Check className="mr-2 h-4 w-4 text-blue-600" />
                                         Finalize
                                       </DropdownMenuItem>
                                     )}
@@ -1405,7 +1405,7 @@ export default function LeaseExpenseClassification() {
         <div className="flex flex-wrap gap-4 border-t pt-4 text-xs text-slate-500">
           <span className="flex items-center gap-1.5"><ArrowRightCircle className="h-3.5 w-3.5 text-blue-500" /> <strong>CAM:</strong> Only finalized Pooled CAM and Direct Recovery rows can be sent to CAM.</span>
           <span className="flex items-center gap-1.5"><RefreshCw className="h-3.5 w-3.5 text-emerald-500" /> <strong>Outside CAM:</strong> Direct Bill, Tenant Direct, Included in Rent, and Nonrecoverable are valid routes.</span>
-          <span className="flex items-center gap-1.5"><CheckCircle className="h-3.5 w-3.5 text-indigo-500" /> <strong>Review:</strong> Missing information, conditional rows, and policy conflicts go to Expense Review.</span>
+          <span className="flex items-center gap-1.5"><CheckCircle className="h-3.5 w-3.5 text-blue-500" /> <strong>Review:</strong> Missing information, conditional rows, and policy conflicts go to Expense Review.</span>
         </div>
       </div>
     </div>

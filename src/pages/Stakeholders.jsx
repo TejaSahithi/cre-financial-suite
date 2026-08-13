@@ -13,7 +13,7 @@ import { Plus, Bell, BellOff, Pencil, Trash2, Loader2, Search, Shield } from "lu
 
 const roleColors = {
   owner: "bg-blue-100 text-blue-700", property_manager: "bg-emerald-100 text-emerald-700",
-  leasing_agent: "bg-amber-100 text-amber-700", finance: "bg-violet-100 text-violet-700",
+  leasing_agent: "bg-amber-100 text-amber-700", finance: "bg-blue-100 text-blue-700",
   accountant: "bg-rose-100 text-rose-700", asset_manager: "bg-slate-100 text-slate-700"
 };
 

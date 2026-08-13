@@ -3544,11 +3544,11 @@ export default function LeaseReview() {
             <p className="text-[10px] text-slate-500">No score recorded</p>
           </CardContent>
         </Card>
-        <Card className="border-purple-200 bg-purple-50">
+        <Card className="border-blue-200 bg-blue-50">
           <CardContent className="p-3">
-            <p className="text-[10px] font-semibold uppercase text-purple-600">Manual Required</p>
-            <p className="text-2xl font-bold text-purple-700">{manualRequiredCount}</p>
-            <p className="text-[10px] text-purple-500">Needs human input or legal review</p>
+            <p className="text-[10px] font-semibold uppercase text-blue-600">Manual Required</p>
+            <p className="text-2xl font-bold text-blue-700">{manualRequiredCount}</p>
+            <p className="text-[10px] text-blue-500">Needs human input or legal review</p>
           </CardContent>
         </Card>
         <Card className={conflicts.length > 0 ? "border-red-200 bg-red-50" : "border-slate-200 bg-white"}>

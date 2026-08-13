@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "@/services/supabaseClient";
-import { Building2, Shield, Loader2, RefreshCw, Smartphone, Check, AlertCircle } from "lucide-react";
+import { Shield, Loader2, RefreshCw, Smartphone, Check, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import ProFormaBrand from "@/components/ProFormaBrand";
 
 /**
  * MFAGuard — Supabase TOTP MFA Interceptor
@@ -90,7 +91,7 @@ export default function MFAGuard({ onVerified }) {
     try {
       const { data, error } = await supabase.auth.mfa.enroll({
         factorType: "totp",
-        issuer: "CRE Suite",
+        issuer: "ProForma OS",
         friendlyName: `Auth_${Date.now().toString().slice(-4)}`
       });
 
@@ -206,11 +207,8 @@ export default function MFAGuard({ onVerified }) {
     <div className="min-h-screen bg-[var(--bg)] flex flex-col">
       {/* Header */}
       <div className="px-6 py-5 max-w-6xl mx-auto w-full">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 bg-[var(--ink)] rounded-lg flex items-center justify-center">
-            <Building2 className="w-4 h-4 text-white" />
-          </div>
-          <span className="text-[var(--ink)] font-bold text-lg tracking-tight">CRE Suite</span>
+        <div className="flex items-center">
+          <ProFormaBrand className="pf-page-brand" />
         </div>
       </div>
 
@@ -228,7 +226,7 @@ export default function MFAGuard({ onVerified }) {
             <p className="text-[var(--muted)] text-sm">
               {phase === "enroll"
                 ? "Scan the QR code with your Authenticator app to add an extra layer of security."
-                : "Open your Authenticator app and enter the 6-digit code for CRE Suite."}
+                : "Open your Authenticator app and enter the 6-digit code for ProForma OS."}
             </p>
           </div>
 
@@ -338,7 +336,7 @@ export default function MFAGuard({ onVerified }) {
               <div className="space-y-4">
                 <div className="flex items-center gap-2 bg-[var(--accent-soft)] rounded-[8px] p-3">
                   <Smartphone className="w-4 h-4 text-[var(--accent)] flex-shrink-0" />
-                  <p className="text-xs text-[var(--accent)]">Open your Authenticator app and enter the current 6-digit code for <strong>CRE Suite</strong>.</p>
+                  <p className="text-xs text-[var(--accent)]">Open your Authenticator app and enter the current 6-digit code for <strong>ProForma OS</strong>.</p>
                 </div>
 
                 <Input

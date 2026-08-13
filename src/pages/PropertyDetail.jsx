@@ -565,7 +565,7 @@ export default function PropertyDetail() {
                               </Link>
                             ) : u.status === 'vacant' && canUploadLease ? (
                               <Link to={createPageUrl("LeaseUpload") + `?property=${propertyId}&unit=${u.id}`}>
-                                <Button size="sm" variant="outline" className="h-7 text-xs border-indigo-200 text-indigo-700 hover:bg-indigo-50">Add Lease</Button>
+                                <Button size="sm" variant="outline" className="h-7 text-xs border-blue-200 text-blue-700 hover:bg-blue-50">Add Lease</Button>
                               </Link>
                             ) : null}
                             {canCreateBudget ? (

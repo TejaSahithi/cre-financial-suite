@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 
 const rows = [
   { label: "Event Bus", value: "Immutable", icon: GitBranch, tone: "bg-blue-50 text-blue-700", note: "lease and portfolio facts publish versioned events" },
-  { label: "Workflows", value: "Routed", icon: Workflow, tone: "bg-indigo-50 text-indigo-700", note: "role, team, queue, and user assignments" },
+  { label: "Workflows", value: "Routed", icon: Workflow, tone: "bg-blue-50 text-blue-700", note: "role, team, queue, and user assignments" },
   { label: "Webhooks", value: "Signed", icon: ShieldCheck, tone: "bg-emerald-50 text-emerald-700", note: "HMAC signatures, replay windows, retries" },
   { label: "Connectors", value: "Read-only", icon: Plug, tone: "bg-slate-50 text-slate-700", note: "ERP, CMMS, CRM, DMS, calendar contracts" },
 ];

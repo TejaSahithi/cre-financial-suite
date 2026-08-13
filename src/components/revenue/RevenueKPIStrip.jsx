@@ -13,7 +13,7 @@ export default function RevenueKPIStrip({ totalRevenue, baseRent, camRecovery, o
     { label: "Total Revenue", value: fmt(totalRevenue), sub: "Annual portfolio revenue", icon: DollarSign, color: "bg-slate-900 text-white" },
     { label: "Base Rent", value: fmt(baseRent), sub: `${totalRevenue > 0 ? ((baseRent / totalRevenue) * 100).toFixed(1) : 0}% of total`, icon: Building2, color: "bg-blue-50 text-blue-700" },
     { label: "CAM Recovery", value: fmt(camRecovery), sub: `${totalRevenue > 0 ? ((camRecovery / totalRevenue) * 100).toFixed(1) : 0}% of total`, icon: DollarSign, color: "bg-emerald-50 text-emerald-700" },
-    { label: "Other Income", value: fmt(otherIncome), sub: `${totalRevenue > 0 ? ((otherIncome / totalRevenue) * 100).toFixed(1) : 0}% of total`, icon: DollarSign, color: "bg-purple-50 text-purple-700" },
+    { label: "Other Income", value: fmt(otherIncome), sub: `${totalRevenue > 0 ? ((otherIncome / totalRevenue) * 100).toFixed(1) : 0}% of total`, icon: DollarSign, color: "bg-blue-50 text-blue-700" },
     { label: "YoY Growth", value: `${yoyGrowth >= 0 ? '+' : ''}${yoyGrowth.toFixed(1)}%`, sub: "vs prior year", icon: yoyGrowth >= 0 ? TrendingUp : TrendingDown, color: yoyGrowth >= 0 ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700" },
   ];
 

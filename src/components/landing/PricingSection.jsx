@@ -133,7 +133,7 @@ export default function PricingSection({ onRequestAccess, onRequestDemo, onConta
           </div>
         </motion.div>
 
-        <div className="grid md:grid-cols-3 gap-5 lg:gap-6">
+        <div className="grid md:grid-cols-3 gap-4 lg:gap-5">
           {plans.map((plan, i) => (
             <motion.div
               key={i}
@@ -156,20 +156,20 @@ export default function PricingSection({ onRequestAccess, onRequestDemo, onConta
                     </Badge>
                   </div>
                 )}
-                <div className="p-6 md:p-7">
-                  <h3 className="text-xl font-bold text-[var(--ink)] tracking-tight">{plan.name}</h3>
-                  <p className="text-sm text-[var(--muted)] mt-2.5 mb-8 min-h-[44px] font-medium leading-relaxed">{plan.desc}</p>
-                  <div className="mb-8">
+                <div className="p-5 md:p-6">
+                  <h3 className="text-lg font-bold text-[var(--ink)] tracking-tight">{plan.name}</h3>
+                  <p className="text-[13px] text-[var(--muted)] mt-2 mb-5 min-h-[38px] font-medium leading-relaxed">{plan.desc}</p>
+                  <div className="mb-5">
                     {plan.isCustom ? (
-                      <span className="text-[30px] font-bold text-[var(--ink)] tracking-tight">Custom pricing</span>
+                      <span className="text-[26px] font-bold text-[var(--ink)] tracking-tight">Custom pricing</span>
                     ) : (
                       <div className="space-y-1">
                         <div className="flex items-baseline gap-1.5">
-                          <motion.span 
+                          <motion.span
                             key={billingCycle}
                             initial={{ opacity: 0, scale: 0.9 }}
                             animate={{ opacity: 1, scale: 1 }}
-                            className="text-[30px] font-bold text-[var(--ink)] tracking-tight tabular-nums"
+                            className="text-[26px] font-bold text-[var(--ink)] tracking-tight tabular-nums"
                           >
                             {getPrice(plan)}
                           </motion.span>
@@ -185,7 +185,7 @@ export default function PricingSection({ onRequestAccess, onRequestDemo, onConta
                   </div>
                   <Button
                     onClick={handleCtaClick(plan.cta)}
-                    className={`w-full mb-8 h-11 font-bold text-sm rounded-[8px] gap-2 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[var(--shadow)] active:translate-y-0 active:scale-[0.98] motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:scale-100 ${
+                    className={`w-full mb-5 h-10 font-bold text-sm rounded-[8px] gap-2 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[var(--shadow)] active:translate-y-0 active:scale-[0.98] motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:scale-100 ${
                       plan.popular
                         ? "bg-[var(--accent)] hover:bg-[var(--accent)] text-white shadow-[var(--shadow-soft)]"
                         : "bg-[var(--ink)] hover:bg-[var(--ink)] text-white shadow-[var(--shadow-soft)]"
@@ -193,16 +193,16 @@ export default function PricingSection({ onRequestAccess, onRequestDemo, onConta
                   >
                     {plan.cta} <ArrowRight className="w-4 h-4" />
                   </Button>
-                  <div className="space-y-4">
-                    <p className="text-[10px] font-black text-[var(--muted)] uppercase tracking-widest mb-2.5">What's included:</p>
+                  <div className="space-y-2.5">
+                    <p className="text-[10px] font-black text-[var(--muted)] uppercase tracking-widest mb-2">What's included:</p>
                     {plan.features.map((f, fi) => (
-                      <div key={fi} className="flex items-start gap-3.5">
+                      <div key={fi} className="flex items-start gap-3">
                         {f.included ? (
-                          <CheckCircle2 className="w-4 h-4 text-[var(--success)] mt-0.5 flex-shrink-0" />
+                          <CheckCircle2 className="w-3.5 h-3.5 text-[var(--success)] mt-0.5 flex-shrink-0" />
                         ) : (
-                          <X className="w-4 h-4 text-[var(--border-strong)] mt-0.5 flex-shrink-0" />
+                          <X className="w-3.5 h-3.5 text-[var(--border-strong)] mt-0.5 flex-shrink-0" />
                         )}
-                        <span className={`text-[13px] font-semibold tracking-tight ${f.included ? "text-[var(--muted)]" : "text-[var(--border-strong)]"}`}>{f.text}</span>
+                        <span className={`text-[12.5px] font-semibold tracking-tight ${f.included ? "text-[var(--muted)]" : "text-[var(--border-strong)]"}`}>{f.text}</span>
                       </div>
                     ))}
                   </div>

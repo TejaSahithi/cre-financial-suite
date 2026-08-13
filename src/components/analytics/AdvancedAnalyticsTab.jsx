@@ -19,7 +19,7 @@ export default function AdvancedAnalyticsTab({ properties, leases, expenses, cam
   const kpis = [
     { label: "Revenue / SqFt", value: `$${revenuePerSF.toFixed(2)}`, icon: DollarSign, color: "bg-blue-50 text-blue-600" },
     { label: "Expense / SqFt", value: `$${expensePerSF.toFixed(2)}`, icon: DollarSign, color: "bg-red-50 text-red-600" },
-    { label: "CAM Recovery %", value: `${camRecovery.toFixed(1)}%`, icon: Calculator, color: "bg-purple-50 text-purple-600" },
+    { label: "CAM Recovery %", value: `${camRecovery.toFixed(1)}%`, icon: Calculator, color: "bg-blue-50 text-blue-600" },
     { label: "Occupancy %", value: `${avgOccupancy.toFixed(1)}%`, icon: Building2, color: "bg-emerald-50 text-emerald-600" },
     { label: "NOI Margin", value: `${noiMargin.toFixed(1)}%`, icon: TrendingUp, color: "bg-amber-50 text-amber-600" },
   ];

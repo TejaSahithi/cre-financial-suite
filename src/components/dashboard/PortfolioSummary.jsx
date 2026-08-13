@@ -31,7 +31,7 @@ export default function PortfolioSummary({ portfolios = [], properties = [] }) {
           <div className="space-y-1">
             {enriched.slice(0, 5).map(p => (
               <Link key={p.id} to={createPageUrl("Portfolios")} className="flex items-center gap-2.5 py-2 border-b border-slate-50 last:border-0 hover:bg-slate-50/50 rounded group">
-                <div className="w-7 h-7 rounded-md bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center flex-shrink-0">
+                <div className="w-7 h-7 rounded-md bg-gradient-to-br from-blue-700 to-blue-600 flex items-center justify-center flex-shrink-0">
                   <Briefcase className="w-3.5 h-3.5 text-white" />
                 </div>
                 <div className="flex-1 min-w-0">

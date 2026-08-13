@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { AccessRequestService } from "@/services/api";
-import { Building2, Clock, CheckCircle2, Mail, RefreshCw } from "lucide-react";
+import { Clock, CheckCircle2, Mail, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useLocation } from "react-router-dom";
 
 import { redirectToLogin } from "@/services/auth";
+import ProFormaBrand from "@/components/ProFormaBrand";
 
 export default function PendingApproval() {
   const [status, setStatus] = useState("pending"); // pending | approved | rejected
@@ -66,7 +67,7 @@ export default function PendingApproval() {
           </p>
           <div className="bg-[var(--bg)] rounded-[8px] p-4 text-left mb-6">
             <p className="text-xs font-semibold text-[var(--muted)] mb-1">Contact Us</p>
-            <p className="text-sm text-[var(--muted)]">📧 support@creplatform.io</p>
+            <p className="text-sm text-[var(--muted)]">📧 support@proformaos.ai</p>
             <p className="text-sm text-[var(--muted)]">📞 +1 (800) 555-0199</p>
           </div>
           <Button variant="outline" onClick={() => window.location.href = "/"} className="w-full">
@@ -81,11 +82,8 @@ export default function PendingApproval() {
     <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center p-6">
       <div className="bg-[var(--surface)] rounded-[8px] shadow-[var(--shadow)] max-w-md w-full p-10 text-center">
         {/* Logo */}
-        <div className="flex items-center justify-center gap-2 mb-8">
-          <div className="w-10 h-10 bg-[var(--ink)] rounded-[8px] flex items-center justify-center">
-            <Building2 className="w-6 h-6 text-white" />
-          </div>
-          <span className="text-[var(--ink)] font-bold text-xl tracking-tight">CRE PLATFORM</span>
+        <div className="flex items-center justify-center mb-8">
+          <ProFormaBrand className="pf-page-brand" />
         </div>
 
         {/* Status */}
@@ -94,7 +92,7 @@ export default function PendingApproval() {
         </div>
         <h2 className="text-2xl font-bold text-[var(--ink)] mb-2">Request Under Review</h2>
         <p className="text-[var(--muted)] text-sm mb-2">
-          Thank you for your interest in CRE Platform! Your access request has been submitted and is pending review by our team.
+          Thank you for your interest in ProForma OS! Your access request has been submitted and is pending review by our team.
         </p>
         {userEmail && (
           <p className="text-xs text-[var(--muted)] mb-6">
@@ -119,7 +117,7 @@ export default function PendingApproval() {
             </li>
             <li className="flex items-start gap-2 text-xs text-[var(--accent)]">
               <span className="w-4 h-4 bg-[var(--accent-soft)] rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 mt-0.5">4</span>
-              Access the full CRE Platform
+              Access the full ProForma OS
             </li>
           </ul>
         </div>
@@ -136,8 +134,8 @@ export default function PendingApproval() {
 
         <div className="mt-4 pt-4 border-t border-[var(--border-cre)]">
           <p className="text-xs text-[var(--muted)]">Questions? Contact us at</p>
-          <a href="mailto:support@creplatform.io" className="text-xs text-[var(--accent)] font-medium hover:underline">
-            support@creplatform.io
+          <a href="mailto:support@proformaos.ai" className="text-xs text-[var(--accent)] font-medium hover:underline">
+            support@proformaos.ai
           </a>
         </div>
       </div>

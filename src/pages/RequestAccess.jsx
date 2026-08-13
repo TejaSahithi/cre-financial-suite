@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Building2, Loader2, CheckCircle2, ArrowRight,
+  Loader2, CheckCircle2, ArrowRight,
   Shield, Zap, Users, AlertCircle, Sparkles
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { submitPublicAccessRequest, getExistingRequest } from "@/services/api";
 import { sendEmail } from "@/services/integrations";
 import { validateEmail, validatePhone } from "@/components/landing/ContactSection";
 import { toast } from "sonner";
+import ProFormaBrand from "@/components/ProFormaBrand";
 
 export default function RequestAccess() {
   const navigate = useNavigate();
@@ -250,14 +251,8 @@ export default function RequestAccess() {
     <div className="min-h-screen bg-[var(--bg)] selection:bg-[var(--accent-soft)] selection:text-[var(--ink)] font-inter">
       <header className="fixed top-0 z-50 w-full px-6 py-5">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <Link to={createPageUrl("Landing")} className="flex items-center gap-3 group transition-transform hover:scale-[1.02]">
-            <div className="w-10 h-10 bg-[var(--ink)] rounded-[8px] flex items-center justify-center shadow-[var(--shadow-soft)] shadow-slate-900/20 group-hover:rotate-3 transition-transform">
-              <Building2 className="w-6 h-6 text-white" />
-            </div>
-            <div className="hidden sm:block">
-              <span className="text-[var(--ink)] font-black text-sm tracking-tight block leading-tight uppercase">CRE Platform</span>
-              <span className="text-[var(--muted)] text-[10px] font-bold tracking-[0.2em] leading-tight uppercase">Commercial Real Estate</span>
-            </div>
+          <Link to={createPageUrl("Landing")} className="flex items-center transition-transform hover:scale-[1.02]">
+            <ProFormaBrand className="pf-page-brand" />
           </Link>
           <div className="flex items-center gap-8">
             <Link to={createPageUrl("Login")} className="text-sm font-bold text-[var(--muted)] hover:text-[var(--ink)] transition-colors">Sign In</Link>
@@ -469,7 +464,7 @@ export default function RequestAccess() {
 
       <footer className="py-12 px-6 border-t border-[var(--border-cre)]">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
-          <p className="text-[11px] font-bold text-[var(--muted)] uppercase tracking-[0.2em]">&copy; 2026 CRE Platform</p>
+          <p className="text-[11px] font-bold text-[var(--muted)] uppercase tracking-[0.2em]">&copy; 2026 ProForma OS</p>
           <div className="flex gap-8">
             {["Safety", "Terms", "Privacy"].map(t => (
               <a key={t} href="#" className="text-[11px] font-black text-[var(--muted)] hover:text-[var(--ink)] uppercase tracking-widest transition-colors">{t}</a>

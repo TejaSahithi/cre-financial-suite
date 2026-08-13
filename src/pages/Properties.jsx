@@ -271,11 +271,11 @@ export default function Properties() {
 
   return (
     <div className="p-6 space-y-6">
-      <PageHeader icon={Home} title="Properties" subtitle={`${scopedProperties.length} properties${scopeSubtitle} · ${singleTenantProps.length} single · ${multiTenantProps.length} multi-building`} iconColor="from-blue-500 to-blue-700">
+      <PageHeader icon={Home} title="Properties" subtitle={`${scopedProperties.length} properties${scopeSubtitle} · ${singleTenantProps.length} single · ${multiTenantProps.length} multi-building`} iconColor="from-blue-700 to-blue-600">
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" disabled={scopedProperties.length === 0} onClick={() => downloadCSV(scopedProperties, 'properties.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
           <Button variant="outline" size="sm" disabled={noPortfolioAccess || !canEditProperties} onClick={() => setShowImport(true)}><Upload className="w-4 h-4 mr-1" />Bulk Upload</Button>
-          <Button size="sm" disabled={noPortfolioAccess || !canEditProperties} onClick={() => setShowCreate(true)} className="bg-gradient-to-r from-blue-600 to-blue-700 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Property</Button>
+          <Button size="sm" disabled={noPortfolioAccess || !canEditProperties} onClick={() => setShowCreate(true)} className="bg-gradient-to-r from-blue-700 to-blue-600 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Property</Button>
         </div>
       </PageHeader>
 
@@ -303,7 +303,7 @@ export default function Properties() {
           <MetricCard label="Single Building" value={singleTenantProps.length} icon={Home} color="bg-blue-50 text-blue-600" className={structureFilter === 'single' ? 'ring-2 ring-blue-500' : ''} />
         </div>
         <div onClick={() => setStructureFilter("multi")} className={`cursor-pointer`}>
-          <MetricCard label="Multi Building" value={multiTenantProps.length} icon={Building2} color="bg-purple-50 text-purple-600" className={structureFilter === 'multi' ? 'ring-2 ring-purple-500' : ''} />
+          <MetricCard label="Multi Building" value={multiTenantProps.length} icon={Building2} color="bg-blue-50 text-blue-600" className={structureFilter === 'multi' ? 'ring-2 ring-blue-500' : ''} />
         </div>
         <MetricCard label="Total SF" value={scopedProperties.reduce((s, p) => s + (p.total_sf || p.total_sqft || 0), 0).toLocaleString()} icon={MapPin} color="bg-emerald-50 text-emerald-600" />
         <MetricCard label="Verified" value={`${scopedProperties.filter(p => p.address_verified).length}/${scopedProperties.length}`} icon={CheckCircle2} color="bg-green-50 text-green-600" sub="addresses verified" />
@@ -371,15 +371,15 @@ export default function Properties() {
                       onCheckedChange={() => togglePropertySelection(p.id)}
                       className="mt-1"
                     />
-                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${p.structure_type === 'multi' ? 'bg-purple-100' : 'bg-blue-100'}`}>
-                      {p.structure_type === 'multi' ? <Building2 className="w-6 h-6 text-purple-500" /> : <Home className="w-6 h-6 text-blue-500" />}
+                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${p.structure_type === 'multi' ? 'bg-blue-100' : 'bg-blue-100'}`}>
+                      {p.structure_type === 'multi' ? <Building2 className="w-6 h-6 text-blue-500" /> : <Home className="w-6 h-6 text-blue-500" />}
                     </div>
                     <div className="min-w-0 flex-1">
                       <h3 className="text-base font-bold text-slate-900 truncate">{p.name}</h3>
                       <p className="text-xs text-slate-400 truncate">{p.address}{p.city ? `, ${p.city}` : ''}{p.state ? `, ${p.state}` : ''}</p>
                       <div className="flex gap-1.5 mt-1.5">
                         <Badge variant="outline" className="text-[10px] capitalize">{p.property_type?.replace('_', ' ')}</Badge>
-                        <Badge className={`text-[10px] ${p.structure_type === 'multi' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                        <Badge className={`text-[10px] ${p.structure_type === 'multi' ? 'bg-blue-100 text-blue-700' : 'bg-blue-100 text-blue-700'}`}>
                           {p.structure_type === 'multi' ? 'Multi' : 'Single'}
                         </Badge>
                       </div>
@@ -440,8 +440,8 @@ export default function Properties() {
                     disabled={!canEditProperties}
                     onCheckedChange={() => togglePropertySelection(p.id)}
                   />
-                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${p.structure_type === 'multi' ? 'bg-purple-100' : 'bg-blue-100'}`}>
-                    {p.structure_type === 'multi' ? <Building2 className="w-5 h-5 text-purple-500" /> : <Home className="w-5 h-5 text-blue-500" />}
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${p.structure_type === 'multi' ? 'bg-blue-100' : 'bg-blue-100'}`}>
+                    {p.structure_type === 'multi' ? <Building2 className="w-5 h-5 text-blue-500" /> : <Home className="w-5 h-5 text-blue-500" />}
                   </div>
                   <div className="flex-1 min-w-0">
                     <h3 className="text-sm font-bold text-slate-900 truncate">{p.name}</h3>
@@ -453,7 +453,7 @@ export default function Properties() {
                     <div className="text-center"><p className="font-bold text-sm">{(p.total_sf || p.total_sqft || 0).toLocaleString()}</p><p className="text-slate-400">Total SF</p></div>
                     <div className="text-center"><p className="font-bold text-sm">{p.occupancy_pct || 0}%</p><p className="text-slate-400">Occ.</p></div>
                   </div>
-                  <Badge className={`flex-shrink-0 text-[10px] ${p.structure_type === 'multi' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                  <Badge className={`flex-shrink-0 text-[10px] ${p.structure_type === 'multi' ? 'bg-blue-100 text-blue-700' : 'bg-blue-100 text-blue-700'}`}>
                     {p.structure_type === 'multi' ? 'Multi' : 'Single'}
                   </Badge>
                   {p.address_verified ? <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" /> : <XCircle className="w-4 h-4 text-slate-300 flex-shrink-0" />}
@@ -521,8 +521,8 @@ export default function Properties() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-3">
-                          <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${p.structure_type === 'multi' ? 'bg-purple-100' : 'bg-blue-100'}`}>
-                            {p.structure_type === 'multi' ? <Building2 className="w-4 h-4 text-purple-500" /> : <Home className="w-4 h-4 text-blue-500" />}
+                          <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${p.structure_type === 'multi' ? 'bg-blue-100' : 'bg-blue-100'}`}>
+                            {p.structure_type === 'multi' ? <Building2 className="w-4 h-4 text-blue-500" /> : <Home className="w-4 h-4 text-blue-500" />}
                           </div>
                           <div>
                             <p className="text-sm font-semibold text-slate-900">{p.name}</p>
@@ -533,7 +533,7 @@ export default function Properties() {
                       <TableCell className="text-sm text-slate-600">{p.address}{p.city ? `, ${p.city}` : ''}{p.state ? `, ${p.state}` : ''}</TableCell>
                       <TableCell><Badge variant="outline" className="text-xs capitalize">{p.property_type?.replace('_', ' ')}</Badge></TableCell>
                       <TableCell>
-                        <Badge className={`text-[10px] uppercase ${p.structure_type === 'multi' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                        <Badge className={`text-[10px] uppercase ${p.structure_type === 'multi' ? 'bg-blue-100 text-blue-700' : 'bg-blue-100 text-blue-700'}`}>
                           {p.structure_type === 'multi' ? 'Multi Building' : 'Single Building'}
                         </Badge>
                       </TableCell>
@@ -688,9 +688,9 @@ export default function Properties() {
                       <p className="text-xs text-slate-500 leading-relaxed">Property consists of exactly one physical building. Can have one or many tenants (suites).</p>
                     </button>
                     <button type="button" onClick={() => setForm({...form, structure_type: 'multi'})}
-                      className={`p-5 rounded-xl border-2 text-left transition-all relative ${form.structure_type === 'multi' ? 'border-purple-600 bg-purple-50 shadow-sm' : 'border-slate-200 hover:border-purple-300 bg-white'}`}>
-                      {form.structure_type === 'multi' && <div className="absolute top-3 right-3 text-purple-600"><CheckCircle2 className="w-5 h-5"/></div>}
-                      <div className="flex items-center gap-2 mb-2"><Building2 className={`w-6 h-6 ${form.structure_type === 'multi' ? 'text-purple-600' : 'text-slate-400'}`} /><span className={`text-base font-bold ${form.structure_type === 'multi' ? 'text-purple-900' : 'text-slate-700'}`}>Multi-Building Complex</span></div>
+                      className={`p-5 rounded-xl border-2 text-left transition-all relative ${form.structure_type === 'multi' ? 'border-blue-600 bg-blue-50 shadow-sm' : 'border-slate-200 hover:border-blue-300 bg-white'}`}>
+                      {form.structure_type === 'multi' && <div className="absolute top-3 right-3 text-blue-600"><CheckCircle2 className="w-5 h-5"/></div>}
+                      <div className="flex items-center gap-2 mb-2"><Building2 className={`w-6 h-6 ${form.structure_type === 'multi' ? 'text-blue-600' : 'text-slate-400'}`} /><span className={`text-base font-bold ${form.structure_type === 'multi' ? 'text-blue-900' : 'text-slate-700'}`}>Multi-Building Complex</span></div>
                       <p className="text-xs text-slate-500 leading-relaxed">A campus or retail center with multiple standalone physical buildings sharing the same address.</p>
                     </button>
                   </div>

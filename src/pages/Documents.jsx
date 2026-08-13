@@ -132,9 +132,9 @@ export default function Documents() {
   const typeColors = {
     lease: "bg-blue-100 text-blue-700",
     invoice: "bg-emerald-100 text-emerald-700",
-    receipt: "bg-purple-100 text-purple-700",
+    receipt: "bg-blue-100 text-blue-700",
     report: "bg-amber-100 text-amber-700",
-    contract: "bg-indigo-100 text-indigo-700",
+    contract: "bg-blue-100 text-blue-700",
     other: "bg-slate-100 text-slate-700",
   };
 
@@ -241,7 +241,7 @@ export default function Documents() {
         {[
           { label: "Lease PDFs", value: countByType("lease"), icon: FileText, color: "bg-blue-50 text-blue-600" },
           { label: "Invoices", value: countByType("invoice"), icon: Receipt, color: "bg-emerald-50 text-emerald-600" },
-          { label: "Contracts", value: countByType("contract"), icon: FolderOpen, color: "bg-purple-50 text-purple-600" },
+          { label: "Contracts", value: countByType("contract"), icon: FolderOpen, color: "bg-blue-50 text-blue-600" },
           { label: "Reports", value: countByType("report"), icon: BarChart3, color: "bg-amber-50 text-amber-600" },
         ].map((s) => (
           <Card key={s.label}>

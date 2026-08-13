@@ -53,7 +53,7 @@ export default function ScopeSelector({ properties, buildings, units, selectedPr
           onValueChange={(v) => { if (onBuildingChange) onBuildingChange(v); if (onUnitChange) onUnitChange("all"); }}
         >
           <SelectTrigger className="w-44 h-9 text-sm border-slate-200 bg-slate-50">
-            <Building2 className="w-3.5 h-3.5 mr-1.5 text-purple-500 flex-shrink-0" />
+            <Building2 className="w-3.5 h-3.5 mr-1.5 text-blue-500 flex-shrink-0" />
             <SelectValue placeholder={buildingPlaceholder} />
           </SelectTrigger>
           <SelectContent>

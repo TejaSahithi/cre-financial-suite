@@ -104,7 +104,7 @@ export default function CreateBuildingModal({ isOpen, onClose, properties = [] }
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Building2 className="w-5 h-5 text-purple-600" />
+            <Building2 className="w-5 h-5 text-blue-600" />
             Add New Building
           </DialogTitle>
           <DialogDescription>
@@ -219,7 +219,7 @@ export default function CreateBuildingModal({ isOpen, onClose, properties = [] }
             <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
             <Button 
               type="submit" 
-              className="bg-purple-600 hover:bg-purple-700 min-w-[120px]" 
+              className="bg-blue-600 hover:bg-blue-700 min-w-[120px]"
               disabled={!form.name || !form.property_id || createMutation.isPending}
             >
               {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}

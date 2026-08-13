@@ -6,6 +6,7 @@ import { createPageUrl } from "@/utils";
 import { markDemoViewed } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
 import { sendEmail } from "@/services/integrations";
+import ProFormaBrand from "@/components/ProFormaBrand";
 
 // Fallback constants if not provided in route state
 const FALLBACK_VIDEO_URL = "https://cjwdwuqqdokblakheyjb.supabase.co/storage/v1/object/public/Slide-deck/End-to-End_CRE_Budgeting_&_CAM.mp4";
@@ -36,7 +37,7 @@ export default function DemoExperience() {
             
             await sendEmail({
               to: data.email,
-              subject: "Thanks for exploring CRE Suite",
+              subject: "Thanks for exploring ProForma OS",
               html: `
                 <div style="font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto;">
                   <p>Hi ${data.full_name},</p>
@@ -52,7 +53,7 @@ export default function DemoExperience() {
                   <a href="${requestAccessUrl}">${requestAccessUrl}</a></p>
                   <p>If you'd like a live walkthrough or have specific questions, we’d be happy to help.</p>
                   <br/>
-                  <p>Best regards,<br/>CRE Financial Suite Team</p>
+                  <p>Best regards,<br/>ProForma OS Team</p>
                 </div>
               `
             });
@@ -76,11 +77,8 @@ export default function DemoExperience() {
     <div className="min-h-screen bg-[var(--bg)] flex flex-col">
       {/* Top Bar */}
       <div className="bg-[var(--surface)] border-b px-6 py-4 flex items-center justify-between sticky top-0 z-50">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 bg-[var(--ink)] rounded-lg flex items-center justify-center">
-            <Building2 className="w-4.5 h-4.5 text-white" />
-          </div>
-          <span className="text-[var(--ink)] font-bold text-lg tracking-tight">CRE Suite</span>
+        <div className="flex items-center">
+          <ProFormaBrand className="pf-page-brand" />
         </div>
         <Link to={createPageUrl("RequestAccess")}>
           <Button variant="default" className="bg-[var(--ink)] hover:bg-[var(--ink)] gap-2">
@@ -110,8 +108,8 @@ export default function DemoExperience() {
         {/* Video Section */}
         <section className="space-y-6">
           <div className="flex items-center gap-3 border-b pb-4">
-            <div className="w-10 h-10 bg-violet-100 rounded-[8px] flex items-center justify-center">
-              <Video className="w-5 h-5 text-violet-600" />
+            <div className="w-10 h-10 bg-blue-100 rounded-[8px] flex items-center justify-center">
+              <Video className="w-5 h-5 text-blue-600" />
             </div>
             <div>
               <h2 className="text-2xl font-bold text-[var(--ink)]">Platform Walkthrough</h2>

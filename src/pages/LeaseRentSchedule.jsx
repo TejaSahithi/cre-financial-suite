@@ -261,7 +261,7 @@ export default function LeaseRentSchedule() {
         icon={FileSpreadsheet}
         title="Lease Rent Schedule"
         subtitle={leaseRow ? `${leaseRow.tenant_name} - ${property?.name || "No property"}` : "Monthly rent comparison"}
-        iconColor="from-blue-600 to-indigo-700"
+        iconColor="from-blue-700 to-blue-600"
       >
         <Button asChild variant="outline" size="sm">
           <Link to={createPageUrl("RentProjection")}>

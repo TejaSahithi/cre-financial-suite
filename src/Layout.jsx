@@ -7,7 +7,7 @@ import { filterNavForAllowedPages, filterNavForRole, LAYOUT_EXEMPT_PAGES, isSupe
 import { useModuleAccess } from "@/lib/ModuleAccessContext";
 import { filterNavForModules } from "@/lib/moduleConfig";
 import {
-  Building2, LayoutDashboard, Briefcase, Home, FileText,
+  LayoutDashboard, Briefcase, Home, FileText,
   DollarSign, Calculator, TrendingUp, ClipboardCheck, BarChart3,
   Bell, Shield, ChevronRight, LogOut, Menu, X,
   Users, Receipt, GitBranch, FolderOpen, Plug,
@@ -15,6 +15,8 @@ import {
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import AssistantPanel from "@/assistant/AssistantPanel";
+import ProFormaBrand from "@/components/ProFormaBrand";
+import { useAssistantContext } from "@/assistant/useAssistantContext";
 
 const navSections = [
   { label: "Dashboard", icon: LayoutDashboard, page: "Dashboard" },
@@ -191,6 +193,7 @@ export default function Layout({ children, currentPageName }) {
   });
   const { user, logout: authContextLogout } = useAuth();
   const { enabledModules, pageAccess } = useModuleAccess();
+  const { isOpen: assistantOpen } = useAssistantContext();
   const allowedPageNames = Object.keys(pageAccess || {}).filter(Boolean);
   const baseNav = allowedPageNames.length > 0
     ? filterNavForAllowedPages(navSections, allowedPageNames, user)
@@ -223,18 +226,13 @@ export default function Layout({ children, currentPageName }) {
   }
 
   return (
-    <div className={`cre-shell ${sidebarOpen ? '' : 'cre-shell-collapsed'}`}>
+    <div className={`cre-shell ${sidebarOpen ? '' : 'cre-shell-collapsed'} ${assistantOpen ? 'cre-shell-assistant-open' : ''}`}>
       {/* Sidebar */}
       <aside className="cre-sidebar hidden lg:flex">
         <div className="cre-brand">
-          <div className="cre-brand-mark">
-            <Building2 className="w-5 h-5" />
-          </div>
+          <ProFormaBrand className="cre-brand-lockup" compact={!sidebarOpen} />
           {sidebarOpen && (
-            <div className="cre-brand-copy min-w-0">
-              <strong className="truncate">CRE PLATFORM</strong>
-              <span>BUDGETING & CAM</span>
-            </div>
+            <span className="sr-only">ProForma OS. Budget. Forecast. Plan. Decide.</span>
           )}
         </div>
 
@@ -259,7 +257,7 @@ export default function Layout({ children, currentPageName }) {
             className="cre-collapse-button mb-3"
             aria-label={sidebarOpen ? "Collapse navigation" : "Expand navigation"}
           >
-            {sidebarOpen ? "‹ Collapse" : <Menu className="mx-auto h-4 w-4" />}
+            {sidebarOpen ? <><span aria-hidden="true">&lsaquo;</span> Collapse</> : <Menu className="mx-auto h-4 w-4" />}
           </button>
           <div className={`flex items-center gap-3 px-2 ${sidebarOpen ? '' : 'justify-center px-0'}`}>
             <div className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-full bg-[var(--accent)] text-xs font-bold text-white">
@@ -286,11 +284,7 @@ export default function Layout({ children, currentPageName }) {
           <div className="absolute inset-0 bg-black/50" onClick={() => setMobileOpen(false)} />
           <aside className="cre-sidebar relative flex translate-x-0">
             <div className="cre-brand">
-              <div className="cre-brand-mark"><Building2 className="h-5 w-5" /></div>
-              <div className="cre-brand-copy min-w-0">
-                <strong>CRE PLATFORM</strong>
-                <span>BUDGETING & CAM</span>
-              </div>
+              <ProFormaBrand className="cre-brand-lockup" />
               <button onClick={() => setMobileOpen(false)} className="ml-auto text-white/60 hover:text-white" aria-label="Close navigation"><X className="w-5 h-5" /></button>
             </div>
             <nav className="cre-nav space-y-0.5">
@@ -310,7 +304,7 @@ export default function Layout({ children, currentPageName }) {
             <label className="cre-search-wrap hidden sm:block">
               <Search className="cre-search-icon" />
               <Input placeholder="Search..." className="cre-search-input shadow-none" />
-              <span className="cre-search-shortcut">⌘ K</span>
+              <span className="cre-search-shortcut">&#8984; K</span>
             </label>
             <div className="text-sm text-[var(--muted)] sm:hidden">
               <span className="font-semibold text-[var(--ink)]">{currentPageLabel}</span>

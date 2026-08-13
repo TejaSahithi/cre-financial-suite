@@ -88,7 +88,7 @@ export function EnterpriseFindings({ findings = [], onNavigateToField }) {
 
               <div className="flex shrink-0 items-center gap-2">
                 {canNavigate ? (
-                  <Button size="sm" variant="outline" className="h-8 border-indigo-200 text-xs font-medium text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700" onClick={() => onNavigateToField(mappedField.tab, fieldKey)}>
+                  <Button size="sm" variant="outline" className="h-8 border-blue-200 text-xs font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700" onClick={() => onNavigateToField(mappedField.tab, fieldKey)}>
                     View Field <ArrowRight className="ml-1 h-3 w-3" />
                   </Button>
                 ) : (

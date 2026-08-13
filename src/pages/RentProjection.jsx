@@ -482,7 +482,7 @@ export default function RentProjection() {
         icon={Building2}
         title="Rent Projection"
         subtitle={`${filteredApprovedLeases.length} approved lease${filteredApprovedLeases.length === 1 ? "" : "s"} in scope`}
-        iconColor="from-blue-600 to-indigo-700"
+        iconColor="from-blue-700 to-blue-600"
       >
         <div className="flex items-center gap-2 flex-wrap">
           <Select value={String(fiscalYear)} onValueChange={(value) => setFiscalYear(Number(value))}>

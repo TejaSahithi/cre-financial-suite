@@ -8,7 +8,7 @@ const actions = [
   { icon: Upload, label: "Upload Lease", page: "/LeaseUpload", color: "text-blue-600" },
   { icon: ClipboardCheck, label: "Create Budget", page: "/CreateBudget", color: "text-emerald-600" },
   { icon: DollarSign, label: "Add Expense", page: "/AddExpense", color: "text-amber-600" },
-  { icon: Calculator, label: "Run CAM Calc", page: "/CAMRun", color: "text-violet-600" },
+  { icon: Calculator, label: "Run CAM Calc", page: "/CAMRun", color: "text-blue-600" },
   { icon: BarChart3, label: "Year-End Recon", page: "/Reconciliation", color: "text-rose-600" },
   { icon: ArrowLeftRight, label: "YoY Comparison", page: "/Comparison", color: "text-slate-600" },
 ];

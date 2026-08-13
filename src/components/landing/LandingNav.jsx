@@ -1,18 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Building2, Menu, X } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Menu, X } from "lucide-react";
+import { Link } from "react-router-dom";
+import ProFormaBrand from "@/components/ProFormaBrand";
 
-export default function LandingNav({ onSignIn, onRequestAccess, onRequestDemo }) {
+export default function LandingNav({ onSignIn, onRequestAccess }) {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [scrolled, setScrolled] = useState(false);
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    const handleScroll = () => setScrolled(window.scrollY > 20);
-    window.addEventListener("scroll", handleScroll);
-    return () => window.removeEventListener("scroll", handleScroll);
-  }, []);
 
   const scrollTo = (id) => {
     setMobileOpen(false);
@@ -28,75 +21,71 @@ export default function LandingNav({ onSignIn, onRequestAccess, onRequestDemo })
   ];
 
   return (
-    <nav className={`fixed top-0 left-0 right-0 z-50 border-b border-[var(--border-cre)] transition-all duration-300 ${scrolled ? "bg-[color-mix(in_srgb,var(--surface)_94%,transparent)] shadow-[var(--shadow-soft)] backdrop-blur-md" : "bg-[var(--surface)]"}`}>
-      <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-        <Link to="/" className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-[9px] border border-[color-mix(in_srgb,var(--accent)_60%,var(--border-cre))] bg-[var(--surface-2)] flex items-center justify-center shadow-[var(--shadow-soft)]">
-            <Building2 className="w-5 h-5 text-[var(--accent)]" />
-          </div>
-          <div>
-            <span className="text-[var(--ink)] font-bold text-sm tracking-wide block leading-tight">CRE PLATFORM</span>
-            <span className="text-[var(--muted)] text-[9px] font-semibold tracking-[0.15em] leading-tight">BUDGETING & CAM</span>
-          </div>
+    <nav className="pf-landing-nav fixed top-0 left-0 right-0 z-50 transition-shadow duration-300">
+      <div className="pf-nav-inner flex w-full items-start justify-between pr-4 sm:pr-6 lg:pr-10">
+        <Link to="/" className="pf-nav-logo-plate flex shrink-0 items-center" aria-label="ProForma OS home">
+          <ProFormaBrand className="pf-nav-brand" />
         </Link>
 
-        <div className="hidden lg:flex items-center gap-7">
+        <div className="pf-nav-menu hidden flex-1 items-center justify-center gap-9 lg:flex">
           {navLinks.map((link, i) =>
             link.to ? (
-              <Link key={i} to={link.to} className="text-[var(--muted)] hover:text-[var(--ink)] text-[13px] font-semibold transition-colors">
+              <Link key={i} to={link.to} className="text-[15px] font-semibold text-[var(--ink)] transition-colors hover:text-[var(--accent)]">
                 {link.label}
               </Link>
             ) : (
-              <button key={i} onClick={link.action} className="text-[var(--muted)] hover:text-[var(--ink)] text-[13px] font-semibold transition-colors">
+              <button key={i} onClick={link.action} className="text-[15px] font-semibold text-[var(--ink)] transition-colors hover:text-[var(--accent)]">
                 {link.label}
               </button>
             )
           )}
         </div>
 
-        <div className="hidden lg:flex items-center gap-4">
+        <div className="pf-nav-actions hidden items-center gap-5 lg:flex">
           <button
             onClick={onSignIn}
-            className="text-[var(--muted)] hover:text-[var(--ink)] text-[13px] font-semibold transition-colors px-2"
+            className="px-2 text-[15px] font-semibold text-[var(--ink)] transition-colors hover:text-[var(--accent)]"
           >
             Sign in
           </button>
           <Button
             onClick={onRequestAccess}
-            className="h-9 rounded-[8px] bg-[var(--accent)] px-5 text-[13px] font-semibold text-white shadow-[var(--shadow-soft)] hover:bg-[var(--accent)] hover:shadow-[var(--shadow)] transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98] motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:scale-100"
+            className="h-12 rounded-[10px] border-[var(--accent)] bg-gradient-to-r from-[var(--pf-blue-deep)] to-[var(--pf-blue-bright)] px-8 text-[15px] font-bold text-white shadow-[0_14px_28px_rgba(20,86,199,.22)] hover:shadow-[0_18px_36px_rgba(20,86,199,.28)]"
           >
             Request access
           </Button>
         </div>
 
-        <button className="lg:hidden text-[var(--ink)]" onClick={() => setMobileOpen(!mobileOpen)}>
-          {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+        <button className="mr-2 rounded-[8px] border border-[var(--border-cre)] bg-[var(--surface)] p-2 text-[var(--ink)] lg:hidden" onClick={() => setMobileOpen(!mobileOpen)} aria-label="Toggle navigation">
+          {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
         </button>
       </div>
 
       {mobileOpen && (
-        <div className="lg:hidden bg-[var(--surface)] border-t border-[var(--border-cre)] px-6 py-5 space-y-1 shadow-[var(--shadow)]">
-          {navLinks.map((link, i) =>
-            link.to ? (
-              <Link key={i} to={link.to} onClick={() => setMobileOpen(false)} className="block text-[var(--muted)] hover:text-[var(--ink)] text-sm py-2.5 font-medium">
-                {link.label}
-              </Link>
-            ) : (
-              <button key={i} onClick={link.action} className="block text-[var(--muted)] hover:text-[var(--ink)] text-sm py-2.5 font-medium w-full text-left">
-                {link.label}
-              </button>
-            )
-          )}
-          <div className="pt-4 border-t border-[var(--border-cre)] flex flex-col gap-3">
+        <div className="lg:hidden border-t border-[var(--border-cre)] bg-[var(--surface)] px-6 py-5 shadow-[var(--shadow)]">
+          <div className="space-y-1">
+            {navLinks.map((link, i) =>
+              link.to ? (
+                <Link key={i} to={link.to} onClick={() => setMobileOpen(false)} className="block rounded-[8px] px-3 py-2.5 text-sm font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]">
+                  {link.label}
+                </Link>
+              ) : (
+                <button key={i} onClick={link.action} className="block w-full rounded-[8px] px-3 py-2.5 text-left text-sm font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]">
+                  {link.label}
+                </button>
+              )
+            )}
+          </div>
+          <div className="mt-4 flex flex-col gap-3 border-t border-[var(--border-cre)] pt-4">
             <button
               onClick={() => { onSignIn(); setMobileOpen(false); }}
-              className="w-full text-[var(--muted)] hover:text-[var(--ink)] text-sm py-2.5 font-medium text-center border border-[var(--border-cre)] rounded-[8px]"
+              className="h-10 rounded-[8px] border border-[var(--border-cre)] text-sm font-semibold text-[var(--ink)]"
             >
               Sign in
             </button>
             <Button
               onClick={() => { onRequestAccess(); setMobileOpen(false); }}
-              className="w-full bg-[var(--accent)] hover:bg-[var(--accent)] text-white text-sm font-semibold h-10 rounded-[8px] shadow-[var(--shadow-soft)] hover:shadow-[var(--shadow)] transition-all duration-200 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100"
+              className="h-10 rounded-[8px] bg-gradient-to-r from-[var(--pf-blue-deep)] to-[var(--pf-blue-bright)] text-sm font-bold text-white"
             >
               Request access
             </Button>

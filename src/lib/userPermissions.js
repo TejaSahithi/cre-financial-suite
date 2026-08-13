@@ -29,8 +29,8 @@ export const ROLE_DEFINITIONS = [
   {
     value: "portfolio_manager",
     label: "Portfolio Manager",
-    color: "bg-violet-100 text-violet-700",
-    borderColor: "border-violet-400",
+    color: "bg-blue-100 text-blue-700",
+    borderColor: "border-blue-400",
     description: "Scoped portfolio visibility, reviews, and configured approvals",
     warning: false,
     defaultCapabilities: { export_data: true, edit_leases: true, manage_vendors: true },
@@ -93,8 +93,8 @@ export const ROLE_DEFINITIONS = [
   {
     value: "custom_role",
     label: "Custom Role",
-    color: "bg-purple-100 text-purple-700",
-    borderColor: "border-purple-400",
+    color: "bg-blue-100 text-blue-700",
+    borderColor: "border-blue-400",
     description: "Organization-defined role using the standard permission engine",
     warning: false,
     defaultCapabilities: {},

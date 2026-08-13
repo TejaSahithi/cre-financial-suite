@@ -1,5 +1,5 @@
 /**
- * CRE Financial Suite — Entity & Type Definitions
+ * ProForma OS — Entity & Type Definitions
  *
  * Centralized entity-to-table mapping and JSDoc types.
  * All service calls should reference ENTITIES for consistent table naming.

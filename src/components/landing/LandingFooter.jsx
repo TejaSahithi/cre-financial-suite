@@ -1,6 +1,7 @@
 import React from "react";
-import { Building2, Mail, Phone, MapPin } from "lucide-react";
+import { Mail, MapPin } from "lucide-react";
 import { Link } from "react-router-dom";
+import ProFormaBrand from "@/components/ProFormaBrand";
 
 export default function LandingFooter() {
   const scrollTo = (id) => {
@@ -8,32 +9,23 @@ export default function LandingFooter() {
   };
 
   return (
-    <footer className="pt-14 pb-8 px-6 text-white" style={{ background: "linear-gradient(180deg, #0F2A44 0%, #081C2D 100%)" }}>
+    <footer className="pt-14 pb-8 px-6 text-white" style={{ background: "linear-gradient(180deg, var(--pf-shell-sidebar) 0%, var(--pf-shell-sidebar-2) 100%)" }}>
       <div className="max-w-7xl mx-auto">
         <div className="grid md:grid-cols-2 lg:grid-cols-5 gap-10 mb-12">
           {/* Brand */}
           <div className="lg:col-span-2">
-            <div className="flex items-center gap-2.5 mb-4">
-              <div className="w-9 h-9 rounded-[9px] border border-[color-mix(in_srgb,var(--accent)_65%,transparent)] bg-white/5 flex items-center justify-center shadow-[var(--shadow-soft)]">
-                <Building2 className="w-5 h-5 text-[var(--accent-2)]" />
-              </div>
-              <div>
-                <span className="text-white font-bold text-sm block leading-tight">CRE PLATFORM</span>
-                <span className="text-white/45 text-[9px] font-semibold tracking-[0.15em]">BUDGETING & CAM</span>
-              </div>
+            <div className="mb-5">
+              <ProFormaBrand tone="light" className="pf-footer-brand" />
             </div>
             <p className="text-white/55 text-sm leading-relaxed max-w-xs mb-5">
               Enterprise budgeting, CAM calculation, and lease management for commercial real estate professionals.
             </p>
             <div className="space-y-2">
               <div className="flex items-center gap-2 text-white/50 text-xs">
-                <Mail className="w-3.5 h-3.5" /> support@creplatform.io
+                <Mail className="w-3.5 h-3.5" /> support@proformaos.ai
               </div>
               <div className="flex items-center gap-2 text-white/50 text-xs">
-                <Phone className="w-3.5 h-3.5" /> +1 (800) 555-0199
-              </div>
-              <div className="flex items-center gap-2 text-white/50 text-xs">
-                <MapPin className="w-3.5 h-3.5" /> New York, NY
+                <MapPin className="w-3.5 h-3.5" /> Knoxville, TN
               </div>
             </div>
           </div>
@@ -72,7 +64,7 @@ export default function LandingFooter() {
         </div>
 
         <div className="pt-6 border-t border-white/10 text-xs text-white/40 text-center">
-          © {new Date().getFullYear()} CRE Platform, Inc. All rights reserved.
+          &copy; {new Date().getFullYear()} ProForma OS, Inc. All rights reserved.
         </div>
       </div>
     </footer>

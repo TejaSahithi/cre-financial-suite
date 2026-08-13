@@ -53,7 +53,7 @@ function StatusBadge({ status }) {
     status === "posted"      ? "bg-emerald-100 text-emerald-700"
     : status === "approved"  ? "bg-emerald-100 text-emerald-700"
     : status === "submitted" || status === "under_review" ? "bg-amber-100 text-amber-800"
-    : status === "calculated" ? "bg-indigo-100 text-indigo-700"
+    : status === "calculated" ? "bg-blue-100 text-blue-700"
     : "bg-slate-100 text-slate-600";
   return <Badge className={`text-[10px] uppercase font-semibold ${tone}`}>{status}</Badge>;
 }
@@ -352,7 +352,7 @@ export default function CAMDashboard() {
               </CardContent>
             </Card>
 
-            <Card className="bg-gradient-to-br from-blue-50 to-indigo-50/40 border-blue-100 shadow-sm">
+            <Card className="bg-gradient-to-br from-blue-50 to-white border-blue-100 shadow-sm">
               <CardContent className="p-4 flex items-center justify-between">
                 <div>
                   <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Managed Properties</p>
@@ -365,20 +365,20 @@ export default function CAMDashboard() {
               </CardContent>
             </Card>
 
-            <Card className="bg-gradient-to-br from-purple-50 to-indigo-50/40 border-purple-100 shadow-sm">
+            <Card className="bg-gradient-to-br from-blue-50 to-white border-blue-100 shadow-sm">
               <CardContent className="p-4 flex items-center justify-between">
                 <div>
                   <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Active Recovery Policies</p>
                   <p className="text-2xl font-bold text-slate-900 mt-1">
                     {leaseList.filter((l) => l.cam_calculation_method || l.cam_cap_type || l.has_cam_rules).length}
                   </p>
-                  <p className="text-xs text-purple-700 mt-1 font-medium">
+                  <p className="text-xs text-blue-700 mt-1 font-medium">
                     {leaseList.filter((l) => l.cam_calculation_method || l.cam_cap_type || l.has_cam_rules).length > 0
                       ? "Materialized rules ready"
                       : "No active rules"}
                   </p>
                 </div>
-                <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-600">
+                <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-600">
                   <ClipboardCheck className="w-5 h-5" />
                 </div>
               </CardContent>
@@ -492,7 +492,7 @@ export default function CAMDashboard() {
               label="CAM Estimates Scheduled"
               value={fmtCurrency(estimatesScheduledTotal)}
               icon={Building2}
-              color="bg-indigo-50 text-indigo-600"
+              color="bg-blue-50 text-blue-600"
               sub={`${estimateSchedules.length} schedule item(s)`}
             />
             <MetricCard

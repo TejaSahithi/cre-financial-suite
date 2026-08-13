@@ -62,7 +62,7 @@ const CRE_ROLES = {
 const ROLE_CATEGORY_ORDER = ["Internal Authority", "Portfolio", "Operations", "Leasing", "Finance", "Ownership", "Compliance", "External", "Custom"];
 
 const ROLE_COLOR_CLASSES = {
-  violet:  { badge: "bg-violet-100 text-violet-700 border-violet-200",  dot: "bg-violet-500" },
+  violet:  { badge: "bg-blue-100 text-blue-700 border-blue-200",  dot: "bg-blue-500" },
   blue:    { badge: "bg-blue-100 text-blue-700 border-blue-200",        dot: "bg-blue-500" },
   emerald: { badge: "bg-emerald-100 text-emerald-700 border-emerald-200", dot: "bg-emerald-500" },
   amber:   { badge: "bg-amber-100 text-amber-700 border-amber-200",     dot: "bg-amber-500" },
@@ -237,12 +237,12 @@ function cloneDefaultNotificationPermissions() {
 
 // ─── Access Levels ─────────────────────────────────────────────────────────────
 const ACCESS_LEVELS = {
-  admin:   { label: "Admin",   chipClass: "bg-violet-100 text-violet-700 border-violet-200",   btnActive: "bg-violet-600 text-white border-transparent" },
+  admin:   { label: "Admin",   chipClass: "bg-blue-100 text-blue-700 border-blue-200",   btnActive: "bg-blue-600 text-white border-transparent" },
   approve: { label: "Approve", chipClass: "bg-amber-100 text-amber-700 border-amber-200",       btnActive: "bg-amber-600 text-white border-transparent" },
   write:   { label: "Write",   chipClass: "bg-emerald-100 text-emerald-700 border-emerald-200", btnActive: "bg-emerald-600 text-white border-transparent" },
   read:    { label: "Read",    chipClass: "bg-blue-100 text-blue-700 border-blue-200",          btnActive: "bg-blue-600 text-white border-transparent" },
   none:    { label: "None",    chipClass: "bg-slate-100 text-slate-400 border-slate-200",       btnActive: "bg-slate-200 text-slate-600 border-transparent" },
-  full:    { label: "Admin",   chipClass: "bg-violet-100 text-violet-700 border-violet-200",    btnActive: "bg-violet-600 text-white border-transparent" },
+  full:    { label: "Admin",   chipClass: "bg-blue-100 text-blue-700 border-blue-200",    btnActive: "bg-blue-600 text-white border-transparent" },
 };
 
 // ─── Signing Privilege Levels ──────────────────────────────────────────────────
@@ -251,7 +251,7 @@ const SIGNING_LEVELS = [
   { level: 1, label: "L1 · Initiator",   short: "L1", color: "sky",     description: "Can prepare and submit for review",       badgeClass: "bg-sky-100 text-sky-700" },
   { level: 2, label: "L2 · Reviewer",    short: "L2", color: "blue",    description: "Can review and recommend approval",       badgeClass: "bg-blue-100 text-blue-700" },
   { level: 3, label: "L3 · Approver",    short: "L3", color: "emerald", description: "Can approve and sign documents",          badgeClass: "bg-emerald-100 text-emerald-700" },
-  { level: 4, label: "L4 · Final Auth.", short: "L4", color: "violet",  description: "Final signatory, can override all levels", badgeClass: "bg-violet-100 text-violet-700" },
+  { level: 4, label: "L4 · Final Auth.", short: "L4", color: "violet",  description: "Final signatory, can override all levels", badgeClass: "bg-blue-100 text-blue-700" },
 ];
 
 const DOCUMENT_TYPES = [
@@ -1281,7 +1281,7 @@ function ScopeSummary({ member }) {
   return (
     <div className="flex flex-wrap gap-1">
       {portfolioCount > 0 && (
-        <span className="text-[10px] px-1.5 py-0.5 rounded border bg-indigo-50 text-indigo-700 border-indigo-200">
+        <span className="text-[10px] px-1.5 py-0.5 rounded border bg-blue-50 text-blue-700 border-blue-200">
           {portfolioCount} portfolio{portfolioCount === 1 ? "" : "s"}
         </span>
       )}
@@ -1305,7 +1305,7 @@ function RoleBadges({ member, maxVisible = 2 }) {
       {visible.map(r => {
         if (r === "custom_role") {
           return (
-            <span key="custom_role" className="text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-purple-100 text-purple-700 border-purple-200">
+            <span key="custom_role" className="text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-blue-100 text-blue-700 border-blue-200">
               {customName || "Custom"}
             </span>
           );
@@ -1532,7 +1532,7 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
             </div>
           </div>
           {isSuperAdmin && (
-            <div className="mt-3 flex items-center gap-2 text-xs text-violet-700 bg-violet-50 rounded-lg px-3 py-1.5">
+            <div className="mt-3 flex items-center gap-2 text-xs text-blue-700 bg-blue-50 rounded-lg px-3 py-1.5">
               <Globe className="w-3 h-3" /> SuperAdmin — cross-org view enabled
             </div>
           )}
@@ -1580,11 +1580,11 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = fal
                   <div className="space-y-2">
                     {selectedRoles.map(r => {
                       if (r === "custom_role") return (
-                        <div key="custom_role" className="flex items-start gap-2 p-2.5 rounded-xl bg-purple-50 border border-purple-200">
-                          <div className="w-2 h-2 rounded-full bg-purple-500 mt-1.5 flex-shrink-0" />
+                        <div key="custom_role" className="flex items-start gap-2 p-2.5 rounded-xl bg-blue-50 border border-blue-200">
+                          <div className="w-2 h-2 rounded-full bg-blue-500 mt-1.5 flex-shrink-0" />
                           <div>
-                            <p className="text-xs font-semibold text-purple-800">{customRoleName || "Custom Role"}</p>
-                            <p className="text-[10px] text-purple-600">Custom title</p>
+                            <p className="text-xs font-semibold text-blue-800">{customRoleName || "Custom Role"}</p>
+                            <p className="text-[10px] text-blue-600">Custom title</p>
                           </div>
                         </div>
                       );
@@ -2723,10 +2723,10 @@ export default function UserManagement() {
 
       {/* SuperAdmin Org Switcher */}
       {isSuperAdmin && allOrgs.length > 0 && (
-        <Card className="border-violet-200 bg-violet-50/40">
+        <Card className="border-blue-200 bg-blue-50/40">
           <CardContent className="p-4">
             <div className="flex items-center gap-4 flex-wrap">
-              <div className="flex items-center gap-2 text-sm font-bold text-violet-700">
+              <div className="flex items-center gap-2 text-sm font-bold text-blue-700">
                 <Globe className="w-4 h-4" /> SuperAdmin View
               </div>
               <Select
@@ -2739,7 +2739,7 @@ export default function UserManagement() {
                   setSelectedIds(new Set());
                 }}
               >
-                <SelectTrigger className="h-9 w-72 bg-white border-violet-200">
+                <SelectTrigger className="h-9 w-72 bg-white border-blue-200">
                   <SelectValue placeholder="Select organization to manage" />
                 </SelectTrigger>
                 <SelectContent>
@@ -2756,7 +2756,7 @@ export default function UserManagement() {
                   ))}
                 </SelectContent>
               </Select>
-              <span className="text-xs bg-violet-100 text-violet-700 px-3 py-1.5 rounded-lg font-medium">
+              <span className="text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg font-medium">
                 Viewing: <strong>{selectedOrgName}</strong>
               </span>
             </div>

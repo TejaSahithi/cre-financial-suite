@@ -436,7 +436,7 @@ export default function CriticalDates() {
         icon={Calendar}
         title="Critical Dates"
         subtitle={subtitle}
-        iconColor="from-purple-600 to-indigo-700"
+        iconColor="from-blue-700 to-blue-600"
       >
         <Button size="sm" onClick={() => setShowAdd(true)} className="bg-[#1a2744] hover:bg-[#243b67]">
           <Plus className="mr-1 h-4 w-4" />

@@ -367,7 +367,7 @@ export default function CAMReviewTab({ camCalcs, expenses, leases, currentYear, 
                       <TableCell>
                         <div className="flex gap-1 flex-wrap">
                           {t.cap_applied && <Badge className="bg-amber-100 text-amber-700 text-[8px]">CAPPED</Badge>}
-                          {t.gross_up_applied && <Badge className="bg-purple-100 text-purple-700 text-[8px]">GROSS-UP</Badge>}
+                          {t.gross_up_applied && <Badge className="bg-blue-100 text-blue-700 text-[8px]">GROSS-UP</Badge>}
                           {t.pct > 15 && <Badge className="bg-red-100 text-red-700 text-[8px]">SPIKE</Badge>}
                         </div>
                       </TableCell>

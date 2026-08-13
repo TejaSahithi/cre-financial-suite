@@ -6,11 +6,11 @@ import { Badge } from "@/components/ui/badge";
 const controls = [
   { label: "Enterprise RBAC", value: "Policy-based", icon: LockKeyhole, tone: "bg-blue-50 text-blue-700" },
   { label: "Support Access", value: "Scoped", icon: LifeBuoy, tone: "bg-emerald-50 text-emerald-700" },
-  { label: "Residency", value: "Fail closed", icon: ShieldCheck, tone: "bg-indigo-50 text-indigo-700" },
+  { label: "Residency", value: "Fail closed", icon: ShieldCheck, tone: "bg-blue-50 text-blue-700" },
   { label: "Retention", value: "Legal hold aware", icon: Archive, tone: "bg-slate-50 text-slate-700" },
   { label: "Error Budgets", value: "Rollout gate", icon: Gauge, tone: "bg-amber-50 text-amber-700" },
   { label: "Credentials", value: "Rotated", icon: KeyRound, tone: "bg-cyan-50 text-cyan-700" },
-  { label: "DR", value: "Exercise required", icon: RotateCcw, tone: "bg-violet-50 text-violet-700" },
+  { label: "DR", value: "Exercise required", icon: RotateCcw, tone: "bg-blue-50 text-blue-700" },
   { label: "Legacy Paths", value: "Measured", icon: AlertTriangle, tone: "bg-rose-50 text-rose-700" },
 ];
 

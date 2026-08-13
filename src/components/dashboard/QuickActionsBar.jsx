@@ -4,8 +4,8 @@ import { createPageUrl } from "@/utils";
 import { Building2, FileText, Calculator, DollarSign, Upload, BarChart3 } from "lucide-react";
 
 const actions = [
-  { label: "Property", icon: Building2, page: "Properties", color: "from-blue-500 to-blue-600" },
-  { label: "Lease", icon: Upload, page: "LeaseUpload", color: "from-violet-500 to-violet-600" },
+  { label: "Property", icon: Building2, page: "Properties", color: "from-blue-700 to-blue-600" },
+  { label: "Lease", icon: Upload, page: "LeaseUpload", color: "from-blue-700 to-blue-600" },
   { label: "Expense", icon: DollarSign, page: "AddExpense", color: "from-emerald-500 to-emerald-600" },
   { label: "Budget", icon: Calculator, page: "CreateBudget", color: "from-amber-500 to-orange-500" },
   { label: "CAM", icon: FileText, page: "CAMRun", color: "from-rose-500 to-pink-500" },

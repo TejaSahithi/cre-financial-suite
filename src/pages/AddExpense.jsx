@@ -983,7 +983,7 @@ export default function AddExpense() {
                     </SelectItem>
                   ))}
                   <SelectItem value="__new__">
-                    <span className="flex items-center gap-1 text-violet-600 font-medium">
+                    <span className="flex items-center gap-1 text-blue-600 font-medium">
                       <Plus className="w-3 h-3" />
                       Create New Vendor
                     </span>
@@ -1155,7 +1155,7 @@ export default function AddExpense() {
             <Button variant="outline" onClick={() => setShowNewVendor(false)}>
               Cancel
             </Button>
-            <Button onClick={handleCreateVendor} disabled={!newVendorForm.name || createVendorMutation.isPending} className="bg-violet-600 hover:bg-violet-700">
+            <Button onClick={handleCreateVendor} disabled={!newVendorForm.name || createVendorMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
               {createVendorMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-1" />}
               Create Vendor
             </Button>

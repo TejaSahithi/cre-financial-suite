@@ -87,7 +87,7 @@ export default function TenantDetail() {
         {[
           { label: "Active Leases", value: activeLeases.length, icon: FileText, color: "text-blue-600 bg-blue-50" },
           { label: "Annual Rent", value: `$${totalRent.toLocaleString()}`, icon: DollarSign, color: "text-emerald-600 bg-emerald-50" },
-          { label: "Annual CAM", value: `$${totalCAM.toLocaleString()}`, icon: Calculator, color: "text-purple-600 bg-purple-50" },
+          { label: "Annual CAM", value: `$${totalCAM.toLocaleString()}`, icon: Calculator, color: "text-blue-600 bg-blue-50" },
           { label: "Properties", value: new Set(leases.map(l => l.property_id)).size, icon: Building2, color: "text-amber-600 bg-amber-50" },
           { label: "Invoices", value: tenantInvoices.length, icon: Receipt, color: "text-rose-600 bg-rose-50" },
         ].map((s, i) => (

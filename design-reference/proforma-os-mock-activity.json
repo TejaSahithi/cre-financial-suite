@@ -1,0 +1,447 @@
+{
+  "exportedAt": "2026-08-12T21:54:04.673Z",
+  "changes": [
+    "Final ProForma OS logo + aligned Budget. Forecast. Plan. Decide. lockup",
+    "Hero changed to The Planning Backbone for Commercial Real Estate",
+    "Removed gold lines beside Budget. Forecast. Plan. Decide.",
+    "Removed gold accent line along left building",
+    "Replaced SOC2 Compliant with Purpose-Built for CRE Finance"
+  ],
+  "hotspots": {
+    "landing": [
+      {
+        "label": "ProForma OS logo",
+        "x": 25,
+        "y": 10,
+        "w": 360,
+        "h": 88
+      },
+      {
+        "label": "Features",
+        "x": 570,
+        "y": 30,
+        "w": 100,
+        "h": 60
+      },
+      {
+        "label": "Platform",
+        "x": 690,
+        "y": 30,
+        "w": 95,
+        "h": 60
+      },
+      {
+        "label": "Pricing",
+        "x": 815,
+        "y": 30,
+        "w": 85,
+        "h": 60
+      },
+      {
+        "label": "FAQ",
+        "x": 925,
+        "y": 30,
+        "w": 70,
+        "h": 60
+      },
+      {
+        "label": "Contact",
+        "x": 1020,
+        "y": 30,
+        "w": 95,
+        "h": 60
+      },
+      {
+        "label": "Sign in",
+        "x": 1310,
+        "y": 30,
+        "w": 90,
+        "h": 60
+      },
+      {
+        "label": "Request access",
+        "x": 1415,
+        "y": 24,
+        "w": 190,
+        "h": 70
+      },
+      {
+        "label": "Trusted by 500+ properties",
+        "x": 720,
+        "y": 145,
+        "w": 450,
+        "h": 55
+      },
+      {
+        "label": "Planning Backbone headline",
+        "x": 500,
+        "y": 205,
+        "w": 1000,
+        "h": 170
+      },
+      {
+        "label": "Hero description",
+        "x": 555,
+        "y": 390,
+        "w": 830,
+        "h": 70
+      },
+      {
+        "label": "Budget Forecast Plan Decide",
+        "x": 650,
+        "y": 475,
+        "w": 590,
+        "h": 55
+      },
+      {
+        "label": "Request Platform Access",
+        "x": 595,
+        "y": 545,
+        "w": 360,
+        "h": 72
+      },
+      {
+        "label": "Request Video Demo",
+        "x": 965,
+        "y": 545,
+        "w": 315,
+        "h": 72
+      },
+      {
+        "label": "Purpose-Built for CRE Finance",
+        "x": 625,
+        "y": 642,
+        "w": 230,
+        "h": 58
+      },
+      {
+        "label": "99.9% Uptime SLA",
+        "x": 850,
+        "y": 642,
+        "w": 210,
+        "h": 58
+      },
+      {
+        "label": "Enterprise Ready",
+        "x": 1060,
+        "y": 642,
+        "w": 220,
+        "h": 58
+      },
+      {
+        "label": "Portfolio Variance",
+        "x": 420,
+        "y": 705,
+        "w": 355,
+        "h": 185
+      },
+      {
+        "label": "CAM Automation",
+        "x": 790,
+        "y": 705,
+        "w": 350,
+        "h": 185
+      },
+      {
+        "label": "Lease Intelligence",
+        "x": 1155,
+        "y": 705,
+        "w": 360,
+        "h": 185
+      },
+      {
+        "label": "Left commercial building visual",
+        "x": 0,
+        "y": 110,
+        "w": 435,
+        "h": 831
+      },
+      {
+        "label": "Right architectural building visual",
+        "x": 1320,
+        "y": 180,
+        "w": 352,
+        "h": 761
+      }
+    ],
+    "dashboard": [
+      {
+        "label": "ProForma OS logo",
+        "x": 14,
+        "y": 10,
+        "w": 235,
+        "h": 65
+      },
+      {
+        "label": "Search",
+        "x": 275,
+        "y": 15,
+        "w": 445,
+        "h": 55
+      },
+      {
+        "label": "Notification / theme / profile",
+        "x": 1260,
+        "y": 10,
+        "w": 390,
+        "h": 62
+      },
+      {
+        "label": "Dashboard nav",
+        "x": 10,
+        "y": 95,
+        "w": 240,
+        "h": 50
+      },
+      {
+        "label": "Portfolio nav",
+        "x": 10,
+        "y": 145,
+        "w": 240,
+        "h": 45
+      },
+      {
+        "label": "Properties nav",
+        "x": 10,
+        "y": 188,
+        "w": 240,
+        "h": 120
+      },
+      {
+        "label": "Tenants nav",
+        "x": 10,
+        "y": 300,
+        "w": 240,
+        "h": 44
+      },
+      {
+        "label": "Leases nav",
+        "x": 10,
+        "y": 344,
+        "w": 240,
+        "h": 135
+      },
+      {
+        "label": "Expenses nav",
+        "x": 10,
+        "y": 480,
+        "w": 240,
+        "h": 190
+      },
+      {
+        "label": "CAM Engine nav",
+        "x": 10,
+        "y": 670,
+        "w": 240,
+        "h": 105
+      },
+      {
+        "label": "Reports nav",
+        "x": 10,
+        "y": 775,
+        "w": 240,
+        "h": 55
+      },
+      {
+        "label": "Dashboard title",
+        "x": 275,
+        "y": 82,
+        "w": 350,
+        "h": 45
+      },
+      {
+        "label": "Portfolio selector",
+        "x": 1460,
+        "y": 80,
+        "w": 170,
+        "h": 48
+      },
+      {
+        "label": "KPI strip",
+        "x": 280,
+        "y": 130,
+        "w": 1350,
+        "h": 75
+      },
+      {
+        "label": "Portfolio Value card",
+        "x": 280,
+        "y": 210,
+        "w": 265,
+        "h": 205
+      },
+      {
+        "label": "Revenue card",
+        "x": 555,
+        "y": 210,
+        "w": 265,
+        "h": 205
+      },
+      {
+        "label": "OPEX card",
+        "x": 830,
+        "y": 210,
+        "w": 265,
+        "h": 205
+      },
+      {
+        "label": "NOI card",
+        "x": 1105,
+        "y": 210,
+        "w": 255,
+        "h": 205
+      },
+      {
+        "label": "Occupancy card",
+        "x": 1370,
+        "y": 210,
+        "w": 255,
+        "h": 205
+      },
+      {
+        "label": "Quick actions",
+        "x": 280,
+        "y": 420,
+        "w": 650,
+        "h": 45
+      },
+      {
+        "label": "Budget vs Actuals",
+        "x": 280,
+        "y": 470,
+        "w": 665,
+        "h": 255
+      },
+      {
+        "label": "NOI Trend",
+        "x": 955,
+        "y": 470,
+        "w": 675,
+        "h": 255
+      },
+      {
+        "label": "Property Performance",
+        "x": 280,
+        "y": 730,
+        "w": 1350,
+        "h": 190
+      }
+    ]
+  },
+  "activity": [
+    {
+      "time": "2026-08-12T21:46:26.229Z",
+      "view": "landing",
+      "action": "Mock opened",
+      "detail": "landing"
+    },
+    {
+      "time": "2026-08-12T21:46:37.829Z",
+      "view": "landing",
+      "action": "Clicked",
+      "detail": "Budget Forecast Plan Decide"
+    },
+    {
+      "time": "2026-08-12T21:46:38.625Z",
+      "view": "landing",
+      "action": "Clicked",
+      "detail": "Budget Forecast Plan Decide"
+    },
+    {
+      "time": "2026-08-12T21:46:42.287Z",
+      "view": "landing",
+      "action": "Clicked",
+      "detail": "Left commercial building visual"
+    },
+    {
+      "time": "2026-08-12T21:46:49.195Z",
+      "view": "landing",
+      "action": "Clicked",
+      "detail": "Purpose-Built for CRE Finance"
+    },
+    {
+      "time": "2026-08-12T21:46:58.974Z",
+      "view": "dashboard",
+      "action": "View switched",
+      "detail": "dashboard"
+    },
+    {
+      "time": "2026-08-12T21:47:10.629Z",
+      "view": "landing",
+      "action": "View switched",
+      "detail": "landing"
+    },
+    {
+      "time": "2026-08-12T21:47:12.707Z",
+      "view": "landing",
+      "action": "Hotspots toggled",
+      "detail": "off"
+    },
+    {
+      "time": "2026-08-12T21:47:13.761Z",
+      "view": "landing",
+      "action": "Hotspots toggled",
+      "detail": "on"
+    },
+    {
+      "time": "2026-08-12T21:52:37.486Z",
+      "view": "landing",
+      "action": "Clicked",
+      "detail": "ProForma OS logo"
+    },
+    {
+      "time": "2026-08-12T21:52:46.561Z",
+      "view": "landing",
+      "action": "Clicked",
+      "detail": "Purpose-Built for CRE Finance"
+    },
+    {
+      "time": "2026-08-12T21:52:56.782Z",
+      "view": "landing",
+      "action": "Clicked",
+      "detail": "Left commercial building visual"
+    },
+    {
+      "time": "2026-08-12T21:53:01.753Z",
+      "view": "landing",
+      "action": "Clicked",
+      "detail": "99.9% Uptime SLA"
+    },
+    {
+      "time": "2026-08-12T21:53:04.399Z",
+      "view": "landing",
+      "action": "Clicked",
+      "detail": "Hero description"
+    },
+    {
+      "time": "2026-08-12T21:53:13.147Z",
+      "view": "landing",
+      "action": "Clicked",
+      "detail": "Trusted by 500+ properties"
+    },
+    {
+      "time": "2026-08-12T21:53:15.309Z",
+      "view": "dashboard",
+      "action": "View switched",
+      "detail": "dashboard"
+    },
+    {
+      "time": "2026-08-12T21:53:26.270Z",
+      "view": "dashboard",
+      "action": "Clicked",
+      "detail": "ProForma OS logo"
+    },
+    {
+      "time": "2026-08-12T21:53:30.363Z",
+      "view": "dashboard",
+      "action": "Hotspots toggled",
+      "detail": "off"
+    },
+    {
+      "time": "2026-08-12T21:53:31.330Z",
+      "view": "dashboard",
+      "action": "Hotspots toggled",
+      "detail": "on"
+    }
+  ]
+}

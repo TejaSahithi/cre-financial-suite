@@ -50,7 +50,7 @@ export default function Actuals() {
           { label: "YTD Revenue", value: `$${(totalRevenue/1000).toFixed(0)}K`, icon: TrendingUp, color: "bg-blue-50 text-blue-600" },
           { label: "YTD Expenses", value: `$${(totalExpenses/1000).toFixed(0)}K`, icon: DollarSign, color: "bg-red-50 text-red-600" },
           { label: "YTD NOI", value: `$${((totalRevenue-totalExpenses)/1000).toFixed(0)}K`, icon: Layers, color: "bg-emerald-50 text-emerald-600" },
-          { label: "NOI Margin", value: totalRevenue ? `${(((totalRevenue-totalExpenses)/totalRevenue)*100).toFixed(1)}%` : '0%', icon: BarChart3, color: "bg-purple-50 text-purple-600" },
+          { label: "NOI Margin", value: totalRevenue ? `${(((totalRevenue-totalExpenses)/totalRevenue)*100).toFixed(1)}%` : '0%', icon: BarChart3, color: "bg-blue-50 text-blue-600" },
         ].map((s, i) => (
           <Card key={i}><CardContent className="p-4 flex items-center gap-3">
             <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${s.color}`}><s.icon className="w-5 h-5" /></div>

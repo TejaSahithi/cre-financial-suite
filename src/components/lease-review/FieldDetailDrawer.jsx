@@ -584,7 +584,7 @@ export default function FieldDetailDrawer({
               <Button
                 size="sm"
                 variant="outline"
-                className="text-purple-700"
+                className="text-blue-700"
                 onClick={() => onNeedsLegal(actionField)}
                 disabled={isSaving}
               >

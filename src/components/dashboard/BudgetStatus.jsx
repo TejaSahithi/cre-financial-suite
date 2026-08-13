@@ -12,7 +12,7 @@ const statusColors = {
   under_review: "bg-amber-100 text-amber-700",
   reviewed: "bg-blue-100 text-blue-700",
   approved: "bg-emerald-100 text-emerald-700",
-  signed: "bg-purple-100 text-purple-700",
+  signed: "bg-blue-100 text-blue-700",
   locked: "bg-slate-200 text-slate-800",
 };
 

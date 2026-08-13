@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Building2, Lock, Eye, EyeOff, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+import { Lock, Eye, EyeOff, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/services/supabaseClient";
 import { createPageUrl } from "@/utils";
+import ProFormaBrand from "@/components/ProFormaBrand";
 
 export default function ResetPassword() {
   const navigate = useNavigate();
@@ -72,11 +73,8 @@ export default function ResetPassword() {
     <div className="min-h-screen bg-[var(--bg)] flex flex-col">
       {/* Top Bar */}
       <div className="px-6 py-5 flex items-center max-w-6xl mx-auto w-full">
-        <a href={createPageUrl("Landing")} className="flex items-center gap-2.5">
-          <div className="w-8 h-8 bg-[var(--ink)] rounded-lg flex items-center justify-center">
-            <Building2 className="w-4 h-4 text-white" />
-          </div>
-          <span className="text-[var(--ink)] font-bold text-lg tracking-tight">CRE Platform</span>
+        <a href={createPageUrl("Landing")} className="flex items-center">
+          <ProFormaBrand className="pf-page-brand" />
         </a>
       </div>
 

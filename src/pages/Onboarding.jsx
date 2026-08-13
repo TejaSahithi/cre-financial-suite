@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createPageUrl } from "@/utils";
+import ProFormaBrand from "@/components/ProFormaBrand";
 
 const steps = [
   { id: 1, label: "Company Setup", icon: Building2 },
@@ -364,10 +365,7 @@ export default function Onboarding() {
       {/* Header */}
       <div className="bg-[var(--ink)] px-6 py-4">
         <div className="max-w-3xl mx-auto flex items-center gap-3">
-          <div className="w-8 h-8 bg-[color-mix(in_srgb,var(--surface)_18%,transparent)] rounded-lg flex items-center justify-center">
-            <Building2 className="w-5 h-5 text-white" />
-          </div>
-          <span className="text-white font-bold text-lg">CRE Platform</span>
+          <ProFormaBrand tone="light" className="pf-page-brand" />
           <div className="ml-auto flex items-center gap-4">
             <span className="text-[color-mix(in_srgb,var(--surface)_60%,transparent)] text-sm">Account Setup</span>
             <Button variant="ghost" size="sm" className="text-white/70 hover:text-white hover:bg-[color-mix(in_srgb,var(--surface)_18%,transparent)]" onClick={() => logout(true)}>
@@ -571,16 +569,16 @@ function MSAStep({ org, onNext, onBack, user }) {
 
   const handleDownload = () => {
     const content = `
-CRE PLATFORM MASTER SERVICE AGREEMENT
+PROFORMA OS MASTER SERVICE AGREEMENT
 Version 4.2 â€¢ Effective Date: ${today}
 â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
 
 This Master Service Agreement ("Agreement") is entered into between
-CRE Platform, Inc. ("Provider") and the organization
+ProForma OS, Inc. ("Provider") and the organization
 ${org?.name || "The Client"} ("Client").
 
 1. SCOPE OF SERVICE
-Provider shall provide Client with access to the CRE Platform cloud-based
+Provider shall provide Client with access to the ProForma OS cloud-based
 platform for commercial real estate portfolio management and automation.
 
 2. SUBSCRIPTION TERM
@@ -637,11 +635,11 @@ DATE:         ${today}
         </div>
         <div className="h-64 overflow-y-auto p-6 text-[13px] text-[var(--muted)] leading-relaxed space-y-4 scrollbar-thin">
           <div className="text-center pb-4">
-            <h3 className="font-bold text-[var(--ink)] text-base">CRE PLATFORM MASTER SERVICE AGREEMENT</h3>
+            <h3 className="font-bold text-[var(--ink)] text-base">PROFORMA OS MASTER SERVICE AGREEMENT</h3>
             <p className="text-[11px] text-[var(--muted)]">Version 4.2 â€¢ Effective Date: {today}</p>
           </div>
-          <p>This Master Service Agreement ("Agreement") is entered into between <strong>CRE Platform, Inc.</strong> ("Provider") and the organization <strong>{org?.name || "The Client"}</strong> ("Client").</p>
-          <p><strong>1. Scope of Service.</strong> Provider shall provide Client with access to the CRE Platform cloud-based platform for commercial real estate portfolio management and automation.</p>
+          <p>This Master Service Agreement ("Agreement") is entered into between <strong>ProForma OS, Inc.</strong> ("Provider") and the organization <strong>{org?.name || "The Client"}</strong> ("Client").</p>
+          <p><strong>1. Scope of Service.</strong> Provider shall provide Client with access to the ProForma OS cloud-based platform for commercial real estate portfolio management and automation.</p>
           <p><strong>2. Subscription Term.</strong> The term of this Agreement shall begin on the date of execution and continue for the duration of the selected subscription plan, renewing automatically unless cancelled.</p>
           <p><strong>3. Payment Terms.</strong> Client agrees to pay all applicable fees via the authorized payment method. All fees are non-refundable except as expressly stated herein.</p>
           <p><strong>4. Confidentiality & Data.</strong> Client retains all rights to its data. Provider implements bank-grade security and isolation to protect Client information.</p>

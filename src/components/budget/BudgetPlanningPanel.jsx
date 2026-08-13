@@ -185,13 +185,13 @@ function AssemblyPreview({ baseRent, otherIncome, estimatedCamRecovery, totalExp
   const noiPositive = noi >= 0;
 
   return (
-    <Card className="border-2 border-indigo-200 bg-gradient-to-br from-indigo-50 to-white shadow-sm">
+    <Card className="border-2 border-blue-200 bg-gradient-to-br from-blue-50 to-white shadow-sm">
       <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-semibold text-indigo-900 flex items-center gap-2">
-          <DollarSign className="h-4 w-4 text-indigo-600" />
+        <CardTitle className="text-sm font-semibold text-blue-900 flex items-center gap-2">
+          <DollarSign className="h-4 w-4 text-blue-600" />
           Planning Budget Preview — FY {fiscalYear}
         </CardTitle>
-        <p className="text-xs text-indigo-600 font-medium">
+        <p className="text-xs text-blue-600 font-medium">
           Assembled from Phase 3A expense basis + Phase 3B CAM estimate + approved revenue data.
           CAM recovery appears only once (Phase 3B estimate, not actual posted CAM).
         </p>
@@ -425,8 +425,8 @@ export default function BudgetPlanningPanel({ propertyId, fiscalYear }) {
   return (
     <div className="space-y-4">
       {/* Header note */}
-      <Card className="border-indigo-200 bg-indigo-50">
-        <CardContent className="p-4 text-sm text-indigo-800">
+      <Card className="border-blue-200 bg-blue-50">
+        <CardContent className="p-4 text-sm text-blue-800">
           <p className="font-medium">Next-Year Planning Budget</p>
           <p className="text-xs mt-0.5">
             Runs three planning engines in sequence and assembles FY {fiscalYear} expense, CAM recovery
@@ -610,7 +610,7 @@ export default function BudgetPlanningPanel({ propertyId, fiscalYear }) {
           <Button
             onClick={createPlanningBudget}
             disabled={creating}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white h-10 px-6 text-sm font-semibold shadow-sm"
+            className="bg-blue-600 hover:bg-blue-700 text-white h-10 px-6 text-sm font-semibold shadow-sm"
           >
             {creating ? (
               <>

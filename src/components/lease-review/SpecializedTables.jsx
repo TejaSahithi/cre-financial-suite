@@ -638,7 +638,7 @@ export function CriticalDatesTable({ lease }) {
                   badgeClass = "bg-red-100 text-red-700";
                   badgeText = "Conflict";
                 } else if (needsReview) {
-                  badgeClass = "bg-purple-50 text-purple-700";
+                  badgeClass = "bg-blue-50 text-blue-700";
                   badgeText = "Manual Review";
                 } else if (present) {
                   badgeClass = "bg-emerald-50 text-emerald-700";

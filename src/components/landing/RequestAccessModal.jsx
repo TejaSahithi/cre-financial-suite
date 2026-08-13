@@ -53,7 +53,7 @@ export default function RequestAccessModal({ onClose }) {
               {/* Left panel */}
               <div className="bg-gradient-to-br from-[#0f1a2e] to-[#1a2f52] p-8 md:w-[42%] rounded-l-2xl relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-40 h-40 bg-blue-500/10 rounded-full blur-3xl" />
-                <div className="absolute bottom-0 left-0 w-32 h-32 bg-indigo-500/10 rounded-full blur-2xl" />
+                <div className="absolute bottom-0 left-0 w-32 h-32 bg-blue-500/10 rounded-full blur-2xl" />
 
                 <div className="relative z-10">
                   <div className="w-10 h-10 bg-gradient-to-br from-blue-400 to-blue-600 rounded-xl flex items-center justify-center mb-5 shadow-lg">

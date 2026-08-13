@@ -185,11 +185,11 @@ export default function Vendors() {
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
-      <PageHeader icon={Truck} title="Vendor Management" subtitle={`${enriched.length} vendors · Linked to expense records`} iconColor="from-violet-500 to-violet-700">
+      <PageHeader icon={Truck} title="Vendor Management" subtitle={`${enriched.length} vendors · Linked to expense records`} iconColor="from-blue-700 to-blue-600">
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => downloadCSV(enriched, 'vendors.csv')}><Download className="w-3.5 h-3.5 mr-1 text-slate-500" />Export</Button>
           <Button variant="outline" size="sm" onClick={() => setShowImport(true)}><Upload className="w-3.5 h-3.5 mr-1" />Import</Button>
-          <Button size="sm" onClick={openNew} className="bg-gradient-to-r from-violet-600 to-violet-700 hover:from-violet-700 hover:to-violet-800 shadow-sm">
+          <Button size="sm" onClick={openNew} className="bg-gradient-to-r from-blue-700 to-blue-600 hover:from-blue-700 hover:to-blue-800 shadow-sm">
             <Plus className="w-3.5 h-3.5 mr-1" />Add Vendor
           </Button>
         </div>
@@ -198,7 +198,7 @@ export default function Vendors() {
       <ScopeSelector properties={properties} buildings={buildings} units={[]} selectedProperty={scopeProperty} onPropertyChange={setScopeProperty} showUnit={false} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <MetricCard label="Total Vendors" value={vendors.length} icon={Users} color="bg-violet-50 text-violet-600" />
+        <MetricCard label="Total Vendors" value={vendors.length} icon={Users} color="bg-blue-50 text-blue-600" />
         <MetricCard label="Total Spend" value={`$${(totalSpend / 1000).toFixed(0)}K`} icon={DollarSign} color="bg-emerald-50 text-emerald-600" sub="all linked expenses" />
         <MetricCard label="Avg. Spend/Vendor" value={`$${(avgSpendPerVendor / 1000).toFixed(1)}K`} icon={TrendingUp} color="bg-blue-50 text-blue-600" />
         <MetricCard label="Top Vendor" value={topVendor?.name || "—"} icon={Receipt} color="bg-amber-50 text-amber-600" sub={topVendor ? `$${(topVendor.totalSpend / 1000).toFixed(0)}K spend` : ""} />
@@ -241,10 +241,10 @@ export default function Vendors() {
             {filtered.length === 0 ? (
               <TableRow><TableCell colSpan={7} className="text-center py-10 text-sm text-slate-400">No vendors found</TableCell></TableRow>
             ) : filtered.map(v => (
-              <TableRow key={v.id} className="hover:bg-violet-50/30 transition-colors cursor-pointer" onClick={() => openProfile(v)}>
+              <TableRow key={v.id} className="hover:bg-blue-50/30 transition-colors cursor-pointer" onClick={() => openProfile(v)}>
                 <TableCell>
                   <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-100 to-violet-200 flex items-center justify-center text-violet-600 font-bold text-xs">
+                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center text-blue-600 font-bold text-xs">
                       {v.name?.charAt(0)?.toUpperCase()}
                     </div>
                     <div>
@@ -302,7 +302,7 @@ export default function Vendors() {
               </div>
             </div>
           </div>
-          <DialogFooter><Button onClick={handleSave} disabled={!form.name} className="bg-gradient-to-r from-violet-600 to-violet-700">{editItem ? 'Update' : 'Create'}</Button></DialogFooter>
+          <DialogFooter><Button onClick={handleSave} disabled={!form.name} className="bg-gradient-to-r from-blue-700 to-blue-600">{editItem ? 'Update' : 'Create'}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 

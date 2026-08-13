@@ -38,11 +38,11 @@ export function EnterpriseCoverageDashboard({ coverage, approval }) {
   };
 
   return (
-    <Card className="mb-6 border-indigo-100 bg-white shadow-sm">
+    <Card className="mb-6 border-blue-100 bg-white shadow-sm">
       <CardHeader className="border-b border-slate-100 bg-slate-50/50 pb-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="flex items-center gap-2 text-base font-semibold text-slate-800">
-            <Layers className="h-4 w-4 text-indigo-600" />
+            <Layers className="h-4 w-4 text-blue-600" />
             Enterprise Canonical Field Coverage & Ledger
           </CardTitle>
 

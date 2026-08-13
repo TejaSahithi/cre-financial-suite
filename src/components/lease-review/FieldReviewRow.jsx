@@ -181,7 +181,7 @@ export function FieldReviewRow({
                 Mark Manual Required
               </DropdownMenuItem>
               <DropdownMenuItem onClick={onNeedsLegal}>
-                <Gavel className="h-4 w-4 text-purple-600" />
+                <Gavel className="h-4 w-4 text-blue-600" />
                 Needs Legal Review
               </DropdownMenuItem>
               {status !== REVIEW_STATUSES.PENDING && (

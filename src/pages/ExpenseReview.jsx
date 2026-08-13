@@ -70,7 +70,7 @@ function compactScope(parts) {
 function v1BadgeClassName(tone) {
   if (tone === "emerald") return "border-emerald-200 bg-emerald-50 text-emerald-700";
   if (tone === "blue") return "border-blue-200 bg-blue-50 text-blue-700";
-  if (tone === "indigo") return "border-indigo-200 bg-indigo-50 text-indigo-700";
+  if (tone === "indigo") return "border-blue-200 bg-blue-50 text-blue-700";
   if (tone === "amber") return "border-amber-200 bg-amber-50 text-amber-800";
   if (tone === "red") return "border-red-200 bg-red-50 text-red-700";
   return "border-slate-200 bg-slate-50 text-slate-700";

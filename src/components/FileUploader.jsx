@@ -586,10 +586,10 @@ export default function FileUploader({
 
       <CardContent className="space-y-4">
         {isAdmin && (
-          <div className="flex items-center gap-3 rounded-lg border border-violet-200 bg-violet-50 p-3">
-            <span className="text-xs font-semibold text-violet-700 whitespace-nowrap">Organization</span>
+          <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+            <span className="text-xs font-semibold text-blue-700 whitespace-nowrap">Organization</span>
             <Select value={adminOrgId} onValueChange={handleAdminOrgChange}>
-              <SelectTrigger className="flex-1 h-9 bg-white border-violet-200 text-sm">
+              <SelectTrigger className="flex-1 h-9 bg-white border-blue-200 text-sm">
                 <SelectValue placeholder="Select organization..." />
               </SelectTrigger>
               <SelectContent>

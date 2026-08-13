@@ -146,7 +146,7 @@ export default function PropertyDrillDown({ property, leases, camCalcs, building
           { label: "Total Revenue", value: fmt(totalRevenue), color: "text-slate-900" },
           { label: "Base Rent", value: fmt(totalRent), color: "text-blue-700" },
           { label: "CAM Recovery", value: fmt(totalCam), color: "text-emerald-700" },
-          { label: "Revenue / SF", value: property.total_sf > 0 ? `$${(totalRevenue / property.total_sf).toFixed(2)}` : '—', color: "text-purple-700" },
+          { label: "Revenue / SF", value: property.total_sf > 0 ? `$${(totalRevenue / property.total_sf).toFixed(2)}` : '—', color: "text-blue-700" },
         ].map((k, i) => (
           <Card key={i}>
             <CardContent className="p-3">

@@ -47,8 +47,8 @@ export async function sendInviteEmail(recipientEmail, recipientName, magicLink) 
     to: recipientEmail,
     templateId: 'generic_internal_notification',
     variables: {
-      subject: "You're invited to CRE Platform",
-      message: `Hi ${recipientName || 'there'},<br/><br/>Your access to CRE Platform has been approved. <a href="${magicLink || '#'}">Click here to sign in</a>.`
+      subject: "You're invited to ProForma OS",
+      message: `Hi ${recipientName || 'there'},<br/><br/>Your access to ProForma OS has been approved. <a href="${magicLink || '#'}">Click here to sign in</a>.`
     }
   });
 }

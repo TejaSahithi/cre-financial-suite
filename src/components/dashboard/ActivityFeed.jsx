@@ -6,7 +6,7 @@ import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { ChevronRight, Activity } from "lucide-react";
 
-const actionColors = { create: "bg-emerald-500", update: "bg-blue-500", delete: "bg-red-500", approve: "bg-violet-500", upload: "bg-amber-500", override: "bg-orange-500", sign: "bg-teal-500", lock: "bg-slate-600", reject: "bg-rose-500", login: "bg-cyan-500", export: "bg-indigo-500" };
+const actionColors = { create: "bg-emerald-500", update: "bg-blue-500", delete: "bg-red-500", approve: "bg-blue-500", upload: "bg-amber-500", override: "bg-orange-500", sign: "bg-teal-500", lock: "bg-slate-600", reject: "bg-rose-500", login: "bg-cyan-500", export: "bg-blue-500" };
 
 export default function ActivityFeed() {
   const { data: logs = [] } = useQuery({

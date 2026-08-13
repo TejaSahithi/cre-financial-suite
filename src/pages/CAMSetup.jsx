@@ -118,7 +118,7 @@ function RunStatusBadge({ status }) {
     status === "posted" ? "bg-emerald-100 text-emerald-700"
     : status === "approved" ? "bg-emerald-100 text-emerald-700"
     : status === "submitted" || status === "under_review" ? "bg-amber-100 text-amber-800"
-    : status === "calculated" ? "bg-indigo-100 text-indigo-700"
+    : status === "calculated" ? "bg-blue-100 text-blue-700"
     : status === "readiness_failed" ? "bg-red-100 text-red-700"
     : "bg-slate-100 text-slate-600";
   return <Badge className={`text-[10px] uppercase font-semibold ${tone}`}>{status}</Badge>;

@@ -12,7 +12,7 @@ export default function AmendmentLineage({ lineage }) {
   return (
     <div className="rounded border border-slate-100 bg-slate-50 p-2.5">
       <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-800">
-        <GitBranch className="h-3.5 w-3.5 text-indigo-600" /> Amendment Lineage
+        <GitBranch className="h-3.5 w-3.5 text-blue-600" /> Amendment Lineage
         <Badge variant="outline" className="text-[10px] capitalize">{formatLayer(lineage.selectedLayer)}</Badge>
       </div>
       <div className="grid gap-2 text-[11px] sm:grid-cols-3">

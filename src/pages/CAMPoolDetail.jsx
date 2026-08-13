@@ -90,7 +90,7 @@ export default function CAMPoolDetail() {
 
   return (
     <div className="space-y-6 p-6">
-      <PageHeader icon={Layers} title="Pool Detail" subtitle="Source expenses, allocations, gross-up, and every participating lease's lines for this pool" iconColor="from-blue-500 to-indigo-600" />
+      <PageHeader icon={Layers} title="Pool Detail" subtitle="Source expenses, allocations, gross-up, and every participating lease's lines for this pool" iconColor="from-blue-700 to-blue-600" />
 
       {camRunId && (
         <Link to={`${createPageUrl("CAMRun")}?cam_run_id=${camRunId}`}>

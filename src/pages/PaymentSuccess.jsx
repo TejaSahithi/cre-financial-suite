@@ -170,7 +170,7 @@ export default function PaymentSuccess() {
 
           <div className="slide-3 mt-10 flex items-center justify-center gap-2 text-[var(--muted)]">
             <Building2 className="w-4 h-4" />
-            <span className="text-xs font-medium">CRE Financial Suite · Enterprise Real Estate Intelligence</span>
+            <span className="text-xs font-medium">ProForma OS · Enterprise Real Estate Intelligence</span>
           </div>
         </div>
       </div>

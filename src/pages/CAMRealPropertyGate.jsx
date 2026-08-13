@@ -63,7 +63,7 @@ const VARIANCE_CLASSIFICATIONS = [
 
 const CLASSIFICATION_TONE = {
   SOURCE_DATA_MAPPING_DIFFERENCE:    "bg-blue-100 text-blue-700",
-  CONTRACT_INTERPRETATION_DIFFERENCE: "bg-indigo-100 text-indigo-700",
+  CONTRACT_INTERPRETATION_DIFFERENCE: "bg-blue-100 text-blue-700",
   CONFIGURATION_DIFFERENCE:          "bg-amber-100 text-amber-800",
   ROUNDING_POLICY_DIFFERENCE:        "bg-slate-100 text-slate-600",
   EXPECTED_V2_CORRECTION:            "bg-emerald-100 text-emerald-700",

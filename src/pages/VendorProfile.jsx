@@ -145,7 +145,7 @@ export default function VendorProfile() {
 
       <div className="flex items-start justify-between flex-wrap gap-4">
         <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 to-violet-700 flex items-center justify-center text-white font-bold text-xl shadow-lg">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-700 to-blue-600 flex items-center justify-center text-white font-bold text-xl shadow-lg">
             {vendor.name?.charAt(0)?.toUpperCase()}
           </div>
           <div>
@@ -226,8 +226,8 @@ export default function VendorProfile() {
 
       {/* Insights */}
       {insights.length > 0 && (
-        <Card className="border-violet-200 bg-gradient-to-r from-violet-50/50 to-purple-50/30">
-          <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><TrendingUp className="w-4 h-4 text-violet-600" />AI Insights</CardTitle></CardHeader>
+        <Card className="border-blue-200 bg-gradient-to-r from-blue-50/50 to-blue-50/30">
+          <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><TrendingUp className="w-4 h-4 text-blue-600" />AI Insights</CardTitle></CardHeader>
           <CardContent>
             <div className="space-y-2">
               {insights.map((ins, i) => (
@@ -353,7 +353,7 @@ export default function VendorProfile() {
                 <Card key={d.id} className="hover:bg-slate-50 transition-colors">
                   <CardContent className="p-3 flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-lg bg-violet-100 flex items-center justify-center"><FileText className="w-4 h-4 text-violet-600" /></div>
+                      <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center"><FileText className="w-4 h-4 text-blue-600" /></div>
                       <div>
                         <p className="text-sm font-medium">{d.name}</p>
                         <p className="text-[10px] text-slate-400">{d.type?.replace(/_/g, ' ')} · {new Date(d.created_date).toLocaleDateString()}</p>

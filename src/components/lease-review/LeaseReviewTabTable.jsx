@@ -9,11 +9,11 @@ import { cleanSourceEvidenceText, isMeaningfulValue } from "@/lib/leaseReviewSch
 
 const TYPE_META = {
   standard: { label: "Standard", className: "bg-blue-50 text-blue-700 border-blue-100" },
-  dynamic: { label: "Dynamic", className: "bg-violet-50 text-violet-700 border-violet-100" },
+  dynamic: { label: "Dynamic", className: "bg-blue-50 text-blue-700 border-blue-100" },
   expense_rule: { label: "Expense Rule", className: "bg-amber-50 text-amber-800 border-amber-100" },
   cam_rule: { label: "CAM Rule", className: "bg-cyan-50 text-cyan-700 border-cyan-100" },
   clause: { label: "Clause", className: "bg-slate-100 text-slate-700 border-slate-200" },
-  material_term: { label: "Material Term", className: "bg-indigo-50 text-indigo-700 border-indigo-100" },
+  material_term: { label: "Material Term", className: "bg-blue-50 text-blue-700 border-blue-100" },
   read_only_reference: { label: "Reference", className: "bg-slate-50 text-slate-600 border-slate-200" },
 };
 
@@ -24,7 +24,7 @@ const STATUS_META = {
   draft: { label: "Draft", className: "bg-amber-50 text-amber-800 border-amber-100" },
   needs_review: { label: "Needs Review", className: "bg-amber-50 text-amber-800 border-amber-100" },
   missing: { label: "Missing", className: "bg-slate-100 text-slate-600 border-slate-200" },
-  manual_required: { label: "Manual", className: "bg-purple-50 text-purple-700 border-purple-100" },
+  manual_required: { label: "Manual", className: "bg-blue-50 text-blue-700 border-blue-100" },
   rejected: { label: "Rejected", className: "bg-red-50 text-red-700 border-red-100" },
   approved: { label: "Approved", className: "bg-emerald-50 text-emerald-700 border-emerald-100" },
   pending: { label: "Pending", className: "bg-slate-100 text-slate-700 border-slate-200" },
@@ -38,8 +38,8 @@ const EXTRACTION_MODE_META = {
   normalized: { label: "Normalized", className: "bg-blue-50 text-blue-700 border-blue-100" },
   inferred: { label: "Inferred", className: "bg-amber-50 text-amber-800 border-amber-100" },
   calculated: { label: "Calculated", className: "bg-cyan-50 text-cyan-700 border-cyan-100" },
-  reviewer_entered: { label: "Reviewer Entered", className: "bg-purple-50 text-purple-700 border-purple-100" },
-  manual: { label: "Manual", className: "bg-purple-50 text-purple-700 border-purple-100" },
+  reviewer_entered: { label: "Reviewer Entered", className: "bg-blue-50 text-blue-700 border-blue-100" },
+  manual: { label: "Manual", className: "bg-blue-50 text-blue-700 border-blue-100" },
   unknown: { label: "Unknown", className: "bg-slate-100 text-slate-600 border-slate-200" },
 };
 

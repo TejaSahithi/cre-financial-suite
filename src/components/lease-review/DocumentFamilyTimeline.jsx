@@ -15,7 +15,7 @@ export default function DocumentFamilyTimeline({ documentFamily }) {
     <Card className="mb-4 border-slate-200 bg-white shadow-sm">
       <CardHeader className="border-b border-slate-100 bg-slate-50/50 pb-3">
         <CardTitle className="flex items-center gap-2 text-base font-semibold text-slate-800">
-          <FileClock className="h-4 w-4 text-indigo-600" /> Document Family Timeline
+          <FileClock className="h-4 w-4 text-blue-600" /> Document Family Timeline
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-4">

@@ -9,6 +9,7 @@ import { useAuth } from "@/lib/AuthContext";
 import { supabase } from "@/services/supabaseClient";
 import { verifyAccessRequest } from "@/services/api";
 import { toast } from "sonner";
+import ProFormaBrand from "@/components/ProFormaBrand";
 
 async function getFunctionErrorMessage(fnError) {
   if (!fnError) return "";
@@ -355,11 +356,8 @@ export default function Login() {
     <div className="min-h-screen bg-[var(--bg)] flex flex-col">
       {/* Top Bar */}
       <div className="px-6 py-5 flex items-center justify-between max-w-6xl mx-auto w-full">
-        <Link to={createPageUrl("Landing")} className="flex items-center gap-2.5">
-          <div className="w-8 h-8 bg-[var(--ink)] rounded-lg flex items-center justify-center">
-            <Building2 className="w-4.5 h-4.5 text-white" />
-          </div>
-          <span className="text-[var(--ink)] font-bold text-lg tracking-tight">CRE Suite</span>
+        <Link to={createPageUrl("Landing")} className="flex items-center">
+          <ProFormaBrand className="pf-page-brand" />
         </Link>
         <Link to={createPageUrl("RequestAccess")} className="text-sm text-[var(--muted)] hover:text-[var(--muted)] font-medium transition-colors">
           Request Access <ArrowRight className="inline w-3.5 h-3.5" />
@@ -374,7 +372,7 @@ export default function Login() {
               {view === "create" ? "Create your account" : "Welcome back"}
             </h1>
             <p className="text-[var(--muted)] text-sm">
-              {view === "create" ? "Complete your approved registration" : "Sign in to your CRE Suite account"}
+              {view === "create" ? "Complete your approved registration" : "Sign in to your ProForma OS account"}
             </p>
           </div>
 

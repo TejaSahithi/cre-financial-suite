@@ -207,7 +207,7 @@ function ApprovalWorkflowsSurface() {
           { label: "Approved Abstracts", value: metrics.approvedAbstracts, tone: "bg-emerald-100 text-emerald-700" },
           { label: "Lease Reviews Pending", value: metrics.pendingLeaseReview, tone: "bg-amber-100 text-amber-800" },
           { label: "CAM Setups Ready", value: metrics.camReady, tone: "bg-blue-100 text-blue-700" },
-          { label: "Budgets Pending", value: metrics.pendingBudgets, tone: "bg-violet-100 text-violet-700" },
+          { label: "Budgets Pending", value: metrics.pendingBudgets, tone: "bg-blue-100 text-blue-700" },
         ].map((metric) => (
           <Card key={metric.label}>
             <CardContent className="p-4">

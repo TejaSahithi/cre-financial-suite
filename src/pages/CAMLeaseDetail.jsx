@@ -93,7 +93,7 @@ export default function CAMLeaseDetail() {
 
   return (
     <div className="space-y-6 p-6">
-      <PageHeader icon={FileText} title="Lease Detail (CAM Run)" subtitle="Every applicable pool, applied policy steps, evidence, and the final amount due for this lease in this run" iconColor="from-blue-500 to-indigo-600" />
+      <PageHeader icon={FileText} title="Lease Detail (CAM Run)" subtitle="Every applicable pool, applied policy steps, evidence, and the final amount due for this lease in this run" iconColor="from-blue-700 to-blue-600" />
 
       {camRunId && (
         <Link to={`${createPageUrl("CAMRun")}?cam_run_id=${camRunId}`}>

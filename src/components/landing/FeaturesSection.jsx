@@ -46,7 +46,7 @@ export default function FeaturesSection() {
           </p>
         </motion.div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-3">
           {features.map((f, i) => (
             <motion.button
               key={i}
@@ -59,20 +59,20 @@ export default function FeaturesSection() {
               viewport={{ once: true, margin: "-70px" }}
               transition={{ duration: 0.38, delay: i * 0.085, ease: "easeOut" }}
               onClick={() => setSelectedFeatureIndex(i)}
-              className={`group relative text-left bg-[var(--surface)] rounded-[8px] border p-5 shadow-[var(--card-shadow)] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-2)] ${
+              className={`group relative text-left bg-[var(--surface)] rounded-[8px] border p-4 shadow-[var(--card-shadow)] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-2)] ${
                 selectedFeatureIndex === i
                   ? "border-[color-mix(in_srgb,var(--accent)_72%,var(--border-cre))] bg-[color-mix(in_srgb,var(--accent)_8%,var(--surface))] shadow-[var(--shadow)]"
                   : "border-[var(--border-cre)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)] hover:shadow-[var(--card-hover-shadow)]"
               }`}
             >
-              <div className={`w-10 h-10 rounded-[8px] border flex items-center justify-center mb-4 shadow-[var(--shadow-soft)] transition-all duration-200 ${
+              <div className={`w-9 h-9 rounded-[8px] border flex items-center justify-center mb-3 shadow-[var(--shadow-soft)] transition-all duration-200 ${
                 selectedFeatureIndex === i
                   ? "border-[color-mix(in_srgb,var(--accent)_75%,var(--border-cre))] bg-[var(--accent-soft)] text-[var(--accent)]"
                   : "border-[color-mix(in_srgb,var(--accent)_45%,var(--border-cre))] bg-[var(--surface-2)] text-[var(--accent)] group-hover:border-[color-mix(in_srgb,var(--accent)_65%,var(--border-cre))]"
               }`}>
-                <f.icon className="w-5 h-5" />
+                <f.icon className="w-4 h-4" />
               </div>
-              <h3 className={`text-sm text-[var(--ink)] mb-1.5 ${selectedFeatureIndex === i ? "font-bold" : "font-semibold"}`}>{f.title}</h3>
+              <h3 className={`text-[13px] text-[var(--ink)] mb-1 ${selectedFeatureIndex === i ? "font-bold" : "font-semibold"}`}>{f.title}</h3>
               <p className="text-[var(--muted)] text-xs leading-relaxed">{f.desc}</p>
             </motion.button>
           ))}

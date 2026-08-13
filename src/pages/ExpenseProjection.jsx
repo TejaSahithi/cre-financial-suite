@@ -429,7 +429,7 @@ export default function ExpenseProjection() {
 
       {/* ── Executive Performance KPI Cards ────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="border-[var(--border-cre)] bg-[var(--surface)] shadow-[var(--shadow-soft)] hover:shadow-[var(--shadow-soft)] transition-all border-t-4 border-t-indigo-600">
+        <Card className="border-[var(--border-cre)] bg-[var(--surface)] shadow-[var(--shadow-soft)] hover:shadow-[var(--shadow-soft)] transition-all border-t-4 border-t-blue-600">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--muted)]">Current Year ({currentYear})</span>

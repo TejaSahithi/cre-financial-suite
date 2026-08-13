@@ -112,7 +112,7 @@ export default function Integrations() {
           { label: "Data Sources", value: 3, icon: Database, color: "bg-emerald-50 text-emerald-600", sub: "CSV, Excel, PDF" },
           { label: "Platforms", value: integrations.filter(i => !i.comingSoon).length, icon: Plug, color: "bg-blue-50 text-blue-600", sub: "Available" },
           { label: "Coming Soon", value: integrations.filter(i => i.comingSoon).length, icon: Circle, color: "bg-slate-50 text-slate-600", sub: "Planned" },
-          { label: "Automations", value: 3, icon: RefreshCw, color: "bg-purple-50 text-purple-600", sub: "Active event triggers" },
+          { label: "Automations", value: 3, icon: RefreshCw, color: "bg-blue-50 text-blue-600", sub: "Active event triggers" },
         ].map((s, i) => (
           <Card key={i}><CardContent className="p-4 flex items-center gap-3">
             <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${s.color}`}><s.icon className="w-5 h-5" /></div>

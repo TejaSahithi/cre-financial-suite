@@ -74,7 +74,7 @@ export default function FieldMappingRules() {
         icon={Settings2}
         title="Field Mapping Rules"
         subtitle={`${LEASE_REVIEW_FIELDS.length} canonical fields · ${customFields.length} org custom fields`}
-        iconColor="from-indigo-500 to-violet-600"
+        iconColor="from-blue-700 to-blue-600"
       />
 
       <Card className="border-blue-200 bg-blue-50">

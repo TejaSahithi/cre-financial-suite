@@ -19,8 +19,8 @@ const actionColors = {
   override: "bg-amber-100 text-amber-700",
   approve: "bg-green-100 text-green-700",
   delete: "bg-red-100 text-red-700",
-  upload: "bg-violet-100 text-violet-700",
-  sign: "bg-indigo-100 text-indigo-700",
+  upload: "bg-blue-100 text-blue-700",
+  sign: "bg-blue-100 text-blue-700",
   lock: "bg-slate-200 text-slate-700",
   reject: "bg-red-100 text-red-700",
   login: "bg-sky-100 text-sky-700",
@@ -31,7 +31,7 @@ const actionColors = {
   budget_approved: "bg-green-100 text-green-800",
   budget_rejected: "bg-red-100 text-red-800",
   budget_locked: "bg-slate-200 text-slate-800",
-  reconciliation_computed: "bg-purple-100 text-purple-800",
+  reconciliation_computed: "bg-blue-100 text-blue-800",
   lease_expense_rule_published_to_cam: "bg-teal-100 text-teal-800",
   expense_classification_sent_to_cam: "bg-cyan-100 text-cyan-800",
   expense_conditional_blocked_from_cam: "bg-amber-100 text-amber-800",
@@ -207,7 +207,7 @@ export default function AuditLog() {
                       )}
                       {log.building_name && (
                         <div className="flex items-center gap-1">
-                          <Building2 className="w-3 h-3 text-purple-500" />
+                          <Building2 className="w-3 h-3 text-blue-500" />
                           <span className="text-xs text-slate-500">{log.building_name}</span>
                         </div>
                       )}

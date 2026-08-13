@@ -990,7 +990,7 @@ export default function ReviewPanel({
             </span>
           )}
           {field.required && <Badge className="bg-amber-50 text-amber-700">required</Badge>}
-          {!field.is_standard && <Badge className="bg-indigo-50 text-indigo-700">custom</Badge>}
+          {!field.is_standard && <Badge className="bg-blue-50 text-blue-700">custom</Badge>}
           <Badge className={`text-[10px] ${confidenceClass(score)}`}>
             {score == null ? field.source || "manual" : `${score}%`}
           </Badge>
@@ -1062,7 +1062,7 @@ export default function ReviewPanel({
                 {payload.extraction_method || payload.pipeline_method || "extraction"}
               </Badge>
               <Badge className="bg-slate-100 text-slate-700">{records.length} records</Badge>
-              {customCount > 0 && <Badge className="bg-indigo-50 text-indigo-700">{customCount} custom</Badge>}
+              {customCount > 0 && <Badge className="bg-blue-50 text-blue-700">{customCount} custom</Badge>}
               {missingCount > 0 && <Badge className="bg-amber-50 text-amber-700">{missingCount} missing</Badge>}
               {rejectedCount > 0 && <Badge className="bg-red-50 text-red-700">{rejectedCount} rejected</Badge>}
             </div>

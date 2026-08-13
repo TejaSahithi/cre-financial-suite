@@ -152,7 +152,7 @@ export default function VendorSpendAnalysis({ expenses, vendors, budgets }) {
                   <TableRow className="hover:bg-slate-50 cursor-pointer" onClick={() => setExpanded(expanded === v.id ? null : v.id)}>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-lg bg-violet-100 flex items-center justify-center text-violet-600 font-bold text-[10px]">{v.name?.charAt(0)}</div>
+                        <div className="w-7 h-7 rounded-lg bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-[10px]">{v.name?.charAt(0)}</div>
                         <span className="text-sm font-medium">{v.name}</span>
                       </div>
                     </TableCell>
