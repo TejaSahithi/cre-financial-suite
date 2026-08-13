@@ -30,6 +30,7 @@ import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { updateLeaseExtractionField, deleteUploadedFile } from "@/services/leaseService";
+import { createNotificationsForEvent } from "@/services/notificationService";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { getLeaseUploadPipelineState } from "@/lib/leaseUploadPipelineState";
@@ -304,6 +305,7 @@ export default function LeaseUpload() {
   const [leaseReviewHandoffError, setLeaseReviewHandoffError] = useState(null);
   const retriedUploadedFiles = useRef(new Set());
   const preparedLeaseDraftFiles = useRef(new Set());
+  const notifiedFileEvents = useRef(new Set());
   // Ref keeps the latest fileRecord status visible inside the polling interval
   // without requiring the interval to be recreated on every status change.
   const fileRecordStatusRef = useRef(null);
@@ -423,6 +425,45 @@ export default function LeaseUpload() {
         selectedUnit.floor ? `Floor ${selectedUnit.floor}` : null,
       ].filter(Boolean)
     : [];
+
+  const notifyLeaseEvent = useCallback((eventType, source, record = null, options = {}) => {
+    const targetFileId = record?.id || record?.file_id || options.fileId || fileId;
+    const generationKey = record?.active_generation_id || record?.generation_id || "current";
+    const notificationKey = `${targetFileId || "unknown"}:${generationKey}:${eventType}`;
+    if (notifiedFileEvents.current.has(notificationKey)) return;
+
+    const notificationOrgId =
+      record?.org_id ||
+      effectiveProperty?.org_id ||
+      getStoredActingOrgId();
+    if (!notificationOrgId) return;
+
+    notifiedFileEvents.current.add(notificationKey);
+    const leaseId = linkedLeaseId || resolveLeaseReviewIdFromUploadRecord(record || fileRecord);
+    const actionUrl = leaseId
+      ? createPageUrl("LeaseReview", { id: leaseId })
+      : `${createPageUrl("LeaseUpload")}?file_id=${targetFileId}`;
+
+    createNotificationsForEvent({
+      org_id: notificationOrgId,
+      event_type: eventType,
+      entity_type: "lease",
+      entity_id: leaseId || targetFileId,
+      entity_label: record?.file_name || fileRecord?.file_name || "Lease Upload",
+      portfolio_id: effectiveProperty?.portfolio_id || null,
+      property_id: record?.property_id || effectivePropertyId || null,
+      action_url: actionUrl,
+      metadata: {
+        source,
+        uploaded_file_id: targetFileId || null,
+        file_name: record?.file_name || fileRecord?.file_name || null,
+        status: record?.status || null,
+      },
+    }).catch((error) => {
+      notifiedFileEvents.current.delete(notificationKey);
+      console.warn("[LeaseUpload] notification event failed:", error?.message || error);
+    });
+  }, [effectiveProperty, effectivePropertyId, fileId, fileRecord, linkedLeaseId]);
 
   const updateScopeParams = ({ property = scopeProperty, building = scopeBuilding, unit = scopeUnit }) => {
     const params = new URLSearchParams(location.search);
@@ -557,6 +598,7 @@ export default function LeaseUpload() {
     }
     setFileId(result.file_id);
     setFileRecord(null);
+    notifyLeaseEvent("lease.uploaded", "lease_upload_complete", null, { fileId: result.file_id });
     if (result.processing_error) {
       toast.error(`Lease uploaded, but parsing failed: ${result.processing_error}`);
       fetchFileRecord(result.file_id);
@@ -567,6 +609,19 @@ export default function LeaseUpload() {
       fetchFileRecord(result.file_id);
     }
   };
+
+  useEffect(() => {
+    if (!fileRecord?.id) return;
+    const status = String(fileRecord.status || "").toLowerCase();
+    const processingStatus = String(fileRecord.processing_status || "").toLowerCase();
+    if (status === "completed" || processingStatus === "completed") {
+      notifyLeaseEvent("lease.extraction_completed", "lease_upload_status_completed", fileRecord);
+    }
+    if (status === "review_required" || processingStatus === "review_required" || fileRecord.review_required === true) {
+      notifyLeaseEvent("lease.extraction_completed", "lease_upload_status_review_required", fileRecord);
+      notifyLeaseEvent("lease.review_required", "lease_upload_status_review_required", fileRecord);
+    }
+  }, [fileRecord, notifyLeaseEvent]);
 
   const retryExtraction = useCallback(async () => {
     if (!fileId) return;

@@ -23,7 +23,7 @@ import EnterpriseControlPlaneDashboard from "@/components/enterprise-control/Ent
 const settingsTabs = [
   { id: "org", label: "Organization", icon: Settings },
   { id: "modules", label: "Modules", icon: Package },
-  { id: "users", label: "Users & Roles", icon: Users },
+  { id: "users", label: "Team & Roles", icon: Users },
   { id: "defaults", label: "CAM Defaults", icon: GitBranch },
   { id: "mapping_rules", label: "Field Mapping Rules", icon: GitBranch },
   { id: "approval_workflows", label: "Approval Workflows", icon: GitBranch },
@@ -263,8 +263,8 @@ export default function OrgSettings() {
           {activeTab === "users" && (
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="text-lg">Users & Role Assignments</CardTitle>
-                <Button size="sm" onClick={() => setShowInvite(true)}><Plus className="w-4 h-4 mr-1" />Invite User</Button>
+                <CardTitle className="text-lg">Team & Role Assignments</CardTitle>
+                <Button size="sm" onClick={() => setShowInvite(true)}><Plus className="w-4 h-4 mr-1" />Invite Member</Button>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
@@ -272,7 +272,7 @@ export default function OrgSettings() {
                     <div className="text-center py-8">
                       <p className="text-sm text-slate-400 mb-2">No users found</p>
                       <Button variant="outline" size="sm" onClick={() => window.location.href = '/UserManagement'}>
-                        Go to User Management
+                        Go to Team Management
                       </Button>
                     </div>
                   ) : users.map(u => (
@@ -296,7 +296,7 @@ export default function OrgSettings() {
                   {users.length > 0 && (
                     <div className="pt-2">
                        <Button variant="outline" className="w-full text-sm" onClick={() => window.location.href = '/UserManagement'}>
-                         Manage All Users & Roles
+                         Manage Team & Roles
                        </Button>
                     </div>
                   )}
@@ -378,10 +378,10 @@ export default function OrgSettings() {
         </div>
       </div>
 
-      {/* Invite User Dialog */}
+      {/* Invite Member Dialog */}
       <Dialog open={showInvite} onOpenChange={setShowInvite}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Invite User</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Invite Member</DialogTitle></DialogHeader>
           <div className="space-y-4 py-2">
             <div>
               <Label>Email Address</Label>

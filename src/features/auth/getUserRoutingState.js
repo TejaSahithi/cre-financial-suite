@@ -2,6 +2,10 @@ import { isSuperAdmin } from '@/lib/rbac';
 
 const OWNER_ONBOARDING_ROLES = new Set(['super_admin', 'org_owner', 'org_admin', 'owner', 'admin']);
 
+function hasViewedDashboard(profile) {
+  return profile?.dashboard_viewed || (typeof window !== 'undefined' && localStorage.getItem('dashboard_viewed') === 'true');
+}
+
 export function getUserRoutingState(u, p, org, members) {
   if (!u || !p) return 'Login';
 
@@ -17,24 +21,23 @@ export function getUserRoutingState(u, p, org, members) {
     ? members.filter((membership) => membership?.status === 'invited')
     : [];
   const onboardingType = p.onboarding_type || u.onboarding_type || u.profile?.onboarding_type || u.user_metadata?.onboarding_type;
-  const isInvitedMember =
-    onboardingType === 'invited' ||
-    pendingInviteMemberships.length > 0 ||
-    activeMemberships.some((membership) => {
-      const role = membership?.role;
-      return role && !OWNER_ONBOARDING_ROLES.has(role);
-    });
+  const hasTeamRole = activeMemberships.some((membership) => {
+    const role = membership?.role;
+    return role && !OWNER_ONBOARDING_ROLES.has(role);
+  });
+  const isTeamInviteFlow = onboardingType === 'invited' || pendingInviteMemberships.length > 0;
 
-  if (isInvitedMember) {
-    if (pendingInviteMemberships.length > 0) return 'AcceptInvite';
-    if (p.status === 'pending_approval' && activeMemberships.length === 0) return 'PendingApproval';
-    if (p.first_login) return 'Welcome';
-
-    const hasViewedDashboard = p?.dashboard_viewed || (typeof window !== 'undefined' && localStorage.getItem('dashboard_viewed') === 'true');
-    if (p.status === 'active' && org?.status === 'active' && !hasViewedDashboard) return 'WelcomeAboard';
+  if (isTeamInviteFlow) {
+    if (pendingInviteMemberships.length > 0 || activeMemberships.length === 0) return 'AcceptInvite';
+    if (p.status === 'active' && org?.status === 'active' && !hasViewedDashboard(p)) return 'WelcomeAboard';
     if (p.status === 'active' && org?.status === 'active') return 'Dashboard';
-    if (activeMemberships.length > 0) return 'WelcomeAboard';
-    return 'PendingApproval';
+    return 'WelcomeAboard';
+  }
+
+  if (hasTeamRole) {
+    if (p.status === 'active' && org?.status === 'active' && !hasViewedDashboard(p)) return 'WelcomeAboard';
+    if (p.status === 'active' && org?.status === 'active') return 'Dashboard';
+    return 'WelcomeAboard';
   }
 
   if (p.status === 'pending_approval') return 'PendingApproval';
@@ -54,8 +57,7 @@ export function getUserRoutingState(u, p, org, members) {
 
 
   // WELCOME ABOARD
-  const hasViewedDashboard = p?.dashboard_viewed || (typeof window !== 'undefined' && localStorage.getItem('dashboard_viewed') === 'true');
-  if (org?.status === 'active' && p.status === 'active' && !hasViewedDashboard) {
+  if (org?.status === 'active' && p.status === 'active' && !hasViewedDashboard(p)) {
     return 'WelcomeAboard';
   }
 

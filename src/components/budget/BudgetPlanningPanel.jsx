@@ -24,6 +24,7 @@ import {
 import { toast } from "sonner";
 
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { createNotificationsForEvent } from "@/services/notificationService";
 import { createPageUrl } from "@/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -258,7 +259,7 @@ function AssemblyPreview({ baseRent, otherIncome, estimatedCamRecovery, totalExp
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function BudgetPlanningPanel({ propertyId, fiscalYear }) {
+export default function BudgetPlanningPanel({ orgId, propertyId, fiscalYear }) {
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -391,6 +392,27 @@ export default function BudgetPlanningPanel({ propertyId, fiscalYear }) {
         revenue_snapshot_id: revenueSnapshotId,
       });
       if (result?.error) throw new Error(result.message || "Budget creation failed");
+      if (orgId) {
+        createNotificationsForEvent({
+          org_id: orgId,
+          event_type: "budget.generated",
+          entity_type: "budget",
+          entity_id: result?.budget_id,
+          entity_label: `${fiscalYear} Planning Budget`,
+          portfolio_id: result?.portfolio_id || null,
+          property_id: result?.property_id || propertyId,
+          action_url: createPageUrl("BudgetDashboard") + location.search,
+          metadata: {
+            source: "budget_planning_panel_generate",
+            fiscal_year: result?.fiscal_year || fiscalYear,
+            scope: result?.scope || "property",
+            status: result?.status || null,
+            generation_method: result?.generation_method || "planning",
+          },
+        }).catch((error) => {
+          console.warn("[BudgetPlanningPanel] budget.generated notification failed:", error?.message || error);
+        });
+      }
       toast.success("Planning budget created as draft.");
       navigate(createPageUrl("BudgetDashboard") + location.search);
     } catch (err) {
@@ -399,7 +421,7 @@ export default function BudgetPlanningPanel({ propertyId, fiscalYear }) {
       setCreating(false);
     }
   }, [
-    canAssemble, propertyId, fiscalYear,
+    canAssemble, orgId, propertyId, fiscalYear,
     basisSnapshotId, camEstSnapshotId, revenueSnapshotId,
     navigate, location.search,
   ]);

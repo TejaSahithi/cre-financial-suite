@@ -518,9 +518,37 @@ export default function LeaseExpenseClassification() {
           return expenseService.sendClassificationToCam(classificationInput, { reason: manualReason });
         })
       );
-      return targetRows.length;
+      return { count: targetRows.length, rows: targetRows };
     },
-    onSuccess: (count) => {
+    onSuccess: ({ count, rows: notifiedRows = [] }) => {
+      const firstRow = notifiedRows[0] || {};
+      const notificationOrgId =
+        firstRow.expense?.org_id ||
+        firstRow.rule?.org_id ||
+        firstRow.lease?.org_id ||
+        getStoredActingOrgId() ||
+        resolvedOrgId;
+      if (notificationOrgId && count > 0) {
+        createNotificationsForEvent({
+          org_id: notificationOrgId,
+          event_type: "cam.eligible",
+          entity_type: "expense",
+          entity_id: firstRow.actualExpenseId || firstRow.classificationRecord?.expense_id || null,
+          entity_label: count === 1
+            ? (firstRow.vendor || firstRow.ruleLabel || "CAM Eligible Expense")
+            : `${count} CAM Eligible Expenses`,
+          portfolio_id: firstRow.property?.portfolio_id || null,
+          property_id: firstRow.expense?.property_id || firstRow.property?.id || (scopeProperty !== "all" ? scopeProperty : null),
+          action_url: createPageUrl("LeaseExpenseClassification"),
+          metadata: {
+            source: "lease_expense_classification_send_to_cam",
+            count,
+            classification_ids: notifiedRows.map((row) => row.classificationRecord?.id || row.id).filter(Boolean),
+          },
+        }).catch((error) => {
+          console.warn("[LeaseExpenseClassification] cam.eligible notification failed:", error?.message || error);
+        });
+      }
       toast.success(`Sent ${count} classification row${count === 1 ? "" : "s"} to CAM`);
       setSelectedIds(new Set());
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });

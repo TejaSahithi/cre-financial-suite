@@ -98,7 +98,7 @@ const navSections = [
   { label: "Integrations", icon: Plug, page: "Integrations" },
   {
     label: "Settings", icon: Shield, children: [
-      { label: "User Management", page: "UserManagement" },
+      { label: "Team Management", page: "UserManagement" },
       { label: "Org Settings", page: "OrgSettings" },
       { label: "Chart of Accounts", page: "ChartOfAccounts" },
       { label: "Field Mapping Rules", page: "FieldMappingRules" },

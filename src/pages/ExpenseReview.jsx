@@ -13,6 +13,7 @@ import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/
 import { resolveTenantForExpense } from "@/lib/tenantResolver";
 import { expenseService } from "@/services/expenseService";
 import { resolveExpenseClassificationCondition } from "@/services/expenseClassificationWorkflowService";
+import { createNotificationsForEvent } from "@/services/notificationService";
 import { supabase } from "@/services/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -358,7 +359,25 @@ export default function ExpenseReview() {
       if (!reason || !reason.trim()) throw new Error("A reason is required to send an expense to CAM.");
       return expenseService.sendClassificationToCam(row, { reason: reason.trim() });
     },
-    onSuccess: () => {
+    onSuccess: (_result, row) => {
+      if (row?.org_id) {
+        createNotificationsForEvent({
+          org_id: row.org_id,
+          event_type: "cam.eligible",
+          entity_type: "expense",
+          entity_id: row.expense_id || row.actual_expense_id || row.id,
+          entity_label: row.vendor_name || row.vendor || row.category || "CAM Eligible Expense",
+          portfolio_id: row.portfolio_id || null,
+          property_id: row.property_id || (scopeProperty !== "all" ? scopeProperty : null),
+          action_url: createPageUrl("ExpenseReview"),
+          metadata: {
+            source: "expense_review_send_to_cam",
+            classification_id: row.id,
+          },
+        }).catch((error) => {
+          console.warn("[ExpenseReview] cam.eligible notification failed:", error?.message || error);
+        });
+      }
       toast.success("Sent to CAM using the existing publication workflow");
       invalidateReviewQueries();
     },
@@ -718,4 +737,3 @@ function DetailSection({ title, items }) {
     </section>
   );
 }
-

@@ -2,7 +2,7 @@ import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
 import { useModuleAccess } from '@/lib/ModuleAccessContext';
-import { canAccess, PUBLIC_PAGES, isSuperAdmin } from '@/lib/rbac';
+import { canAccess, PUBLIC_PAGES, MANDATORY_SETUP_PAGES, isSuperAdmin } from '@/lib/rbac';
 import AccessDenied from '@/components/AccessDenied';
 import LayoutWrapper from '@/app/LayoutWrapper';
 
@@ -10,7 +10,7 @@ export default function RbacGuard({ pageName, children }) {
   const { user } = useAuth();
   const { isPageEnabled, pageAccess } = useModuleAccess();
 
-  if (PUBLIC_PAGES.includes(pageName)) return children;
+  if (PUBLIC_PAGES.includes(pageName) || MANDATORY_SETUP_PAGES.includes(pageName)) return children;
 
   if (!user) {
     return <Navigate to="/Login" replace />;

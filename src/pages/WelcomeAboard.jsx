@@ -115,7 +115,7 @@ const SUPER_ADMIN_FEATURES = [
   },
   {
     icon: Users,
-    label: "Global User Management",
+    label: "Global Team Management",
     desc: "Manage every user across all organizations. Assign roles, revoke access, review invitations, and control permissions.",
     color: "from-amber-600 to-orange-600",
     badge: "Admin"

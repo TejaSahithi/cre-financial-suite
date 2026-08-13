@@ -70,3 +70,12 @@ ALTER TABLE public.memberships
     'tenant',
     'custom_role'
   ));
+
+-- Team-member invites are not public/org access requests. Keep
+-- pending_approval reserved for SuperAdmin-reviewed access requests so invited
+-- members do not fall into the organization onboarding approval route.
+UPDATE public.profiles
+SET status = 'invited',
+    updated_at = now()
+WHERE onboarding_type = 'invited'
+  AND status IN ('pending_approval', 'approved');

@@ -559,6 +559,18 @@ export async function updateProfile(updates) {
   if (updateError) throw updateError;
 
   if (!updatedRows?.length) {
+    const { data: existingProfile, error: verifyError } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (verifyError) throw verifyError;
+    if (existingProfile?.id) {
+      _cachedProfile = null;
+      return await me();
+    }
+
     const { error: insertError } = await supabase
       .from('profiles')
       .insert({

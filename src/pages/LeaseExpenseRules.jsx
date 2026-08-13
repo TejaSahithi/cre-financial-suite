@@ -501,6 +501,8 @@ export default function LeaseExpenseRules() {
         checked: candidates.length,
         repaired: 0,
         rules: 0,
+        org_id: candidates[0]?.org_id || null,
+        property_id: scope.propertyId || candidates[0]?.property_id || null,
         failed: [],
         empty: [],
       };
@@ -544,6 +546,22 @@ export default function LeaseExpenseRules() {
       queryClient.invalidateQueries({ queryKey: ["leases"] });
 
       if (summary.rules > 0) {
+        createNotificationsForEvent({
+          org_id: summary.org_id,
+          event_type: "lease_rule.review_required",
+          entity_type: "lease_expense_rule",
+          entity_label: "Lease Expense Rules",
+          property_id: summary.property_id || null,
+          action_url: createPageUrl("LeaseExpenseRules"),
+          metadata: {
+            source: "lease_expense_rules_sync_approved_leases",
+            leases_checked: summary.checked,
+            leases_repaired: summary.repaired,
+            rules_synced: summary.rules,
+          },
+        }).catch((error) => {
+          console.warn("[LeaseExpenseRules] review-required notification failed:", error?.message || error);
+        });
         toast.success(
           `Synced ${summary.rules} lease expense rule${summary.rules === 1 ? "" : "s"} from ${summary.repaired} approved lease${summary.repaired === 1 ? "" : "s"}.`,
         );
@@ -1081,5 +1099,4 @@ export default function LeaseExpenseRules() {
     </div>
   );
 }
-
 
