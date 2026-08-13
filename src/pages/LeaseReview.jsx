@@ -83,7 +83,7 @@ import {
   resolveFieldColumns,
 } from "@/lib/leaseReviewSchema";
 import { getFieldAliases, resolveLeaseField } from "@/lib/leaseFieldResolver";
-import { createPageUrl } from "@/utils";
+import { createAbsolutePageUrl, createPageUrl } from "@/utils";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { supabase } from "@/services/supabaseClient";
 import {
@@ -3092,7 +3092,7 @@ export default function LeaseReview() {
     }
     setSendingSignature(true);
     try {
-      const reviewUrl = window.location.origin + createPageUrl("LeaseReview", { id: lease.id });
+      const reviewUrl = createAbsolutePageUrl("LeaseReview", { id: lease.id });
       await NotificationService.create({
         org_id: lease.org_id,
         type: "signature_request",
@@ -3106,7 +3106,8 @@ export default function LeaseReview() {
         templateId: 'generic_internal_notification',
         variables: {
           subject: `[Signature Requested] ${lease.tenant_name || "Lease"}`,
-          message: `You have been asked to review and sign a lease for ${lease.tenant_name || "Unknown"}. ${signatureMessage ? `Message: ${signatureMessage}. ` : ""}Please open the lease review dashboard to sign.`
+          message: `You have been asked to review and sign a lease for ${lease.tenant_name || "Unknown"}. ${signatureMessage ? `Message: ${signatureMessage}. ` : ""}Please open the lease review dashboard to sign.`,
+          action_url: reviewUrl
         }
       });
       toast.success(`Signature request sent to ${recipient.name} <${recipient.email}>`);

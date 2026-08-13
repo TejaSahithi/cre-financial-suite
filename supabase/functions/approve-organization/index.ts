@@ -7,6 +7,16 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+const BRAND_NAME = 'ProForma OS';
+const SUPPORT_EMAIL = 'support@proformaos.ai';
+const DEFAULT_FRONTEND_URL = 'https://www.proformaos.ai';
+const LOGO_URL = `${DEFAULT_FRONTEND_URL}/assets/proforma-os-logo.png`;
+
+function resolveFrontendUrl(value?: string | null) {
+  const url = String(value || '').trim().replace(/\/$/, '');
+  return url && !/(vercel\.app|localhost)/i.test(url) ? url : DEFAULT_FRONTEND_URL;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -117,7 +127,7 @@ Deno.serve(async (req: Request) => {
 
     const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
     // Normalize to strip any trailing slash so CTA URLs never have double slashes
-    const frontendUrl = (Deno.env.get('FRONTEND_URL') || Deno.env.get('SITE_URL') || 'https://cre-financial-suite.vercel.app').replace(/\/$/, '');
+    const frontendUrl = resolveFrontendUrl(Deno.env.get('FRONTEND_URL') || Deno.env.get('SITE_URL'));
     const welcomeUrl = `${frontendUrl}/WelcomeAboard`;
 
     let emailWarning = null;
@@ -133,12 +143,12 @@ Deno.serve(async (req: Request) => {
       <html lang="en">
       <head>
         <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-        <title>Welcome to CRE Platform</title>
+        <title>Welcome to ${BRAND_NAME}</title>
         <style>
           body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; margin:0; padding:0; background:#f8fafc; }
           .wrapper { max-width:600px; margin:40px auto; background:#fff; border-radius:16px; overflow:hidden; border:1px solid #e2e8f0; }
-          .header { background:linear-gradient(135deg,#1a2744 0%,#2d4a8a 100%); padding:32px 40px; text-align:center; }
-          .logo-text { color:#fff; font-size:24px; font-weight:800; letter-spacing:-0.5px; }
+          .header { background:#071326; padding:26px 40px; text-align:left; }
+          .logo-img { width:196px; height:auto; display:block; background:#fff; border-radius:8px; padding:8px 10px; }
           .body { padding:40px; }
           h1 { font-size:24px; font-weight:700; color:#0f172a; margin:0 0 16px; }
           p { color:#475569; font-size:16px; line-height:1.6; margin:0 0 20px; }
@@ -150,19 +160,19 @@ Deno.serve(async (req: Request) => {
       <body>
         <div class="wrapper">
           <div class="header">
-            <span class="logo-text">CRE Platform</span>
+            <img class="logo-img" src="${LOGO_URL}" alt="${BRAND_NAME}" />
           </div>
           <div class="body">
             <h1>Welcome Aboard! 🎉</h1>
             <p>Hi there,</p>
             <p>Great news! Your organization <strong>${org.name}</strong> has been approved and activated by our team.</p>
-            <p>Your subscription is now active and you have full access to the CRE Financial Suite platform. You can now invite your team, manage portfolios, and run advanced CAM reconciliations.</p>
+            <p>Your subscription is now active and you have full access to ${BRAND_NAME}. You can now invite your team, manage portfolios, and run advanced CAM reconciliations.</p>
             <div style="text-align: center;">
               <a href="${welcomeUrl}" class="cta">Go to Your Dashboard →</a>
             </div>
             <p style="margin-bottom:0;">Welcome to the future of Commercial Real Estate Management.</p>
           </div>
-          <div class="footer"><p>CRE Platform &middot; support@cresuite.org &middot; &copy; ${new Date().getFullYear()} All rights reserved</p></div>
+          <div class="footer"><p>${BRAND_NAME} &middot; ${SUPPORT_EMAIL} &middot; &copy; ${new Date().getFullYear()} All rights reserved</p></div>
         </div>
       </body>
       </html>
@@ -173,9 +183,9 @@ Deno.serve(async (req: Request) => {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            from: 'CRE Platform <support@cresuite.org>',
+            from: `${BRAND_NAME} <${SUPPORT_EMAIL}>`,
             to: org.primary_contact_email,
-            subject: 'Welcome to CRE Platform! Your account is now active 🎉',
+            subject: `Welcome to ${BRAND_NAME}! Your account is now active`,
             html,
           }),
         });

@@ -13,6 +13,16 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.40.0";
 
+const BRAND_NAME = "ProForma OS";
+const SUPPORT_EMAIL = "support@proformaos.ai";
+const DEFAULT_FRONTEND_URL = "https://www.proformaos.ai";
+const LOGO_URL = `${DEFAULT_FRONTEND_URL}/assets/proforma-os-logo.png`;
+
+function resolveFrontendUrl(value?: string | null) {
+  const url = String(value || "").trim().replace(/\/$/, "");
+  return url && !/(vercel\.app|localhost)/i.test(url) ? url : DEFAULT_FRONTEND_URL;
+}
+
 const getCorsHeaders = (origin: string | null) => ({
   "Access-Control-Allow-Origin": origin || "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -26,10 +36,9 @@ const emailWrapper = (content: string) => `<!DOCTYPE html>
   <style>
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;margin:0;padding:0;background:#f8fafc}
     .wrap{max-width:600px;margin:40px auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0}
-    .hdr{background:linear-gradient(135deg,#1a2744 0%,#2d4a8a 100%);padding:28px 36px}
+    .hdr{background:#071326;padding:26px 36px}
     .logo{display:flex;align-items:center;gap:10px}
-    .logo-icon{width:34px;height:34px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center}
-    .logo-text{color:#fff;font-size:17px;font-weight:700;letter-spacing:-.3px}
+    .logo-img{width:196px;height:auto;display:block;background:#fff;border-radius:8px;padding:8px 10px}
     .body{padding:32px 36px}
     h1{font-size:22px;font-weight:700;color:#0f172a;margin:0 0 8px}
     p{color:#475569;font-size:15px;line-height:1.6;margin:0 0 14px}
@@ -44,14 +53,11 @@ const emailWrapper = (content: string) => `<!DOCTYPE html>
   <div class="wrap">
     <div class="hdr">
       <div class="logo">
-        <div class="logo-icon">
-          <span style="font-size:13px;font-weight:800;color:#1a2744;letter-spacing:-0.04em;">CP</span>
-        </div>
-        <span class="logo-text">CRE Platform</span>
+        <img class="logo-img" src="${LOGO_URL}" alt="${BRAND_NAME}" />
       </div>
     </div>
     <div class="body">${content}</div>
-    <div class="ftr"><p>CRE Platform &middot; support@cresuite.org &middot; &copy; 2025 All rights reserved</p></div>
+    <div class="ftr"><p>${BRAND_NAME} &middot; ${SUPPORT_EMAIL} &middot; &copy; ${new Date().getFullYear()} All rights reserved</p></div>
   </div>
 </body>
 </html>`;
@@ -71,9 +77,9 @@ Deno.serve(async (req: Request) => {
     const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
     const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-    const FRONTEND_URL = Deno.env.get("FRONTEND_URL") || "http://localhost:5173";
-    const ADMIN_EMAIL = "support@cresuite.org";
-    const FROM = "CRE Platform <support@cresuite.org>";
+    const FRONTEND_URL = resolveFrontendUrl(Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL"));
+    const ADMIN_EMAIL = SUPPORT_EMAIL;
+    const FROM = `${BRAND_NAME} <${SUPPORT_EMAIL}>`;
 
     const { full_name, email, phone, company_name, department, message } = await req.json();
 
@@ -121,7 +127,7 @@ Deno.serve(async (req: Request) => {
     // ── 2. Admin notification email ───────────────────────────────────────────
     const adminHtml = emailWrapper(`
       <h1>📬 New Contact Form Submission</h1>
-      <p>A new message was received via the CRE Platform contact form.</p>
+      <p>A new message was received via the ${BRAND_NAME} contact form.</p>
       <div class="box">
         <p><strong>Name:</strong> ${full_name}</p>
         <p><strong>Email:</strong> <a href="mailto:${email}">${email}</a></p>
@@ -168,7 +174,7 @@ Deno.serve(async (req: Request) => {
         <p><strong>Reference:</strong> ${Date.now().toString(36).toUpperCase()}</p>
         <p><strong>Response time:</strong> Within 4 business hours</p>
       </div>
-      <p>In the meantime, you can explore our platform capabilities or learn more about CRE Platform.</p>
+      <p>In the meantime, you can explore our platform capabilities or learn more about ${BRAND_NAME}.</p>
       <a href="${FRONTEND_URL}/RequestAccess" class="cta">Request Platform Access →</a>
       <p style="color:#94a3b8;font-size:13px;margin-top:24px">If your inquiry is urgent, reply directly to this email or call us at +1 (800) 555-0199.</p>
     `);
@@ -179,7 +185,7 @@ Deno.serve(async (req: Request) => {
       body: JSON.stringify({
         from: FROM,
         to: [email],
-        subject: "We received your message — CRE Platform",
+        subject: `We received your message - ${BRAND_NAME}`,
         html: userHtml,
       }),
     });

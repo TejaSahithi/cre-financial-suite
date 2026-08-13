@@ -7,6 +7,16 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+const BRAND_NAME = "ProForma OS";
+const SUPPORT_EMAIL = "support@proformaos.ai";
+const DEFAULT_FRONTEND_URL = "https://www.proformaos.ai";
+const LOGO_URL = `${DEFAULT_FRONTEND_URL}/assets/proforma-os-logo.png`;
+
+function resolveFrontendUrl(value?: string | null) {
+  const url = String(value || "").trim().replace(/\/$/, "");
+  return url && !/(vercel\.app|localhost)/i.test(url) ? url : DEFAULT_FRONTEND_URL;
+}
+
 const SYSTEM_ROLE_ALIASES: Record<string, string> = {
   admin: "org_admin",
   custom: "custom_role",
@@ -217,7 +227,7 @@ Deno.serve(async (req: Request) => {
     const { data: existingUsers } = await adminClient.auth.admin.listUsers();
     const existingUser = existingUsers?.users?.find((u: any) => u.email === email);
 
-    const frontendUrl = Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL") || "http://localhost:5173";
+    const frontendUrl = resolveFrontendUrl(Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL"));
     let userId = existingUser?.id;
     let isNewUser = !userId;
     let inviteLink = buildAcceptInviteUrl(frontendUrl, {
@@ -475,7 +485,7 @@ Deno.serve(async (req: Request) => {
         const title = isNewUser ? "Complete your account setup" : "You've been added to a new organization";
         const bodyText = isNewUser 
           ? `You've been invited to join <strong>${orgName}</strong> as <strong>${roleLabel}</strong>. Please create your account to get started.`
-          : `Your existing CRE Platform account has been given access to <strong>${orgName}</strong> as <strong>${roleLabel}</strong>.`;
+          : `Your existing ${BRAND_NAME} account has been given access to <strong>${orgName}</strong> as <strong>${roleLabel}</strong>.`;
         const ctaText = isNewUser ? "Create Account" : "Sign In";
 
         const html = `<!DOCTYPE html>
@@ -483,19 +493,13 @@ Deno.serve(async (req: Request) => {
             <head>
               <meta charset="UTF-8" />
               <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-              <title>CRE Platform</title>
+              <title>${BRAND_NAME}</title>
             </head>
             <body style="margin:0;padding:40px 16px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
               <div style="max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-                <div style="padding:28px 36px;background:linear-gradient(135deg,#1a2744 0%,#2d4a8a 100%);">
+                <div style="padding:26px 36px;background:#071326;">
                   <div style="display:flex;align-items:center;gap:10px;">
-                    <div style="width:36px;height:36px;border-radius:10px;background:#ffffff;display:flex;align-items:center;justify-content:center;">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1a2744" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-                        <polyline points="9 22 9 12 15 12 15 22"></polyline>
-                      </svg>
-                    </div>
-                    <span style="color:#ffffff;font-size:18px;font-weight:700;letter-spacing:-0.3px;">CRE Platform</span>
+                    <img src="${LOGO_URL}" alt="${BRAND_NAME}" style="width:196px;height:auto;display:block;background:#ffffff;border-radius:8px;padding:8px 10px;" />
                   </div>
                 </div>
                 <div style="padding:32px 36px;color:#475569;font-size:15px;line-height:1.6;">
@@ -504,7 +508,7 @@ Deno.serve(async (req: Request) => {
                   <p style="margin:0 0 20px;">${bodyText}</p>
                   <a href="${inviteLink}" style="display:inline-block;background:#1a2744;color:#ffffff;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:600;font-size:16px;">${ctaText}</a>
                 </div>
-                <div style="border-top:1px solid #e2e8f0;background:#f8fafc;padding:18px 36px;text-align:center;color:#94a3b8;font-size:12px;">CRE Platform · support@cresuite.org</div>
+                <div style="border-top:1px solid #e2e8f0;background:#f8fafc;padding:18px 36px;text-align:center;color:#94a3b8;font-size:12px;">${BRAND_NAME} · ${SUPPORT_EMAIL}</div>
               </div>
             </body>
           </html>`;
@@ -513,7 +517,7 @@ Deno.serve(async (req: Request) => {
           method: "POST",
           headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({ 
-            from: "CRE Platform <support@cresuite.org>", 
+            from: `${BRAND_NAME} <${SUPPORT_EMAIL}>`, 
             to: email, 
             subject: title, 
             html 

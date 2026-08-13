@@ -17,6 +17,16 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.40.0";
 
+const BRAND_NAME = "ProForma OS";
+const SUPPORT_EMAIL = "support@proformaos.ai";
+const DEFAULT_FRONTEND_URL = "https://www.proformaos.ai";
+const LOGO_URL = `${DEFAULT_FRONTEND_URL}/assets/proforma-os-logo.png`;
+
+function resolveFrontendUrl(value?: string | null) {
+  const url = String(value || "").trim().replace(/\/$/, "");
+  return url && !/(vercel\.app|localhost)/i.test(url) ? url : DEFAULT_FRONTEND_URL;
+}
+
 const getCorsHeaders = (origin: string | null) => ({
   "Access-Control-Allow-Origin": origin || "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -30,10 +40,9 @@ const emailWrapper = (content: string) => `<!DOCTYPE html>
   <style>
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;margin:0;padding:0;background:#f8fafc}
     .wrap{max-width:600px;margin:40px auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0}
-    .hdr{background:linear-gradient(135deg,#1a2744 0%,#2d4a8a 100%);padding:28px 36px}
+    .hdr{background:#071326;padding:26px 36px}
     .logo{display:flex;align-items:center;gap:10px}
-    .logo-icon{width:34px;height:34px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center}
-    .logo-text{color:#fff;font-size:17px;font-weight:700;letter-spacing:-.3px}
+    .logo-img{width:196px;height:auto;display:block;background:#fff;border-radius:8px;padding:8px 10px}
     .body{padding:32px 36px}
     h1{font-size:22px;font-weight:700;color:#0f172a;margin:0 0 8px}
     p{color:#475569;font-size:15px;line-height:1.6;margin:0 0 14px}
@@ -47,14 +56,11 @@ const emailWrapper = (content: string) => `<!DOCTYPE html>
   <div class="wrap">
     <div class="hdr">
       <div class="logo">
-        <div class="logo-icon">
-          <span style="font-size:13px;font-weight:800;color:#1a2744;letter-spacing:-0.04em;">CP</span>
-        </div>
-        <span class="logo-text">CRE Platform</span>
+        <img class="logo-img" src="${LOGO_URL}" alt="${BRAND_NAME}" />
       </div>
     </div>
     <div class="body">${content}</div>
-    <div class="ftr"><p>CRE Platform &middot; support@cresuite.org &middot; &copy; 2025 All rights reserved</p></div>
+    <div class="ftr"><p>${BRAND_NAME} &middot; ${SUPPORT_EMAIL} &middot; &copy; ${new Date().getFullYear()} All rights reserved</p></div>
   </div>
 </body>
 </html>`;
@@ -74,11 +80,11 @@ Deno.serve(async (req: Request) => {
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
     const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
     const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
-    const FRONTEND_URL = Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL") || "https://cre-financial-suite-main.vercel.app";
+    const FRONTEND_URL = resolveFrontendUrl(Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL"));
     // After confirmation, land on a protected page so MFAGuard triggers enrollment
     const POST_CONFIRM_URL = `${FRONTEND_URL}/Onboarding`;
     const INVITE_ACCEPT_URL = `${FRONTEND_URL}/AcceptInvite`;
-    const FROM = "CRE Platform <support@cresuite.org>";
+    const FROM = `${BRAND_NAME} <${SUPPORT_EMAIL}>`;
 
     if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
       return new Response(JSON.stringify({ error: "Server misconfigured" }), {
@@ -123,14 +129,14 @@ Deno.serve(async (req: Request) => {
           const html = emailWrapper(`
             <h1>Reset your password</h1>
             <p>Hi ${firstName},</p>
-            <p>We received a request to reset your CRE Platform password. Click the button below to choose a new password.</p>
+            <p>We received a request to reset your ${BRAND_NAME} password. Click the button below to choose a new password.</p>
             <a href="${link}" class="cta">Reset Password →</a>
             <p class="note">This link expires in 1 hour. If you didn't request a password reset, you can safely ignore this email — your password won't change.</p>
           `);
           const res = await fetch("https://api.resend.com/emails", {
             method: "POST",
             headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ from: FROM, to: [normalizedEmail], subject: "Reset your CRE Platform password", html }),
+            body: JSON.stringify({ from: FROM, to: [normalizedEmail], subject: `Reset your ${BRAND_NAME} password`, html }),
           });
           if (!res.ok) console.error("[signup] Resend error (recovery):", await res.text());
           else console.log("[signup] Password reset email sent to:", normalizedEmail);
@@ -595,21 +601,21 @@ async function sendFlowEmail({
     ? emailWrapper(`
         <h1>Complete your invited account</h1>
         <p>Hi ${firstName},</p>
-        <p>Your organization has already assigned your access in CRE Platform. Use the secure link below to set your password and activate your member workspace.</p>
+        <p>Your organization has already assigned your access in ${BRAND_NAME}. Use the secure link below to set your password and activate your member workspace.</p>
         <a href="${link}" class="cta">Complete Account Setup →</a>
         <p class="note">This link signs you in securely so you can finish setup and review your assigned modules and pages.</p>
       `)
     : emailWrapper(`
         <h1>Confirm your email address</h1>
         <p>Hi ${firstName},</p>
-        <p>Thanks for signing up for CRE Platform! Click the button below to confirm your email and activate your account.</p>
+        <p>Thanks for signing up for ${BRAND_NAME}! Click the button below to confirm your email and activate your account.</p>
         <a href="${link}" class="cta">Confirm Email Address →</a>
         <p class="note">This link expires in 24 hours. If you didn't create an account, you can safely ignore this email.</p>
       `);
 
   const subject = flow === "invite"
-    ? "Complete your CRE Platform account setup"
-    : "Confirm your CRE Platform account";
+    ? `Complete your ${BRAND_NAME} account setup`
+    : `Confirm your ${BRAND_NAME} account`;
 
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",

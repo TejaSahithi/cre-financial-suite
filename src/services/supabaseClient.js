@@ -20,7 +20,7 @@ import { createClient } from '@supabase/supabase-js';
 // globalThis. The Symbol.for() registry makes the lookup stable across
 // duplicate module instances (HMR loads create new local Symbols, but
 // Symbol.for() returns the same one).
-const GLOBAL_SINGLETON_KEY = Symbol.for('cre-financial-suite.supabase-browser-client');
+const GLOBAL_SINGLETON_KEY = Symbol.for('proforma-os.supabase-browser-client');
 
 function getOrCreateSupabaseClient() {
   const globalScope = /** @type {Record<string|symbol, unknown>} */ (globalThis);

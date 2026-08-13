@@ -20,6 +20,16 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+const BRAND_NAME = "ProForma OS";
+const SUPPORT_EMAIL = "support@proformaos.ai";
+const DEFAULT_FRONTEND_URL = "https://www.proformaos.ai";
+const LOGO_URL = `${DEFAULT_FRONTEND_URL}/assets/proforma-os-logo.png`;
+
+function resolveFrontendUrl(value?: string | null) {
+  const url = String(value || "").trim().replace(/\/$/, "");
+  return url && !/(vercel\.app|localhost)/i.test(url) ? url : DEFAULT_FRONTEND_URL;
+}
+
 Deno.serve(async (req: Request) => {
   const authorization = req.headers.get("Authorization");
 
@@ -178,8 +188,8 @@ Deno.serve(async (req: Request) => {
       expires_at: new Date(Date.now() + 86400000).toISOString(),
     }).catch((e) => console.error("[invite-client] invitation log err:", e));
 
-    const frontendUrl = Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL") || "http://localhost:5173";
-    const loginLink = `${frontendUrl}/signin`;
+    const frontendUrl = resolveFrontendUrl(Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL"));
+    const loginLink = `${frontendUrl}/Login`;
     const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
 
     if (RESEND_API_KEY) {
@@ -189,11 +199,11 @@ Deno.serve(async (req: Request) => {
         <html lang="en">
         <head>
           <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-          <title>CRE Platform</title>
+          <title>${BRAND_NAME}</title>
           <style>
             body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; margin:0; padding:0; background:#f8fafc; }
             .wrapper { max-width:600px; margin:40px auto; background:#fff; border-radius:16px; overflow:hidden; border:1px solid #e2e8f0; }
-            .header { background:linear-gradient(135deg,#1a2744 0%,#2d4a8a 100%); padding:32px 40px; }
+            .header { background:#071326; padding:26px 40px; }
             .logo { display:flex; align-items:center; gap:10px; }
             .logo-icon { width:36px;height:36px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center; }
             .logo-text { color:#fff; font-size:18px; font-weight:700; letter-spacing:-0.3px; }
@@ -218,20 +228,20 @@ Deno.serve(async (req: Request) => {
                     <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
                   </svg>
                 </div>
-                <span class="logo-text">CRE Platform</span>
+                <img src="${LOGO_URL}" alt="${BRAND_NAME}" style="width:196px;height:auto;display:block;background:#ffffff;border-radius:8px;padding:8px 10px;" />
               </div>
             </div>
             <div class="body">${content}</div>
-            <div class="footer"><p>CRE Platform &middot; support@cresuite.org &middot; &copy; 2025 All rights reserved</p></div>
+            <div class="footer"><p>${BRAND_NAME} &middot; ${SUPPORT_EMAIL} &middot; &copy; ${new Date().getFullYear()} All rights reserved</p></div>
           </div>
         </body>
         </html>
         `;
 
         const htmlContent = isNewUser ? emailWrapper(`
-          <h1>You've Been Invited to CRE Platform</h1>
+          <h1>You've Been Invited to ${BRAND_NAME}</h1>
           <p>Hi ${full_name || "there"},</p>
-          <p>You have been invited to join <strong>CRE Platform</strong> as a ${role.replace("_", " ")}. Our platform helps you manage your commercial real estate lifecycle.</p>
+          <p>You have been invited to join <strong>${BRAND_NAME}</strong> as a ${role.replace("_", " ")}. Our platform helps you manage your commercial real estate lifecycle.</p>
           <div class="info-box">
             <p><strong>Your Temporary Credentials:</strong></p>
             <p>Email: <strong>${email}</strong></p>
@@ -242,7 +252,7 @@ Deno.serve(async (req: Request) => {
         `) : emailWrapper(`
           <h1>You've Been Added to an Organization</h1>
           <p>Hi ${full_name || "there"},</p>
-          <p>Your existing <strong>CRE Platform</strong> account has been added to a new organization as a ${role.replace("_", " ")}.</p>
+          <p>Your existing <strong>${BRAND_NAME}</strong> account has been added to a new organization as a ${role.replace("_", " ")}.</p>
           <a href="${loginLink}" class="cta">Sign In to Your Account</a>
           <p>Use your existing credentials to log in and access your new workspace.</p>
         `);
@@ -251,9 +261,9 @@ Deno.serve(async (req: Request) => {
           method: "POST",
           headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
-            from: "CRE Platform <support@cresuite.org>",
+            from: `${BRAND_NAME} <${SUPPORT_EMAIL}>`,
             to: email,
-            subject: "You have been invited to CRE Platform!",
+            subject: `You have been invited to ${BRAND_NAME}!`,
             html: htmlContent,
           }),
         });

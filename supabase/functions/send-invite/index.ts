@@ -7,6 +7,16 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+const BRAND_NAME = 'ProForma OS';
+const SUPPORT_EMAIL = 'support@proformaos.ai';
+const DEFAULT_FRONTEND_URL = 'https://www.proformaos.ai';
+const LOGO_URL = `${DEFAULT_FRONTEND_URL}/assets/proforma-os-logo.png`;
+
+function resolveFrontendUrl(value?: string | null) {
+  const url = String(value || '').trim().replace(/\/$/, '');
+  return url && !/(vercel\.app|localhost)/i.test(url) ? url : DEFAULT_FRONTEND_URL;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -74,7 +84,7 @@ serve(async (req) => {
 
     // Send the email (mocked or actual Resend logic)
     const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
-    const SITE_URL = Deno.env.get('FRONTEND_URL') || 'http://localhost:5174';
+    const SITE_URL = resolveFrontendUrl(Deno.env.get('FRONTEND_URL') || Deno.env.get('SITE_URL'));
     const inviteLink = `${SITE_URL}/AcceptInvite?token=${token}`;
 
     if (RESEND_API_KEY) {
@@ -82,10 +92,10 @@ serve(async (req) => {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          from: 'CRE Platform <support@cresuite.org>',
+          from: `${BRAND_NAME} <${SUPPORT_EMAIL}>`,
           to: email,
           subject: 'You have been invited to join an organization',
-          html: `<p>You've been invited to join as a ${role}. Click below to accept your invitation:</p><p><a href="${inviteLink}">${inviteLink}</a></p>`
+          html: `<!DOCTYPE html><html lang="en"><body style="margin:0;padding:40px 16px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"><div style="max-width:600px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;"><div style="padding:26px 36px;background:#071326;"><img src="${LOGO_URL}" alt="${BRAND_NAME}" style="width:196px;height:auto;display:block;background:#fff;border-radius:8px;padding:8px 10px;" /></div><div style="padding:32px 36px;color:#475569;font-size:15px;line-height:1.6;"><h1 style="margin:0 0 12px;color:#0f172a;font-size:24px;">You have been invited</h1><p>You've been invited to join as a <strong>${role}</strong>.</p><p><a href="${inviteLink}" style="display:inline-block;background:#071326;color:#fff;padding:12px 22px;border-radius:10px;text-decoration:none;font-weight:600;">Accept Invitation</a></p></div><div style="border-top:1px solid #e2e8f0;background:#f8fafc;padding:18px 36px;text-align:center;color:#94a3b8;font-size:12px;">${BRAND_NAME} · ${SUPPORT_EMAIL}</div></div></body></html>`
         })
       });
     }

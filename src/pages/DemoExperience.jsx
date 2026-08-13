@@ -1,8 +1,8 @@
 import React, { useEffect } from "react";
 import { useLocation, useNavigate, Link } from "react-router-dom";
-import { Building2, ArrowRight, Video, FileText, CheckCircle2, Shield, Users } from "lucide-react";
+import { ArrowRight, Video, FileText, CheckCircle2, Shield, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { createPageUrl } from "@/utils";
+import { createAbsolutePageUrl, createPageUrl } from "@/utils";
 import { markDemoViewed } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
 import { sendEmail } from "@/services/integrations";
@@ -33,29 +33,15 @@ export default function DemoExperience() {
           if (data && data.email && !sessionStorage.getItem(`demo_email_sent_${requestId}`)) {
             sessionStorage.setItem(`demo_email_sent_${requestId}`, "true");
             
-            const requestAccessUrl = `${window.location.origin}${createPageUrl("RequestAccess")}?tab=access`;
+            const requestAccessUrl = createAbsolutePageUrl("RequestAccess", { tab: "access" });
             
             await sendEmail({
               to: data.email,
-              subject: "Thanks for exploring ProForma OS",
-              html: `
-                <div style="font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto;">
-                  <p>Hi ${data.full_name},</p>
-                  <p>Thanks for taking the time to explore our platform.</p>
-                  <p>We hope the demo gave you a clear view of how you can:</p>
-                  <ul>
-                    <li>Automate budgeting and CAM</li>
-                    <li>Manage portfolios and properties efficiently</li>
-                    <li>Replace spreadsheets with a unified system</li>
-                  </ul>
-                  <p>If you're ready to move forward, you can request platform access below:</p>
-                  <p>👉 Request Access:<br/>
-                  <a href="${requestAccessUrl}">${requestAccessUrl}</a></p>
-                  <p>If you'd like a live walkthrough or have specific questions, we’d be happy to help.</p>
-                  <br/>
-                  <p>Best regards,<br/>ProForma OS Team</p>
-                </div>
-              `
+              templateId: "demo_followup",
+              variables: {
+                name: data.full_name,
+                action_url: requestAccessUrl,
+              }
             });
           }
         } catch (e) {

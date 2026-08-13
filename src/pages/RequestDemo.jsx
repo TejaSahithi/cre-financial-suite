@@ -118,7 +118,7 @@ export default function RequestDemo() {
       (async () => {
         try {
           await sendEmail({
-            to: "sales@cresuite.org",
+            to: "sales@proformaos.ai",
             templateId: 'request_demo_admin_notification',
             variables: {
               name: form.full_name,

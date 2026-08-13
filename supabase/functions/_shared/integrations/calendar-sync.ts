@@ -9,7 +9,7 @@ function toIcsDate(value: string) {
 }
 
 export function buildIcsCalendar(args: { calendarName: string; events: any[] }) {
-  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//CRE Platform//Release 9//EN", `X-WR-CALNAME:${escapeIcs(args.calendarName)}`];
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//ProForma OS//Release 9//EN", `X-WR-CALNAME:${escapeIcs(args.calendarName)}`];
   for (const event of args.events) {
     if (!event.eventDate && !event.windowEnd) continue;
     lines.push("BEGIN:VEVENT");

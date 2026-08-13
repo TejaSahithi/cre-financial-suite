@@ -14,6 +14,30 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.40.0";
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+const BRAND_NAME = 'ProForma OS';
+const SUPPORT_EMAIL = 'support@proformaos.ai';
+const DEFAULT_FRONTEND_URL = 'https://www.proformaos.ai';
+function resolveFrontendUrl(value?: string | null) {
+  const url = String(value || '').trim().replace(/\/$/, '');
+  return url && !/(vercel\.app|localhost)/i.test(url) ? url : DEFAULT_FRONTEND_URL;
+}
+const APP_BASE_URL = resolveFrontendUrl(Deno.env.get('FRONTEND_URL') || Deno.env.get('SITE_URL'));
+const FROM_DEFAULT = `${BRAND_NAME} <${SUPPORT_EMAIL}>`;
+const LOGO_URL = `${APP_BASE_URL}/assets/proforma-os-logo.png`;
+
+function absoluteAppUrl(value: unknown) {
+  const url = String(value || '').trim();
+  if (!url) return '';
+  if (/^https?:\/\//i.test(url)) {
+    try {
+      const parsed = new URL(url);
+      return `${APP_BASE_URL}${parsed.pathname}${parsed.search}${parsed.hash}`;
+    } catch (_err) {
+      return url;
+    }
+  }
+  return `${APP_BASE_URL}${url.startsWith('/') ? url : `/${url}`}`;
+}
 
 const getCorsHeaders = (origin: string | null) => {
   return {
@@ -23,19 +47,18 @@ const getCorsHeaders = (origin: string | null) => {
   };
 };
 
-const withCrePlatformBranding = (content: string) => `<!DOCTYPE html>
+const withProFormaBranding = (content: string) => `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CRE Platform</title>
+  <title>${BRAND_NAME}</title>
   <style>
     body { margin: 0; padding: 0; background: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
     .wrapper { max-width: 600px; margin: 40px auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; }
-    .header { padding: 28px 36px; background: linear-gradient(135deg, #1a2744 0%, #2d4a8a 100%); }
+    .header { padding: 26px 36px; background: #071326; }
     .brand { display: flex; align-items: center; gap: 10px; }
-    .logo { width: 36px; height: 36px; border-radius: 10px; background: #ffffff; display: flex; align-items: center; justify-content: center; }
-    .brand-name { color: #ffffff; font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+    .logo-img { width: 196px; height: auto; display: block; background: #ffffff; border-radius: 8px; padding: 8px 10px; }
     .body { padding: 32px 36px; color: #475569; line-height: 1.6; font-size: 15px; }
     .body h1, .body h2, .body h3 { color: #0f172a; margin-top: 0; }
     .footer { border-top: 1px solid #e2e8f0; background: #f8fafc; padding: 18px 36px; text-align: center; color: #94a3b8; font-size: 12px; }
@@ -45,14 +68,11 @@ const withCrePlatformBranding = (content: string) => `<!DOCTYPE html>
   <div class="wrapper">
     <div class="header">
       <div class="brand">
-        <div class="logo">
-          <span style="font-size: 13px; font-weight: 800; color: #1a2744; letter-spacing: -0.04em;">CP</span>
-        </div>
-        <span class="brand-name">CRE Platform</span>
+        <img class="logo-img" src="${LOGO_URL}" alt="${BRAND_NAME}" />
       </div>
     </div>
     <div class="body">${content}</div>
-    <div class="footer">CRE Platform · support@cresuite.org</div>
+    <div class="footer">${BRAND_NAME} · ${SUPPORT_EMAIL}</div>
   </div>
 </body>
 </html>`;
@@ -62,6 +82,7 @@ const PUBLIC_TEMPLATES = [
   'request_access_admin_notification',
   'request_demo_autoreply',
   'request_demo_admin_notification',
+  'demo_followup',
   'contact_autoreply',
   'contact_admin_notification'
 ];
@@ -157,14 +178,15 @@ async function resolveInternalRecipientEmail({ supabaseAdmin, user, orgId, recip
 }
 
 function getTemplateData(templateId: string, variables: any) {
-  const adminEmail = 'support@cresuite.org';
-  const fromDefault = 'CRE Platform <support@cresuite.org>';
+  const adminEmail = SUPPORT_EMAIL;
+  const fromDefault = FROM_DEFAULT;
+  const actionUrl = absoluteAppUrl(variables.actionUrl || variables.action_url);
   
   switch(templateId) {
     case 'request_access_autoreply':
       return {
         from: fromDefault,
-        subject: "CRE Platform - We've received your access request",
+        subject: `${BRAND_NAME} - We've received your access request`,
         html: `
           <h1>Thanks for requesting access, ${variables.name || 'there'}!</h1>
           <p>We've received your access request and our team is currently reviewing it.</p>
@@ -188,10 +210,22 @@ function getTemplateData(templateId: string, variables: any) {
     case 'contact_autoreply':
       return {
         from: fromDefault,
-        subject: "CRE Platform - Thanks for reaching out",
+        subject: `${BRAND_NAME} - Thanks for reaching out`,
         html: `
           <h1>Thanks for reaching out, ${variables.name || 'there'}!</h1>
           <p>We've received your message and our team will get back to you shortly.</p>
+        `
+      };
+    case 'demo_followup':
+      return {
+        from: fromDefault,
+        subject: `Thanks for exploring ${BRAND_NAME}`,
+        html: `
+          <h1>Thanks for exploring ${BRAND_NAME}</h1>
+          <p>Hi ${variables.name || 'there'},</p>
+          <p>Thanks for taking the time to explore our platform.</p>
+          <p>We hope the demo gave you a clear view of how you can automate budgeting and CAM, manage portfolios and properties efficiently, and replace spreadsheets with a unified operating system.</p>
+          <p style="margin: 24px 0 0;"><a href="${actionUrl || `${APP_BASE_URL}/RequestAccess?tab=access`}" style="display: inline-block; padding: 12px 18px; border-radius: 10px; background: #071326; color: #ffffff; text-decoration: none; font-weight: 600;">Request Platform Access</a></p>
         `
       };
     case 'request_demo_admin_notification':
@@ -239,6 +273,7 @@ function getTemplateData(templateId: string, variables: any) {
               <td style="padding: 12px 0; text-align: right; font-weight: 600;">${variables.expenseRatio || '0%'} / ${variables.camShare || '0%'}</td>
             </tr>
           </table>
+          ${actionUrl ? `<p style="margin: 0 0 18px;"><a href="${actionUrl}" style="display: inline-block; padding: 12px 18px; border-radius: 10px; background: #071326; color: #ffffff; text-decoration: none; font-weight: 600;">Open Budget Review</a></p>` : ''}
           ${variables.downloadUrl ? `<p style="margin: 0 0 8px;">A detailed export with budget summary, expense detail, revenue detail, lease schedules, and CAM support is ready for download.</p>
                  <p style="margin: 0 0 24px;"><a href="${variables.downloadUrl}" style="display: inline-block; padding: 12px 18px; border-radius: 10px; background: #1d4ed8; color: #ffffff; text-decoration: none; font-weight: 600;">Open Detailed Export</a></p>` : ''}
           ${variables.aiInsights ? `<div style="padding: 16px; border-radius: 12px; background: #f8fafc; border: 1px solid #e2e8f0;"><strong>AI Insight</strong><br/>${variables.aiInsights}</div>` : ''}
@@ -257,11 +292,11 @@ function getTemplateData(templateId: string, variables: any) {
     case 'generic_internal_notification':
       return {
         from: fromDefault,
-        subject: `CRE Platform Notification: ${variables.subject || 'Update'}`,
+        subject: `${BRAND_NAME} Notification: ${variables.subject || 'Update'}`,
         html: `
           <h1>${variables.subject || 'Platform Notification'}</h1>
           <p>${variables.message || 'You have a new notification.'}</p>
-          ${variables.action_url ? `<p style="margin: 24px 0 0;"><a href="${variables.action_url}" style="display: inline-block; padding: 12px 18px; border-radius: 10px; background: #1d4ed8; color: #ffffff; text-decoration: none; font-weight: 600;">Open in CRE Platform</a></p>` : ''}
+          ${actionUrl ? `<p style="margin: 24px 0 0;"><a href="${actionUrl}" style="display: inline-block; padding: 12px 18px; border-radius: 10px; background: #071326; color: #ffffff; text-decoration: none; font-weight: 600;">Open in ${BRAND_NAME}</a></p>` : ''}
           ${variables.module || variables.notification_type ? `<p style="margin-top: 24px; color: #94a3b8; font-size: 12px;">${variables.module || 'notification'} · ${variables.notification_type || variables.event_type || 'update'}</p>` : ''}
         `
       };
@@ -390,7 +425,7 @@ Deno.serve(async (req) => {
     }
 
     // ── 3. Send via Resend ──
-    const brandedHtml = withCrePlatformBranding(templateData.html);
+    const brandedHtml = withProFormaBranding(templateData.html);
 
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',

@@ -7,7 +7,7 @@ import { FileText, Zap, TrendingUp, ArrowRight, Loader2, CheckCircle2, Lock, X, 
 import { UnitService, BuildingService, PropertyService, LeaseService, BudgetService, PortfolioService } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
 import { buildHierarchyScope } from "@/lib/hierarchyScope";
-import { createPageUrl } from "@/utils";
+import { createAbsolutePageUrl, createPageUrl } from "@/utils";
 import ScenarioPlanner from "@/components/ScenarioPlanner";
 import FileUploader from "@/components/FileUploader";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
@@ -415,7 +415,8 @@ export default function CreateBudget() {
         templateId: 'generic_internal_notification',
         variables: {
           subject: `${budget?.name || "Budget"} requires rework`,
-          message: `Budget "${budget?.name}" (FY ${budget?.budget_year || budget?.fiscal_year || "current"}) needs updates before approval. Reviewer comments: ${comment}. Open Budget Studio to view details.`
+          message: `Budget "${budget?.name}" (FY ${budget?.budget_year || budget?.fiscal_year || "current"}) needs updates before approval. Reviewer comments: ${comment}. Open Budget Studio to view details.`,
+          action_url: createAbsolutePageUrl("CreateBudget", budget?.id ? { id: budget.id } : undefined)
         }
       });
       toast.success(`Rework notes sent to ${recipients.length} stakeholder${recipients.length === 1 ? "" : "s"}`);

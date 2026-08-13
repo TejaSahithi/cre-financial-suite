@@ -11,6 +11,10 @@ export const notificationService = createEntityService('Notification');
 
 const notificationDeliveryService = createEntityService('NotificationDelivery');
 const notificationPreferenceService = createEntityService('NotificationPreference');
+const envBaseUrl = String(import.meta.env.VITE_APP_BASE_URL || '').trim().replace(/\/$/, '');
+const APP_BASE_URL = envBaseUrl && !/(vercel\.app|localhost)/i.test(envBaseUrl)
+  ? envBaseUrl
+  : 'https://www.proformaos.ai';
 
 function isMissingNotificationSchema(error) {
   const text = [error?.message, error?.details, error?.hint].filter(Boolean).join(' ');
@@ -289,8 +293,7 @@ export async function createNotificationsForEvent(event, options = {}) {
 
 function absoluteActionUrl(actionUrl) {
   if (!actionUrl || /^https?:\/\//i.test(actionUrl)) return actionUrl || '';
-  if (typeof window === 'undefined' || !window.location?.origin) return actionUrl;
-  return new URL(actionUrl, window.location.origin).toString();
+  return new URL(actionUrl, APP_BASE_URL).toString();
 }
 
 export async function dispatchPortfolioCreatedNotification(event) {

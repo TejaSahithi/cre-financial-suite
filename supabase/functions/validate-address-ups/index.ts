@@ -153,7 +153,7 @@ Deno.serve(async (req: Request) => {
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
           transId: crypto.randomUUID(),
-          transactionSrc: "CRE Platform",
+          transactionSrc: "ProForma OS",
         },
         body: JSON.stringify({
           XAVRequest: {

@@ -172,7 +172,7 @@ export default function RequestAccess() {
       (async () => {
         try {
           await sendEmail({
-            to: "sales@cresuite.org",
+            to: "sales@proformaos.ai",
             templateId: 'request_access_admin_notification',
             variables: {
               name: form.full_name,

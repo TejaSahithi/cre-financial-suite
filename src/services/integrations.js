@@ -5,7 +5,8 @@
  */
 import { supabase } from "@/services/supabaseClient";
 
-function withCrePlatformBranding(content) {
+function withProFormaBranding(content) {
+  const logoUrl = "https://www.proformaos.ai/assets/proforma-os-logo.png";
   return `<!DOCTYPE html>
   <html lang="en">
   <head>
@@ -14,10 +15,9 @@ function withCrePlatformBranding(content) {
     <style>
       body { font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 24px; background: #f8fafc; color: #334155; }
       .wrapper { max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; }
-      .header { background: linear-gradient(135deg, #1a2744 0%, #2d4a8a 100%); padding: 28px 32px; }
+      .header { background: #071326; padding: 26px 32px; }
       .brand { display: flex; align-items: center; gap: 10px; }
-      .brand-icon { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; background: #ffffff; border-radius: 10px; }
-      .brand-name { color: #ffffff; font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+      .brand-logo { width: 196px; height: auto; display: block; background: #ffffff; border-radius: 8px; padding: 8px 10px; }
       .content { padding: 32px; }
       .footer { padding: 18px 32px; background: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #94a3b8; }
       .content h1, .content h2, .content h3 { color: #0f172a; margin-top: 0; }
@@ -29,10 +29,7 @@ function withCrePlatformBranding(content) {
     <div class="wrapper">
       <div class="header">
         <div class="brand">
-          <div class="brand-icon">
-            <span style="font-size: 13px; font-weight: 800; color: #1a2744; letter-spacing: -0.04em;">CP</span>
-          </div>
-          <span class="brand-name">ProForma OS</span>
+          <img class="brand-logo" src="${logoUrl}" alt="ProForma OS" />
         </div>
       </div>
       <div class="content">${content}</div>

@@ -7,6 +7,13 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+const DEFAULT_FRONTEND_URL = 'https://www.proformaos.ai';
+
+function resolveFrontendUrl(value?: string | null) {
+  const url = String(value || '').trim().replace(/\/$/, '');
+  return url && !/(vercel\.app|localhost)/i.test(url) ? url : DEFAULT_FRONTEND_URL;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -97,7 +104,7 @@ Deno.serve(async (req: Request) => {
       throw new Error('Missing STRIPE_SECRET_KEY');
     }
 
-    const frontendUrl = Deno.env.get('FRONTEND_URL') || 'https://cre-financial-suite-n9be.vercel.app';
+    const frontendUrl = resolveFrontendUrl(Deno.env.get('FRONTEND_URL') || Deno.env.get('SITE_URL'));
     const stripe = new Stripe(stripeSecretKey, {
       apiVersion: '2023-10-16',
       httpClient: Stripe.createFetchHttpClient(),

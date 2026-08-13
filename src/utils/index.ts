@@ -16,6 +16,17 @@ export function createPageUrl(
   return query ? `${path}?${query}` : path;
 }
 
+export function createAbsolutePageUrl(
+  pageName: string,
+  params?: Record<string, string | number | boolean | null | undefined>,
+): string {
+  const envBaseUrl = String(import.meta.env.VITE_APP_BASE_URL || '').trim().replace(/\/$/, '');
+  const baseUrl = envBaseUrl && !/(vercel\.app|localhost)/i.test(envBaseUrl)
+    ? envBaseUrl
+    : 'https://www.proformaos.ai';
+  return new URL(createPageUrl(pageName, params), baseUrl).toString();
+}
+
 export function downloadCSV(
   data: Record<string, unknown>[],
   filename = 'export.csv',

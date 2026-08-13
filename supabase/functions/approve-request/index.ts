@@ -7,20 +7,29 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-/** Wraps HTML content in the standard CRE Platform branded email shell. */
+const BRAND_NAME = 'ProForma OS';
+const SUPPORT_EMAIL = 'support@proformaos.ai';
+const DEFAULT_FRONTEND_URL = 'https://www.proformaos.ai';
+const LOGO_URL = `${DEFAULT_FRONTEND_URL}/assets/proforma-os-logo.png`;
+
+function resolveFrontendUrl(value?: string | null) {
+  const url = String(value || '').trim().replace(/\/$/, '');
+  return url && !/(vercel\.app|localhost)/i.test(url) ? url : DEFAULT_FRONTEND_URL;
+}
+
+/** Wraps HTML content in the standard ProForma OS branded email shell. */
 const emailWrapper = (content: string) => `
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>CRE Platform</title>
+  <title>${BRAND_NAME}</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; margin:0; padding:0; background:#f8fafc; }
     .wrapper { max-width:600px; margin:40px auto; background:#fff; border-radius:16px; overflow:hidden; border:1px solid #e2e8f0; }
-    .header { background:linear-gradient(135deg,#1a2744 0%,#2d4a8a 100%); padding:32px 40px; }
+    .header { background:#071326; padding:26px 40px; }
     .logo { display:flex; align-items:center; gap:10px; }
-    .logo-icon { width:36px;height:36px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center; }
-    .logo-text { color:#fff; font-size:18px; font-weight:700; letter-spacing:-0.3px; }
+    .logo-img { width:196px;height:auto;display:block;background:#fff;border-radius:8px;padding:8px 10px; }
     .body { padding:36px 40px; color:#475569; font-size:15px; line-height:1.6; }
     h1 { font-size:24px; font-weight:700; color:#0f172a; margin:0 0 8px; }
     p { margin:0 0 16px; }
@@ -35,14 +44,11 @@ const emailWrapper = (content: string) => `
   <div class="wrapper">
     <div class="header">
       <div class="logo">
-        <div class="logo-icon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a2744" stroke-width="2.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
-        </div>
-        <span class="logo-text">CRE Platform</span>
+        <img class="logo-img" src="${LOGO_URL}" alt="${BRAND_NAME}" />
       </div>
     </div>
     <div class="body">${content}</div>
-    <div class="footer"><p>CRE Platform &middot; support@cresuite.org &middot; &copy; ${new Date().getFullYear()} All rights reserved</p></div>
+    <div class="footer"><p>${BRAND_NAME} &middot; ${SUPPORT_EMAIL} &middot; &copy; ${new Date().getFullYear()} All rights reserved</p></div>
   </div>
 </body>
 </html>
@@ -159,7 +165,7 @@ Deno.serve(async (req: Request) => {
     if (updateErr) throw updateErr;
 
     const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
-    const frontendUrl = Deno.env.get('FRONTEND_URL') || Deno.env.get('SITE_URL') || 'http://localhost:5173';
+    const frontendUrl = resolveFrontendUrl(Deno.env.get('FRONTEND_URL') || Deno.env.get('SITE_URL'));
 
     if (approved) {
       if (accessRequest.request_type === 'demo') {
@@ -171,11 +177,11 @@ Deno.serve(async (req: Request) => {
           <html lang="en">
           <head>
             <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-            <title>CRE Platform</title>
+            <title>${BRAND_NAME}</title>
             <style>
               body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; margin:0; padding:0; background:#f8fafc; }
               .wrapper { max-width:600px; margin:40px auto; background:#fff; border-radius:16px; overflow:hidden; border:1px solid #e2e8f0; }
-              .header { background:linear-gradient(135deg,#1a2744 0%,#2d4a8a 100%); padding:32px 40px; }
+              .header { background:#071326; padding:26px 40px; }
               .logo { display:flex; align-items:center; gap:10px; }
               .logo-icon { width:36px;height:36px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center; }
               .logo-text { color:#fff; font-size:18px; font-weight:700; letter-spacing:-0.3px; }
@@ -193,14 +199,11 @@ Deno.serve(async (req: Request) => {
             <div class="wrapper">
               <div class="header">
                 <div class="logo">
-                  <div class="logo-icon">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a2744" stroke-width="2.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
-                  </div>
-                  <span class="logo-text">CRE Platform</span>
+                  <img src="${LOGO_URL}" alt="${BRAND_NAME}" style="width:196px;height:auto;display:block;background:#ffffff;border-radius:8px;padding:8px 10px;" />
                 </div>
               </div>
               <div class="body">${content}</div>
-              <div class="footer"><p>CRE Platform &middot; support@cresuite.org &middot; &copy; 2025 All rights reserved</p></div>
+              <div class="footer"><p>${BRAND_NAME} &middot; ${SUPPORT_EMAIL} &middot; &copy; ${new Date().getFullYear()} All rights reserved</p></div>
             </div>
           </body>
           </html>
@@ -210,9 +213,9 @@ Deno.serve(async (req: Request) => {
           const html = emailWrapper(`
             <h1>Did You Enjoy the Demo? 🎬</h1>
             <p>Hi ${accessRequest.full_name},</p>
-            <p>Thank you for watching the <strong>CRE Platform</strong> demo! We hope it gave you a clear view of how our platform can transform your commercial real estate operations.</p>
+            <p>Thank you for watching the <strong>${BRAND_NAME}</strong> demo! We hope it gave you a clear view of how our platform can transform your commercial real estate operations.</p>
             <div class="info-box">
-              <p><strong>Here's what CRE Platform can do for ${accessRequest.company_name}:</strong></p>
+              <p><strong>Here's what ${BRAND_NAME} can do for ${accessRequest.company_name}:</strong></p>
               <p>✅ Automate CAM reconciliations &amp; budgeting<br/>
               ✅ Real-time financial insights across your portfolio<br/>
               ✅ Role-based access for your entire team<br/>
@@ -228,9 +231,9 @@ Deno.serve(async (req: Request) => {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              from: 'CRE Platform <support@cresuite.org>',
+              from: `${BRAND_NAME} <${SUPPORT_EMAIL}>`,
               to: accessRequest.email,
-              subject: 'Did you enjoy the CRE Platform demo? Here\'s your next step!',
+              subject: `Did you enjoy the ${BRAND_NAME} demo? Here's your next step!`,
               html: html
             })
           });
@@ -250,11 +253,11 @@ Deno.serve(async (req: Request) => {
           <html lang="en">
           <head>
             <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-            <title>CRE Platform</title>
+            <title>${BRAND_NAME}</title>
             <style>
               body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; margin:0; padding:0; background:#f8fafc; }
               .wrapper { max-width:600px; margin:40px auto; background:#fff; border-radius:16px; overflow:hidden; border:1px solid #e2e8f0; }
-              .header { background:linear-gradient(135deg,#1a2744 0%,#2d4a8a 100%); padding:32px 40px; }
+              .header { background:#071326; padding:26px 40px; }
               .logo { display:flex; align-items:center; gap:10px; }
               .logo-icon { width:36px;height:36px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center; }
               .logo-text { color:#fff; font-size:18px; font-weight:700; letter-spacing:-0.3px; }
@@ -272,20 +275,17 @@ Deno.serve(async (req: Request) => {
             <div class="wrapper">
               <div class="header">
                 <div class="logo">
-                  <div class="logo-icon">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a2744" stroke-width="2.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
-                  </div>
-                  <span class="logo-text">CRE Platform</span>
+                  <img src="${LOGO_URL}" alt="${BRAND_NAME}" style="width:196px;height:auto;display:block;background:#ffffff;border-radius:8px;padding:8px 10px;" />
                 </div>
               </div>
               <div class="body">${content}</div>
-              <div class="footer"><p>CRE Platform &middot; support@cresuite.org &middot; &copy; 2025 All rights reserved</p></div>
+              <div class="footer"><p>${BRAND_NAME} &middot; ${SUPPORT_EMAIL} &middot; &copy; ${new Date().getFullYear()} All rights reserved</p></div>
             </div>
           </body>
           </html>
           `;
 
-          const loginLink = `${frontendUrl}/signin`;
+          const loginLink = `${frontendUrl}/Login`;
           const html = emailWrapper(`
             <p>Hi ${accessRequest.full_name},</p>
             <p>Your access request has been approved.</p>
@@ -300,14 +300,14 @@ Deno.serve(async (req: Request) => {
             </ul>
             <p>If you have any questions, feel free to reply to this email.</p>
             <br/>
-            <p>Welcome aboard,<br/>CRE Financial Suite Team</p>
+            <p>Welcome aboard,<br/>${BRAND_NAME} Team</p>
           `);
 
             const emailRes = await fetch('https://api.resend.com/emails', {
               method: 'POST',
               headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                from: 'CRE Platform <support@cresuite.org>',
+                from: `${BRAND_NAME} <${SUPPORT_EMAIL}>`,
                 to: accessRequest.email,
                 subject: 'Your access request has been approved',
                 html: html
@@ -345,19 +345,19 @@ Deno.serve(async (req: Request) => {
         const rejHtml = emailWrapper(`
           <h1 style="margin:0 0 12px;color:#0f172a;font-size:22px;">Update on Your Access Request</h1>
           <p>Hi ${accessRequest.full_name},</p>
-          <p>Thank you for your interest in CRE Platform. After reviewing your request for <strong>${accessRequest.company_name || 'your organization'}</strong>, we are unable to approve access at this time.</p>
+          <p>Thank you for your interest in ${BRAND_NAME}. After reviewing your request for <strong>${accessRequest.company_name || 'your organization'}</strong>, we are unable to approve access at this time.</p>
           ${rejectionReason ? `<div class="info-box"><p><strong>Reason:</strong> ${rejectionReason}</p></div>` : ''}
-          <p>If you believe this is an error or would like to discuss further, please reply to this email or contact us at <a href="mailto:support@cresuite.org">support@cresuite.org</a>.</p>
-          <p style="margin-bottom:0;">Thank you for your understanding.<br/>The CRE Platform Team</p>
+          <p>If you believe this is an error or would like to discuss further, please reply to this email or contact us at <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>.</p>
+          <p style="margin-bottom:0;">Thank you for your understanding.<br/>The ${BRAND_NAME} Team</p>
         `);
 
         const rejRes = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            from: 'CRE Platform <support@cresuite.org>',
+            from: `${BRAND_NAME} <${SUPPORT_EMAIL}>`,
             to: accessRequest.email,
-            subject: 'Update on Your CRE Platform Access Request',
+            subject: `Update on Your ${BRAND_NAME} Access Request`,
             html: rejHtml,
           }),
         });

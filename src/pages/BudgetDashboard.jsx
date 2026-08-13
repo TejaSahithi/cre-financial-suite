@@ -43,7 +43,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { createPageUrl } from "@/utils";
+import { createAbsolutePageUrl, createPageUrl } from "@/utils";
 
 const CURRENCY_FORMATTER = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -524,6 +524,7 @@ export default function BudgetDashboard() {
           noi: formatCurrency(noi),
           expenseRatio: formatPercent(expenseRatio),
           camShare: formatPercent(camShare),
+          actionUrl: createAbsolutePageUrl("BudgetDashboard"),
           downloadUrl,
           aiInsights: budget.ai_insights
         }
