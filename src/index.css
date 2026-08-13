@@ -964,6 +964,12 @@
     height: 52px;
     flex: 0 0 auto;
     object-fit: contain;
+    background: #ffffff;
+    border-radius: 8px;
+    padding: 3px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: crisp-edges;
   }
 
   .pf-brand-copy {
