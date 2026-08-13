@@ -1241,13 +1241,13 @@
 
   .pf-hero-description {
     max-width: 780px;
-    margin-top: 34px;
+    margin-top: 50px;
     font-size: 17px;
     line-height: 1.52;
   }
 
   .pf-hero-running {
-    margin-top: 31px;
+    margin-top: 47px;
     font-size: 21px;
   }
 
@@ -1266,13 +1266,13 @@
   }
 
   .pf-hero-proof {
-    margin-top: 46px;
+    margin-top: 60px;
     gap-column: 32px;
     font-size: 14px;
   }
 
   .pf-hero-card-row {
-    margin-top: 38px;
+    margin-top: 24px;
     margin-left: clamp(315px, 20vw, 355px);
     margin-right: clamp(76px, 8vw, 132px);
     max-width: 1080px;
@@ -1517,12 +1517,12 @@
 
   .pf-hero-description {
     max-width: 730px;
-    margin-top: 28px;
+    margin-top: 34px;
     font-size: 14px;
   }
 
   .pf-hero-running {
-    margin-top: 27px;
+    margin-top: 32px;
     font-size: 18px;
   }
 
@@ -1545,12 +1545,12 @@
   }
 
   .pf-hero-proof {
-    margin-top: 39px;
+    margin-top: 46px;
     font-size: 13px;
   }
 
   .pf-hero-card-row {
-    margin-top: 34px;
+    margin-top: 24px;
     margin-left: clamp(292px, 19.5vw, 338px);
     margin-right: 96px;
     max-width: min(970px, calc(100vw - 438px));
