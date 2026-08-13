@@ -236,7 +236,8 @@ export default function Layout({ children, currentPageName }) {
           )}
         </div>
 
-        <nav className="cre-nav space-y-0.5">
+        <div className="cre-sidebar-scroll">
+          <nav className="cre-nav space-y-0.5">
           {visibleNav.length > 0 ? (
             visibleNav.map((item, i) => (
               <NavItem key={i} item={item} currentPageName={currentPageName} collapsed={!sidebarOpen} />
@@ -248,7 +249,8 @@ export default function Layout({ children, currentPageName }) {
               </div>
             )
           )}
-        </nav>
+          </nav>
+        </div>
 
         <div className="cre-sidebar-footer">
           <button
@@ -287,11 +289,13 @@ export default function Layout({ children, currentPageName }) {
               <ProFormaBrand className="cre-brand-lockup" />
               <button onClick={() => setMobileOpen(false)} className="ml-auto text-white/60 hover:text-white" aria-label="Close navigation"><X className="w-5 h-5" /></button>
             </div>
-            <nav className="cre-nav space-y-0.5">
+            <div className="cre-sidebar-scroll">
+              <nav className="cre-nav space-y-0.5">
               {visibleNav.map((item, i) => (
                 <NavItem key={i} item={item} currentPageName={currentPageName} collapsed={false} onNavigate={() => setMobileOpen(false)} />
               ))}
-            </nav>
+              </nav>
+            </div>
           </aside>
         </div>
       )}

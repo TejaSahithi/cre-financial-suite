@@ -1,6 +1,5 @@
 import React, { useState } from "react";
-import { FileText, Send, RotateCcw, MapPin } from "lucide-react";
-import assistantMark from "@/assets/cre-assistant-mark.svg";
+import { Bot, FileText, Send, RotateCcw, MapPin } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -31,8 +30,8 @@ function MessageBubble({ message }) {
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div className={`flex max-w-[90%] items-start gap-2 ${isUser ? "flex-row-reverse" : ""}`}>
         {!isUser && (
-          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full" aria-hidden="true">
-            <img src={assistantMark} alt="" className="h-6 w-6 rounded-full" />
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--pf-shell-border)] bg-[var(--pf-blue-soft)] text-[var(--accent)]" aria-hidden="true">
+            <Bot className="h-4 w-4" />
           </div>
         )}
         <div className={`max-w-full rounded-lg px-3 py-2 text-sm ${isUser ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
@@ -83,10 +82,10 @@ export default function AssistantPanel() {
     <>
       <Button
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 z-40 h-14 w-14 rounded-full bg-transparent p-0 shadow-lg hover:bg-transparent"
-        aria-label="Open CRE Assistant"
+        className="fixed bottom-6 right-6 z-40 h-14 w-14 rounded-full border border-[var(--pf-shell-border)] bg-gradient-to-br from-white to-[var(--pf-blue-soft)] p-0 text-[var(--accent)] shadow-[0_14px_30px_rgba(20,86,199,.22)] hover:from-white hover:to-[var(--pf-blue-soft)]"
+        aria-label="Open ProForma Assistant"
       >
-        <img src={assistantMark} alt="" className="h-10 w-10 rounded-full" />
+        <Bot className="h-7 w-7" />
       </Button>
 
       <Sheet open={isOpen} onOpenChange={setIsOpen} modal={false}>
@@ -94,10 +93,10 @@ export default function AssistantPanel() {
           <SheetHeader>
             <div className="flex items-center justify-between pr-6">
               <SheetTitle className="flex items-center gap-2">
-                <span className="flex h-8 w-8 items-center justify-center rounded-full">
-                  <img src={assistantMark} alt="" className="h-6 w-6 rounded-full" />
+                <span className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--pf-shell-border)] bg-[var(--pf-blue-soft)] text-[var(--accent)]">
+                  <Bot className="h-4 w-4" />
                 </span>
-                CRE Assistant
+                ProForma Assistant
               </SheetTitle>
               <Button variant="ghost" size="sm" onClick={clearConversation} title="New conversation">
                 <RotateCcw className="h-4 w-4" />
