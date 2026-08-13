@@ -180,6 +180,7 @@ const APPROVED_FIELD_ALIASES: Record<string, string[]> = {
   rent_per_sf: ["rent_per_sf", "tenant_rent_per_rsf", "base_rent_psf"],
   escalation_type: ["escalation_type", "rent_escalation_type"],
   escalation_rate: ["escalation_rate", "renewal_escalation_percent", "renewal_escalation_pct"],
+  escalation_index: ["escalation_index", "rent_escalation_index", "cpi_index", "cpi_index_name"],
   escalation_timing: ["escalation_timing", "rent_escalation_timing"],
   free_rent_months: ["free_rent_months", "rent_abatement_months", "abatement_months", "free_rent"],
   renewal_options: ["renewal_options", "renewal_option_count", "option_to_renew", "renewal_option"],
@@ -353,6 +354,10 @@ function normalizeEscalationTiming(rawValue: unknown): string {
   return "lease_anniversary";
 }
 
+function isIndexEscalationType(escalationType: string): boolean {
+  return /(^|_)(cpi|index)($|_)/.test(String(escalationType || "").trim().toLowerCase());
+}
+
 function escalationEventsThroughMonth(
   referenceStart: Date | null,
   targetMonthStart: Date,
@@ -383,7 +388,7 @@ function escalatedMonthlyAmount(
     return round2(baseMonthly + (escalationValue * events));
   }
 
-  if (["fixed_pct", "fixed", "cpi", "manual", "stepped"].includes(escalationType) || escalationType.includes("pct")) {
+  if (["fixed_pct", "fixed", "manual", "stepped"].includes(escalationType) || escalationType.includes("pct") || isIndexEscalationType(escalationType)) {
     return round2(baseMonthly * Math.pow(1 + (escalationValue / 100), events));
   }
 
@@ -420,6 +425,13 @@ export function generateApprovedRentScheduleRows(lease: Record<string, any>): Re
     approvedFieldValue(lease, ["escalation_type"]),
   );
   const escalationValue = asNumber(approvedFieldValue(lease, ["escalation_rate"])) ?? 0;
+  const escalationIndex = asText(approvedFieldValue(lease, ["escalation_index"]));
+  const usesIndexEscalation = isIndexEscalationType(escalationType);
+  const indexEscalationNote = usesIndexEscalation
+    ? (escalationValue === 0
+      ? "CPI/index escalation requires approved index values or an approved escalation-rate assumption before billing use."
+      : "CPI/index escalation is calculated from the approved escalation_rate assumption; verify source index values before billing use.")
+    : null;
   const escalationTiming = normalizeEscalationTiming(
     approvedFieldValue(lease, ["escalation_timing"]),
   );
@@ -470,10 +482,13 @@ export function generateApprovedRentScheduleRows(lease: Record<string, any>): Re
       escalation_type: escalationType,
       escalation_rate: escalationType.includes("amount") || escalationType.includes("flat") ? null : escalationValue,
       escalation_amount: escalationType.includes("amount") || escalationType.includes("flat") ? escalationValue : null,
+      escalation_index: escalationIndex,
       status: "approved",
       approved_at: lease?.abstract_approved_at ?? null,
       approved_by: lease?.abstract_approved_by ?? null,
       source: "approved_abstract",
+      assumption_reason: indexEscalationNote,
+      notes: indexEscalationNote,
       metadata: {
         month_key: monthKey(monthStart),
         full_month_amount: round2(fullMonthly),
@@ -481,6 +496,9 @@ export function generateApprovedRentScheduleRows(lease: Record<string, any>): Re
         overlap_days: overlapDays,
         days_in_month: monthDays,
         free_rent_applied: isFreeRent,
+        index_escalation: usesIndexEscalation,
+        escalation_index: escalationIndex,
+        index_rate_source: usesIndexEscalation ? (escalationValue === 0 ? "missing" : "approved_escalation_rate") : null,
       },
     });
 

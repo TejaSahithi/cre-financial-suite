@@ -1,10 +1,11 @@
-﻿import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   CAM_STATUS_LABELS,
   CONTRACT_STATUS_LABELS,
   LANDLORD_EXPENSE_LABELS,
   LEASE_EXPENSE_RULES_UI_CONTRACT_VERSION,
   TREATMENT_LABELS,
+  buildRuleEditForm,
   getAmountFormulaLabel,
   getAppliesWhenLabel,
   getContractStatus,
@@ -180,6 +181,47 @@ describe("Lease Expense Rules UI Contract v1", () => {
     expect(getAmountFormulaLabel(utilities)).toBe("Tenant pays vendor");
   });
 
+
+  it("keeps CPI/index adjustment fields in the edit form contract", () => {
+    const form = buildRuleEditForm({
+      index_adjustment_applicable: true,
+      index_adjustment_type: "cpi",
+      index_name: "CPI-U",
+      index_base_period: "base month",
+      index_current_period: "current month",
+      index_adjustment_percent: 3.25,
+      index_floor_percent: 1,
+      index_cap_percent: 5,
+      index_adjustment_frequency: "annual",
+      index_source: "reviewed index assumption",
+    });
+
+    expect(form.index_adjustment_applicable).toBe("yes");
+    expect(form.index_adjustment_type).toBe("cpi");
+    expect(form.index_name).toBe("CPI-U");
+    expect(form.index_base_period).toBe("base month");
+    expect(form.index_current_period).toBe("current month");
+    expect(form.index_adjustment_percent).toBe("3.25");
+    expect(form.index_floor_percent).toBe("1");
+    expect(form.index_cap_percent).toBe("5");
+    expect(form.index_adjustment_frequency).toBe("annual");
+    expect(form.index_source).toBe("reviewed index assumption");
+  });
+
+  it("surfaces CPI/index adjustments as amount formula data", () => {
+    expect(getAmountFormulaLabel({
+      recovery_treatment: "pooled_recovery",
+      index_adjustment_applicable: true,
+      index_adjustment_type: "cpi",
+      index_name: "CPI-U",
+      index_adjustment_percent: 3.25,
+    })).toBe("3.25% CPI-U Adjustment");
+
+    expect(getAmountFormulaLabel({
+      index_adjustment_applicable: true,
+      index_adjustment_type: "cpi",
+    })).toBe("CPI Adjustment Review");
+  });
   it("uses one frozen contract status badge", () => {
     expect(getContractStatus({ approval_status: "approved", review_status: "approved" }).label).toBe("Approved");
     expect(getContractStatus({ approval_status: "rejected", review_status: "rejected" }).label).toBe("Rejected");

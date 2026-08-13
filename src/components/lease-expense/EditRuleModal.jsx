@@ -25,6 +25,8 @@ import {
   TRI_STATE_OPTIONS,
   RECOVERY_METHOD_OPTIONS,
   ALLOCATION_OPTIONS,
+  INDEX_ADJUSTMENT_TYPE_OPTIONS,
+  INDEX_ADJUSTMENT_FREQUENCY_OPTIONS,
   humanizeToken,
   getSourcePage,
   getExactSourceText,
@@ -230,6 +232,97 @@ export default function EditRuleModal({
                   </SelectContent>
                 </Select>
               </div>
+              <div className="space-y-2">
+                <Label>CPI / Index Adjustment Applies</Label>
+                <Select value={form.index_adjustment_applicable} onValueChange={(value) => setForm((current) => ({ ...current, index_adjustment_applicable: value }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="yes">Yes</SelectItem>
+                    <SelectItem value="no">No</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Adjustment Type</Label>
+                <Select value={form.index_adjustment_type} onValueChange={(value) => setForm((current) => ({ ...current, index_adjustment_type: value }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {INDEX_ADJUSTMENT_TYPE_OPTIONS.map((option) => (
+                      <SelectItem key={option} value={option}>{humanizeToken(option)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Index Name</Label>
+                <Input
+                  value={form.index_name}
+                  onChange={(event) => setForm((current) => ({ ...current, index_name: event.target.value }))}
+                  placeholder="Published index name"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Adjustment Frequency</Label>
+                <Select value={form.index_adjustment_frequency} onValueChange={(value) => setForm((current) => ({ ...current, index_adjustment_frequency: value }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {INDEX_ADJUSTMENT_FREQUENCY_OPTIONS.map((option) => (
+                      <SelectItem key={option} value={option}>{humanizeToken(option)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Base Index Period</Label>
+                <Input
+                  value={form.index_base_period}
+                  onChange={(event) => setForm((current) => ({ ...current, index_base_period: event.target.value }))}
+                  placeholder="Base month or period"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Current Index Period</Label>
+                <Input
+                  value={form.index_current_period}
+                  onChange={(event) => setForm((current) => ({ ...current, index_current_period: event.target.value }))}
+                  placeholder="Comparison month or period"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Adjustment Percent</Label>
+                <Input
+                  type="number"
+                  value={form.index_adjustment_percent}
+                  onChange={(event) => setForm((current) => ({ ...current, index_adjustment_percent: event.target.value }))}
+                  placeholder="Reviewed or assumed percent"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Index Floor Percent</Label>
+                <Input
+                  type="number"
+                  value={form.index_floor_percent}
+                  onChange={(event) => setForm((current) => ({ ...current, index_floor_percent: event.target.value }))}
+                  placeholder="Minimum adjustment"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Index Cap Percent</Label>
+                <Input
+                  type="number"
+                  value={form.index_cap_percent}
+                  onChange={(event) => setForm((current) => ({ ...current, index_cap_percent: event.target.value }))}
+                  placeholder="Maximum adjustment"
+                />
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <Label>Index Source / Assumption</Label>
+                <Input
+                  value={form.index_source}
+                  onChange={(event) => setForm((current) => ({ ...current, index_source: event.target.value }))}
+                  placeholder="Source for index values or approved assumption"
+                />
+              </div>
             </div>
 
             <div className="space-y-2">
@@ -237,7 +330,7 @@ export default function EditRuleModal({
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                 <p><span className="font-medium text-slate-900">Source page:</span> {(() => {
                   const sp = getSourcePage(context.rule);
-                  return sp != null && sp !== "" && Number(sp) > 0 ? `p. ${Number(sp)}` : "—";
+                  return sp != null && sp !== "" && Number(sp) > 0 ? `p. ${Number(sp)}` : "â€”";
                 })()}</p>
                 <p className="mt-2"><span className="font-medium text-slate-900">Exact source text:</span> {getExactSourceText(context.rule) || "-"}</p>
               </div>

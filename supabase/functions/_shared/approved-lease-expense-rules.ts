@@ -569,6 +569,21 @@ function prepareRulePayload(lease: any, orgId: string, rule: any) {
       ),
       reconciliation_frequency: cleanText(rule?.reconciliation_frequency) ||
         (["base_year", "expense_stop", "pass_through"].includes(recoveryMethod) ? "annual" : null),
+      index_adjustment_applicable: Boolean(
+        rule?.index_adjustment_applicable ||
+        rule?.cpi_applicable ||
+        cleanText(rule?.index_adjustment_type || rule?.cpi_adjustment_type || rule?.escalation_index) ||
+        numberOrNull(rule?.index_adjustment_percent ?? rule?.cpi_adjustment_percent ?? rule?.cpi_rate) != null,
+      ),
+      index_adjustment_type: cleanText(rule?.index_adjustment_type || rule?.cpi_adjustment_type || rule?.escalation_type) || (rule?.cpi_applicable ? "cpi" : null),
+      index_name: cleanText(rule?.index_name || rule?.cpi_index_name || rule?.escalation_index) || null,
+      index_base_period: cleanText(rule?.index_base_period || rule?.cpi_base_period) || null,
+      index_current_period: cleanText(rule?.index_current_period || rule?.cpi_current_period) || null,
+      index_adjustment_percent: numberOrNull(rule?.index_adjustment_percent ?? rule?.cpi_adjustment_percent ?? rule?.cpi_rate),
+      index_floor_percent: numberOrNull(rule?.index_floor_percent ?? rule?.cpi_floor_percent),
+      index_cap_percent: numberOrNull(rule?.index_cap_percent ?? rule?.cpi_cap_percent),
+      index_adjustment_frequency: cleanText(rule?.index_adjustment_frequency || rule?.cpi_adjustment_frequency) || null,
+      index_source: cleanText(rule?.index_source || rule?.cpi_source) || null,
       exact_source_text: sourceText,
       confidence_score: confidence,
       confidence,
@@ -1048,7 +1063,3 @@ export const __test__ = {
   sourceFileIdCandidates,
   workflowFromFactLedgerDebug,
 };
-
-
-
-

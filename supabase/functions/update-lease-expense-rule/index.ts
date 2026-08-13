@@ -22,6 +22,16 @@ const ALLOWED_PATCH_KEYS = new Set([
   "gross_up_percent",
   "reconciliation_required",
   "notes",
+  "index_adjustment_applicable",
+  "index_adjustment_type",
+  "index_name",
+  "index_base_period",
+  "index_current_period",
+  "index_adjustment_percent",
+  "index_floor_percent",
+  "index_cap_percent",
+  "index_adjustment_frequency",
+  "index_source",
 ]);
 
 function validatePayload(body: Record<string, unknown> = {}) {

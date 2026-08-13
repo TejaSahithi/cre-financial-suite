@@ -3,6 +3,7 @@ import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   approvedFieldValue,
   baseMonthlyRentFromLease,
+  generateApprovedRentScheduleRows,
   normalizedLeaseDates,
 } from "../_shared/rent-schedule.ts";
 
@@ -64,4 +65,28 @@ Deno.test("rent schedule corrects a next-anniversary expiration to the final app
   });
 
   assertEquals(dates.leaseEnd?.toISOString().slice(0, 10), "2029-01-31");
+});
+Deno.test("rent schedule tags CPI/index escalations as approved assumptions", () => {
+  const rows = generateApprovedRentScheduleRows({
+    id: "lease-1",
+    org_id: "org-1",
+    abstract_status: "approved",
+    abstract_snapshot: {
+      approved: {
+        commencement_date: { value: "2024-01-01", review_status: "accepted" },
+        expiration_date: { value: "2025-01-31", review_status: "accepted" },
+        monthly_rent: { value: "1000", review_status: "accepted" },
+        escalation_type: { value: "cpi", review_status: "accepted" },
+        escalation_rate: { value: "3", review_status: "accepted" },
+        escalation_index: { value: "CPI-U", review_status: "accepted" },
+      },
+    },
+  });
+
+  const secondJanuary = rows.find((row) => row.period_start === "2025-01-01");
+  assertEquals(secondJanuary?.monthly_amount, 1030);
+  assertEquals(secondJanuary?.escalation_index, "CPI-U");
+  assertEquals(secondJanuary?.metadata?.index_escalation, true);
+  assertEquals(secondJanuary?.metadata?.index_rate_source, "approved_escalation_rate");
+  assertEquals(Boolean(secondJanuary?.assumption_reason), true);
 });

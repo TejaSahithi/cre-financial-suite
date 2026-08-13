@@ -47,6 +47,32 @@ export const ALLOCATION_OPTIONS = [
   "fixed",
   "direct",
 ];
+export const INDEX_ADJUSTMENT_TYPE_OPTIONS = [
+  "none",
+  "cpi",
+  "index",
+  "fixed_percent",
+];
+
+export const INDEX_ADJUSTMENT_FREQUENCY_OPTIONS = [
+  "annual",
+  "monthly",
+  "on_reconciliation",
+  "lease_anniversary",
+];
+
+export const INDEX_ADJUSTMENT_PATCH_KEYS = [
+  "index_adjustment_applicable",
+  "index_adjustment_type",
+  "index_name",
+  "index_base_period",
+  "index_current_period",
+  "index_adjustment_percent",
+  "index_floor_percent",
+  "index_cap_percent",
+  "index_adjustment_frequency",
+  "index_source",
+];
 
 export function toNullableNumber(value) {
   if (value === "" || value == null) return null;
@@ -81,6 +107,16 @@ export function buildRuleEditForm(rule) {
     gross_up_applicable: toBooleanString(Boolean(rule?.gross_up_applicable)),
     gross_up_percent: rule?.gross_up_percent == null ? "" : String(rule.gross_up_percent),
     reconciliation_required: toBooleanString(Boolean(rule?.reconciliation_required)),
+    index_adjustment_applicable: toBooleanString(Boolean(rule?.index_adjustment_applicable)),
+    index_adjustment_type: rule?.index_adjustment_type || "none",
+    index_name: rule?.index_name || "",
+    index_base_period: rule?.index_base_period || "",
+    index_current_period: rule?.index_current_period || "",
+    index_adjustment_percent: rule?.index_adjustment_percent == null ? "" : String(rule.index_adjustment_percent),
+    index_floor_percent: rule?.index_floor_percent == null ? "" : String(rule.index_floor_percent),
+    index_cap_percent: rule?.index_cap_percent == null ? "" : String(rule.index_cap_percent),
+    index_adjustment_frequency: rule?.index_adjustment_frequency || "annual",
+    index_source: rule?.index_source || "",
     notes: rule?.notes || "",
   };
 }
@@ -725,6 +761,21 @@ export function getAmountFormulaLabel(rule) {
     return allocation.includes("pro rata") || allocation.includes("pro_rata") ? `${share} Pro Rata` : `${share} Share`;
   }
 
+  const indexAdjustmentApplies = Boolean(
+    rule?.index_adjustment_applicable ||
+    rule?.index_adjustment_type ||
+    rule?.index_name ||
+    rule?.index_adjustment_percent != null,
+  );
+  if (indexAdjustmentApplies) {
+    const adjustment = formatPercent(rule?.index_adjustment_percent);
+    const indexName = String(rule?.index_name || "").replace(/\s+/g, " ").trim();
+    const typeToken = normalizeDisplayKey(rule?.index_adjustment_type);
+    const typeLabel = typeToken === "cpi" ? "CPI" : humanizeToken(rule?.index_adjustment_type || "index_adjustment");
+    const label = indexName || typeLabel;
+    return adjustment ? `${adjustment} ${label} Adjustment` : `${label} Adjustment Review`;
+  }
+
   const cap = formatPercent(rule?.cap_percent ?? rule?.cam_cap_rate ?? model?.cap);
   if (cap) return `${cap} Annual Cap`;
 
@@ -995,4 +1046,3 @@ export function calculateRuleCounts(flattenedRows) {
 
   return summary;
 }
-

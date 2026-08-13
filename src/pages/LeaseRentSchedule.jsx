@@ -221,6 +221,7 @@ export default function LeaseRentSchedule() {
   const sourceLabel = schedulesLoading
     ? "Loading schedule rows"
     : (persistedRows.length > 0 ? "Stored schedule rows" : "Approved abstract preview");
+  const isPreviewOnlySchedule = !schedulesLoading && persistedRows.length === 0;
 
   const handleExport = () => {
     if (!comparisonRows.length) return;
@@ -351,6 +352,26 @@ export default function LeaseRentSchedule() {
               </CardContent>
             </Card>
           </div>
+
+          {isPreviewOnlySchedule && (
+            <Card className="border-amber-200 bg-amber-50">
+              <CardContent className="flex items-center justify-between gap-4 p-4">
+                <div className="flex items-center gap-3 text-sm text-amber-800">
+                  <AlertCircle className="h-5 w-5 shrink-0 text-amber-500" />
+                  <div>
+                    <p className="font-semibold">Rent schedule is preview-only.</p>
+                    <p className="text-xs text-amber-700">
+                      No stored rent schedule rows exist for this lease. Budget, billing, expense classification, and CAM readiness should use stored schedule rows after generation completes.
+                    </p>
+                  </div>
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={() => refetch()} disabled={schedulesLoading}>
+                  <RefreshCw className={`h-4 w-4 ${schedulesLoading ? "animate-spin" : ""}`} />
+                  Refresh
+                </Button>
+              </CardContent>
+            </Card>
+          )}
 
           {selectedYearHasNoRent && (
             <Card className="border-amber-200 bg-amber-50">

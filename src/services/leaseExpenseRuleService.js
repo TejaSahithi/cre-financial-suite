@@ -187,6 +187,15 @@ function ruleSemanticFingerprint(rule, index = 0) {
     firstPresent(rule?.cap_amount, rule?.cap_value),
     rule?.cap_percent,
     rule?.tenant_share_percent,
+    rule?.index_adjustment_applicable,
+    rule?.index_adjustment_type,
+    rule?.index_name,
+    rule?.index_base_period,
+    rule?.index_current_period,
+    rule?.index_adjustment_percent,
+    rule?.index_floor_percent,
+    rule?.index_cap_percent,
+    rule?.index_adjustment_frequency,
     deriveRuleBillingTreatment(rule),
     firstPresent(rule?.billing_frequency, rule?.frequency),
     rule?.source_page,
@@ -382,7 +391,7 @@ async function ensurePersistentCategories({ orgId, categories = [], rules = [] }
       if (insertError) {
         // RLS denies the insert when the current user/role isn't permitted to
         // create org-scoped categories (e.g. anon key, restricted member).
-        // Don't fail the whole rule-save — continue with whatever categories
+        // Don't fail the whole rule-save â€” continue with whatever categories
         // already exist (the seeded system defaults). Rules for the missing
         // keys will fall through to the text-only path with expense_category
         // populated but expense_category_id NULL, which we now allow.
@@ -394,7 +403,7 @@ async function ensurePersistentCategories({ orgId, categories = [], rules = [] }
           /permission denied/i.test(message);
         if (isRlsDenial) {
           devWarn(
-            `[leaseExpenseRuleService] expense_categories INSERT denied by RLS for ${insertPayload.length} key(s) — using existing seeded categories. Missing keys:`,
+            `[leaseExpenseRuleService] expense_categories INSERT denied by RLS for ${insertPayload.length} key(s) â€” using existing seeded categories. Missing keys:`,
             insertPayload.map((p) => p.normalized_key),
           );
         } else {
@@ -569,7 +578,7 @@ export const leaseExpenseRuleService = {
   async loadRuleSets(leaseIds = []) {
     const tag = `[loadRuleSets leaseIds=${leaseIds?.length || 0}]`;
     if (!Array.isArray(leaseIds) || leaseIds.length === 0) {
-      devLog(`${tag} early return — no leaseIds`);
+      devLog(`${tag} early return â€” no leaseIds`);
       return [];
     }
 
@@ -623,7 +632,7 @@ export const leaseExpenseRuleService = {
     // Save every rule we have a canonical category text for, even if the
     // expense_categories lookup failed (table missing, RLS denial, or org
     // hasn't seeded). The `expense_category` text column is now the source
-    // of truth — the FK to expense_categories is nice-to-have for joins,
+    // of truth â€” the FK to expense_categories is nice-to-have for joins,
     // but losing it must not lose the rule. Previously this filter dropped
     // every rule whenever expense_categories was unavailable, which is why
     // the page showed 0 after approval.
@@ -654,7 +663,7 @@ export const leaseExpenseRuleService = {
     // whichever payload survives dedup.
     const ruleSourceByKey = new Map();
     let rulePayloads = savableRules.map((rule) => {
-      // Only include `id` when the rule actually has a UUID — sending
+      // Only include `id` when the rule actually has a UUID â€” sending
       // `id: undefined` in a PostgREST upsert payload triggers a 400 on
       // some clients because PostgREST expects either a complete `id` per
       // row or none. The strip-missing-column retry was masking this with
@@ -719,7 +728,16 @@ export const leaseExpenseRuleService = {
         billing_frequency: normalizeFrequency(rule.billing_frequency || rule.frequency),
         reconciliation_required: deriveRuleReconciliationRequired(rule),
         reconciliation_frequency: deriveRuleReconciliationFrequency(rule),
-        
+        index_adjustment_applicable: Boolean(rule.index_adjustment_applicable),
+        index_adjustment_type: rule.index_adjustment_type || null,
+        index_name: rule.index_name || null,
+        index_base_period: rule.index_base_period || null,
+        index_current_period: rule.index_current_period || null,
+        index_adjustment_percent: asNumber(rule.index_adjustment_percent),
+        index_floor_percent: asNumber(rule.index_floor_percent),
+        index_cap_percent: asNumber(rule.index_cap_percent),
+        index_adjustment_frequency: rule.index_adjustment_frequency || null,
+        index_source: rule.index_source || null,
         exact_source_text: deriveRuleExactSourceText(rule),
         confidence_score: deriveRuleConfidence(rule),
         extraction_status: deriveRuleExtractionStatus(rule),
@@ -816,7 +834,7 @@ export const leaseExpenseRuleService = {
 
     const supersededRuleIds = [];
 
-    // ── Values/clauses source data, keyed by rule_key ──────────────────
+    // â”€â”€ Values/clauses source data, keyed by rule_key â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // The RPC hasn't run yet, so newly-created rules' DB ids aren't known
     // client-side -- values/clauses reference rules by rule_key instead
     // (a deliberate improvement over the prior expense_category_id-based
@@ -849,7 +867,7 @@ export const leaseExpenseRuleService = {
       );
     }
 
-    // ── Mechanical multi-table write, now server-owned ──────────────────
+    // â”€â”€ Mechanical multi-table write, now server-owned â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // save_lease_expense_rule_set (edge function -> SECURITY DEFINER RPC)
     // upserts the rule_set row (creating one if ruleSetId is null), upserts
     // lease_expense_rules on (lease_id, rule_key), replaces

@@ -241,6 +241,10 @@ function hasStatedAllocationOrFormula(rule = {}) {
     rule?.base_year_amount,
     rule?.coverage_requirement_amount,
     rule?.insurance_coverage_amount,
+    rule?.index_adjustment_applicable,
+    rule?.index_adjustment_type,
+    rule?.index_name,
+    rule?.index_adjustment_percent,
   ));
 }
 
@@ -492,7 +496,19 @@ function deriveNormalizedContractModel(rule = {}) {
     condition_type: rule?.condition_type || null,
     condition_data: rule?.condition_data || null,
     cap: rule?.cap_rate ?? rule?.cap_percentage ?? null,
-    floor: rule?.floor_rate ?? null,
+    floor: rule?.floor_rate ?? rule?.index_floor_percent ?? null,
+    index_adjustment: {
+      applicable: Boolean(rule?.index_adjustment_applicable),
+      type: rule?.index_adjustment_type || null,
+      name: rule?.index_name || null,
+      base_period: rule?.index_base_period || null,
+      current_period: rule?.index_current_period || null,
+      adjustment_percent: rule?.index_adjustment_percent ?? null,
+      floor_percent: rule?.index_floor_percent ?? null,
+      cap_percent: rule?.index_cap_percent ?? null,
+      frequency: rule?.index_adjustment_frequency || null,
+      source: rule?.index_source || null,
+    },
     base_year: rule?.base_year ?? null,
     expense_stop: rule?.expense_stop_amount ?? null,
     share: rule?.tenant_share_pct ?? rule?.pro_rata_share ?? null,

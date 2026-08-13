@@ -57,6 +57,29 @@ import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { createNotificationsForEvent } from "@/services/notificationService";
 import { createPageUrl } from "@/utils";
 
+import {
+  toNullableNumber,
+  fromBooleanString,
+  buildRuleEditForm,
+  isApprovedRule,
+  getPolicyStatus,
+  getContractStatus,
+  isLeaseDerivedRule,
+  isCoverageGapRule,
+  getRuleValidation,
+  buildRuleHierarchyPatch,
+  INDEX_ADJUSTMENT_PATCH_KEYS,
+  getLeaseBuildingId,
+  buildDisplayRows,
+  dedupeDisplayRows,
+  calculateRuleCounts,
+} from '@/components/lease-expense/utils/leaseExpenseRulesHelpers';
+
+import {
+  buildExpenseFindingCoverageRows,
+  calculateFindingCoverageCounts,
+} from '@/components/lease-expense/utils/expenseFindingCoverage';
+
 const RULE_PATCH_KEYS = [
   "expense_category",
   "expense_subcategory",
@@ -76,28 +99,8 @@ const RULE_PATCH_KEYS = [
   "gross_up_percent",
   "reconciliation_required",
   "notes",
+  ...INDEX_ADJUSTMENT_PATCH_KEYS,
 ];
-
-import {
-  toNullableNumber,
-  fromBooleanString,
-  buildRuleEditForm,
-  isApprovedRule,
-  getPolicyStatus,
-  getContractStatus,
-  isLeaseDerivedRule,
-  isCoverageGapRule,
-  getRuleValidation,
-  buildRuleHierarchyPatch,
-  getLeaseBuildingId,
-  buildDisplayRows,
-  dedupeDisplayRows,
-  calculateRuleCounts,
-} from '@/components/lease-expense/utils/leaseExpenseRulesHelpers';
-import {
-  buildExpenseFindingCoverageRows,
-  calculateFindingCoverageCounts,
-} from '@/components/lease-expense/utils/expenseFindingCoverage';
 
 function normalizeStatus(value) {
   return String(value || "").trim().toLowerCase();
@@ -374,7 +377,7 @@ export default function LeaseExpenseRules() {
     console.log("rule_sets loaded:", ruleSetsByLease.length);
     console.log("rules per lease (in scope):", Object.fromEntries(rulesByLeaseId));
     console.log("total rules in flatten:", totalRulesInScope);
-    console.log("status filter:", statusFilter, "→ hidden by filter:", hiddenByStatusFilter);
+    console.log("status filter:", statusFilter, "-> hidden by filter:", hiddenByStatusFilter);
     console.log("search:", search || "(none)");
     console.groupEnd();
   }, [ruleSetsByLease, flattenedRows, statusFilter, search, scopeProperty, scopeBuilding, scopeUnit, leases, selectorFilteredLeases]);
@@ -839,6 +842,16 @@ export default function LeaseExpenseRules() {
       gross_up_applicable: fromBooleanString(editForm.gross_up_applicable),
       gross_up_percent: toNullableNumber(editForm.gross_up_percent),
       reconciliation_required: fromBooleanString(editForm.reconciliation_required),
+      index_adjustment_applicable: fromBooleanString(editForm.index_adjustment_applicable),
+      index_adjustment_type: editForm.index_adjustment_type === "none" ? null : editForm.index_adjustment_type,
+      index_name: editForm.index_name || null,
+      index_base_period: editForm.index_base_period || null,
+      index_current_period: editForm.index_current_period || null,
+      index_adjustment_percent: toNullableNumber(editForm.index_adjustment_percent),
+      index_floor_percent: toNullableNumber(editForm.index_floor_percent),
+      index_cap_percent: toNullableNumber(editForm.index_cap_percent),
+      index_adjustment_frequency: editForm.index_adjustment_frequency || null,
+      index_source: editForm.index_source || null,
       notes: editForm.notes || null,
       updated_at: new Date().toISOString(),
     };
@@ -887,7 +900,7 @@ export default function LeaseExpenseRules() {
 
       {leaseIdParam && (
         <div className="flex items-center gap-2 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-          Showing expense rules for one lease only —{" "}
+          Showing expense rules for one lease only -{" "}
           <Link to={createPageUrl("LeaseExpenseRules")} className="underline">
             View all leases
           </Link>
@@ -1099,4 +1112,3 @@ export default function LeaseExpenseRules() {
     </div>
   );
 }
-
