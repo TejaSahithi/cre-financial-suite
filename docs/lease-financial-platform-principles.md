@@ -1,3 +1,5 @@
+
+
 # Lease Financial Platform — Architectural Principles
 
 These are the standing rules for every financial evaluator added to this
