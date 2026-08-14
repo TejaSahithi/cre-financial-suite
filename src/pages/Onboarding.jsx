@@ -597,6 +597,62 @@ export default function Onboarding() {
 }
 
 // â”€â”€â”€ MSA Step â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function ConfirmationStep({ org, user, plan }) {
+  const navigate = useNavigate();
+  const orgStatus = String(org?.status || user?.profile?.status || user?.status || "").toLowerCase();
+  const isActive = orgStatus === "active";
+  const isUnderReview = orgStatus === "under_review" || orgStatus === "approved" || orgStatus === "pending_approval";
+  const planLabel = plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : "Professional";
+
+  return (
+    <div className="text-center">
+      <div className={`mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-[8px] ${isActive ? "bg-[var(--success-soft)] text-[var(--success)]" : "bg-[var(--accent-soft)] text-[var(--accent)]"}`}>
+        <CheckCircle2 className="h-9 w-9" />
+      </div>
+
+      <h2 className="mb-2 text-2xl font-bold text-[var(--ink)]">
+        {isActive ? "Your workspace is active" : "Application submitted"}
+      </h2>
+      <p className="mx-auto mb-6 max-w-xl text-sm leading-relaxed text-[var(--muted)]">
+        {isActive
+          ? "Your organization has been approved and your ProForma OS workspace is ready."
+          : "Your onboarding package has been received. We are reviewing your organization and subscription details."}
+      </p>
+
+      <div className="mb-6 grid grid-cols-1 gap-3 text-left md:grid-cols-3">
+        <div className="rounded-[8px] border border-[var(--border-cre)] bg-[var(--bg)] p-4">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted)]">Organization</p>
+          <p className="mt-1 truncate text-sm font-semibold text-[var(--ink)]">{org?.name || "Your organization"}</p>
+        </div>
+        <div className="rounded-[8px] border border-[var(--border-cre)] bg-[var(--bg)] p-4">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted)]">Plan</p>
+          <p className="mt-1 text-sm font-semibold text-[var(--ink)]">{planLabel}</p>
+        </div>
+        <div className="rounded-[8px] border border-[var(--border-cre)] bg-[var(--bg)] p-4">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted)]">Status</p>
+          <p className="mt-1 text-sm font-semibold text-[var(--ink)]">
+            {isActive ? "Active" : isUnderReview ? "Under review" : "Pending"}
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-col justify-center gap-3 sm:flex-row">
+        {isActive ? (
+          <Button onClick={() => navigate(createPageUrl("Dashboard"))} className="h-12 rounded-[8px] bg-[var(--ink)] px-8 font-semibold hover:bg-[var(--ink)]">
+            Open Dashboard
+          </Button>
+        ) : (
+          <Button onClick={() => navigate(createPageUrl("PaymentSuccess"))} className="h-12 rounded-[8px] bg-[var(--ink)] px-8 font-semibold hover:bg-[var(--ink)]">
+            View Approval Status
+          </Button>
+        )}
+        <Button variant="outline" onClick={() => window.location.reload()} className="h-12 rounded-[8px] px-8">
+          Refresh Status
+        </Button>
+      </div>
+    </div>
+  );
+}
 function MSAStep({ org, onNext, onBack, user }) {
   const [accepted, setAccepted] = useState(false);
   const [fullName, setFullName] = useState(user?.full_name || "");
