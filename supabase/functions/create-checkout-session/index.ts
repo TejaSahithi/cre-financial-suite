@@ -10,8 +10,12 @@ const corsHeaders = {
 const DEFAULT_FRONTEND_URL = 'https://www.proformaos.ai';
 
 function resolveFrontendUrl(value?: string | null) {
-  const url = String(value || '').trim().replace(/\/$/, '');
-  return url && !/(vercel\.app|localhost)/i.test(url) ? url : DEFAULT_FRONTEND_URL;
+  let url = String(value || '').trim().replace(/\/$/, '');
+  if (!url) return DEFAULT_FRONTEND_URL;
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    url = `https://${url}`;
+  }
+  return url;
 }
 
 Deno.serve(async (req: Request) => {
