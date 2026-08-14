@@ -237,6 +237,10 @@ verify_jwt = true
 enabled = true
 verify_jwt = false
 
+[functions.submit-access-request]
+enabled = true
+verify_jwt = false
+
 
 [functions.validate-address-ups]
 enabled = true

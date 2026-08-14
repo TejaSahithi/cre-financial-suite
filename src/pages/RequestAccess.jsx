@@ -11,7 +11,6 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createPageUrl } from "@/utils";
 import { submitPublicAccessRequest, getExistingRequest } from "@/services/api";
-import { sendEmail } from "@/services/integrations";
 import { validateEmail, validatePhone } from "@/components/landing/ContactSection";
 import { toast } from "sonner";
 import ProFormaBrand from "@/components/ProFormaBrand";
@@ -167,32 +166,6 @@ export default function RequestAccess() {
       localStorage.setItem("has_requested_access", "true");
       localStorage.setItem("requested_access_email", form.email.trim().toLowerCase());
       setSubmitted(true);
-
-      // Notify internal team & user (non-blocking)
-      (async () => {
-        try {
-          await sendEmail({
-            to: "sales@proformaos.ai",
-            templateId: 'request_access_admin_notification',
-            variables: {
-              name: form.full_name,
-              email: form.email,
-              company: form.company_name,
-              role: isOtherRole ? form.customRole : form.role
-            }
-          });
-        } catch (e) { console.error("Admin notification fail:", e); }
-
-        try {
-          await sendEmail({
-            to: form.email,
-            templateId: 'request_access_autoreply',
-            variables: {
-              name: form.full_name.split(' ')[0]
-            }
-          });
-        } catch (e) { console.error("Auto-reply fail:", e); }
-      })();
 
     } catch (err) {
       console.error("Access request submission failed:", err);

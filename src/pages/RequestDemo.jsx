@@ -246,7 +246,7 @@ export default function RequestDemo() {
                     <div className="relative group">
                       <Input 
                         type="email" value={form.email} onChange={(e) => setField("email", e.target.value)} onBlur={handleEmailBlur}
-                        placeholder="jane@crefirm.com"
+                        placeholder="jane@company.com"
                         className="h-11 bg-[var(--surface-2)] border-[var(--border-cre)] rounded-[8px] px-4 text-[13px] font-semibold tracking-tight transition-all focus:bg-[var(--surface)] focus:ring-0 focus:border-[var(--accent)] shadow-[var(--shadow-soft)]"
                       />
                       {emailVerified && <div className="absolute right-3 top-1/2 -translate-y-1/2"><CheckCircle2 className="w-4 h-4 text-[var(--success)]" /></div>}

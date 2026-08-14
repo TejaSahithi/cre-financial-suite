@@ -87,6 +87,12 @@ const PUBLIC_TEMPLATES = [
   'contact_admin_notification'
 ];
 
+const ADMIN_NOTIFICATION_TEMPLATES = new Set([
+  'request_access_admin_notification',
+  'request_demo_admin_notification',
+  'contact_admin_notification',
+]);
+
 const AUTHENTICATED_TEMPLATES = [
   'budget_approval_notification',
   'lease_review_summary',
@@ -175,6 +181,44 @@ async function resolveInternalRecipientEmail({ supabaseAdmin, user, orgId, recip
     email: authUser?.user?.email || '',
     error: authUser?.user?.email ? '' : 'Notification recipient has no email address',
   };
+}
+
+async function resolveSuperAdminRecipientEmails(supabaseAdmin: any) {
+  const fallback = [SUPPORT_EMAIL];
+  if (!supabaseAdmin) return fallback;
+
+  const { data: memberships, error: membershipError } = await supabaseAdmin
+    .from('memberships')
+    .select('user_id,status')
+    .eq('role', 'super_admin');
+
+  if (membershipError) {
+    console.error('[send-email] super admin membership lookup failed:', membershipError.message);
+    return fallback;
+  }
+
+  const userIds = [...new Set((memberships || [])
+    .filter((membership: any) => isActiveMembershipStatus(membership.status || 'active'))
+    .map((membership: any) => membership.user_id)
+    .filter(Boolean))];
+
+  if (userIds.length === 0) return fallback;
+
+  const { data: profiles, error: profileError } = await supabaseAdmin
+    .from('profiles')
+    .select('email')
+    .in('id', userIds);
+
+  if (profileError) {
+    console.error('[send-email] super admin profile lookup failed:', profileError.message);
+    return fallback;
+  }
+
+  const emails = [...new Set((profiles || [])
+    .map((profile: any) => String(profile.email || '').trim().toLowerCase())
+    .filter(Boolean))];
+
+  return emails.length > 0 ? emails : fallback;
 }
 
 function getTemplateData(templateId: string, variables: any) {
@@ -403,6 +447,10 @@ Deno.serve(async (req) => {
 
     // If template specifies a 'to' address (e.g., admin notifications), use it. Otherwise use the client's 'to'.
     let finalTo = templateData.to || to;
+    if (ADMIN_NOTIFICATION_TEMPLATES.has(templateId)) {
+      finalTo = await resolveSuperAdminRecipientEmails(supabaseAdmin);
+    }
+
     if (!finalTo && templateId === 'generic_internal_notification') {
       const resolvedRecipient = await resolveInternalRecipientEmail({
         supabaseAdmin,

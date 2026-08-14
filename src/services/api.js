@@ -1647,7 +1647,6 @@ export const ComputationSnapshotService = createEntityService('ComputationSnapsh
  * Status defaults to 'pending_approval' so SuperAdmins can review.
  */
 export async function submitPublicAccessRequest(payload) {
-  // Strict: ONLY inserts into access_requests. Never touches demo_requests.
   const requestPayload = {
     full_name: payload.full_name,
     email: payload.email,
@@ -1668,23 +1667,33 @@ export async function submitPublicAccessRequest(payload) {
     return { id: `mem-${Date.now()}`, ...requestPayload, created_at: new Date().toISOString() };
   }
 
-  // Use .insert() — upsert requires UPDATE privilege even for fresh rows,
-  // which RLS blocks for anon users when existing rows have non-pending statuses.
-  const { data, error } = await supabase
-    .from('access_requests')
-    .insert(requestPayload);
+  const { data, error } = await supabase.functions.invoke('submit-access-request', {
+    body: requestPayload,
+  });
 
   if (error) {
-    // 23505 = unique_violation (duplicate email) — treat as success so user isn't stuck
-    if (error.code === '23505') {
-      console.warn('[api] submitPublicAccessRequest: duplicate email, returning gracefully');
-      return { ...requestPayload, created_at: new Date().toISOString() };
+    const ctx = error?.context;
+    if (ctx && typeof ctx.json === 'function') {
+      try {
+        const payload = await ctx.json();
+        throw new Error(payload?.message || payload?.error || error.message || 'Failed to submit access request');
+      } catch (parseError) {
+        if (parseError instanceof Error && parseError.message) throw parseError;
+      }
     }
     console.error('[api] submitPublicAccessRequest failed:', error);
     throw new Error(error.message || 'Failed to submit access request');
   }
 
-  return data?.[0] || requestPayload;
+  if (data?.error) {
+    throw new Error(data.message || data.error || 'Failed to submit access request');
+  }
+
+  if (data?.warnings?.length) {
+    console.warn('[api] submitPublicAccessRequest warnings:', data.warnings);
+  }
+
+  return data?.request || requestPayload;
 }
 
 /**

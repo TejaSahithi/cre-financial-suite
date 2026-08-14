@@ -11,6 +11,10 @@ const BRAND_NAME = 'ProForma OS';
 const SUPPORT_EMAIL = 'support@proformaos.ai';
 const DEFAULT_FRONTEND_URL = 'https://www.proformaos.ai';
 const LOGO_URL = `${DEFAULT_FRONTEND_URL}/assets/proforma-os-logo.png`;
+const TWILIO_ACCOUNT_SID = Deno.env.get('TWILIO_ACCOUNT_SID') || '';
+const TWILIO_AUTH_TOKEN = Deno.env.get('TWILIO_AUTH_TOKEN') || '';
+const TWILIO_FROM_NUMBER = Deno.env.get('TWILIO_FROM_NUMBER') || '';
+const TWILIO_MESSAGING_SERVICE_SID = Deno.env.get('TWILIO_MESSAGING_SERVICE_SID') || '';
 
 function resolveFrontendUrl(value?: string | null) {
   const url = String(value || '').trim().replace(/\/$/, '');
@@ -53,6 +57,51 @@ const emailWrapper = (content: string) => `
 </body>
 </html>
 `;
+
+function normalizeSmsPhone(value: unknown) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const digits = raw.replace(/\D/g, '');
+  const normalized = raw.startsWith('+')
+    ? `+${digits}`
+    : digits.length === 10
+      ? `+1${digits}`
+      : digits.length === 11 && digits.startsWith('1')
+        ? `+${digits}`
+        : '';
+  return /^\+[1-9]\d{7,14}$/.test(normalized) ? normalized : '';
+}
+
+async function sendApprovalSms(toPhone: unknown, message: string) {
+  if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || (!TWILIO_FROM_NUMBER && !TWILIO_MESSAGING_SERVICE_SID)) {
+    return { status: 'skipped', warning: 'Twilio SMS provider is not configured.' };
+  }
+
+  const to = normalizeSmsPhone(toPhone);
+  if (!to) return { status: 'skipped', warning: 'Requester has no valid SMS phone number.' };
+
+  const form = new URLSearchParams();
+  form.set('To', to);
+  form.set('Body', message.replace(/\s+/g, ' ').trim().slice(0, 1600));
+  if (TWILIO_MESSAGING_SERVICE_SID) form.set('MessagingServiceSid', TWILIO_MESSAGING_SERVICE_SID);
+  else form.set('From', TWILIO_FROM_NUMBER);
+
+  const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${btoa(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`)}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: form,
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    return { status: 'failed', warning: payload?.message || 'Twilio SMS send failed.' };
+  }
+
+  return { status: 'sent', id: payload?.sid || null };
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -291,7 +340,7 @@ Deno.serve(async (req: Request) => {
             <p>Hi ${accessRequest.full_name},</p>
             <p>Your access request has been approved.</p>
             <p>You can now create your account and get started with the platform.</p>
-            <p>👉 Create your account:<br/>
+            <p>Create your account:<br/>
             <a href="${loginLink}">${loginLink}</a></p>
             <p>Once signed in, you will:</p>
             <ul>
@@ -328,6 +377,18 @@ Deno.serve(async (req: Request) => {
         } else {
           console.warn('[approve-request] RESEND_API_KEY not set — skipping branded email.');
           warnings.push('Approval saved, but approval email was skipped because RESEND_API_KEY is not configured.');
+        }
+
+        const smsResult = await sendApprovalSms(
+          accessRequest.phone,
+          `${BRAND_NAME}: your access request for ${accessRequest.company_name || 'your organization'} has been approved. Sign in here: ${frontendUrl}/Login`
+        );
+
+        if (smsResult.status !== 'sent') {
+          console.warn('[approve-request] Approval SMS not sent:', smsResult.warning);
+          warnings.push(`Approval SMS not sent: ${smsResult.warning}`);
+        } else {
+          console.log('[approve-request] Approval SMS sent:', smsResult.id);
         }
       }
 
