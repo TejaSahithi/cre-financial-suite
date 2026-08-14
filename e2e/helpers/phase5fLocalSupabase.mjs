@@ -285,12 +285,34 @@ export async function seedPhase5fScenario() {
     metadata: { phase: "5F", source_file_id: uploadId, workflow_output: workflowOutput },
   };
 
+  const minimalPdf = new TextEncoder().encode([
+    "%PDF-1.4",
+    "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
+    "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj",
+    "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >> endobj",
+    "4 0 obj << /Length 72 >> stream",
+    "BT /F1 12 Tf 72 720 Td (Phase 5F seeded lease source document.) Tj ET",
+    "endstream endobj",
+    "xref",
+    "0 5",
+    "0000000000 65535 f ",
+    "trailer << /Root 1 0 R /Size 5 >>",
+    "startxref",
+    "0",
+    "%%EOF",
+  ].join("\n"));
+  const { error: storageError } = await admin.storage
+    .from("financial-uploads")
+    .upload(`${orgAId}/${uploadId}`, minimalPdf, { contentType: "application/pdf", upsert: true });
+  if (storageError) throw new Error(`Could not seed source PDF object: ${storageError.message}`);
   await insertRow(admin, "uploaded_files", {
     id: uploadId,
     org_id: orgAId,
     module_type: "leases",
     file_name: `phase5f-seeded-${suffix}.pdf`,
-    file_url: `${env.API_URL}/storage/v1/object/public/financial-uploads/phase5f/${uploadId}.pdf`,
+    file_url: `${env.API_URL}/storage/v1/object/public/financial-uploads/${orgAId}/${uploadId}`,
+    storage_bucket: "financial-uploads",
+    storage_path: `${orgAId}/${uploadId}`,
     file_size: 12048,
     mime_type: "application/pdf",
     uploaded_by: reviewerEmail,

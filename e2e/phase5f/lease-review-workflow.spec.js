@@ -119,18 +119,29 @@ test("Phase 5F seeded authenticated Lease Upload to Review approval workflow", a
   await expect(page.getByText("Evidence (editable)")).toBeVisible({ timeout: 15000 });
   const viewDocumentButton = page.getByRole("button", { name: "View in Document" });
   if (await viewDocumentButton.isVisible().catch(() => false)) {
-    const [evidencePage] = await Promise.all([
+    const [evidencePage, sourceRequest] = await Promise.all([
       context.waitForEvent("page"),
+      context.waitForEvent("request", (request) => {
+        const url = request.url();
+        return url.includes("/storage/v1/object/") && url.includes(seeded.uploadId);
+      }),
       viewDocumentButton.click(),
     ]);
-    await evidencePage.waitForLoadState("domcontentloaded").catch(() => {});
-    expect(evidencePage.url()).toContain(seeded.uploadId);
+    const sourceResponse = await sourceRequest.response();
+    expect(sourceRequest.url()).toContain(seeded.uploadId);
+    expect(sourceResponse?.status()).toBe(200);
     await evidencePage.close();
   }
   await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "Approve Lease Abstract" }).click();
-  await expect(page.getByText(/required field.*resolved before approval|Approval blocked/i).first()).toBeVisible({ timeout: 15000 });
-
+  const blockedApproveButton = page.getByRole("button", { name: "Approve Lease Abstract" });
+  await expect(blockedApproveButton).toBeVisible({ timeout: 15000 });
+  if (await blockedApproveButton.isEnabled()) {
+    await blockedApproveButton.click();
+    await expect(page.getByText(/required field.*resolved before approval|Approval blocked/i).first()).toBeVisible({ timeout: 15000 });
+  } else {
+    await expect(blockedApproveButton).toBeDisabled();
+    await expect(blockedApproveButton).toHaveAttribute("title", /required field\(s\) must be resolved before approval/i);
+  }
   await editFieldValue(page, "Security Deposit", "32500", "Reviewer confirmed the signed security deposit is $32,500.");
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await page.getByRole("button", { name: "Save Review Draft" }).click();
@@ -141,8 +152,7 @@ test("Phase 5F seeded authenticated Lease Upload to Review approval workflow", a
   await expect(page.getByText(/Required Reviewed 12 \/ 12|No blockers\. Ready to approve|All checks passed/i).first()).toBeVisible({ timeout: 15000 });
   await page.getByRole("tab", { name: "Rent & Charges" }).click();
   const securityDepositRow = page.locator("tr", { hasText: "Security Deposit" }).first();
-  await expect(securityDepositRow).toContainText("32500", { timeout: 15000 });
-  await expect(securityDepositRow).not.toContainText("30000");
+  await expect(securityDepositRow.locator("td").nth(1)).toContainText("$32,500", { timeout: 15000 });
   await openActionMenu(page, "Security Deposit");
   await page.getByRole("menuitem", { name: "Edit" }).click();
   await expect(page.locator('input[type="number"], input[type="text"]').first()).toHaveValue("32500", { timeout: 10000 });
@@ -153,11 +163,20 @@ test("Phase 5F seeded authenticated Lease Upload to Review approval workflow", a
   await page.screenshot({ path: testInfo.outputPath("03-edited-after-reload.png"), fullPage: true });
 
   await page.getByRole("button", { name: "Approve Lease Abstract" }).click();
-  await expect(page.getByRole("dialog")).toContainText("Confirm");
-  await page.getByPlaceholder("Full name of signatory").fill("Phase 5F Reviewer");
-  await page.locator('input[type="datetime-local"]').fill("2026-07-17T09:30");
+  const approvalDialog = page.getByRole("dialog");
+  await expect(approvalDialog).toContainText("Approve Lease Abstract");
   await page.getByPlaceholder(/Any notes from the signing party/i).fill("Phase 5F browser approval validation.");
-  await page.getByRole("button", { name: "Confirm Approval" }).click();
+  await approvalDialog.getByRole("checkbox").check();
+  await approvalDialog.locator("input").nth(1).fill("Phase 5F Reviewer");
+  const signaturePad = approvalDialog.locator('canvas[aria-label="Electronic signature drawing pad"]');
+  const box = await signaturePad.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box.x + 20, box.y + 50);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 90, box.y + 30);
+  await page.mouse.move(box.x + 160, box.y + 65);
+  await page.mouse.up();
+  await approvalDialog.getByRole("button", { name: "Approve & Sign" }).click();
   await expect(page.getByText(/Lease abstract approved|Lease approved/i).first()).toBeVisible({ timeout: 45000 });
   await expect(page.getByRole("button", { name: "Open Lease Detail" })).toBeVisible({ timeout: 20000 });
   await page.screenshot({ path: testInfo.outputPath("04-approved.png"), fullPage: true });

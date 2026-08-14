@@ -3103,6 +3103,43 @@ export default function LeaseReview() {
   };
 
   const markLeasePendingApproval = async () => {
+    // 1. Bulk accept/review all eligible extracted fields and auto-NA missing optional fields
+    const { eligibleFields, autoNaFields: fieldsToAutoNa, optionalUnresolved } = bulkEvaluation;
+    const nowIso = new Date().toISOString();
+    const reviewerName = user?.full_name || user?.email || lease?.signed_by || "Reviewer";
+
+    const allFieldsToAccept = Array.from(new Set([
+      ...eligibleFields,
+      ...(optionalUnresolved || []).filter((key) => {
+        const row = reviewRowByKey?.get?.(key) ?? reviewRowByKey?.[key] ?? standardRowByKey?.get?.(key) ?? standardRowByKey?.[key];
+        const val = row?.normalized_value ?? row?.normalizedValue ?? row?.value ?? fieldReviews?.[key]?.value ?? readFieldValue(lease, key);
+        return isMeaningfulValue(val);
+      }),
+    ]));
+
+    const { nextFieldReviews } = buildBulkApprovalState({
+      eligibleFields: allFieldsToAccept,
+      autoNaFields: fieldsToAutoNa || [],
+      fieldReviews,
+      lease,
+      rowByKey: reviewRowByKey,
+      fallbackRowByKey: standardRowByKey,
+      signedBy: reviewerName,
+      nowIso,
+      reviewStatuses: REVIEW_STATUSES,
+    });
+
+    try {
+      await saveAbstractDraft({
+        lease,
+        fieldReviews: nextFieldReviews,
+        action: "send_for_approval_field_sync",
+      });
+      setFieldReviews(nextFieldReviews);
+    } catch (saveErr) {
+      console.warn("[LeaseReview] field review sync during send for approval skipped:", saveErr?.message || saveErr);
+    }
+
     const pendingPatch = {
       abstract_status: "pending_review",
       status: "pending_review",

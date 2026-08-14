@@ -38,7 +38,7 @@ export async function findUploadedFileForLease(lease) {
     if (!sourceFileId) return null;
     let query = supabase
       .from("uploaded_files")
-      .select("id, org_id, file_url, file_name")
+      .select("id, org_id, file_url, file_name, storage_bucket, storage_path")
       .eq("id", sourceFileId);
     if (lease.org_id) query = query.eq("org_id", lease.org_id);
     const { data } = await query.maybeSingle();
@@ -69,9 +69,10 @@ export async function resolveUploadedFileUrl(fileRecord) {
   if (!fileRecord) return null;
 
   const storagePath = deriveFinancialUploadPath(fileRecord);
+  const storageBucket = fileRecord.storage_bucket || "financial-uploads";
   if (storagePath) {
     const { data, error } = await supabase.storage
-      .from("financial-uploads")
+      .from(storageBucket)
       .createSignedUrl(storagePath, 60 * 60);
 
     if (!error && data?.signedUrl) {
@@ -79,10 +80,13 @@ export async function resolveUploadedFileUrl(fileRecord) {
     }
   }
 
-  return fileRecord.file_url || null;
+  const rawUrl = String(fileRecord.file_url || "");
+  return rawUrl.includes("/storage/v1/object/public/financial-uploads/") ? null : rawUrl || null;
 }
 
 export function deriveFinancialUploadPath(fileRecord) {
+  if (fileRecord?.storage_path) return fileRecord.storage_path;
+
   const rawUrl = String(fileRecord?.file_url || "");
   const publicPrefix = "/storage/v1/object/public/financial-uploads/";
   const signPrefix = "/storage/v1/object/sign/financial-uploads/";

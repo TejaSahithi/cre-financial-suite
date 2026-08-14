@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from "react";
-import { Search, SlidersHorizontal, Check, Pencil, X, Eye, Ban, Send, MoreHorizontal, AlertTriangle, CircleSlash, CheckCircle2 } from "lucide-react";
+import React, { useMemo, useState, useEffect } from "react";
+import { Search, SlidersHorizontal, Check, Pencil, X, Eye, Ban, Send, MoreHorizontal, AlertTriangle, CircleSlash, CheckCircle2, AlertCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -143,6 +143,15 @@ export function rowHasDisplayValue(row) {
   return isMeaningfulValue(row?.value ?? row?.normalized_value ?? row?.normalizedValue);
 }
 
+export function isMandatoryRow(row) {
+  return Boolean(
+    row?.requiredForApproval ||
+    row?.required ||
+    row?.is_required ||
+    row?.mandatory
+  );
+}
+
 export function rowMatchesCompletenessFilter(row, completenessFilter = "filled") {
   const hasValue = rowHasDisplayValue(row);
   if (completenessFilter === "filled") return hasValue;
@@ -150,6 +159,9 @@ export function rowMatchesCompletenessFilter(row, completenessFilter = "filled")
     if (hasValue) return false;
     if (row?.rowType === "clause") return false;
     return Boolean(row?.defaultVisible || row?.requiredForApproval || row?.requiredForBudget || row?.requiredForCam || row?.requiredForExpenseRules || row?.sourceText || row?.source_text);
+  }
+  if (completenessFilter === "mandatory" || completenessFilter === "required") {
+    return isMandatoryRow(row);
   }
   return true;
 }
@@ -180,10 +192,18 @@ export default function LeaseReviewTabTable({
   approvalRequiredKeys = null,
 }) {
   const [query, setQuery] = useState("");
-  const [typeFilter, setTypeFilter] = useState("all");
+  const hasStandardFields = useMemo(() => rows.some((row) => row.rowType === "standard"), [rows]);
+  const [typeFilter, setTypeFilter] = useState(() => (rows.some((row) => row.rowType === "standard") ? "standard" : "all"));
   const [statusFilter, setStatusFilter] = useState("all");
   const [showAdvanced, setShowAdvanced] = useState(true);
   const [completenessFilter, setCompletenessFilter] = useState("filled");
+
+  // Keep typeFilter aligned to standard when available
+  useEffect(() => {
+    if (hasStandardFields && typeFilter === "all" && !rows.every((row) => row.rowType === "clause" || row.rowType === "material_term")) {
+      // Keep user choice or default to standard
+    }
+  }, [hasStandardFields, rows, typeFilter]);
 
   const typeOptions = useMemo(() => {
     return Array.from(new Set(rows.map((row) => row.rowType).filter(Boolean))).sort();
@@ -201,6 +221,7 @@ export default function LeaseReviewTabTable({
     all: baseFilteredRows.length,
     filled: baseFilteredRows.filter((row) => rowMatchesCompletenessFilter(row, "filled")).length,
     missing: baseFilteredRows.filter((row) => rowMatchesCompletenessFilter(row, "missing")).length,
+    mandatory: baseFilteredRows.filter((row) => rowMatchesCompletenessFilter(row, "mandatory")).length,
   }), [baseFilteredRows]);
 
   const visibleRows = useMemo(() => {
@@ -224,6 +245,11 @@ export default function LeaseReviewTabTable({
             <AlertTriangle className="h-3.5 w-3.5" />
             Missing
             <Badge variant="outline" className="ml-1 border-slate-200 bg-slate-50 text-slate-600">{completenessCounts.missing}</Badge>
+          </Button>
+          <Button type="button" variant={completenessFilter === "mandatory" ? "secondary" : "ghost"} size="sm" className="h-7 gap-1.5 px-2 text-xs" onClick={() => setCompletenessFilter("mandatory")}>
+            <AlertCircle className="h-3.5 w-3.5 text-amber-600" />
+            Mandatory
+            <Badge variant="outline" className="ml-1 border-amber-200 bg-amber-50 text-amber-700">{completenessCounts.mandatory}</Badge>
           </Button>
         </div>
       </div>
