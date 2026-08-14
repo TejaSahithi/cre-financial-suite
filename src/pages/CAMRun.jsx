@@ -26,6 +26,7 @@ import { useAuth } from "@/lib/AuthContext";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { createNotificationsForEvent } from "@/services/notificationService";
+import { logAudit } from "@/services/audit";
 import {
   recordModuleApprovalAction,
   submitOrReuseModuleApprovalWorkflow,
@@ -35,6 +36,7 @@ import { buildCamActiveLeaseIdSet, filterCamActiveLeases, filterRowsToCamActiveL
 import PageHeader from "@/components/PageHeader";
 import ScopeSelector from "@/components/ScopeSelector";
 import SendForApprovalButton from "@/components/approvals/SendForApprovalButton";
+import ElectronicSignatureBlock from "@/components/approvals/ElectronicSignatureBlock";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -111,6 +113,8 @@ export default function CAMRun() {
     return next;
   });
   const [runMode, setRunMode] = useState("posting_eligible");
+  const [approveDialogOpen, setApproveDialogOpen] = useState(false);
+  const [camApprovalSignature, setCamApprovalSignature] = useState(null);
 
   // Dialog states for posting / lifecycle
   const [adjDialog, setAdjDialog] = useState(false);
@@ -337,7 +341,29 @@ export default function CAMRun() {
         if (variables?.action === "submit_for_review") {
           await submitOrReuseModuleApprovalWorkflow({ workflowType: "cam", entity: workflowEntity, user, metadata: { source: "cam_run_submit_for_review" } });
         } else if (variables?.action === "approve") {
-          await recordModuleApprovalAction({ workflowType: "cam", entity: workflowEntity, user, action: "approve", metadata: { source: "cam_run_approve" } });
+          const electronicSignature = variables?.payload?.electronic_signature || null;
+          await recordModuleApprovalAction({
+            workflowType: "cam",
+            entity: workflowEntity,
+            user,
+            action: "approve",
+            metadata: { source: "cam_run_approve", electronic_signature: electronicSignature },
+          });
+          if (electronicSignature) {
+            await logAudit({
+              entityType: "CAMRun",
+              entityId: workflowEntity.id,
+              action: "cam_run_approval_signed",
+              orgId: workflowEntity.org_id || activeProperty?.org_id,
+              details: {
+                signed_by: electronicSignature.signedBy,
+                signed_at: electronicSignature.signedAt,
+                electronic_signature: electronicSignature,
+              },
+            }).catch((error) => {
+              console.warn("[CAMRun] electronic signature audit failed:", error?.message || error);
+            });
+          }
         } else if (variables?.action === "reject") {
           await recordModuleApprovalAction({
             workflowType: "cam",
@@ -364,6 +390,16 @@ export default function CAMRun() {
     actionMutation.mutateAsync({ action, payload }, {
       onSuccess: () => toast.success(successMsg ?? "Done"),
     });
+
+  const approveAndSignRun = async () => {
+    if (!camApprovalSignature?.valid) {
+      toast.error("Complete the attestation, legal name, and drawn signature before approving.");
+      return;
+    }
+    await doAction("approve", { electronic_signature: camApprovalSignature }, "Run approved");
+    setApproveDialogOpen(false);
+    setCamApprovalSignature(null);
+  };
 
   const markCamRunPendingApproval = async () => {
     if (activeRun?.status === "calculated") {
@@ -660,7 +696,7 @@ export default function CAMRun() {
                           <Button
                             className="bg-emerald-600 hover:bg-emerald-700"
                             disabled={blockingExceptions.length > 0}
-                            onClick={() => doAction("approve", {}, "Run approved")}
+                            onClick={() => setApproveDialogOpen(true)}
                           >
                             <CheckCircle2 className="mr-2 h-4 w-4" /> Approve Run
                           </Button>
@@ -834,6 +870,31 @@ export default function CAMRun() {
       )}
 
       {/* Dialogs */}
+      <Dialog open={approveDialogOpen} onOpenChange={(open) => { setApproveDialogOpen(open); if (!open) setCamApprovalSignature(null); }}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader><DialogTitle>Approve CAM Run</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-sm font-medium text-slate-700">Run Summary</p>
+              <p className="text-xs text-slate-500">
+                {activeProperty?.name || "Selected CAM run"} · {activeRun?.fiscal_year || activeRun?.recovery_year || "Current period"} · {activeRun?.id || ""}
+              </p>
+            </div>
+            <ElectronicSignatureBlock
+              user={user}
+              attestationText="I reviewed this CAM run, including summary totals and exception status, and authorize this approval to be recorded at this point in time."
+              onChange={setCamApprovalSignature}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setApproveDialogOpen(false); setCamApprovalSignature(null); }}>Cancel</Button>
+            <Button onClick={approveAndSignRun} disabled={!camApprovalSignature?.valid || actionMutation.isPending}>
+              <CheckCircle2 className="mr-2 h-4 w-4" /> Approve & Sign
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={adjDialog} onOpenChange={setAdjDialog}>
         <DialogContent>
           <DialogHeader><DialogTitle>Create Adjustment Run</DialogTitle></DialogHeader>

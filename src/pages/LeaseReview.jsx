@@ -102,6 +102,7 @@ import { useAuth } from "@/lib/AuthContext";
 import { isSuperAdmin } from "@/lib/rbac";
 import { SummaryStat } from "@/components/lease-review/SummaryStat";
 import SendForApprovalButton from "@/components/approvals/SendForApprovalButton";
+import ElectronicSignatureBlock from "@/components/approvals/ElectronicSignatureBlock";
 import {
   SourceFileLink,
   findUploadedFileForLease,
@@ -354,6 +355,7 @@ export default function LeaseReview() {
   // Approval form
   const [approvalSignedBy, setApprovalSignedBy] = useState("");
   const [approvalSignedAt, setApprovalSignedAt] = useState("");
+  const [approvalSignature, setApprovalSignature] = useState(null);
   const [approvalComments, setApprovalComments] = useState("");
   const [approvalDocumentUrl, setApprovalDocumentUrl] = useState("");
 
@@ -2270,12 +2272,8 @@ export default function LeaseReview() {
       );
       return;
     }
-    if (!approvalSignedBy.trim()) {
-      toast.error("Enter the signatory name before approving.");
-      return;
-    }
-    if (!approvalSignedAt) {
-      toast.error("Enter the signature date/time before approving.");
+    if (!approvalSignature?.valid) {
+      toast.error("Complete the attestation, legal name, and drawn signature before approving.");
       return;
     }
 
@@ -2284,7 +2282,8 @@ export default function LeaseReview() {
       // --- Bulk Approval Pre-pass ---
       const { eligibleFields, autoNaFields: fieldsToAutoNa } = bulkEvaluation;
       const nowIso = new Date().toISOString();
-      const signedBy = approvalSignedBy || lease?.signed_by;
+      const signedBy = approvalSignature.signedBy || approvalSignedBy || lease?.signed_by;
+      const signedAt = approvalSignature.signedAt || approvalSignedAt || nowIso;
 
       const { nextFieldReviews, auditDetails } = buildBulkApprovalState({
         eligibleFields,
@@ -2320,14 +2319,28 @@ export default function LeaseReview() {
 
       const approvalResult = await approveLeaseWorkflow({
         leaseId: lease.id,
-        signedBy: approvalSignedBy,
-        signedAt: approvalSignedAt,
+        signedBy,
+        signedAt,
         approvalComments,
         approvalDocumentUrl: resolvedDocumentUrl,
         fieldReviews: nextFieldReviews,
         idempotencyKey: createLeaseApprovalIdempotencyKey(lease.id),
       });
       const approvedLease = approvalResult.lease;
+
+      await logAudit({
+        entityType: "Lease",
+        entityId: lease.id,
+        action: "lease_abstract_approval_signed",
+        orgId: lease.org_id,
+        details: {
+          signed_by: signedBy,
+          signed_at: signedAt,
+          electronic_signature: approvalSignature,
+        },
+      }).catch((error) => {
+        console.warn("[LeaseReview] electronic signature audit failed:", error?.message || error);
+      });
 
       try {
         await submitOrReuseModuleApprovalWorkflow({
@@ -2336,8 +2349,9 @@ export default function LeaseReview() {
           user,
           metadata: {
             source: "lease_review_approve_abstract",
-            signed_by: approvalSignedBy,
-            signed_at: approvalSignedAt,
+            signed_by: signedBy,
+            signed_at: signedAt,
+            electronic_signature: approvalSignature,
           },
         });
         await recordModuleApprovalAction({
@@ -2348,8 +2362,9 @@ export default function LeaseReview() {
           comments: approvalComments || "Lease abstract approved.",
           metadata: {
             source: "lease_review_approve_abstract",
-            signed_by: approvalSignedBy,
-            signed_at: approvalSignedAt,
+            signed_by: signedBy,
+            signed_at: signedAt,
+            electronic_signature: approvalSignature,
           },
         });
       } catch (error) {
@@ -2461,6 +2476,7 @@ export default function LeaseReview() {
 
       toast.success(`Lease abstract approved (v${approvedLease.abstract_version || 1})`);
       setShowApproval(false);
+      setApprovalSignature(null);
       setShowPostApprovalBanner(true);
     } catch (err) {
       console.error("[LeaseReview] approve failed:", err);
@@ -4273,8 +4289,8 @@ export default function LeaseReview() {
       </Dialog>
 
       {/* Approval dialog */}
-      <Dialog open={showApproval} onOpenChange={setShowApproval}>
-        <DialogContent className="max-w-lg">
+      <Dialog open={showApproval} onOpenChange={(open) => { setShowApproval(open); if (!open) setApprovalSignature(null); }}>
+        <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>Approve Lease Abstract</DialogTitle>
             <DialogDescription asChild>
@@ -4310,28 +4326,6 @@ export default function LeaseReview() {
           </div>
           <div className="space-y-3">
             <div>
-              <Label className="text-xs font-semibold text-slate-700">
-                Signed By <span className="text-red-500">*</span>
-              </Label>
-              <Input
-                className="mt-1"
-                placeholder="Full name of signatory"
-                value={approvalSignedBy}
-                onChange={(e) => setApprovalSignedBy(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label className="text-xs font-semibold text-slate-700">
-                Signed At <span className="text-red-500">*</span>
-              </Label>
-              <Input
-                className="mt-1"
-                type="datetime-local"
-                value={approvalSignedAt}
-                onChange={(e) => setApprovalSignedAt(e.target.value)}
-              />
-            </div>
-            <div>
               <Label className="text-xs font-semibold text-slate-700">Document URL (optional)</Label>
               <Input
                 className="mt-1"
@@ -4350,18 +4344,24 @@ export default function LeaseReview() {
                 placeholder="Any notes from the signing party..."
               />
             </div>
+            <ElectronicSignatureBlock
+              user={user}
+              defaultName={lease?.signed_by || approvalSignedBy}
+              attestationText="I reviewed this lease abstract, including any unresolved optional fields, and authorize it to become the official lease abstract."
+              onChange={setApprovalSignature}
+            />
           </div>
           <DialogFooter className="mt-4">
-            <Button variant="outline" onClick={() => setShowApproval(false)}>
+            <Button variant="outline" onClick={() => { setShowApproval(false); setApprovalSignature(null); }}>
               Cancel
             </Button>
             <Button
               className="bg-emerald-600 hover:bg-emerald-700"
               onClick={handleApproveAbstract}
-              disabled={approving || fieldSaving}
+              disabled={approving || fieldSaving || !approvalSignature?.valid}
             >
               {approving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
-              Confirm Approval
+              Approve & Sign
             </Button>
           </DialogFooter>
         </DialogContent>

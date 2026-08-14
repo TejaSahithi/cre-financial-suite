@@ -17,9 +17,12 @@ import { CheckCircle2, ArrowLeft, XCircle, RotateCcw } from "lucide-react";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { createNotificationsForEvent } from "@/services/notificationService";
+import { logAudit } from "@/services/audit";
 import useOrgQuery from "@/hooks/useOrgQuery";
+import { useAuth } from "@/lib/AuthContext";
 import { createPageUrl } from "@/utils";
 import PageHeader from "@/components/PageHeader";
+import ElectronicSignatureBlock from "@/components/approvals/ElectronicSignatureBlock";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,9 +42,12 @@ function fmtDateTime(value) {
 }
 
 export default function CAMApproval() {
+  const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const camRunId = searchParams.get("cam_run_id") || "";
+  const [showApproveDialog, setShowApproveDialog] = useState(false);
+  const [approvalSignature, setApprovalSignature] = useState(null);
   const [dialogAction, setDialogAction] = useState(null); // 'reject' | 'return_to_draft'
   const [reason, setReason] = useState("");
   const { data: properties = [] } = useOrgQuery("Property");
@@ -115,8 +121,37 @@ export default function CAMApproval() {
   };
 
   const approveMutation = useMutation({
-    mutationFn: () => invokeEdgeFunction("cam-run-workflow-v2", { cam_run_id: camRunId, action: "approve" }),
-    onSuccess: (result) => { notifyCamApprovalEvent("cam.approved", "cam_approval_page_approve", result); toast.success("Run approved."); invalidate(); },
+    mutationFn: async () => {
+      if (!approvalSignature?.valid) {
+        throw new Error("Complete the attestation, legal name, and drawn signature before approving.");
+      }
+      const result = await invokeEdgeFunction("cam-run-workflow-v2", {
+        cam_run_id: camRunId,
+        action: "approve",
+        electronic_signature: approvalSignature,
+      });
+      await logAudit({
+        entityType: "CAMRun",
+        entityId: camRunId,
+        action: "cam_run_approval_signed",
+        orgId: run?.org_id || activeProperty?.org_id,
+        details: {
+          signed_by: approvalSignature.signedBy,
+          signed_at: approvalSignature.signedAt,
+          electronic_signature: approvalSignature,
+        },
+      }).catch((error) => {
+        console.warn("[CAMApproval] electronic signature audit failed:", error?.message || error);
+      });
+      return result;
+    },
+    onSuccess: (result) => {
+      notifyCamApprovalEvent("cam.approved", "cam_approval_page_approve", result);
+      toast.success("Run approved.");
+      setShowApproveDialog(false);
+      setApprovalSignature(null);
+      invalidate();
+    },
     onError: (err) => toast.error(err?.message || "Could not approve — check for unresolved blocking exceptions"),
   });
 
@@ -176,7 +211,7 @@ export default function CAMApproval() {
 
               {isSubmitted && (
                 <div className="mt-4 flex flex-wrap gap-3">
-                  <Button onClick={() => approveMutation.mutate()} disabled={approveMutation.isPending || openBlocking.length > 0}>
+                  <Button onClick={() => setShowApproveDialog(true)} disabled={approveMutation.isPending || openBlocking.length > 0}>
                     <CheckCircle2 className="mr-2 h-4 w-4" /> Approve
                   </Button>
                   <Button variant="outline" onClick={() => { setDialogAction("reject"); setReason(""); }}>
@@ -213,6 +248,33 @@ export default function CAMApproval() {
           </Card>
         </>
       )}
+
+      <Dialog open={showApproveDialog} onOpenChange={(open) => { setShowApproveDialog(open); if (!open) setApprovalSignature(null); }}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Approve CAM Run</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-sm font-medium text-slate-700">Run Summary</p>
+              <p className="text-xs text-slate-500">
+                {activeProperty?.name || "Selected CAM run"} · Final recovery {fmtCurrency(totals.finalRecovery)}
+              </p>
+            </div>
+            <ElectronicSignatureBlock
+              user={user}
+              attestationText="I reviewed this CAM run, including summary totals and exception status, and authorize this approval to be recorded at this point in time."
+              onChange={setApprovalSignature}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowApproveDialog(false)}>Cancel</Button>
+            <Button onClick={() => approveMutation.mutate()} disabled={!approvalSignature?.valid || approveMutation.isPending}>
+              <CheckCircle2 className="mr-2 h-4 w-4" /> Approve & Sign
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(dialogAction)} onOpenChange={(open) => !open && setDialogAction(null)}>
         <DialogContent>

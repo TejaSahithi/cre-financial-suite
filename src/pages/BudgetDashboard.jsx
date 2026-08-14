@@ -21,11 +21,14 @@ import {
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { generateApprovedBudgetWorkbook } from "@/services/approvedBudgetWorkbookGenerator";
 import { createNotificationsForEvent } from "@/services/notificationService";
+import { logAudit } from "@/services/audit";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useSnapshotQuery } from "@/hooks/useSnapshotQuery";
+import { useAuth } from "@/lib/AuthContext";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import ScopeSelector from "@/components/ScopeSelector";
+import ElectronicSignatureBlock from "@/components/approvals/ElectronicSignatureBlock";
 import PageHeader from "@/components/PageHeader";
 import PipelineActions, { BUDGET_ACTIONS } from "@/components/PipelineActions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -319,11 +322,14 @@ function BudgetInsights({ budget }) {
 }
 
 export default function BudgetDashboard() {
+  const { user } = useAuth();
   const location = useLocation();
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
   const [scopeUnit, setScopeUnit] = useState("all");
   const [selectedBudgetId, setSelectedBudgetId] = useState(null);
+  const [budgetApprovalDialogOpen, setBudgetApprovalDialogOpen] = useState(false);
+  const [budgetApprovalSignature, setBudgetApprovalSignature] = useState(null);
 
   const { data: budgets = [], isLoading } = useOrgQuery("Budget");
   const { data: properties = [] } = useOrgQuery("Property");
@@ -356,6 +362,7 @@ export default function BudgetDashboard() {
     onSuccess: async (_result, variables) => {
       await invalidateBudgetCaches(queryClient);
       const budget = variables?.budget;
+      const electronicSignature = variables?.electronicSignature || null;
       const eventByAction = {
         mark_reviewed: "budget.final_approval_required",
         approve: "budget.approved",
@@ -384,6 +391,23 @@ export default function BudgetDashboard() {
           console.warn("[BudgetDashboard] notification event failed:", error?.message || error);
         });
       }
+      if (variables?.action === "approve" && electronicSignature) {
+        await logAudit({
+          entityType: "Budget",
+          entityId: budget?.id,
+          action: "budget_approval_signed",
+          orgId: budget?.org_id || budget?.organization_id,
+          details: {
+            signed_by: electronicSignature.signedBy,
+            signed_at: electronicSignature.signedAt,
+            electronic_signature: electronicSignature,
+          },
+        }).catch((error) => {
+          console.warn("[BudgetDashboard] electronic signature audit failed:", error?.message || error);
+        });
+        setBudgetApprovalDialogOpen(false);
+        setBudgetApprovalSignature(null);
+      }
       toast.success("Budget status updated");
     },
     onError: (err) => {
@@ -391,12 +415,16 @@ export default function BudgetDashboard() {
     },
   });
 
-  const handleStatusChange = (budget, action) => {
+  const handleStatusChange = (budget, action, electronicSignature = null) => {
     if (!budget?.scope_id) return;
     updateMutation.mutate({
       action,
       budget,
       fiscalYear: getBudgetYear(budget),
+      electronicSignature,
+      approval_comment: electronicSignature
+        ? `Approved and electronically signed by ${electronicSignature.signedBy} at ${electronicSignature.signedAt}`
+        : undefined,
     });
   };
 
@@ -711,14 +739,12 @@ export default function BudgetDashboard() {
                       </Button>
                     )}
                     {selectedBudget.status === "reviewed" && (
-                      <Dialog>
-                        <DialogTrigger asChild>
-                          <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold">
-                            <CheckCircle2 className="mr-2 h-4 w-4" />
-                            Approve & Sign Budget
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent className="sm:max-w-lg">
+                      <Dialog open={budgetApprovalDialogOpen} onOpenChange={(open) => { setBudgetApprovalDialogOpen(open); if (!open) setBudgetApprovalSignature(null); }}>
+                        <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold" onClick={() => setBudgetApprovalDialogOpen(true)}>
+                          <CheckCircle2 className="mr-2 h-4 w-4" />
+                          Approve & Sign Budget
+                        </Button>
+                        <DialogContent className="max-w-3xl">
                           <DialogHeader>
                             <DialogTitle className="text-lg font-bold text-slate-900">
                               Approve & Executive Sign-Off
@@ -748,19 +774,23 @@ export default function BudgetDashboard() {
                               </div>
                             </div>
 
-                            <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
-                              "By approving, you confirm this FY{getBudgetYear(selectedBudget)} budget and its underlying planning
-                              assumptions as the authorized final approver. The approved version will be locked from financial regeneration."
-                            </div>
+                            <ElectronicSignatureBlock
+                              user={user}
+                              attestationText={`I reviewed this FY${getBudgetYear(selectedBudget)} budget and its underlying planning assumptions, and authorize final approval at this point in time.`}
+                              onChange={setBudgetApprovalSignature}
+                            />
                           </div>
 
                           <DialogFooter>
+                            <Button variant="outline" onClick={() => { setBudgetApprovalDialogOpen(false); setBudgetApprovalSignature(null); }}>
+                              Cancel
+                            </Button>
                             <Button
-                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold w-full"
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
                               onClick={() => {
-                                handleStatusChange(selectedBudget, "approve");
+                                handleStatusChange(selectedBudget, "approve", budgetApprovalSignature);
                               }}
-                              disabled={updateMutation.isPending}
+                              disabled={updateMutation.isPending || !budgetApprovalSignature?.valid}
                             >
                               {updateMutation.isPending ? (
                                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
