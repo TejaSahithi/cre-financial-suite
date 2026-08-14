@@ -157,17 +157,17 @@ export default function ElectronicSignatureBlock({
   };
 
   return (
-    <div className="rounded-lg border border-blue-200 bg-white p-4 shadow-sm">
-      <h3 className="text-sm font-bold text-blue-950">{title}</h3>
+    <div className="rounded-lg border border-blue-200 bg-white p-3 shadow-sm">
+      <h3 className="text-[13px] font-bold text-blue-950">{title}</h3>
 
-      <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50/60 p-3">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border border-blue-300 bg-white text-blue-700">
-            <UserCircle2 className="h-6 w-6" />
+      <div className="mt-2 rounded-lg border border-blue-100 bg-blue-50/60 p-2.5">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-blue-300 bg-white text-blue-700">
+            <UserCircle2 className="h-5 w-5" />
           </div>
           <div>
-            <p className="text-[11px] font-semibold text-blue-700">Current approver</p>
-            <p className="text-sm font-bold text-blue-950">{approverName}</p>
+            <p className="text-[10px] font-semibold text-blue-700">Current approver</p>
+            <p className="text-[13px] font-bold text-blue-950">{approverName}</p>
             <p className="text-xs text-slate-500">
               {approverRole}{approverEmail ? ` · ${approverEmail}` : ""}
             </p>
@@ -175,19 +175,19 @@ export default function ElectronicSignatureBlock({
         </div>
       </div>
 
-      <label className="mt-4 flex items-start gap-3 text-sm text-blue-950">
+      <label className="mt-3 flex items-start gap-2.5 text-[13px] leading-5 text-blue-950">
         <Checkbox checked={attested} onCheckedChange={(checked) => setAttested(Boolean(checked))} />
         <span>{attestationText}</span>
       </label>
 
-      <div className="mt-4">
+      <div className="mt-3">
         <Label className="text-xs font-semibold text-blue-950">
           Type your full legal name <span className="text-red-500">*</span>
         </Label>
-        <Input className="mt-1" value={signedBy} onChange={(event) => setSignedBy(event.target.value)} />
+        <Input className="mt-1 h-9" value={signedBy} onChange={(event) => setSignedBy(event.target.value)} />
       </div>
 
-      <div className="mt-4">
+      <div className="mt-3">
         <div className="mb-1 flex items-center justify-between">
           <Label className="text-xs font-semibold text-blue-950">
             Draw your signature <span className="text-red-500">*</span>
@@ -199,7 +199,7 @@ export default function ElectronicSignatureBlock({
         <div className="rounded-lg border border-blue-200 bg-white p-2">
           <canvas
             ref={canvasRef}
-            className="h-32 w-full touch-none rounded-md bg-white"
+            className="h-24 w-full touch-none rounded-md bg-white"
             onPointerDown={beginStroke}
             onPointerMove={drawStroke}
             onPointerUp={endStroke}
@@ -213,12 +213,12 @@ export default function ElectronicSignatureBlock({
         </div>
       </div>
 
-      <div className="mt-4 border-t border-blue-100 pt-3">
+      <div className="mt-3 border-t border-blue-100 pt-2.5">
         <p className="text-xs font-bold text-blue-950">Signing time</p>
-        <p className="text-sm text-slate-600">{formatSigningTime(signedAt)} · Recorded automatically</p>
+        <p className="text-xs text-slate-600">{formatSigningTime(signedAt)} · Recorded automatically</p>
       </div>
 
-      <div className="mt-3 flex items-center gap-2 border-t border-blue-100 pt-3 text-sm text-slate-600">
+      <div className="mt-2.5 flex items-center gap-2 border-t border-blue-100 pt-2.5 text-xs text-slate-600">
         <Lock className="h-4 w-4 text-blue-800" />
         This approval will be permanently recorded in the audit log.
       </div>

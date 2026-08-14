@@ -744,7 +744,7 @@ export default function BudgetDashboard() {
                           <CheckCircle2 className="mr-2 h-4 w-4" />
                           Approve & Sign Budget
                         </Button>
-                        <DialogContent className="max-w-3xl">
+                        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto p-5">
                           <DialogHeader>
                             <DialogTitle className="text-lg font-bold text-slate-900">
                               Approve & Executive Sign-Off

@@ -871,7 +871,7 @@ export default function CAMRun() {
 
       {/* Dialogs */}
       <Dialog open={approveDialogOpen} onOpenChange={(open) => { setApproveDialogOpen(open); if (!open) setCamApprovalSignature(null); }}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto p-5">
           <DialogHeader><DialogTitle>Approve CAM Run</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">

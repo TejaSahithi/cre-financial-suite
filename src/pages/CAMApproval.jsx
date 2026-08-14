@@ -250,7 +250,7 @@ export default function CAMApproval() {
       )}
 
       <Dialog open={showApproveDialog} onOpenChange={(open) => { setShowApproveDialog(open); if (!open) setApprovalSignature(null); }}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto p-5">
           <DialogHeader>
             <DialogTitle>Approve CAM Run</DialogTitle>
           </DialogHeader>

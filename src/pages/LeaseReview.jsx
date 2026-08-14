@@ -4290,7 +4290,7 @@ export default function LeaseReview() {
 
       {/* Approval dialog */}
       <Dialog open={showApproval} onOpenChange={(open) => { setShowApproval(open); if (!open) setApprovalSignature(null); }}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto p-5">
           <DialogHeader>
             <DialogTitle>Approve Lease Abstract</DialogTitle>
             <DialogDescription asChild>

@@ -409,7 +409,7 @@ export default function Approvals() {
       </Tabs>
 
       <Dialog open={Boolean(selectedWorkflow && selectedAction)} onOpenChange={(open) => !open && setSelectedWorkflow(null)}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto p-5">
           <DialogHeader>
             <DialogTitle>{labelize(selectedAction)} Workflow</DialogTitle>
             <DialogDescription>
