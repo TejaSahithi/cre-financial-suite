@@ -4200,6 +4200,23 @@ export default function LeaseReview() {
                   <Ban className="mr-1 h-4 w-4" />
                   Reject Document
                 </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowReextractConfirm(true)}
+                  disabled={reextracting || !resolvedSourceFileId}
+                  title={
+                    resolvedSourceFileId
+                      ? "Re-run extraction for this lease"
+                      : "Source file is required before re-extraction"
+                  }
+                >
+                  {reextracting ? (
+                    <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="mr-1 h-4 w-4" />
+                  )}
+                  Re-extract Lease
+                </Button>
                 <Button variant="outline" onClick={() => setShowSendBack(true)}>
                   <Undo2 className="mr-1 h-4 w-4" />
                   Send Back for Re-extraction
