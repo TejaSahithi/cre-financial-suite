@@ -76,7 +76,7 @@ Deno.serve(async (req: Request) => {
     // 3. Validate org state
     let { data: orgData, error: orgError } = await supabaseAdmin
       .from('organizations')
-      .select('status, plan, billing_cycle, stripe_customer_id, stripe_sub_id')
+      .select('*')
       .eq('id', orgId)
       .maybeSingle();
 
@@ -86,27 +86,64 @@ Deno.serve(async (req: Request) => {
 
     if (!orgData) {
       console.warn(`[create-checkout-session] Org ${orgId} missing in DB for user ${user.id}, self-healing record...`);
+      const orgPayload = {
+        id: orgId,
+        name: (user.user_metadata?.company_name as string | undefined) || 'My Organization',
+        status: 'onboarding',
+        onboarding_step: 3,
+        primary_contact_email: user.email,
+        updated_at: new Date().toISOString(),
+      };
+
       const { data: healedOrg, error: healError } = await supabaseAdmin
         .from('organizations')
-        .upsert({
-          id: orgId,
-          name: user.user_metadata?.company_name || 'My Organization',
-          status: 'onboarding',
-          onboarding_step: 3,
-          primary_contact_email: user.email,
-          created_by: user.id,
-        })
-        .select('status, plan, billing_cycle, stripe_customer_id, stripe_sub_id')
-        .single();
+        .upsert(orgPayload)
+        .select('*')
+        .maybeSingle();
 
       if (healError || !healedOrg) {
-        console.error('[create-checkout-session] Failed to heal organization record:', healError);
-        return new Response(JSON.stringify({ error: 'Organization not found' }), { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        console.warn('[create-checkout-session] Upsert healing failed, trying insert/fallback:', healError);
+        const { data: fallbackOrg } = await supabaseAdmin
+          .from('organizations')
+          .select('*')
+          .eq('id', orgId)
+          .maybeSingle();
+
+        if (fallbackOrg) {
+          orgData = fallbackOrg;
+        } else {
+          const { data: freshOrg, error: freshErr } = await supabaseAdmin
+            .from('organizations')
+            .insert({
+              name: (user.user_metadata?.company_name as string | undefined) || 'My Organization',
+              status: 'onboarding',
+              onboarding_step: 3,
+              primary_contact_email: user.email,
+            })
+            .select('*')
+            .single();
+
+          if (freshOrg) {
+            await supabaseAdmin
+              .from('memberships')
+              .upsert({
+                user_id: user.id,
+                org_id: freshOrg.id,
+                role: 'org_admin',
+                status: 'active',
+              });
+            orgData = freshOrg;
+          } else {
+            console.error('[create-checkout-session] Could not create fallback org:', freshErr);
+            return new Response(JSON.stringify({ error: 'Organization not found' }), { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          }
+        }
+      } else {
+        orgData = healedOrg;
       }
-      orgData = healedOrg;
     }
 
-    if (orgData.stripe_sub_id || (orgData.plan && orgData.billing_cycle && orgData.stripe_customer_id)) {
+    if (orgData?.stripe_sub_id || (orgData?.plan && orgData?.billing_cycle && orgData?.stripe_customer_id)) {
       return new Response(JSON.stringify({ error: 'Organization already has an active billing subscription' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
@@ -153,21 +190,21 @@ Deno.serve(async (req: Request) => {
       customer_email: user.email,
     });
 
-    // 6. Audit Log
-    const { error: auditErr } = await supabaseAdmin.from('audit_logs').insert({
-      org_id: orgId,
-      actor_user_id: user.id,
-      actor_email: user.email,
-      actor_role: role,
-      entity_type: 'CheckoutSession',
-      entity_id: session.id,
-      action: 'create',
-      source: 'edge_function',
-      severity: 'info'
-    });
-    if (auditErr) {
-      console.error('[create-checkout-session] Audit log failed:', auditErr);
-      throw new Error(`Audit log failed: ${auditErr.message}`);
+    // 6. Audit Log (Non-blocking)
+    try {
+      await supabaseAdmin.from('audit_logs').insert({
+        org_id: orgId,
+        actor_user_id: user.id,
+        actor_email: user.email,
+        actor_role: role,
+        entity_type: 'CheckoutSession',
+        entity_id: session.id,
+        action: 'create',
+        source: 'edge_function',
+        severity: 'info'
+      });
+    } catch (auditErr) {
+      console.warn('[create-checkout-session] Audit log warning (non-blocking):', auditErr);
     }
 
     return new Response(JSON.stringify({ url: session.url, sessionId: session.id }), {
