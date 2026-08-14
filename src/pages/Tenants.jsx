@@ -9,21 +9,27 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Plus, Users, FileText, DollarSign, Receipt, ChevronRight, Download, Upload } from "lucide-react";
+import { Search, Plus, Users, FileText, DollarSign, Receipt, ChevronRight, Download, Upload, Trash2 } from "lucide-react";
 import ModuleLink from "@/components/ModuleLink";
 import { downloadCSV } from "@/utils/index";
 import PageHeader from "@/components/PageHeader";
 import BulkImportModal from "@/components/property/BulkImportModal";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
+import { toast } from "sonner";
 
 export default function Tenants() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [selectedTenantNames, setSelectedTenantNames] = useState([]);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
   const [form, setForm] = useState({ name: "", contact_name: "", contact_email: "", contact_phone: "", industry: "", status: "active" });
   const queryClient = useQueryClient();
 
@@ -50,6 +56,45 @@ export default function Tenants() {
       queryClient.invalidateQueries({ queryKey: ['Tenant'] });
       setShowAdd(false);
       setForm({ name: "", contact_name: "", contact_email: "", contact_phone: "", industry: "", status: "active" });
+      toast.success("Tenant created successfully");
+    },
+    onError: (err) => {
+      toast.error(`Failed to create tenant: ${err?.message || "Unknown error"}`);
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (tenant) => {
+      if (tenant.entityId) {
+        await tenantService.delete(tenant.entityId);
+      }
+      return tenant.name;
+    },
+    onSuccess: (name) => {
+      queryClient.invalidateQueries({ queryKey: ['Tenant'] });
+      setSelectedTenantNames((prev) => prev.filter((n) => n !== name));
+      setDeleteTarget(null);
+      toast.success("Tenant removed successfully");
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete tenant: ${err?.message || "Unknown error"}`);
+    },
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (names) => {
+      const entitiesToDelete = tenantEntities.filter((t) => names.includes(t.name));
+      await Promise.all(entitiesToDelete.map((t) => tenantService.delete(t.id)));
+      return names.length;
+    },
+    onSuccess: (count) => {
+      queryClient.invalidateQueries({ queryKey: ['Tenant'] });
+      setSelectedTenantNames([]);
+      setShowBulkDelete(false);
+      toast.success(`${count} tenant${count === 1 ? "" : "s"} deleted successfully`);
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete selected tenants: ${err?.message || "Unknown error"}`);
     },
   });
 
@@ -91,6 +136,22 @@ export default function Tenants() {
 
   const activeTenants = Object.values(tenantMap).filter(t => t.leases?.some(l => l.status !== 'expired'));
   const totalOutstanding = Object.values(tenantMap).reduce((s, t) => s + (t.outstandingBalance || 0), 0);
+  const allFilteredSelected = tenants.length > 0 && tenants.every((t) => selectedTenantNames.includes(t.name));
+
+  const toggleTenantSelection = (name) => {
+    setSelectedTenantNames((prev) =>
+      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]
+    );
+  };
+
+  const toggleSelectAllFiltered = (checked) => {
+    if (checked) {
+      setSelectedTenantNames((prev) => [...new Set([...prev, ...tenants.map((t) => t.name)])]);
+    } else {
+      const filteredNames = new Set(tenants.map((t) => t.name));
+      setSelectedTenantNames((prev) => prev.filter((name) => !filteredNames.has(name)));
+    }
+  };
 
   return (
     <div className="p-4 lg:p-6 space-y-4">
@@ -117,21 +178,46 @@ export default function Tenants() {
         ))}
       </div>
 
-      <div className="flex gap-3 items-center">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <Input placeholder="Search tenants..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 h-8 text-sm" />
+      <div className="flex flex-wrap gap-3 items-center justify-between">
+        <div className="flex flex-1 min-w-[260px] max-w-md gap-3 items-center">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <Input placeholder="Search tenants..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 h-8 text-sm" />
+          </div>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-32 h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="all">All</SelectItem><SelectItem value="active">Active</SelectItem><SelectItem value="expired">Expired</SelectItem></SelectContent>
+          </Select>
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-32 h-8 text-xs"><SelectValue /></SelectTrigger>
-          <SelectContent><SelectItem value="all">All</SelectItem><SelectItem value="active">Active</SelectItem><SelectItem value="expired">Expired</SelectItem></SelectContent>
-        </Select>
+
+        {selectedTenantNames.length > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-slate-500">{selectedTenantNames.length} selected</span>
+            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setSelectedTenantNames([])}>Clear</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs border-red-200 text-red-600 hover:bg-red-50"
+              onClick={() => setShowBulkDelete(true)}
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-1" />
+              Delete Selected
+            </Button>
+          </div>
+        )}
       </div>
 
       <Card>
         <CardContent className="p-0">
           <Table>
             <TableHeader><TableRow className="bg-slate-50">
+              <TableHead className="w-10">
+                <Checkbox
+                  checked={allFilteredSelected}
+                  onCheckedChange={toggleSelectAllFiltered}
+                  aria-label="Select all filtered tenants"
+                />
+              </TableHead>
               <TableHead className="text-[10px]">TENANT</TableHead>
               <TableHead className="text-[10px]">INDUSTRY</TableHead>
               <TableHead className="text-[10px]">PROPERTIES</TableHead>
@@ -139,17 +225,25 @@ export default function Tenants() {
               <TableHead className="text-[10px] text-right">ANNUAL RENT</TableHead>
               <TableHead className="text-[10px] text-right">OUTSTANDING</TableHead>
               <TableHead className="text-[10px]">STATUS</TableHead>
-              <TableHead className="text-[10px]">NAVIGATE</TableHead>
+              <TableHead className="text-[10px]">ACTIONS</TableHead>
             </TableRow></TableHeader>
             <TableBody>
               {tenants.length === 0 ? (
-                <TableRow><TableCell colSpan={8} className="text-center py-8 text-sm text-slate-400">No tenants found</TableCell></TableRow>
+                <TableRow><TableCell colSpan={9} className="text-center py-8 text-sm text-slate-400">No tenants found</TableCell></TableRow>
               ) : tenants.map((t, i) => {
                 const hasActive = t.leases?.some(l => l.status !== 'expired');
+                const isSelected = selectedTenantNames.includes(t.name);
                 return (
                   <TableRow key={i} className="hover:bg-slate-50">
                     <TableCell>
-                      <div><p className="text-sm font-medium">{t.name}</p>{t.contact_email && <p className="text-[10px] text-slate-400">{t.contact_email}</p>}</div>
+                      <Checkbox
+                        checked={isSelected}
+                        onCheckedChange={() => toggleTenantSelection(t.name)}
+                        aria-label={`Select ${t.name}`}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <div><p className="text-sm font-medium text-slate-900">{t.name}</p>{t.contact_email && <p className="text-[10px] text-slate-400">{t.contact_email}</p>}</div>
                     </TableCell>
                     <TableCell className="text-xs text-slate-500">{t.industry || '—'}</TableCell>
                     <TableCell className="text-xs">{t.properties?.size || 0}</TableCell>
@@ -158,10 +252,21 @@ export default function Tenants() {
                     <TableCell className={`text-right text-xs font-bold tabular-nums ${t.outstandingBalance > 0 ? 'text-red-600' : 'text-slate-400'}`}>${(t.outstandingBalance || 0).toLocaleString()}</TableCell>
                     <TableCell><Badge className={hasActive ? 'bg-emerald-100 text-emerald-700 text-[9px]' : 'bg-slate-100 text-slate-600 text-[9px]'}>{hasActive ? 'Active' : 'Expired'}</Badge></TableCell>
                     <TableCell>
-                      <div className="flex gap-1">
+                      <div className="flex items-center gap-1">
                         <Link to={createPageUrl("TenantDetail") + `?name=${encodeURIComponent(t.name)}`}>
-                          <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2">Profile <ChevronRight className="w-3 h-3 ml-0.5" /></Button>
+                          <Button variant="ghost" size="sm" className="h-7 text-xs px-2">Profile <ChevronRight className="w-3 h-3 ml-0.5" /></Button>
                         </Link>
+                        {t.entityId && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0 text-red-500 hover:text-red-600"
+                            onClick={() => setDeleteTarget(t)}
+                            title="Delete tenant"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -186,7 +291,7 @@ export default function Tenants() {
               <div><Label className="text-xs">Phone</Label><Input value={form.contact_phone} onChange={e => setForm({...form, contact_phone: e.target.value})} /></div>
             </div>
           </div>
-          <DialogFooter><Button onClick={() => createMutation.mutate(form)} disabled={!form.name} className="bg-blue-600 hover:bg-blue-700">Create Tenant</Button></DialogFooter>
+          <DialogFooter><Button onClick={() => createMutation.mutate(form)} disabled={!form.name || createMutation.isPending} className="bg-blue-600 hover:bg-blue-700">Create Tenant</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -194,6 +299,25 @@ export default function Tenants() {
         isOpen={showImport} 
         onClose={() => setShowImport(false)} 
         moduleType="tenant" 
+      />
+
+      <DeleteConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={`Delete tenant "${deleteTarget?.name || ""}"?`}
+        description="This will permanently remove the tenant record."
+        loading={deleteMutation.isPending}
+        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget)}
+      />
+
+      <DeleteConfirmDialog
+        open={showBulkDelete}
+        onOpenChange={setShowBulkDelete}
+        title={`Delete ${selectedTenantNames.length} selected tenant${selectedTenantNames.length === 1 ? "" : "s"}?`}
+        description="This will permanently remove the selected tenant records."
+        confirmLabel="Delete Selected"
+        loading={bulkDeleteMutation.isPending}
+        onConfirm={() => bulkDeleteMutation.mutate(selectedTenantNames)}
       />
     </div>
   );

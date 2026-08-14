@@ -98,7 +98,7 @@ export default function Properties() {
     property_type: "office", structure_type: "single",
     total_sf: "", total_buildings: 1, total_units: 0, year_built: "",
     portfolio_id: selectedPortfolioId !== "all" ? selectedPortfolioId : "",
-    property_manager_user_id: "",
+    manager_user_ids: [],
   });
   const defaultForm = buildDefaultForm();
   const [form, setForm] = useState(defaultForm);
@@ -204,7 +204,12 @@ export default function Properties() {
       return;
     }
     setEditingProperty(property);
-    const existingManager = propertyManagersById[property.id]?.[0]?.user_id || property.manager_user_id || property.property_manager || "";
+    const existingManagers = (propertyManagersById[property.id] || []).map((m) => m.user_id).filter(Boolean);
+    const fallbackManager = property.manager_user_id || property.property_manager || "";
+    const initialManagerIds = existingManagers.length > 0
+      ? existingManagers
+      : (fallbackManager ? [fallbackManager] : []);
+
     setForm({
       name: property.name || "",
       address: property.address || "",
@@ -218,7 +223,7 @@ export default function Properties() {
       total_units: property.total_units || 0,
       year_built: property.year_built ? String(property.year_built) : "",
       portfolio_id: property.portfolio_id || "",
-      property_manager_user_id: existingManager,
+      manager_user_ids: initialManagerIds,
       address_verified: property.address_verified || false,
     });
     setCurrentStep(1);
@@ -229,7 +234,7 @@ export default function Properties() {
     mutationFn: async (data) => {
       const isEditing = !!editingProperty;
       assertCanWritePage(user, "Properties", isEditing ? "edit properties" : "create properties");
-      const { property_manager_user_id, ...propPayload } = data;
+      const { manager_user_ids, ...propPayload } = data;
       let saved;
       if (isEditing) {
         saved = await propertyService.update(editingProperty.id, propPayload);
@@ -240,12 +245,16 @@ export default function Properties() {
       const targetPropertyId = saved?.id || editingProperty?.id;
       const targetOrgId = saved?.org_id || editingProperty?.org_id || propPayload.org_id || effectiveOrgId;
 
-      if (targetPropertyId && targetOrgId && property_manager_user_id) {
-        await assignPropertyManager({
-          propertyId: targetPropertyId,
-          orgId: targetOrgId,
-          managerUserId: property_manager_user_id,
-        });
+      if (targetPropertyId && targetOrgId && Array.isArray(manager_user_ids) && manager_user_ids.length > 0) {
+        await Promise.all(
+          manager_user_ids.map((mgrId) =>
+            assignPropertyManager({
+              propertyId: targetPropertyId,
+              orgId: targetOrgId,
+              managerUserId: mgrId,
+            })
+          )
+        );
 
         createNotificationsForEvent({
           event_type: "property.manager_assigned",
@@ -257,7 +266,7 @@ export default function Properties() {
           action_url: `${createPageUrl("PropertyDetail")}?id=${targetPropertyId}`,
           metadata: {
             property_name: saved?.name || data.name,
-            assigned_manager_user_id: property_manager_user_id,
+            assigned_manager_user_ids: manager_user_ids,
             assignment_source: isEditing ? "property_edit_modal" : "property_create_modal",
           },
         }).catch((error) => {
@@ -875,32 +884,60 @@ export default function Properties() {
                     </Select>
                   </div>
                 </div>
-                <div>
-                  <Label>Property Manager Assignment</Label>
-                  <div className="mt-1.5">
-                    <Select
-                      value={form.property_manager_user_id || "none"}
-                      onValueChange={v => setForm({ ...form, property_manager_user_id: v === "none" ? "" : v })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder={isLoadingManagers ? "Loading property managers..." : "Select property manager (optional)"} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">Do not assign now</SelectItem>
-                        {assignableManagers.map((m) => {
-                          const name = m.profile.full_name || m.profile.email || m.user_id;
-                          const role = (m.custom_role || m.role || "manager").replaceAll("_", " ");
-                          return (
-                            <SelectItem key={m.user_id} value={m.user_id}>
-                              {name} · {role}
-                            </SelectItem>
-                          );
-                        })}
-                      </SelectContent>
-                    </Select>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Property Manager(s) Assignment</Label>
+                    <span className="text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                      {(form.manager_user_ids || []).length} Selected
+                    </span>
                   </div>
+                  {isLoadingManagers ? (
+                    <div className="flex items-center gap-2 text-xs text-slate-500 py-2">
+                      <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                      Loading property managers...
+                    </div>
+                  ) : assignableManagers.length === 0 ? (
+                    <p className="text-xs text-amber-700 py-1">
+                      No active property managers found in this organization.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto pr-1">
+                      {assignableManagers.map((manager) => {
+                        const displayName = manager.profile.full_name || manager.profile.email || manager.user_id;
+                        const roleLabel = (manager.custom_role || manager.role || "manager").replaceAll("_", " ");
+                        const isSelected = (form.manager_user_ids || []).includes(manager.user_id);
+                        return (
+                          <label
+                            key={manager.user_id}
+                            className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border text-xs cursor-pointer transition-all ${
+                              isSelected
+                                ? "border-blue-500 bg-blue-50/80 text-blue-900 font-semibold shadow-xs"
+                                : "border-slate-200 bg-white hover:border-slate-300 text-slate-700"
+                            }`}
+                          >
+                            <Checkbox
+                              checked={isSelected}
+                              onCheckedChange={(checked) => {
+                                const current = form.manager_user_ids || [];
+                                setForm({
+                                  ...form,
+                                  manager_user_ids: checked
+                                    ? [...current, manager.user_id]
+                                    : current.filter((id) => id !== manager.user_id),
+                                });
+                              }}
+                            />
+                            <div className="min-w-0 flex-1 truncate">
+                              <span className="truncate block">{displayName}</span>
+                              <span className="text-[10px] text-slate-400 font-normal capitalize">{roleLabel}</span>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
                   <p className="text-[11px] text-slate-500 mt-1">
-                    The assigned manager will also cascade automatically to all buildings and units in this property.
+                    The assigned manager(s) will also cascade automatically to all buildings and units in this property.
                   </p>
                 </div>
                 <div>
@@ -1031,7 +1068,7 @@ export default function Properties() {
                 year_built: parseInt(form.year_built) || null,
                 address_verified: form.address_verified || false,
                 ...(form.portfolio_id ? { portfolio_id: form.portfolio_id } : {}),
-                ...(form.property_manager_user_id ? { property_manager_user_id: form.property_manager_user_id } : {}),
+                ...(form.manager_user_ids ? { manager_user_ids: form.manager_user_ids } : {}),
                 ...(effectiveOrgId && effectiveOrgId !== '__none__' ? { org_id: effectiveOrgId } : {}),
                 status: "active",
               })} disabled={!canEditProperties || !form.name || saveMutation.isPending || (!isAdmin && portfolios.length > 0 && !form.portfolio_id)} className="bg-blue-600 hover:bg-blue-700 min-w-[140px] shadow-sm">
