@@ -1903,10 +1903,10 @@ export default function BulkImportModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={v => { if (!v) { onClose(); reset(); } }}>
-      <DialogContent className="w-[calc(100vw-2rem)] max-w-6xl max-h-[92vh] overflow-hidden flex flex-col p-0 gap-0">
+      <DialogContent className="w-[94vw] max-w-5xl max-h-[88vh] overflow-hidden flex flex-col p-0 gap-0 z-[100] shadow-2xl">
 
         {/* ── Header ──────────────────────────────────────────── */}
-        <DialogHeader className="px-6 py-4 border-b bg-gradient-to-r from-slate-50 to-white shrink-0">
+        <DialogHeader className="px-6 py-3.5 border-b bg-gradient-to-r from-slate-50 to-white shrink-0">
           <div className="flex items-center justify-between">
             <div>
               <DialogTitle className="text-base font-semibold">Bulk Import — {title}</DialogTitle>
@@ -1978,12 +1978,17 @@ export default function BulkImportModal({
                 <option value="">Resolve building from each row (or select per row)</option>
                 {buildingOptions
                   .filter(building => !effectivePropertyId || building.property_id === effectivePropertyId)
-                  .map(building => (
-                    <option key={building.id} value={building.id}>
-                      {building.name || building.building_id_code || 'Building'}
+                  .map(b => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}{b.address ? ` — ${b.address}` : ''}
                     </option>
                   ))}
               </select>
+              {buildingOptions.length === 0 && (
+                <p className="text-[11px] text-amber-700 mt-1.5">
+                  No buildings found for this property. Create a building first, then come back.
+                </p>
+              )}
             </div>
           )}
 
@@ -2019,11 +2024,11 @@ export default function BulkImportModal({
 
           {/* Upload Zone */}
           {!rows && !loading && (
-            <div className="border-2 border-dashed border-slate-200 rounded-xl p-10 text-center bg-slate-50/50 hover:border-blue-300 transition-colors">
-              <Upload className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-              <p className="text-sm font-semibold text-slate-700 mb-1">Upload Your Document</p>
-              <p className="text-xs text-slate-400 mb-5">CSV · Excel · PDF · Word (.docx) · Plain text</p>
-              <div className="flex justify-center flex-wrap gap-2 mb-6">
+            <div className="border-2 border-dashed border-slate-200 rounded-xl p-6 sm:p-8 text-center bg-slate-50/50 hover:border-blue-300 transition-colors">
+              <Upload className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+              <p className="text-sm font-semibold text-slate-700 mb-0.5">Upload Your Document</p>
+              <p className="text-xs text-slate-400 mb-4">CSV · Excel · PDF · Word (.docx) · Plain text</p>
+              <div className="flex justify-center flex-wrap gap-2 mb-5">
                 {[{l:'CSV',c:'text-emerald-600',I:FileText},{l:'Excel',c:'text-green-700',I:FileSpreadsheet},
                   {l:'PDF',c:'text-red-500',I:FileType2},{l:'Word',c:'text-blue-600',I:FileType2},{l:'TXT',c:'text-slate-500',I:FileText}
                 ].map(({l,c,I})=>(

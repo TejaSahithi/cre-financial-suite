@@ -31,6 +31,8 @@ import CreateBuildingModal from "@/components/property/CreateBuildingModal";
 import CreateUnitModal from "@/components/property/CreateUnitModal";
 import BulkImportModal from "@/components/property/BulkImportModal";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
+import ManagerAssignmentBadges from "@/components/ManagerAssignmentBadges";
+import useManagerAssignments from "@/hooks/useManagerAssignments";
 import { toast } from "sonner";
 import { useModuleAccess } from "@/lib/ModuleAccessContext";
 
@@ -50,7 +52,9 @@ export default function BuildingsUnits({ mode = "combined" }) {
   const [portfolioFilter, setPortfolioFilter] = useState(portfolioId || "all");
   const [propertyFilter, setPropertyFilter] = useState(propertyId || "all");
   const [showCreateBuilding, setShowCreateBuilding] = useState(false);
+  const [editingBuilding, setEditingBuilding] = useState(null);
   const [showCreateUnit, setShowCreateUnit] = useState(false);
+  const [editingUnit, setEditingUnit] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [importType, setImportType] = useState("building");
   const [selectedBuildingIds, setSelectedBuildingIds] = useState([]);
@@ -130,8 +134,18 @@ export default function BuildingsUnits({ mode = "combined" }) {
   const activePortfolio = portfolioFilter !== "all" ? portfolios.find((portfolio) => portfolio.id === portfolioFilter) : null;
   const activeBuilding = buildingId ? scopedBuildings.find((building) => building.id === buildingId) : null;
 
+  const allPropertyIds = useMemo(() => properties.map(p => p.id).filter(Boolean), [properties]);
+  const allPropertyOrgIds = useMemo(() => properties.map(p => p.org_id).filter(Boolean), [properties]);
+  const { data: propertyManagersById = {} } = useManagerAssignments({
+    scope: "property",
+    scopeIds: allPropertyIds,
+    orgIds: allPropertyOrgIds,
+  });
+
+  const getPropertyManagers = (propId) => propertyManagersById[propId] || [];
+
   const getPropertyName = (id) => properties.find((property) => property.id === id)?.name || "—";
-  const getBuildingName = (id) => buildings.find((building) => building.id === id)?.name || "â€”";
+  const getBuildingName = (id) => buildings.find((building) => building.id === id)?.name || "—";
   const getBuildingPropertyId = (id) => buildings.find((building) => building.id === id)?.property_id || null;
   const getBuildingUnits = (buildingId) => scopedUnits.filter((unit) => unit.building_id === buildingId);
 
@@ -536,6 +550,7 @@ export default function BuildingsUnits({ mode = "combined" }) {
                     <TableHead className="text-xs font-bold tracking-wider">FLOOR</TableHead>
                     {!activeBuilding && <TableHead className="text-xs font-bold tracking-wider">BUILDING</TableHead>}
                     {!activeBuilding && <TableHead className="text-xs font-bold tracking-wider">PROPERTY</TableHead>}
+                    <TableHead className="text-xs font-bold tracking-wider">PROPERTY MANAGER</TableHead>
                     <TableHead className="text-xs font-bold tracking-wider">SQ FT</TableHead>
                     <TableHead className="text-xs font-bold tracking-wider">TYPE</TableHead>
                     <TableHead className="text-xs font-bold tracking-wider">STATUS</TableHead>
@@ -563,6 +578,12 @@ export default function BuildingsUnits({ mode = "combined" }) {
                       {!activeBuilding && (
                         <TableCell className="text-sm text-slate-600">{getPropertyName(unit.property_id || getBuildingPropertyId(unit.building_id))}</TableCell>
                       )}
+                      <TableCell>
+                        <ManagerAssignmentBadges
+                          managers={getPropertyManagers(unit.property_id || getBuildingPropertyId(unit.building_id))}
+                          emptyLabel="No manager"
+                        />
+                      </TableCell>
                       <TableCell className="text-sm font-mono">{(unit.square_footage || unit.square_feet || 0).toLocaleString()}</TableCell>
                       <TableCell className="text-sm text-slate-600 capitalize">{unit.unit_type || "—"}</TableCell>
                       <TableCell>
@@ -578,15 +599,30 @@ export default function BuildingsUnits({ mode = "combined" }) {
                       </TableCell>
                       <TableCell className="text-sm text-slate-600">{unit.tenant_name || "—"}</TableCell>
                       <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 w-8 p-0 text-red-500 hover:text-red-600"
-                          onClick={() => setDeleteTarget({ type: "unit", record: unit })}
-                          title="Delete unit"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
+                        <div className="flex items-center gap-1 justify-end">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs h-7 px-2"
+                            disabled={!canManageUnits}
+                            onClick={() => {
+                              setEditingUnit(unit);
+                              setShowCreateUnit(true);
+                            }}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0 text-red-500 hover:text-red-600"
+                            disabled={!canManageUnits}
+                            onClick={() => setDeleteTarget({ type: "unit", record: unit })}
+                            title="Delete unit"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -625,16 +661,37 @@ export default function BuildingsUnits({ mode = "combined" }) {
                     <div className="min-w-0 flex-1">
                       <h3 className="text-base font-bold text-slate-900">{building.name}</h3>
                       <p className="text-xs text-slate-400">{getPropertyName(building.property_id)}</p>
+                      <div className="mt-1.5">
+                        <ManagerAssignmentBadges
+                          managers={getPropertyManagers(building.property_id)}
+                          emptyLabel="No manager"
+                        />
+                      </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0 text-red-500 hover:text-red-600"
-                      onClick={() => setDeleteTarget({ type: "building", record: building })}
-                      title="Delete building"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-xs h-7 px-2"
+                        disabled={!canManageBuildings}
+                        onClick={() => {
+                          setEditingBuilding(building);
+                          setShowCreateBuilding(true);
+                        }}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0 text-red-500 hover:text-red-600"
+                        disabled={!canManageBuildings}
+                        onClick={() => setDeleteTarget({ type: "building", record: building })}
+                        title="Delete building"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
                   </div>
                   <div className="grid grid-cols-4 gap-2 mb-3">
                     {[
@@ -675,7 +732,20 @@ export default function BuildingsUnits({ mode = "combined" }) {
                             <Button
                               variant="ghost"
                               size="sm"
+                              className="text-[10px] h-6 px-1.5"
+                              disabled={!canManageUnits}
+                              onClick={() => {
+                                setEditingUnit(unit);
+                                setShowCreateUnit(true);
+                              }}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
                               className="h-6 w-6 p-0 text-red-500 hover:text-red-600"
+                              disabled={!canManageUnits}
                               onClick={() => setDeleteTarget({ type: "unit", record: unit })}
                               title="Delete unit"
                             >
@@ -711,6 +781,12 @@ export default function BuildingsUnits({ mode = "combined" }) {
                   <div className="flex-1 min-w-0">
                     <h3 className="text-sm font-bold text-slate-900 truncate">{building.name}</h3>
                     <p className="text-xs text-slate-400 truncate">{getPropertyName(building.property_id)}</p>
+                    <div className="mt-1">
+                      <ManagerAssignmentBadges
+                        managers={getPropertyManagers(building.property_id)}
+                        emptyLabel="No manager"
+                      />
+                    </div>
                   </div>
                   <div className="hidden md:flex items-center gap-6 text-xs text-slate-600 flex-shrink-0">
                     <div className="text-center"><p className="font-bold text-sm">{(((building.total_sf || building.total_sqft || 0) / 1000).toFixed(0))}K</p><p className="text-slate-400">SF</p></div>
@@ -719,19 +795,34 @@ export default function BuildingsUnits({ mode = "combined" }) {
                     <div className="text-center"><p className="font-bold text-sm">{leased}</p><p className="text-slate-400">Leased</p></div>
                   </div>
                   {building.year_built && <span className="text-xs text-slate-400 flex-shrink-0">{building.year_built}</span>}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 w-8 p-0 text-red-500 hover:text-red-600 flex-shrink-0"
-                    onClick={() => setDeleteTarget({ type: "building", record: building })}
-                    title="Delete building"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
-                  <Button variant="outline" size="sm" className="flex-shrink-0 text-xs" onClick={() => openBuildingUnitsView(building)}>
-                    View Units
-                    <ChevronRight className="w-3 h-3 ml-1" />
-                  </Button>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <Button variant="outline" size="sm" className="flex-shrink-0 text-xs" onClick={() => openBuildingUnitsView(building)}>
+                      View Units
+                      <ChevronRight className="w-3 h-3 ml-1" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-xs"
+                      disabled={!canManageBuildings}
+                      onClick={() => {
+                        setEditingBuilding(building);
+                        setShowCreateBuilding(true);
+                      }}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 text-red-500 hover:text-red-600 flex-shrink-0"
+                      disabled={!canManageBuildings}
+                      onClick={() => setDeleteTarget({ type: "building", record: building })}
+                      title="Delete building"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             );
@@ -751,6 +842,7 @@ export default function BuildingsUnits({ mode = "combined" }) {
                 </TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">BUILDING</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">PROPERTY</TableHead>
+                <TableHead className="text-xs font-bold tracking-wider">PROPERTY MANAGER</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">SQ FT</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">FLOORS</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">YEAR BUILT</TableHead>
@@ -784,6 +876,12 @@ export default function BuildingsUnits({ mode = "combined" }) {
                       </div>
                     </TableCell>
                     <TableCell className="text-sm text-slate-600">{getPropertyName(building.property_id)}</TableCell>
+                    <TableCell>
+                      <ManagerAssignmentBadges
+                        managers={getPropertyManagers(building.property_id)}
+                        emptyLabel="No manager"
+                      />
+                    </TableCell>
                     <TableCell className="text-sm font-mono">{(building.total_sf || building.total_sqft || 0).toLocaleString()}</TableCell>
                     <TableCell className="text-sm">{building.floors || 1}</TableCell>
                     <TableCell className="text-sm">{building.year_built || "—"}</TableCell>
@@ -791,20 +889,32 @@ export default function BuildingsUnits({ mode = "combined" }) {
                     <TableCell><Badge className="bg-emerald-100 text-emerald-700 text-xs">{leased}</Badge></TableCell>
                     <TableCell><Badge className="bg-amber-100 text-amber-700 text-xs">{vacant}</Badge></TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         <Button variant="outline" size="sm" onClick={() => openBuildingUnitsView(building)}>View</Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={!canManageBuildings}
+                          onClick={() => {
+                            setEditingBuilding(building);
+                            setShowCreateBuilding(true);
+                          }}
+                        >
+                          Edit
+                        </Button>
                         <Button
                           variant="ghost"
                           size="sm"
                           className="h-8 w-8 p-0 text-red-500 hover:text-red-600"
+                          disabled={!canManageBuildings}
                           onClick={() => setDeleteTarget({ type: "building", record: building })}
                           title="Delete building"
                         >
                           <Trash2 className="w-4 h-4" />
                         </Button>
                       </div>
-                      </TableCell>
-                    </TableRow>
+                    </TableCell>
+                  </TableRow>
                 );
               })}
             </TableBody>
@@ -814,13 +924,21 @@ export default function BuildingsUnits({ mode = "combined" }) {
 
       <CreateBuildingModal
         isOpen={showCreateBuilding}
-        onClose={() => setShowCreateBuilding(false)}
+        onClose={() => {
+          setShowCreateBuilding(false);
+          setEditingBuilding(null);
+        }}
+        buildingToEdit={editingBuilding}
         properties={scopedProperties}
       />
 
       <CreateUnitModal
         isOpen={showCreateUnit}
-        onClose={() => setShowCreateUnit(false)}
+        onClose={() => {
+          setShowCreateUnit(false);
+          setEditingUnit(null);
+        }}
+        unitToEdit={editingUnit}
         buildings={scopedBuildings}
       />
 

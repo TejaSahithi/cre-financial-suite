@@ -1592,7 +1592,7 @@ export const PARSER_MAP = {
  * Export template CSV strings for each module, so users know what headers to use.
  */
 export const CSV_TEMPLATES = {
-  property: 'Property Name,Address,City,State,Zip,Property Type,Total SF,Year Built,Status,Portfolio\n',
+  property: 'Property Name,Address,City,State,Zip,Property Type,Total SF,Year Built,Status,Portfolio,Property Manager\n',
   lease: 'Tenant Name,Unit Number,Property Name,Start Date,End Date,Monthly Rent,Annual Rent,Square Footage,Lease Type,Security Deposit,CAM Amount,Escalation Rate,Status,Notes\n',
   tenant: 'Tenant Name,Company,Email,Phone,Industry,Status\n',
   vendor: 'Vendor Name,Contact Name,Email,Phone,Category,Status\n',

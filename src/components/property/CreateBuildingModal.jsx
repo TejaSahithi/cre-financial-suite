@@ -12,9 +12,11 @@ import { createNotificationsForEvent } from "@/services/notificationService";
 import { createPageUrl } from "@/utils";
 import { toast } from "sonner";
 
-export default function CreateBuildingModal({ isOpen, onClose, properties = [] }) {
+export default function CreateBuildingModal({ isOpen, onClose, properties = [], buildingToEdit = null }) {
   const queryClient = useQueryClient();
   const [usePropertyAddress, setUsePropertyAddress] = useState(true);
+  const isEditing = !!buildingToEdit;
+
   const [form, setForm] = useState({
     name: "",
     property_id: properties[0]?.id || "",
@@ -36,22 +38,41 @@ export default function CreateBuildingModal({ isOpen, onClose, properties = [] }
   ].filter(Boolean).join(", ");
 
   useEffect(() => {
-    if (usePropertyAddress && selectedProperty?.address) {
+    if (usePropertyAddress && selectedProperty?.address && !isEditing) {
       setForm((current) => ({ ...current, address: selectedProperty.address }));
     }
-  }, [usePropertyAddress, selectedProperty?.address]);
+  }, [usePropertyAddress, selectedProperty?.address, isEditing]);
 
   useEffect(() => {
     if (!isOpen) return;
-    setForm((current) => ({
-      ...current,
-      property_id: properties[0]?.id || current.property_id || "",
-    }));
-    setUsePropertyAddress(true);
-  }, [isOpen, properties]);
+    if (buildingToEdit) {
+      setForm({
+        name: buildingToEdit.name || "",
+        property_id: buildingToEdit.property_id || properties[0]?.id || "",
+        address: buildingToEdit.address || "",
+        total_sf: buildingToEdit.total_sf ? String(buildingToEdit.total_sf) : "",
+        floors: buildingToEdit.floors ? String(buildingToEdit.floors) : "1",
+        year_built: buildingToEdit.year_built ? String(buildingToEdit.year_built) : "",
+      });
+      setUsePropertyAddress(!buildingToEdit.address || buildingToEdit.address === selectedProperty?.address);
+    } else {
+      setForm({
+        name: "",
+        property_id: properties[0]?.id || "",
+        address: "",
+        total_sf: "",
+        floors: "1",
+        year_built: "",
+      });
+      setUsePropertyAddress(true);
+    }
+  }, [isOpen, buildingToEdit, properties]);
 
-  const createMutation = useMutation({
+  const saveMutation = useMutation({
     mutationFn: async (data) => {
+      if (isEditing) {
+        return BuildingService.update(buildingToEdit.id, data);
+      }
       const created = await BuildingService.create(data);
       const property = properties.find((item) => item.id === (created?.property_id || data.property_id));
 
@@ -77,20 +98,21 @@ export default function CreateBuildingModal({ isOpen, onClose, properties = [] }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bu-buildings"] });
-      toast.success("Building created successfully.");
+      queryClient.invalidateQueries({ queryKey: ["Building"] });
+      toast.success(isEditing ? "Building updated successfully." : "Building created successfully.");
       onClose();
       setUsePropertyAddress(true);
       setForm({ name: "", property_id: properties[0]?.id || "", address: "", total_sf: "", floors: "1", year_built: "" });
     },
     onError: (err) => {
-      toast.error(`Failed to create building: ${err.message}`);
+      toast.error(`Failed to ${isEditing ? 'update' : 'create'} building: ${err.message}`);
     },
   });
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!form.name || !form.property_id) return;
-    createMutation.mutate({
+    saveMutation.mutate({
       ...form,
       total_sf: parseInt(form.total_sf) || 0,
       floors: parseInt(form.floors) || 1,
@@ -105,10 +127,10 @@ export default function CreateBuildingModal({ isOpen, onClose, properties = [] }
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Building2 className="w-5 h-5 text-blue-600" />
-            Add New Building
+            {isEditing ? "Edit Building" : "Add New Building"}
           </DialogTitle>
           <DialogDescription>
-            Create a new building structure within an existing property.
+            {isEditing ? "Update details for this building structure." : "Create a new building structure within an existing property."}
           </DialogDescription>
         </DialogHeader>
 
@@ -220,10 +242,10 @@ export default function CreateBuildingModal({ isOpen, onClose, properties = [] }
             <Button 
               type="submit" 
               className="bg-blue-600 hover:bg-blue-700 min-w-[120px]"
-              disabled={!form.name || !form.property_id || createMutation.isPending}
+              disabled={!form.name || !form.property_id || saveMutation.isPending}
             >
-              {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-              Create Building
+              {saveMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+              {isEditing ? "Save Changes" : "Create Building"}
             </Button>
           </DialogFooter>
         </form>

@@ -9,8 +9,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { UnitService } from "@/services/api";
 import { toast } from "sonner";
 
-export default function CreateUnitModal({ isOpen, onClose, buildings = [] }) {
+export default function CreateUnitModal({ isOpen, onClose, buildings = [], unitToEdit = null }) {
   const queryClient = useQueryClient();
+  const isEditing = !!unitToEdit;
   const firstBuildingId = buildings[0]?.id || "";
   const buildingById = useMemo(
     () => new Map((buildings || []).map((building) => [building.id, building])),
@@ -26,22 +27,39 @@ export default function CreateUnitModal({ isOpen, onClose, buildings = [] }) {
   });
 
   useEffect(() => {
-    setForm((current) => {
-      const currentBuildingStillExists = current.building_id && buildingById.has(current.building_id);
-      if (currentBuildingStillExists) return current;
-      return {
-        ...current,
+    if (!isOpen) return;
+    if (unitToEdit) {
+      setForm({
+        unit_id_code: unitToEdit.unit_number || unitToEdit.unit_id_code || "",
+        building_id: unitToEdit.building_id || firstBuildingId,
+        floor: unitToEdit.floor ? String(unitToEdit.floor) : "1",
+        square_feet: unitToEdit.square_footage || unitToEdit.square_feet ? String(unitToEdit.square_footage || unitToEdit.square_feet) : "",
+        unit_type: unitToEdit.unit_type || "office",
+        occupancy_status: unitToEdit.occupancy_status || unitToEdit.status || "vacant",
+      });
+    } else {
+      setForm({
+        unit_id_code: "",
         building_id: firstBuildingId,
-      };
-    });
-  }, [buildingById, firstBuildingId]);
+        floor: "1",
+        square_feet: "",
+        unit_type: "office",
+        occupancy_status: "vacant",
+      });
+    }
+  }, [isOpen, unitToEdit, firstBuildingId]);
 
-  const createMutation = useMutation({
-    mutationFn: (data) => UnitService.create(data),
+  const saveMutation = useMutation({
+    mutationFn: (data) => {
+      if (isEditing) {
+        return UnitService.update(unitToEdit.id, data);
+      }
+      return UnitService.create(data);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bu-units"] });
       queryClient.invalidateQueries({ queryKey: ["Unit"] });
-      toast.success("Unit created successfully.");
+      toast.success(isEditing ? "Unit updated successfully." : "Unit created successfully.");
       onClose();
       setForm({
         unit_id_code: "",
@@ -53,7 +71,7 @@ export default function CreateUnitModal({ isOpen, onClose, buildings = [] }) {
       });
     },
     onError: (err) => {
-      toast.error(`Failed to create unit: ${err.message}`);
+      toast.error(`Failed to ${isEditing ? 'update' : 'create'} unit: ${err.message}`);
     },
   });
 
@@ -61,12 +79,12 @@ export default function CreateUnitModal({ isOpen, onClose, buildings = [] }) {
     e.preventDefault();
     if (!form.unit_id_code || !form.building_id) return;
     const selectedBuilding = buildingById.get(form.building_id) || null;
-    const propertyId = selectedBuilding?.property_id || null;
+    const propertyId = selectedBuilding?.property_id || (unitToEdit?.property_id) || null;
     if (!propertyId) {
       toast.error("Selected building is missing its property link.");
       return;
     }
-    createMutation.mutate({
+    saveMutation.mutate({
       unit_id_code: form.unit_id_code,
       unit_number: form.unit_id_code,
       property_id: propertyId,
@@ -85,10 +103,10 @@ export default function CreateUnitModal({ isOpen, onClose, buildings = [] }) {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <DoorOpen className="w-5 h-5 text-blue-600" />
-            Add New Unit
+            {isEditing ? "Edit Unit" : "Add New Unit"}
           </DialogTitle>
           <DialogDescription>
-            Specify details for a new unit or suite within a building.
+            {isEditing ? "Update details for this unit or suite." : "Specify details for a new unit or suite within a building."}
           </DialogDescription>
         </DialogHeader>
 
@@ -188,10 +206,10 @@ export default function CreateUnitModal({ isOpen, onClose, buildings = [] }) {
             <Button 
               type="submit" 
               className="bg-blue-600 hover:bg-blue-700 min-w-[120px]" 
-              disabled={!form.unit_id_code || !form.building_id || createMutation.isPending}
+              disabled={!form.unit_id_code || !form.building_id || saveMutation.isPending}
             >
-              {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-              Create Unit
+              {saveMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+              {isEditing ? "Save Changes" : "Create Unit"}
             </Button>
           </DialogFooter>
         </form>

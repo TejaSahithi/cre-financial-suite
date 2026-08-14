@@ -125,6 +125,7 @@ async function assignPortfolioManager({ portfolioId, orgId, managerUserId }) {
 
 export default function Portfolios() {
   const [showCreate, setShowCreate] = useState(false);
+  const [editingPortfolio, setEditingPortfolio] = useState(null);
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState("grid");
   const [selectedOrgId, setSelectedOrgId] = useState(() => getStoredActingOrgId() || "all");
@@ -141,7 +142,7 @@ export default function Portfolios() {
     fiscal_year: "jan_dec",
     intents: [],
     notes: "",
-    property_manager_user_id: "",
+    manager_user_ids: [],
   };
   const [form, setForm] = useState(defaultForm);
   const queryClient = useQueryClient();
@@ -244,7 +245,8 @@ export default function Portfolios() {
       toast.error("You have read-only access to Portfolios.");
       return;
     }
-
+    setEditingPortfolio(null);
+    setForm(defaultForm);
     if (isAdmin) {
       setSelectedCreateOrgId(
         selectedOrgId !== "all" ? selectedOrgId : (organizations[0]?.id || "")
@@ -255,76 +257,81 @@ export default function Portfolios() {
     setShowCreate(true);
   };
 
-  const createMutation = useMutation({
+  const openEditModal = (portfolio) => {
+    if (!canEditPortfolios) {
+      toast.error("You have read-only access to Portfolios.");
+      return;
+    }
+    setEditingPortfolio(portfolio);
+    if (isAdmin) {
+      setSelectedCreateOrgId(portfolio.org_id || "");
+    }
+    const currentManagers = (portfolioManagersById[portfolio.id] || []).map((m) => m.user_id).filter(Boolean);
+    setForm({
+      name: portfolio.name || "",
+      description: portfolio.description || "",
+      owner_entity: portfolio.owner_entity || "",
+      type: portfolio.type || "commercial",
+      geography: portfolio.geography || "",
+      fiscal_year: portfolio.fiscal_year || "jan_dec",
+      intents: Array.isArray(portfolio.intents) ? portfolio.intents : [],
+      notes: portfolio.notes || "",
+      manager_user_ids: currentManagers,
+    });
+    setShowCreate(true);
+  };
+
+  const saveMutation = useMutation({
     mutationFn: async (data) => {
-      assertCanWritePage(user, "Portfolios", "create portfolios");
-      const writableOrgId = data.org_id || await resolveWritableOrgId(orgId);
-      const { property_manager_user_id, ...portfolioData } = data;
-      // TEMP DIAGNOSTIC (remove once the RLS 42501 on portfolio create is
-      // root-caused): the client-side permission gate above passed, but the
-      // database's WITH CHECK (can_write_page(org_id, 'Portfolios')) has
-      // been rejecting the insert anyway. This dumps exactly what org_id is
-      // being sent and what the client believes the user's org memberships
-      // are, so a failing attempt tells us whether org_id is missing/wrong
-      // or whether the membership itself lacks org_admin/write access.
-      console.info("[Portfolio.create diagnostic]", {
-        formOrgId: data.org_id || null,
-        hookOrgId: orgId || null,
-        resolvedWritableOrgId: writableOrgId || null,
-        userId: user?.id || null,
-        rawRole: user?._raw_role || user?.role || null,
-        memberships: (user?.memberships || []).map((m) => ({
-          org_id: m?.org_id,
-          role: m?.role,
-          status: m?.status,
-        })),
-      });
-      const created = await PortfolioService.create({
-        ...portfolioData,
-        ...(writableOrgId ? { org_id: writableOrgId } : {}),
-      });
+      const isEditing = !!editingPortfolio;
+      assertCanWritePage(user, "Portfolios", isEditing ? "edit portfolios" : "create portfolios");
+      const writableOrgId = data.org_id || editingPortfolio?.org_id || await resolveWritableOrgId(orgId);
+      const { manager_user_ids = [], ...portfolioData } = data;
 
-      await ensureCreatorPortfolioAccess({
-        portfolioId: created?.id,
-        orgId: created?.org_id || writableOrgId,
-        user,
-      });
-
-      if (property_manager_user_id) {
-        await assignPortfolioManager({
-          portfolioId: created?.id,
-          orgId: created?.org_id || writableOrgId,
-          managerUserId: property_manager_user_id,
+      let saved;
+      if (isEditing) {
+        saved = await PortfolioService.update(editingPortfolio.id, {
+          ...portfolioData,
+          ...(writableOrgId ? { org_id: writableOrgId } : {}),
+        });
+      } else {
+        saved = await PortfolioService.create({
+          ...portfolioData,
+          ...(writableOrgId ? { org_id: writableOrgId } : {}),
         });
 
-        createNotificationsForEvent({
-          event_type: "portfolio.manager_assigned",
-          org_id: created?.org_id || writableOrgId,
-          portfolio_id: created?.id,
-          entity_type: "portfolio",
-          entity_id: created?.id,
-          entity_label: created?.name || data.name,
-          action_url: createPageUrl("Portfolios"),
-          metadata: {
-            portfolio_name: created?.name || data.name,
-            assigned_manager_user_id: property_manager_user_id,
-            assignment_source: "portfolio_create_modal",
-          },
-        }).catch((error) => {
-          console.warn("[Portfolios] manager assignment notification failed:", error?.message || error);
+        await ensureCreatorPortfolioAccess({
+          portfolioId: saved?.id,
+          orgId: saved?.org_id || writableOrgId,
+          user,
         });
       }
 
-      dispatchPortfolioCreatedNotification({
-        org_id: created?.org_id || writableOrgId,
-        portfolio_id: created?.id,
-        portfolio_name: created?.name || data.name,
-        action_url: createPageUrl("Portfolios"),
-      }).catch((error) => {
-        console.warn("[Portfolios] notification event failed:", error?.message || error);
-      });
+      const targetPortfolioId = saved?.id || editingPortfolio?.id;
+      const targetOrgId = saved?.org_id || writableOrgId;
 
-      return created;
+      if (targetPortfolioId && targetOrgId && Array.isArray(manager_user_ids)) {
+        for (const managerUserId of manager_user_ids) {
+          await assignPortfolioManager({
+            portfolioId: targetPortfolioId,
+            orgId: targetOrgId,
+            managerUserId,
+          });
+        }
+      }
+
+      if (!isEditing && saved?.id) {
+        dispatchPortfolioCreatedNotification({
+          org_id: saved?.org_id || writableOrgId,
+          portfolio_id: saved?.id,
+          portfolio_name: saved?.name || data.name,
+          action_url: createPageUrl("Portfolios"),
+        }).catch((error) => {
+          console.warn("[Portfolios] notification event failed:", error?.message || error);
+        });
+      }
+
+      return saved;
     },
     onSuccess: (data) => {
       clearCache();
@@ -333,17 +340,20 @@ export default function Portfolios() {
       queryClient.invalidateQueries({ queryKey: ["Building"] });
       queryClient.invalidateQueries({ queryKey: ["Unit"] });
       queryClient.invalidateQueries({ queryKey: ["Lease"] });
+      queryClient.invalidateQueries({ queryKey: ["user-assignments"] });
+      queryClient.invalidateQueries({ queryKey: ["portfolio-assignable-managers"] });
       setShowCreate(false);
+      const wasEditing = !!editingPortfolio;
+      setEditingPortfolio(null);
       setForm(defaultForm);
       if (data?.org_id) {
         handleSelectedOrgChange(data.org_id);
       }
-      toast.success("Portfolio created successfully");
-      // Stay on the Portfolios page so the user can see the newly created portfolio in the list
+      toast.success(wasEditing ? "Portfolio updated successfully" : "Portfolio created successfully");
     },
     onError: (err) => {
       const permissionMessage = describePermissionError(err, "Portfolios");
-      toast.error(permissionMessage || `Failed to create portfolio: ${err?.message || "Unknown error"}`);
+      toast.error(permissionMessage || `Failed to save portfolio: ${err?.message || "Unknown error"}`);
     },
   });
 
@@ -493,7 +503,7 @@ export default function Portfolios() {
     totalSF: visibleProperties.reduce((sum, property) => sum + (property.total_sqft || 0), 0),
   };
 
-  const createDisabled = !form.name || createMutation.isPending || (isAdmin && !selectedCreateOrgId);
+  const saveDisabled = !form.name || saveMutation.isPending || (isAdmin && !selectedCreateOrgId);
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
@@ -639,44 +649,49 @@ export default function Portfolios() {
                       </div>
                     </div>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
-                    disabled={!canEditPortfolios}
-                    onClick={() => setDeleteTarget(portfolio)}
-                    title="Delete portfolio"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
-                </div>
-                {portfolio.description && (
-                  <p className="text-xs text-slate-400 mb-3 line-clamp-2">{portfolio.description}</p>
-                )}
-                <div className="grid grid-cols-3 gap-2 mb-3">
-                  {[
-                    { label: "Properties", value: portfolio._propCount },
-                    { label: "Total SF", value: `${(portfolio._totalSF / 1000).toFixed(0)}K` },
-                    { label: "Occupancy", value: `${portfolio._occupancy.toFixed(0)}%` },
-                  ].map((metric, index) => (
-                    <div key={index} className="bg-slate-50 rounded-lg px-2 py-1.5 text-center">
-                      <p className="text-[9px] font-bold text-slate-400 uppercase">{metric.label}</p>
-                      <p className="text-sm font-bold text-slate-900">{metric.value}</p>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="h-1.5 flex-1 bg-slate-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-emerald-500 rounded-full transition-all"
-                      style={{ width: `${portfolio._propCount > 0 ? (portfolio._verifiedCount / portfolio._propCount) * 100 : 0}%` }}
-                    />
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2 text-xs text-slate-600 hover:text-blue-600 hover:bg-blue-50"
+                      disabled={!canEditPortfolios}
+                      onClick={() => openEditModal(portfolio)}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                      disabled={!canEditPortfolios}
+                      onClick={() => setDeleteTarget(portfolio)}
+                      title="Delete portfolio"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
                   </div>
-                  <span className="text-[10px] text-slate-400 font-medium">
-                    {portfolio._verifiedCount}/{portfolio._propCount} verified
-                  </span>
                 </div>
-                <div className="space-y-1 max-h-24 overflow-y-auto">
+
+                {portfolio.description && (
+                  <p className="text-xs text-slate-500 mb-4 line-clamp-2">{portfolio.description}</p>
+                )}
+
+                <div className="grid grid-cols-3 gap-2 py-3 border-y border-slate-100 my-3 text-center">
+                  <div>
+                    <p className="text-lg font-bold text-slate-900">{portfolio._propCount}</p>
+                    <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Properties</p>
+                  </div>
+                  <div>
+                    <p className="text-lg font-bold text-slate-900">{portfolio._occupancy.toFixed(0)}%</p>
+                    <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Occupancy</p>
+                  </div>
+                  <div>
+                    <p className="text-lg font-bold text-slate-900">${(portfolio._annualRent / 1000).toFixed(0)}K</p>
+                    <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Rent / yr</p>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5 pt-1">
                   {portfolio._properties.slice(0, 3).map((property) => (
                     <Link
                       key={property.id}
@@ -695,11 +710,22 @@ export default function Portfolios() {
                     </Link>
                   ))}
                 </div>
-                <Link to={createPageUrl("Properties") + `?portfolio=${portfolio.id}`}>
-                  <Button variant="outline" size="sm" className="w-full mt-3 text-xs h-7">
-                    View All Properties
+                <div className="flex items-center gap-2 mt-3">
+                  <Link to={createPageUrl("Properties") + `?portfolio=${portfolio.id}`} className="flex-1">
+                    <Button variant="outline" size="sm" className="w-full text-xs h-8">
+                      View Properties
+                    </Button>
+                  </Link>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs h-8 px-3 text-slate-700 hover:text-blue-600 hover:border-blue-300"
+                    disabled={!canEditPortfolios}
+                    onClick={() => openEditModal(portfolio)}
+                  >
+                    Edit
                   </Button>
-                </Link>
+                </div>
               </CardContent>
             </Card>
           ))}
@@ -741,6 +767,15 @@ export default function Portfolios() {
                   </Button>
                 </Link>
                 <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs flex-shrink-0"
+                  disabled={!canEditPortfolios}
+                  onClick={() => openEditModal(portfolio)}
+                >
+                  Edit
+                </Button>
+                <Button
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50 flex-shrink-0"
@@ -769,7 +804,7 @@ export default function Portfolios() {
                 </TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">PORTFOLIO</TableHead>
                 {isAdmin && <TableHead className="text-xs font-bold tracking-wider">ORG</TableHead>}
-                <TableHead className="text-xs font-bold tracking-wider">MANAGER</TableHead>
+                <TableHead className="text-xs font-bold tracking-wider">PORTFOLIO MANAGER</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">STATUS</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">PROPERTIES</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">BUILDINGS</TableHead>
@@ -821,10 +856,18 @@ export default function Portfolios() {
                   </TableCell>
                   <TableCell className="text-sm font-medium">${(portfolio._annualRent / 1000).toFixed(0)}K</TableCell>
                   <TableCell>
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1.5">
                       <Link to={createPageUrl("Properties") + `?portfolio=${portfolio.id}`}>
                         <Button variant="outline" size="sm">View</Button>
                       </Link>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!canEditPortfolios}
+                        onClick={() => openEditModal(portfolio)}
+                      >
+                        Edit
+                      </Button>
                       <Button
                         variant="ghost"
                         size="icon"
@@ -844,12 +887,14 @@ export default function Portfolios() {
         </Card>
       )}
 
-      <Dialog open={showCreate && canEditPortfolios} onOpenChange={(open) => setShowCreate(open && canEditPortfolios)}>
-        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+      <Dialog open={showCreate && canEditPortfolios} onOpenChange={(open) => { setShowCreate(open && canEditPortfolios); if (!open) setEditingPortfolio(null); }}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto z-[100]">
           <DialogHeader>
-            <DialogTitle>Create Portfolio</DialogTitle>
+            <DialogTitle>{editingPortfolio ? "Edit Portfolio" : "Create Portfolio"}</DialogTitle>
             <DialogDescription>
-              Group properties into a portfolio for unified management.
+              {editingPortfolio
+                ? "Update portfolio details and assigned portfolio managers."
+                : "Group properties into a portfolio for unified management."}
               <span className="block mt-1 text-blue-600 font-medium">
                 Metrics like SF, Occupancy, and Rent are calculated automatically as you add properties.
               </span>
@@ -885,7 +930,7 @@ export default function Portfolios() {
               {isAdmin && (
                 <div className="col-span-2">
                   <Label>Organization *</Label>
-                  <Select value={selectedCreateOrgId} onValueChange={setSelectedCreateOrgId}>
+                  <Select value={selectedCreateOrgId} onValueChange={setSelectedCreateOrgId} disabled={!!editingPortfolio}>
                     <SelectTrigger>
                       <SelectValue placeholder="Assign this portfolio to an organization" />
                     </SelectTrigger>
@@ -901,43 +946,63 @@ export default function Portfolios() {
               )}
 
               {canAssignPortfolioManager && (
-                <div className="col-span-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-                  <Label>Property Manager Assignment</Label>
-                  <Select
-                    value={form.property_manager_user_id || "none"}
-                    onValueChange={(value) => setForm({ ...form, property_manager_user_id: value === "none" ? "" : value })}
-                    disabled={!createOrgId || isLoadingManagers || assignableManagers.length === 0}
-                  >
-                    <SelectTrigger className="mt-1 bg-white">
-                      <SelectValue
-                        placeholder={
-                          isLoadingManagers
-                            ? "Loading property managers..."
-                            : "Assign a property manager to this portfolio"
-                        }
-                      />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Do not assign now</SelectItem>
+                <div className="col-span-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                      Portfolio Manager(s) Assignment
+                    </Label>
+                    <span className="text-[11px] text-slate-500 font-medium">
+                      {(form.manager_user_ids || []).length} selected
+                    </span>
+                  </div>
+                  {isLoadingManagers ? (
+                    <div className="flex items-center gap-2 text-xs text-slate-500 py-2">
+                      <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                      Loading portfolio managers...
+                    </div>
+                  ) : assignableManagers.length === 0 ? (
+                    <p className="text-xs text-amber-700 py-1">
+                      No active portfolio/property managers found in this organization.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto pr-1">
                       {assignableManagers.map((manager) => {
                         const displayName = manager.profile.full_name || manager.profile.email || manager.user_id;
                         const roleLabel = (manager.custom_role || manager.role || "manager").replaceAll("_", " ");
+                        const isSelected = (form.manager_user_ids || []).includes(manager.user_id);
                         return (
-                          <SelectItem key={manager.user_id} value={manager.user_id}>
-                            {displayName} · {roleLabel}
-                          </SelectItem>
+                          <label
+                            key={manager.user_id}
+                            className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border text-xs cursor-pointer transition-all ${
+                              isSelected
+                                ? "border-blue-500 bg-blue-50/80 text-blue-900 font-semibold shadow-xs"
+                                : "border-slate-200 bg-white hover:border-slate-300 text-slate-700"
+                            }`}
+                          >
+                            <Checkbox
+                              checked={isSelected}
+                              onCheckedChange={(checked) => {
+                                const current = form.manager_user_ids || [];
+                                setForm({
+                                  ...form,
+                                  manager_user_ids: checked
+                                    ? [...current, manager.user_id]
+                                    : current.filter((id) => id !== manager.user_id),
+                                });
+                              }}
+                            />
+                            <div className="min-w-0 flex-1 truncate">
+                              <span className="truncate block">{displayName}</span>
+                              <span className="text-[10px] text-slate-400 font-normal capitalize">{roleLabel}</span>
+                            </div>
+                          </label>
                         );
                       })}
-                    </SelectContent>
-                  </Select>
-                  <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-                    Assigned managers receive portfolio-scope access and the portfolio assignment notification after creation.
-                  </p>
-                  {createOrgId && !isLoadingManagers && assignableManagers.length === 0 && (
-                    <p className="mt-2 text-[11px] text-amber-700">
-                      No active property manager users are available in this organization.
-                    </p>
+                    </div>
                   )}
+                  <p className="text-[11px] leading-relaxed text-slate-500">
+                    Assigned portfolio managers receive portfolio-level management permissions and dashboard notifications.
+                  </p>
                 </div>
               )}
 
@@ -1033,8 +1098,7 @@ export default function Portfolios() {
               <div className="space-y-1">
                 <p className="text-sm font-bold text-blue-900">Automated KPI Tracking</p>
                 <p className="text-xs text-blue-700 leading-relaxed">
-                  After creating this portfolio, you will be redirected to link properties.
-                  The dashboard will then automatically compute:
+                  After saving this portfolio, link properties to automatically track:
                 </p>
                 <div className="flex gap-3 pt-1">
                   {['Total Square Footage', 'Occupancy %', 'Annual Rent'].map((item) => (
@@ -1047,7 +1111,7 @@ export default function Portfolios() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => { setShowCreate(false); setEditingPortfolio(null); }}>Cancel</Button>
             <Button
               onClick={() => {
                 const extras = [
@@ -1059,18 +1123,18 @@ export default function Portfolios() {
                 ].filter(Boolean).join(" | ");
                 const description = [form.description, extras].filter(Boolean).join(" — ") || undefined;
 
-                createMutation.mutate({
+                saveMutation.mutate({
                   name: form.name,
                   ...(description ? { description } : {}),
-                  ...(form.property_manager_user_id ? { property_manager_user_id: form.property_manager_user_id } : {}),
+                  ...(form.manager_user_ids?.length > 0 ? { manager_user_ids: form.manager_user_ids } : {}),
                   ...(isAdmin && selectedCreateOrgId ? { org_id: selectedCreateOrgId } : {}),
                 });
               }}
-              disabled={!canEditPortfolios || createDisabled}
+              disabled={!canEditPortfolios || saveDisabled}
               className="bg-gradient-to-r from-blue-700 to-blue-600"
             >
-              {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-              Create
+              {saveMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+              {editingPortfolio ? "Save Changes" : "Create"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -2,8 +2,9 @@ import React, { useEffect, useState } from "react";
 import { propertyService } from "@/services/propertyService";
 import { validateAddress } from "@/services/integrations";
 import useOrgId from "@/hooks/useOrgId";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
+import { supabase } from "@/services/supabaseClient";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -29,6 +30,48 @@ import { useAuth } from "@/lib/AuthContext";
 import { createNotificationsForEvent } from "@/services/notificationService";
 import useManagerAssignments, { mergeManagerAssignments } from "@/hooks/useManagerAssignments";
 
+async function assignPropertyManager({ propertyId, orgId, managerUserId }) {
+  if (!propertyId || !orgId || !managerUserId) return null;
+
+  const { data: membership, error: membershipError } = await supabase
+    .from("memberships")
+    .select("user_id, assigned_properties")
+    .eq("user_id", managerUserId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+
+  if (membershipError) throw membershipError;
+
+  const assignedProperties = Array.isArray(membership?.assigned_properties)
+    ? membership.assigned_properties
+    : [];
+
+  if (membership?.user_id && !assignedProperties.includes(propertyId)) {
+    const { error: updateError } = await supabase
+      .from("memberships")
+      .update({ assigned_properties: [...assignedProperties, propertyId] })
+      .eq("user_id", managerUserId)
+      .eq("org_id", orgId);
+
+    if (updateError) throw updateError;
+  }
+
+  const { error: accessError } = await supabase
+    .from("user_access")
+    .upsert({
+      user_id: managerUserId,
+      org_id: orgId,
+      scope: "property",
+      scope_id: propertyId,
+      role: "manager",
+      is_active: true,
+    }, { onConflict: "user_id,scope,scope_id" });
+
+  if (accessError) throw accessError;
+
+  return managerUserId;
+}
+
 export default function Properties() {
   const { user } = useAuth();
   const { canWritePage } = useModuleAccess();
@@ -36,6 +79,7 @@ export default function Properties() {
   const location = useLocation();
   const portfolioId = new URLSearchParams(location.search).get("portfolio");
   const [showCreate, setShowCreate] = useState(false);
+  const [editingProperty, setEditingProperty] = useState(null);
   const [currentStep, setCurrentStep] = useState(1);
   const [showImport, setShowImport] = useState(false);
   const [search, setSearch] = useState("");
@@ -53,7 +97,8 @@ export default function Properties() {
     name: "", address: "", city: "", state: "", zip: "",
     property_type: "office", structure_type: "single",
     total_sf: "", total_buildings: 1, total_units: 0, year_built: "",
-    portfolio_id: selectedPortfolioId !== "all" ? selectedPortfolioId : ""
+    portfolio_id: selectedPortfolioId !== "all" ? selectedPortfolioId : "",
+    property_manager_user_id: "",
   });
   const defaultForm = buildDefaultForm();
   const [form, setForm] = useState(defaultForm);
@@ -87,47 +132,177 @@ export default function Properties() {
     }));
   }, [activePortfolioId, portfolios]);
 
-  useEffect(() => {
-    setSelectedPropertyIds((prev) =>
-      prev.filter((id) => properties.some((property) => property.id === id))
-    );
-  }, [properties]);
+  const effectiveOrgId = orgId && orgId !== "__none__" ? orgId : (currentOrgId || "");
+  const { data: assignableManagers = [], isFetching: isLoadingManagers } = useQuery({
+    queryKey: ["property-assignable-managers", effectiveOrgId],
+    queryFn: async () => {
+      if (!effectiveOrgId) return [];
 
-  const createMutation = useMutation({
-    mutationFn: (data) => {
-      assertCanWritePage(user, "Properties", "create properties");
-      return propertyService.create(data);
+      const { data: memberships, error: membershipError } = await supabase
+        .from("memberships")
+        .select("user_id, role, status, custom_role, capabilities, assigned_properties")
+        .eq("org_id", effectiveOrgId);
+
+      if (membershipError) throw membershipError;
+
+      const managerMemberships = (memberships || []).filter((membership) => {
+        const roles = new Set([
+          membership.role,
+          membership.custom_role,
+          ...(Array.isArray(membership.capabilities?.roles) ? membership.capabilities.roles : []),
+        ].filter(Boolean));
+        const status = membership.status || "active";
+        return ["active", "approved"].includes(status) && (
+          roles.has("property_manager") ||
+          roles.has("manager") ||
+          roles.has("portfolio_manager") ||
+          roles.has("asset_manager")
+        );
+      });
+
+      if (managerMemberships.length === 0) return [];
+
+      const userIds = [...new Set(managerMemberships.map((membership) => membership.user_id).filter(Boolean))];
+      const { data: profiles, error: profileError } = await supabase
+        .from("profiles")
+        .select("id, full_name, email")
+        .in("id", userIds);
+
+      if (profileError) throw profileError;
+
+      const profilesById = Object.fromEntries((profiles || []).map((profile) => [profile.id, profile]));
+
+      return managerMemberships
+        .map((membership) => ({
+          ...membership,
+          profile: profilesById[membership.user_id] || {},
+        }))
+        .sort((a, b) => {
+          const left = a.profile.full_name || a.profile.email || a.user_id;
+          const right = b.profile.full_name || b.profile.email || b.user_id;
+          return String(left).localeCompare(String(right));
+        });
+    },
+    enabled: showCreate && !!effectiveOrgId,
+    initialData: [],
+  });
+
+  const openCreateModal = () => {
+    if (!canEditProperties) {
+      toast.error("You have read-only access to Properties.");
+      return;
+    }
+    setEditingProperty(null);
+    setForm(buildDefaultForm());
+    setCurrentStep(1);
+    setShowCreate(true);
+  };
+
+  const openEditModal = (property) => {
+    if (!canEditProperties) {
+      toast.error("You have read-only access to Properties.");
+      return;
+    }
+    setEditingProperty(property);
+    const existingManager = propertyManagersById[property.id]?.[0]?.user_id || property.manager_user_id || property.property_manager || "";
+    setForm({
+      name: property.name || "",
+      address: property.address || "",
+      city: property.city || "",
+      state: property.state || "",
+      zip: property.zip || "",
+      property_type: property.property_type || "office",
+      structure_type: property.structure_type || "single",
+      total_sf: property.total_sf ? String(property.total_sf) : (property.total_sqft ? String(property.total_sqft) : ""),
+      total_buildings: property.total_buildings || 1,
+      total_units: property.total_units || 0,
+      year_built: property.year_built ? String(property.year_built) : "",
+      portfolio_id: property.portfolio_id || "",
+      property_manager_user_id: existingManager,
+      address_verified: property.address_verified || false,
+    });
+    setCurrentStep(1);
+    setShowCreate(true);
+  };
+
+  const saveMutation = useMutation({
+    mutationFn: async (data) => {
+      const isEditing = !!editingProperty;
+      assertCanWritePage(user, "Properties", isEditing ? "edit properties" : "create properties");
+      const { property_manager_user_id, ...propPayload } = data;
+      let saved;
+      if (isEditing) {
+        saved = await propertyService.update(editingProperty.id, propPayload);
+      } else {
+        saved = await propertyService.create(propPayload);
+      }
+
+      const targetPropertyId = saved?.id || editingProperty?.id;
+      const targetOrgId = saved?.org_id || editingProperty?.org_id || propPayload.org_id || effectiveOrgId;
+
+      if (targetPropertyId && targetOrgId && property_manager_user_id) {
+        await assignPropertyManager({
+          propertyId: targetPropertyId,
+          orgId: targetOrgId,
+          managerUserId: property_manager_user_id,
+        });
+
+        createNotificationsForEvent({
+          event_type: "property.manager_assigned",
+          org_id: targetOrgId,
+          portfolio_id: saved?.portfolio_id || propPayload.portfolio_id || null,
+          entity_type: "property",
+          entity_id: targetPropertyId,
+          entity_label: saved?.name || data.name,
+          action_url: `${createPageUrl("PropertyDetail")}?id=${targetPropertyId}`,
+          metadata: {
+            property_name: saved?.name || data.name,
+            assigned_manager_user_id: property_manager_user_id,
+            assignment_source: isEditing ? "property_edit_modal" : "property_create_modal",
+          },
+        }).catch((error) => {
+          console.warn("[Properties] manager assignment notification failed:", error?.message || error);
+        });
+      }
+
+      return saved;
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['Property'] });
+      queryClient.invalidateQueries({ queryKey: ['user-assignments'] });
+      const wasEditing = !!editingProperty;
       setShowCreate(false);
+      setEditingProperty(null);
       setForm(buildDefaultForm());
       setCurrentStep(1);
-      toast.success("Property created successfully");
-      createNotificationsForEvent({
-        org_id: data?.org_id || activePortfolio?.org_id || currentOrgId || orgId,
-        event_type: "property.created",
-        entity_type: "property",
-        entity_id: data?.id,
-        entity_label: data?.name || form.name,
-        portfolio_id: data?.portfolio_id || form.portfolio_id || activePortfolioId || null,
-        property_id: data?.id,
-        action_url: `${createPageUrl("PropertyDetail")}?id=${data?.id}`,
-        created_by: user?.id,
-        metadata: {
-          source: "property_create",
-          property_name: data?.name || form.name,
-          portfolio_name: activePortfolio?.name || null,
-        },
-      }).catch((error) => {
-        console.warn("[Properties] notification event failed:", error?.message || error);
-      });
-      if (data && data.id) {
-        navigate(createPageUrl("PropertyDetail") + "?id=" + data.id);
+      toast.success(wasEditing ? "Property updated successfully" : "Property created successfully");
+
+      if (!wasEditing) {
+        createNotificationsForEvent({
+          org_id: data?.org_id || activePortfolio?.org_id || currentOrgId || orgId,
+          event_type: "property.created",
+          entity_type: "property",
+          entity_id: data?.id,
+          entity_label: data?.name || form.name,
+          portfolio_id: data?.portfolio_id || form.portfolio_id || activePortfolioId || null,
+          property_id: data?.id,
+          action_url: `${createPageUrl("PropertyDetail")}?id=${data?.id}`,
+          created_by: user?.id,
+          metadata: {
+            source: "property_create",
+            property_name: data?.name || form.name,
+            portfolio_name: activePortfolio?.name || null,
+          },
+        }).catch((error) => {
+          console.warn("[Properties] notification event failed:", error?.message || error);
+        });
+        if (data && data.id) {
+          navigate(createPageUrl("PropertyDetail") + "?id=" + data.id);
+        }
       }
     },
     onError: (err) => {
-      toast.error(isPagePermissionError(err) ? err.message : "Failed to create property: " + (err?.message || "Unknown error"));
+      toast.error(isPagePermissionError(err) ? err.message : `Failed to save property: ${err?.message || "Unknown error"}`);
     },
   });
 
@@ -306,7 +481,7 @@ export default function Properties() {
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" disabled={scopedProperties.length === 0} onClick={() => downloadCSV(exportRows, 'properties.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
           <Button variant="outline" size="sm" disabled={noPortfolioAccess || !canEditProperties} onClick={() => setShowImport(true)}><Upload className="w-4 h-4 mr-1" />Bulk Upload</Button>
-          <Button size="sm" disabled={noPortfolioAccess || !canEditProperties} onClick={() => setShowCreate(true)} className="bg-gradient-to-r from-blue-700 to-blue-600 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Property</Button>
+          <Button size="sm" disabled={noPortfolioAccess || !canEditProperties} onClick={openCreateModal} className="bg-gradient-to-r from-blue-700 to-blue-600 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Property</Button>
         </div>
       </PageHeader>
 
@@ -403,7 +578,7 @@ export default function Properties() {
                       className="mt-1"
                     />
                     <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${p.structure_type === 'multi' ? 'bg-blue-100' : 'bg-blue-100'}`}>
-                      {p.structure_type === 'multi' ? <Building2 className="w-6 h-6 text-blue-500" /> : <Home className="w-6 h-6 text-blue-500" />}
+                      {p.structure_type === 'multi' ? <Building2 className="w-4 h-4 text-blue-500" /> : <Home className="w-4 h-4 text-blue-500" />}
                     </div>
                     <div className="min-w-0 flex-1">
                       <h3 className="text-base font-bold text-slate-900 truncate">{p.name}</h3>
@@ -448,9 +623,20 @@ export default function Properties() {
                     ) : (
                       <span className="text-[10px] text-slate-400 flex items-center gap-1"><XCircle className="w-3 h-3" />Unverified</span>
                     )}
-                    <Link to={createPageUrl("PropertyDetail") + `?id=${p.id}`}>
-                      <Button variant="outline" size="sm" className="text-xs h-7">View <ChevronRight className="w-3 h-3 ml-1" /></Button>
-                    </Link>
+                    <div className="flex items-center gap-1.5">
+                      <Link to={createPageUrl("PropertyDetail") + `?id=${p.id}`}>
+                        <Button variant="outline" size="sm" className="text-xs h-7">View <ChevronRight className="w-3 h-3 ml-1" /></Button>
+                      </Link>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-xs h-7 px-2.5"
+                        disabled={!canEditProperties}
+                        onClick={() => openEditModal(p)}
+                      >
+                        Edit
+                      </Button>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -494,19 +680,29 @@ export default function Properties() {
                     {p.structure_type === 'multi' ? 'Multi' : 'Single'}
                   </Badge>
                   {p.address_verified ? <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" /> : <XCircle className="w-4 h-4 text-slate-300 flex-shrink-0" />}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 w-8 p-0 text-red-500 hover:text-red-600 flex-shrink-0"
-                    disabled={!canEditProperties}
-                    onClick={() => setDeleteTarget(p)}
-                    title="Delete property"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
-                  <Link to={createPageUrl("PropertyDetail") + `?id=${p.id}`}>
-                    <Button variant="outline" size="sm" className="flex-shrink-0">View</Button>
-                  </Link>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <Link to={createPageUrl("PropertyDetail") + `?id=${p.id}`}>
+                      <Button variant="outline" size="sm">View</Button>
+                    </Link>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={!canEditProperties}
+                      onClick={() => openEditModal(p)}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 text-red-500 hover:text-red-600"
+                      disabled={!canEditProperties}
+                      onClick={() => setDeleteTarget(p)}
+                      title="Delete property"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             );
@@ -597,10 +793,18 @@ export default function Properties() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5">
                           <Link to={createPageUrl("PropertyDetail") + `?id=${p.id}`}>
                             <Button variant="outline" size="sm">View</Button>
                           </Link>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={!canEditProperties}
+                            onClick={() => openEditModal(p)}
+                          >
+                            Edit
+                          </Button>
                           <Button
                             variant="ghost"
                             size="sm"
@@ -622,13 +826,13 @@ export default function Properties() {
         </Card>
       )}
 
-      {/* Add Property Multi-Step Wizard Dialog */}
-      <Dialog open={showCreate && canEditProperties} onOpenChange={v => { setShowCreate(v && canEditProperties); if(!v) setCurrentStep(1); }}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
+      {/* Add / Edit Property Multi-Step Wizard Dialog */}
+      <Dialog open={showCreate && canEditProperties} onOpenChange={v => { setShowCreate(v && canEditProperties); if(!v) { setCurrentStep(1); setEditingProperty(null); } }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden z-[100]">
           <DialogHeader>
-            <DialogTitle>Add New Property</DialogTitle>
+            <DialogTitle>{editingProperty ? "Edit Property" : "Add New Property"}</DialogTitle>
             <DialogDescription>
-              Step {currentStep} of 4: {['Basic Info', 'Location & Verification', 'Structure', 'Metrics'][currentStep - 1]}
+              Step {currentStep} of 4: {['Basic Info & Manager', 'Location & Verification', 'Structure', 'Metrics'][currentStep - 1]}
             </DialogDescription>
           </DialogHeader>
 
@@ -670,6 +874,34 @@ export default function Properties() {
                       </SelectContent>
                     </Select>
                   </div>
+                </div>
+                <div>
+                  <Label>Property Manager Assignment</Label>
+                  <div className="mt-1.5">
+                    <Select
+                      value={form.property_manager_user_id || "none"}
+                      onValueChange={v => setForm({ ...form, property_manager_user_id: v === "none" ? "" : v })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={isLoadingManagers ? "Loading property managers..." : "Select property manager (optional)"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Do not assign now</SelectItem>
+                        {assignableManagers.map((m) => {
+                          const name = m.profile.full_name || m.profile.email || m.user_id;
+                          const role = (m.custom_role || m.role || "manager").replaceAll("_", " ");
+                          return (
+                            <SelectItem key={m.user_id} value={m.user_id}>
+                              {name} · {role}
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    The assigned manager will also cascade automatically to all buildings and units in this property.
+                  </p>
                 </div>
                 <div>
                   <Label>Primary Property Type</Label>
@@ -748,8 +980,8 @@ export default function Properties() {
             {currentStep === 4 && (
               <div className="space-y-5 animate-in fade-in slide-in-from-right-4 duration-300 fill-mode-both">
                 <div className="bg-slate-50 rounded-lg p-4 border border-slate-100 mb-2">
-                  <h4 className="text-sm font-bold text-slate-800 mb-1">Almost done!</h4>
-                  <p className="text-xs text-slate-500">Add key metrics. You can always update these later or let them calculate automatically from the rent roll.</p>
+                  <h4 className="text-sm font-bold text-slate-800 mb-1">{editingProperty ? "Update Metrics" : "Almost done!"}</h4>
+                  <p className="text-xs text-slate-500">Key metrics for this property. These can calculate automatically from the rent roll.</p>
                 </div>
                 <div>
                   <Label>Total Rentable Square Feet (RSF)</Label>
@@ -773,7 +1005,7 @@ export default function Properties() {
             {currentStep > 1 ? (
               <Button variant="outline" onClick={() => setCurrentStep(prev => prev - 1)}><ArrowLeft className="w-4 h-4 mr-1" />Back</Button>
             ) : (
-              <Button variant="ghost" className="text-slate-500 hover:text-slate-700" onClick={() => { setShowCreate(false); setCurrentStep(1); }}>Cancel</Button>
+              <Button variant="ghost" className="text-slate-500 hover:text-slate-700" onClick={() => { setShowCreate(false); setEditingProperty(null); setCurrentStep(1); }}>Cancel</Button>
             )}
 
             {currentStep < 4 ? (
@@ -785,7 +1017,7 @@ export default function Properties() {
                 Next Step<ArrowRight className="w-4 h-4 ml-1.5" />
               </Button>
             ) : (
-              <Button onClick={() => createMutation.mutate({
+              <Button onClick={() => saveMutation.mutate({
                 name: form.name,
                 address: form.address,
                 city: form.city,
@@ -799,10 +1031,12 @@ export default function Properties() {
                 year_built: parseInt(form.year_built) || null,
                 address_verified: form.address_verified || false,
                 ...(form.portfolio_id ? { portfolio_id: form.portfolio_id } : {}),
-                ...(orgId && orgId !== '__none__' ? { org_id: orgId } : {}),
+                ...(form.property_manager_user_id ? { property_manager_user_id: form.property_manager_user_id } : {}),
+                ...(effectiveOrgId && effectiveOrgId !== '__none__' ? { org_id: effectiveOrgId } : {}),
                 status: "active",
-              })} disabled={!canEditProperties || !form.name || createMutation.isPending || (!isAdmin && portfolios.length > 0 && !form.portfolio_id)} className="bg-blue-600 hover:bg-blue-700 min-w-[140px] shadow-sm">
-                {createMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}Create Property
+              })} disabled={!canEditProperties || !form.name || saveMutation.isPending || (!isAdmin && portfolios.length > 0 && !form.portfolio_id)} className="bg-blue-600 hover:bg-blue-700 min-w-[140px] shadow-sm">
+                {saveMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+                {editingProperty ? "Save Changes" : "Create Property"}
               </Button>
             )}
           </DialogFooter>
