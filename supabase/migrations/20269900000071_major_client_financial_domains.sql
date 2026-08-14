@@ -36,7 +36,7 @@ DROP POLICY IF EXISTS lease_percentage_rent_terms_insert ON public.lease_percent
 DROP POLICY IF EXISTS lease_percentage_rent_terms_update ON public.lease_percentage_rent_terms;
 DROP POLICY IF EXISTS lease_percentage_rent_terms_delete ON public.lease_percentage_rent_terms;
 CREATE POLICY lease_percentage_rent_terms_select ON public.lease_percentage_rent_terms
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY lease_percentage_rent_terms_insert ON public.lease_percentage_rent_terms
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 CREATE POLICY lease_percentage_rent_terms_update ON public.lease_percentage_rent_terms
@@ -82,7 +82,7 @@ DROP POLICY IF EXISTS tenant_sales_reports_insert ON public.tenant_sales_reports
 DROP POLICY IF EXISTS tenant_sales_reports_update ON public.tenant_sales_reports;
 DROP POLICY IF EXISTS tenant_sales_reports_delete ON public.tenant_sales_reports;
 CREATE POLICY tenant_sales_reports_select ON public.tenant_sales_reports
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY tenant_sales_reports_insert ON public.tenant_sales_reports
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 CREATE POLICY tenant_sales_reports_update ON public.tenant_sales_reports
@@ -130,7 +130,7 @@ DROP POLICY IF EXISTS lease_obligations_insert ON public.lease_obligations;
 DROP POLICY IF EXISTS lease_obligations_update ON public.lease_obligations;
 DROP POLICY IF EXISTS lease_obligations_delete ON public.lease_obligations;
 CREATE POLICY lease_obligations_select ON public.lease_obligations
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY lease_obligations_insert ON public.lease_obligations
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 CREATE POLICY lease_obligations_update ON public.lease_obligations
@@ -170,7 +170,7 @@ DROP POLICY IF EXISTS lease_obligation_occurrences_insert ON public.lease_obliga
 DROP POLICY IF EXISTS lease_obligation_occurrences_update ON public.lease_obligation_occurrences;
 DROP POLICY IF EXISTS lease_obligation_occurrences_delete ON public.lease_obligation_occurrences;
 CREATE POLICY lease_obligation_occurrences_select ON public.lease_obligation_occurrences
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY lease_obligation_occurrences_insert ON public.lease_obligation_occurrences
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 CREATE POLICY lease_obligation_occurrences_update ON public.lease_obligation_occurrences
@@ -210,7 +210,7 @@ DROP POLICY IF EXISTS reference_series_selections_insert ON public.reference_ser
 DROP POLICY IF EXISTS reference_series_selections_update ON public.reference_series_selections;
 DROP POLICY IF EXISTS reference_series_selections_delete ON public.reference_series_selections;
 CREATE POLICY reference_series_selections_select ON public.reference_series_selections
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY reference_series_selections_insert ON public.reference_series_selections
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 CREATE POLICY reference_series_selections_update ON public.reference_series_selections
@@ -244,7 +244,7 @@ DROP POLICY IF EXISTS reference_observations_insert ON public.reference_observat
 DROP POLICY IF EXISTS reference_observations_update ON public.reference_observations;
 DROP POLICY IF EXISTS reference_observations_delete ON public.reference_observations;
 CREATE POLICY reference_observations_select ON public.reference_observations
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY reference_observations_insert ON public.reference_observations
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 CREATE POLICY reference_observations_update ON public.reference_observations
@@ -286,7 +286,7 @@ DROP POLICY IF EXISTS coi_documents_insert ON public.coi_documents;
 DROP POLICY IF EXISTS coi_documents_update ON public.coi_documents;
 DROP POLICY IF EXISTS coi_documents_delete ON public.coi_documents;
 CREATE POLICY coi_documents_select ON public.coi_documents
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY coi_documents_insert ON public.coi_documents
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 CREATE POLICY coi_documents_update ON public.coi_documents
@@ -319,7 +319,7 @@ ALTER TABLE public.lease_insurance_compliance_results ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS lease_insurance_compliance_results_select ON public.lease_insurance_compliance_results;
 DROP POLICY IF EXISTS lease_insurance_compliance_results_insert ON public.lease_insurance_compliance_results;
 CREATE POLICY lease_insurance_compliance_results_select ON public.lease_insurance_compliance_results
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY lease_insurance_compliance_results_insert ON public.lease_insurance_compliance_results
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 
@@ -354,7 +354,7 @@ DROP POLICY IF EXISTS vendor_credentials_insert ON public.vendor_credentials;
 DROP POLICY IF EXISTS vendor_credentials_update ON public.vendor_credentials;
 DROP POLICY IF EXISTS vendor_credentials_delete ON public.vendor_credentials;
 CREATE POLICY vendor_credentials_select ON public.vendor_credentials
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY vendor_credentials_insert ON public.vendor_credentials
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 CREATE POLICY vendor_credentials_update ON public.vendor_credentials
@@ -402,7 +402,7 @@ DROP POLICY IF EXISTS percentage_rent_calculations_insert ON public.percentage_r
 DROP POLICY IF EXISTS percentage_rent_calculations_update ON public.percentage_rent_calculations;
 DROP POLICY IF EXISTS percentage_rent_calculations_delete ON public.percentage_rent_calculations;
 CREATE POLICY percentage_rent_calculations_select ON public.percentage_rent_calculations
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY percentage_rent_calculations_insert ON public.percentage_rent_calculations
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 CREATE POLICY percentage_rent_calculations_update ON public.percentage_rent_calculations
@@ -447,7 +447,7 @@ DROP POLICY IF EXISTS lease_charge_calculations_insert ON public.lease_charge_ca
 DROP POLICY IF EXISTS lease_charge_calculations_update ON public.lease_charge_calculations;
 DROP POLICY IF EXISTS lease_charge_calculations_delete ON public.lease_charge_calculations;
 CREATE POLICY lease_charge_calculations_select ON public.lease_charge_calculations
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY lease_charge_calculations_insert ON public.lease_charge_calculations
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 CREATE POLICY lease_charge_calculations_update ON public.lease_charge_calculations
@@ -492,7 +492,7 @@ DROP POLICY IF EXISTS financial_control_findings_insert ON public.financial_cont
 DROP POLICY IF EXISTS financial_control_findings_update ON public.financial_control_findings;
 DROP POLICY IF EXISTS financial_control_findings_delete ON public.financial_control_findings;
 CREATE POLICY financial_control_findings_select ON public.financial_control_findings
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY financial_control_findings_insert ON public.financial_control_findings
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 CREATE POLICY financial_control_findings_update ON public.financial_control_findings

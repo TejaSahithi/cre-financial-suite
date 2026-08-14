@@ -130,6 +130,45 @@ WHERE m.status = 'invited'
     )
   );
 
+CREATE OR REPLACE FUNCTION public.normalize_page_access_level(raw_level text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT CASE lower(COALESCE(raw_level, 'none'))
+    WHEN 'full' THEN 'admin'
+    WHEN 'manage' THEN 'admin'
+    WHEN 'admin' THEN 'admin'
+    WHEN 'approve' THEN 'approve'
+    WHEN 'write' THEN 'write'
+    WHEN 'edit' THEN 'write'
+    WHEN 'read' THEN 'read'
+    WHEN 'read_only' THEN 'read'
+    WHEN 'readonly' THEN 'read'
+    WHEN 'view' THEN 'read'
+    ELSE 'none'
+  END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.access_level_rank(level text)
+RETURNS integer
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT CASE lower(COALESCE(level, 'none'))
+    WHEN 'admin' THEN 4
+    WHEN 'full' THEN 4
+    WHEN 'approve' THEN 3
+    WHEN 'write' THEN 2
+    WHEN 'edit' THEN 2
+    WHEN 'read' THEN 1
+    WHEN 'read_only' THEN 1
+    WHEN 'readonly' THEN 1
+    WHEN 'view' THEN 1
+    ELSE 0
+  END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.role_default_page_access(role_name text, page_name text)
 RETURNS text
 LANGUAGE sql IMMUTABLE

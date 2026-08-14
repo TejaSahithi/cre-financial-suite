@@ -47,16 +47,12 @@ export default function Vendors() {
   const { data: expenses = [] } = useOrgQuery("Expense");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
   const { data: properties = [] } = useOrgQuery("Property");
-  const { data: buildings = [] } = useOrgQuery("Building");
-<<<<<<< HEAD
+  const { data: units = [] } = useOrgQuery("Unit");
   const { data: vendorCredentials = [] } = useQuery({
     queryKey: ["vendor-credentials", orgId],
     enabled: Boolean(orgId),
     queryFn: () => listOperationalDomainRows("vendor_credentials", { orgId, limit: 200 }),
   });
-=======
-  const { data: units = [] } = useOrgQuery("Unit");
->>>>>>> f93b73e626fefe8dd1c9ad2be66f1c8ee2fe259c
 
   const createMutation = useMutation({
     mutationFn: (d) => vendorService.create(d),

@@ -48,7 +48,7 @@ DROP POLICY IF EXISTS cpi_rent_adjustment_proposals_insert ON public.cpi_rent_ad
 DROP POLICY IF EXISTS cpi_rent_adjustment_proposals_update ON public.cpi_rent_adjustment_proposals;
 DROP POLICY IF EXISTS cpi_rent_adjustment_proposals_delete ON public.cpi_rent_adjustment_proposals;
 CREATE POLICY cpi_rent_adjustment_proposals_select ON public.cpi_rent_adjustment_proposals
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY cpi_rent_adjustment_proposals_insert ON public.cpi_rent_adjustment_proposals
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 CREATE POLICY cpi_rent_adjustment_proposals_update ON public.cpi_rent_adjustment_proposals

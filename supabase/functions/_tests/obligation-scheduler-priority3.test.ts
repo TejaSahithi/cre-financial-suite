@@ -1,4 +1,4 @@
-import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+﻿import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { generateObligationOccurrences } from "../_shared/obligations/obligation-engine.ts";
 import {
   deliveryIdempotencyKey,
@@ -79,9 +79,9 @@ Deno.test("satisfied waived and cancelled occurrences are not notifiable", () =>
 
 Deno.test({
   name: "scheduler migration registers cron, status constraints, idempotency indexes and retry columns",
-  permissions: { read: [new URL("../../migrations/20269900000073_obligation_scheduler_idempotency.sql", import.meta.url)] },
+  permissions: { read: [new URL("../../migrations/20269900000076_obligation_scheduler_idempotency.sql", import.meta.url)] },
   async fn() {
-    const sql = await Deno.readTextFile(new URL("../../migrations/20269900000073_obligation_scheduler_idempotency.sql", import.meta.url));
+    const sql = await Deno.readTextFile(new URL("../../migrations/20269900000076_obligation_scheduler_idempotency.sql", import.meta.url));
     assertStringIncludes(sql, "idx_notifications_org_idempotency_key");
     assertStringIncludes(sql, "idx_notification_deliveries_idempotency_key");
     assertStringIncludes(sql, "satisfied");
@@ -104,3 +104,4 @@ Deno.test({
     assertStringIncludes(source, "external_delivery_allowed === false");
   },
 });
+

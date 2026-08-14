@@ -87,7 +87,7 @@ DROP POLICY IF EXISTS tenant_reconciliations_insert ON public.tenant_reconciliat
 DROP POLICY IF EXISTS tenant_reconciliations_update ON public.tenant_reconciliations;
 DROP POLICY IF EXISTS tenant_reconciliations_delete ON public.tenant_reconciliations;
 CREATE POLICY tenant_reconciliations_select ON public.tenant_reconciliations
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY tenant_reconciliations_insert ON public.tenant_reconciliations
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 CREATE POLICY tenant_reconciliations_update ON public.tenant_reconciliations
@@ -101,7 +101,7 @@ DROP POLICY IF EXISTS tenant_reconciliation_lines_insert ON public.tenant_reconc
 DROP POLICY IF EXISTS tenant_reconciliation_lines_update ON public.tenant_reconciliation_lines;
 DROP POLICY IF EXISTS tenant_reconciliation_lines_delete ON public.tenant_reconciliation_lines;
 CREATE POLICY tenant_reconciliation_lines_select ON public.tenant_reconciliation_lines
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY tenant_reconciliation_lines_insert ON public.tenant_reconciliation_lines
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 CREATE POLICY tenant_reconciliation_lines_update ON public.tenant_reconciliation_lines

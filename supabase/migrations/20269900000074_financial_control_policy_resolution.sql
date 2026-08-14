@@ -32,7 +32,7 @@ DROP POLICY IF EXISTS financial_control_policies_insert ON public.financial_cont
 DROP POLICY IF EXISTS financial_control_policies_update ON public.financial_control_policies;
 DROP POLICY IF EXISTS financial_control_policies_delete ON public.financial_control_policies;
 CREATE POLICY financial_control_policies_select ON public.financial_control_policies
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_member_of_org(org_id));
 CREATE POLICY financial_control_policies_insert ON public.financial_control_policies
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
 CREATE POLICY financial_control_policies_update ON public.financial_control_policies
