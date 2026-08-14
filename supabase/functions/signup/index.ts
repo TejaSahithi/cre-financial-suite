@@ -158,18 +158,32 @@ Deno.serve(async (req: Request) => {
       if (RESEND_API_KEY) {
         const redirectUrl = flow === "invite" ? INVITE_ACCEPT_URL : POST_CONFIRM_URL;
         const link = await getAnyAuthLink(admin, normalizedEmail, redirectUrl);
-        if (link) {
-          await sendFlowEmail({
-            resendKey: RESEND_API_KEY,
-            from: FROM,
-            email: normalizedEmail,
-            firstName: full_name || normalizedEmail.split("@")[0],
-            link,
-            flow,
-          });
-          console.log("[signup] Resend auth email sent via Resend to:", normalizedEmail, "flow:", flow);
-        } else {
+        if (!link) {
           console.error("[signup] Could not generate any auth link for resend:", normalizedEmail);
+          return new Response(JSON.stringify({ error: "Could not generate confirmation link. Please try again." }), {
+            status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+        await sendFlowEmail({
+          resendKey: RESEND_API_KEY,
+          from: FROM,
+          email: normalizedEmail,
+          firstName: full_name || normalizedEmail.split("@")[0],
+          link,
+          flow,
+        });
+        console.log("[signup] Resend auth email sent via Resend to:", normalizedEmail, "flow:", flow);
+      } else {
+        const { error: resendErr } = await admin.auth.resend({
+          type: "signup",
+          email: normalizedEmail,
+          options: { emailRedirectTo: flow === "invite" ? INVITE_ACCEPT_URL : POST_CONFIRM_URL },
+        });
+        if (resendErr) {
+          console.error("[signup] Supabase built-in resend failed:", resendErr.message);
+          return new Response(JSON.stringify({ error: resendErr.message || "Could not resend confirmation email." }), {
+            status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
         }
       }
       return new Response(JSON.stringify({ success: true, confirmationRequired: true, flow }), {
@@ -190,20 +204,26 @@ Deno.serve(async (req: Request) => {
       const flow = await detectRegistrationFlow(admin, normalizedEmail, existing.id);
 
       if (flow === "invite") {
-        if (RESEND_API_KEY) {
-          const link = await getAnyAuthLink(admin, normalizedEmail, INVITE_ACCEPT_URL);
-          if (link) {
-            await sendFlowEmail({
-              resendKey: RESEND_API_KEY,
-              from: FROM,
-              email: normalizedEmail,
-              firstName: full_name || normalizedEmail.split("@")[0],
-              link,
-              flow,
-            });
-            console.log("[signup] Invite completion email sent for existing invited user:", normalizedEmail);
-          }
+        if (!RESEND_API_KEY) {
+          return new Response(JSON.stringify({ error: "Email service is not configured. Cannot send invite-completion email." }), {
+            status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
         }
+        const link = await getAnyAuthLink(admin, normalizedEmail, INVITE_ACCEPT_URL);
+        if (!link) {
+          return new Response(JSON.stringify({ error: "Could not generate invite-completion link. Please try again." }), {
+            status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+        await sendFlowEmail({
+          resendKey: RESEND_API_KEY,
+          from: FROM,
+          email: normalizedEmail,
+          firstName: full_name || normalizedEmail.split("@")[0],
+          link,
+          flow,
+        });
+        console.log("[signup] Invite completion email sent for existing invited user:", normalizedEmail);
         return new Response(JSON.stringify({ success: true, confirmationRequired: true, flow }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -213,16 +233,30 @@ Deno.serve(async (req: Request) => {
         // Exists but unconfirmed — resend confirmation
         if (RESEND_API_KEY) {
           const link = await getAnyAuthLink(admin, normalizedEmail, POST_CONFIRM_URL);
-          if (link) {
-            await sendFlowEmail({
-              resendKey: RESEND_API_KEY,
-              from: FROM,
-              email: normalizedEmail,
-              firstName: full_name || normalizedEmail.split("@")[0],
-              link,
-              flow: "signup",
+          if (!link) {
+            return new Response(JSON.stringify({ error: "Could not generate confirmation link. Please try again." }), {
+              status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
             });
-            console.log("[signup] Resent confirmation for existing unconfirmed user:", normalizedEmail);
+          }
+          await sendFlowEmail({
+            resendKey: RESEND_API_KEY,
+            from: FROM,
+            email: normalizedEmail,
+            firstName: full_name || normalizedEmail.split("@")[0],
+            link,
+            flow: "signup",
+          });
+          console.log("[signup] Resent confirmation for existing unconfirmed user:", normalizedEmail);
+        } else {
+          const { error: resendErr } = await admin.auth.resend({
+            type: "signup",
+            email: normalizedEmail,
+            options: { emailRedirectTo: POST_CONFIRM_URL },
+          });
+          if (resendErr) {
+            return new Response(JSON.stringify({ error: resendErr.message || "Could not resend confirmation email." }), {
+              status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
           }
         }
         return new Response(JSON.stringify({ success: true, confirmationRequired: true, flow: "signup" }), {
@@ -407,19 +441,21 @@ Deno.serve(async (req: Request) => {
     // Send confirmation email: try Resend first, fall back to Supabase built-in SMTP.
     if (RESEND_API_KEY) {
       const link = await getAnyAuthLink(admin, normalizedEmail, POST_CONFIRM_URL);
-      if (link) {
-        await sendFlowEmail({
-          resendKey: RESEND_API_KEY,
-          from: FROM,
-          email: normalizedEmail,
-          firstName: full_name || normalizedEmail.split("@")[0],
-          link,
-          flow: "signup",
-        });
-        console.log("[signup] Confirmation email sent via Resend to:", normalizedEmail);
-      } else {
+      if (!link) {
         console.error("[signup] Failed to generate auth link for new user:", normalizedEmail);
+        return new Response(JSON.stringify({ error: "Account created, but confirmation link could not be generated. Please use Resend confirmation email." }), {
+          status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
+      await sendFlowEmail({
+        resendKey: RESEND_API_KEY,
+        from: FROM,
+        email: normalizedEmail,
+        firstName: full_name || normalizedEmail.split("@")[0],
+        link,
+        flow: "signup",
+      });
+      console.log("[signup] Confirmation email sent via Resend to:", normalizedEmail);
     } else {
       // RESEND_API_KEY not set — fall back to Supabase's built-in email by
       // re-triggering signup via the non-admin client. This sends the default
@@ -631,6 +667,7 @@ async function sendFlowEmail({
   if (!res.ok) {
     const body = await res.text();
     console.error("[signup] Resend error:", body);
+    throw new Error(`Resend failed to send ${flow} email: ${body || res.statusText}`);
   }
 }
 
