@@ -156,7 +156,6 @@ export default function RequestAccess() {
         role: isOtherRole ? form.customRole : form.role,
         portfolios: form.portfolios_count || "N/A",
         properties_count: form.properties_count || "N/A",
-        property_count: form.properties_count || "N/A",
         plan: form.plan || "N/A",
         billing_cycle: form.billing_cycle || "monthly",
         request_type: "access",

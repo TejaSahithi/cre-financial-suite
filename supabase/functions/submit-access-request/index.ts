@@ -151,6 +151,50 @@ async function sendEmail({ resendKey, from, to, subject, html }: any) {
   return { ok: true, id: payload?.id || null };
 }
 
+function extractMissingColumn(error: any) {
+  const message = String(error?.message || error?.details || "");
+  const match = message.match(/Could not find the '([^']+)' column/i);
+  return match?.[1] || "";
+}
+
+async function insertAccessRequest(admin: any, payload: Record<string, unknown>, warnings: string[]) {
+  const optionalColumns = new Set([
+    "phone",
+    "role",
+    "portfolios",
+    "properties_count",
+    "plan",
+    "billing_cycle",
+    "request_type",
+    "updated_at",
+  ]);
+  const workingPayload = { ...payload };
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const { data, error } = await admin
+      .from("access_requests")
+      .insert(workingPayload)
+      .select()
+      .single();
+
+    if (!error) return { data, error: null };
+
+    const missingColumn = extractMissingColumn(error);
+    if (missingColumn && optionalColumns.has(missingColumn) && missingColumn in workingPayload) {
+      delete workingPayload[missingColumn];
+      warnings.push(`Skipped optional access_requests.${missingColumn}; column is missing in the deployed schema cache.`);
+      continue;
+    }
+
+    return { data: null, error };
+  }
+
+  return {
+    data: null,
+    error: new Error("Could not submit access request after reconciling optional schema columns."),
+  };
+}
+
 Deno.serve(async (req: Request) => {
   const corsHeaders = getCorsHeaders(req.headers.get("Origin"));
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -188,7 +232,6 @@ Deno.serve(async (req: Request) => {
       role: role || null,
       portfolios: portfolios || null,
       properties_count: propertiesCount || null,
-      property_count: propertiesCount || null,
       plan: plan || null,
       billing_cycle: billingCycle,
       request_type: "access",
@@ -198,11 +241,7 @@ Deno.serve(async (req: Request) => {
 
     let accessRequest: any = null;
     let duplicate = false;
-    const { data: inserted, error: insertError } = await admin
-      .from("access_requests")
-      .insert(requestPayload)
-      .select()
-      .single();
+    const { data: inserted, error: insertError } = await insertAccessRequest(admin, requestPayload, warnings);
 
     if (insertError) {
       if (insertError.code === "23505") {
