@@ -13,8 +13,10 @@ const DEFAULT_FRONTEND_URL = 'https://www.proformaos.ai';
 const LOGO_URL = `${DEFAULT_FRONTEND_URL}/assets/proforma-os-logo.png`;
 
 function resolveFrontendUrl(value?: string | null) {
-  const url = String(value || '').trim().replace(/\/$/, '');
-  return url && !/(vercel\.app|localhost)/i.test(url) ? url : DEFAULT_FRONTEND_URL;
+  let url = String(value || '').trim().replace(/\/+$/, '');
+  if (!url || /(vercel\.app|localhost)/i.test(url)) return DEFAULT_FRONTEND_URL;
+  if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+  return url;
 }
 
 serve(async (req) => {

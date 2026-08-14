@@ -15,8 +15,10 @@ const BRAND_NAME = "ProForma OS";
 const SUPPORT_EMAIL = "support@proformaos.ai";
 const DEFAULT_FRONTEND_URL = "https://www.proformaos.ai";
 function resolveFrontendUrl(value?: string | null) {
-  const url = String(value || "").trim().replace(/\/$/, "");
-  return url && !/(vercel\.app|localhost)/i.test(url) ? url : DEFAULT_FRONTEND_URL;
+  let url = String(value || "").trim().replace(/\/+$/, "");
+  if (!url || /(vercel\.app|localhost)/i.test(url)) return DEFAULT_FRONTEND_URL;
+  if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+  return url;
 }
 const APP_BASE_URL = resolveFrontendUrl(Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL"));
 const FROM_DEFAULT = `${BRAND_NAME} <${SUPPORT_EMAIL}>`;
