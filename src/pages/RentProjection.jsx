@@ -177,6 +177,12 @@ export default function RentProjection() {
     [location.search, portfolios, properties, buildings, units],
   );
 
+  useEffect(() => {
+    setScopeProperty(hierarchy.propertyId || "all");
+    setScopeBuilding(hierarchy.buildingId || "all");
+    setScopeUnit(hierarchy.unitId || "all");
+  }, [hierarchy.propertyId, hierarchy.buildingId, hierarchy.unitId]);
+
   const selectedPropertyId = scopeProperty !== "all" ? scopeProperty : null;
   const selectedBuildingId = scopeBuilding !== "all" ? scopeBuilding : null;
   const selectedUnitId = scopeUnit !== "all" ? scopeUnit : null;
@@ -558,6 +564,7 @@ export default function RentProjection() {
       </PageHeader>
 
       <ScopeSelector
+        portfolios={hierarchy.orgScopedPortfolios}
         properties={hierarchy.scopedProperties}
         buildings={hierarchy.scopedBuildings}
         units={hierarchy.scopedUnits}
@@ -567,6 +574,7 @@ export default function RentProjection() {
         onPropertyChange={setScopeProperty}
         onBuildingChange={setScopeBuilding}
         onUnitChange={setScopeUnit}
+        syncToUrl
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">

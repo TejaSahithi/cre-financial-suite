@@ -244,6 +244,7 @@ export default function Revenue() {
       )}
 
       <ScopeSelector
+        portfolios={scope.orgScopedPortfolios}
         properties={scope.scopedProperties}
         buildings={scope.scopedBuildings}
         units={scope.scopedUnits}
@@ -253,6 +254,7 @@ export default function Revenue() {
         onPropertyChange={setScopeProperty}
         onBuildingChange={setScopeBuilding}
         onUnitChange={setScopeUnit}
+        syncToUrl
       />
 
       <RevenueKPIStrip totalRevenue={totalRevenue} baseRent={totalBaseRent} camRecovery={totalCamRecovery} otherIncome={otherIncome} yoyGrowth={yoyGrowth} />
@@ -273,5 +275,4 @@ export default function Revenue() {
     </div>
   );
 }
-
 

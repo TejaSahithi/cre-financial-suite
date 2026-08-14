@@ -310,6 +310,7 @@ export default function ExpenseDashboard() {
       </div>
 
       <ScopeSelector
+        portfolios={scope.orgScopedPortfolios}
         properties={scope.scopedProperties}
         buildings={scope.scopedBuildings}
         units={scope.scopedUnits}
@@ -319,6 +320,7 @@ export default function ExpenseDashboard() {
         onPropertyChange={setScopeProperty}
         onBuildingChange={setScopeBuilding}
         onUnitChange={setScopeUnit}
+        syncToUrl
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">

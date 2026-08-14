@@ -247,7 +247,9 @@ export default function AddExpense() {
     }));
   };
 
-  const visibleProperties = scope.scopedProperties;
+  const visibleProperties = form.portfolio_id
+    ? scope.orgScopedProperties.filter((property) => property.portfolio_id === form.portfolio_id)
+    : scope.scopedProperties;
   const visibleBuildings = form.property_id
     ? scope.scopedBuildings.filter((building) => building.property_id === form.property_id)
     : scope.scopedBuildings;
@@ -880,6 +882,33 @@ export default function AddExpense() {
                   {categoryOptions.map((category) => (
                     <SelectItem key={category.id} value={category.id}>
                       {[category.category_name, category.subcategory_name].filter(Boolean).join(" / ")}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Portfolio</Label>
+              <Select
+                value={form.portfolio_id || "__all__"}
+                onValueChange={(value) =>
+                  setForm((current) => ({
+                    ...current,
+                    portfolio_id: value === "__all__" ? "" : value,
+                    property_id: "",
+                    building_id: "",
+                    unit_id: "",
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select portfolio..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">All Portfolios</SelectItem>
+                  {scope.orgScopedPortfolios.map((portfolio) => (
+                    <SelectItem key={portfolio.id} value={portfolio.id}>
+                      {portfolio.name}
                     </SelectItem>
                   ))}
                 </SelectContent>

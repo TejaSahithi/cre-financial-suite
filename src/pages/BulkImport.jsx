@@ -419,6 +419,7 @@ export default function BulkImport() {
             <p className="text-xs text-slate-500">Imported expenses will be saved against this hierarchy.</p>
           </div>
           <ScopeSelector
+            portfolios={scope.orgScopedPortfolios}
             properties={scope.scopedProperties}
             buildings={scopedBuildings}
             units={scopedUnits}
@@ -428,6 +429,7 @@ export default function BulkImport() {
             onPropertyChange={handlePropertyChange}
             onBuildingChange={handleBuildingChange}
             onUnitChange={handleUnitChange}
+            syncToUrl
           />
           <div className="flex flex-wrap gap-2 text-xs">
             <Badge variant="outline">Portfolio: {effectivePortfolio?.name || "Org-level only"}</Badge>

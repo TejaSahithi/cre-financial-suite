@@ -318,6 +318,7 @@ export default function LeaseUpload() {
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
+  const { data: portfolios = [] } = useOrgQuery("Portfolio");
 
   useEffect(() => {
     let nextProperty = queryPropertyId || "all";
@@ -857,6 +858,7 @@ export default function LeaseUpload() {
             <p className="text-xs text-slate-500">Choose the property, building, and unit context for this upload.</p>
           </div>
           <ScopeSelector
+            portfolios={portfolios}
             properties={properties}
             buildings={scopedBuildings}
             units={scopedUnits}
@@ -878,6 +880,7 @@ export default function LeaseUpload() {
               setScopeUnit(value);
               updateScopeParams({ property: scopeProperty, building: scopeBuilding, unit: value });
             }}
+            syncToUrl
           />
           <div className="text-xs text-slate-500">
             <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3 sm:grid-cols-3">

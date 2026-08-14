@@ -228,6 +228,12 @@ export default function CriticalDates() {
   const [scopeBuilding, setScopeBuilding] = useState(scope.buildingId || "all");
   const [scopeUnit, setScopeUnit] = useState(scope.unitId || "all");
 
+  useEffect(() => {
+    setScopeProperty(scope.propertyId || "all");
+    setScopeBuilding(scope.buildingId || "all");
+    setScopeUnit(scope.unitId || "all");
+  }, [scope.propertyId, scope.buildingId, scope.unitId]);
+
   const { data: criticalDates = [], isLoading } = useQuery({
     queryKey: ["lease-critical-dates"],
     queryFn: () => listCriticalDates(),
@@ -445,6 +451,7 @@ export default function CriticalDates() {
       </PageHeader>
 
       <ScopeSelector
+        portfolios={scope.orgScopedPortfolios}
         properties={scope.scopedProperties}
         buildings={scope.scopedBuildings}
         units={scope.scopedUnits}
@@ -454,6 +461,7 @@ export default function CriticalDates() {
         onPropertyChange={setScopeProperty}
         onBuildingChange={setScopeBuilding}
         onUnitChange={setScopeUnit}
+        syncToUrl
       />
 
       {/* Stat cards */}

@@ -224,6 +224,7 @@ export async function createNotificationsForEvent(event, options = {}) {
       assigned_user_ids: normalizedEvent.assigned_user_ids || normalizedEvent.assignedUserIds || [],
       responsible_user_ids: normalizedEvent.responsible_user_ids || normalizedEvent.responsibleUserIds || [],
       participant_user_ids: normalizedEvent.participant_user_ids || normalizedEvent.participantUserIds || [],
+      email_attachments: normalizedEvent.email_attachments || normalizedEvent.emailAttachments || [],
       metadata: normalizedEvent.metadata || {},
     });
   }

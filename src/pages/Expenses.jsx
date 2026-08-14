@@ -762,6 +762,7 @@ export default function Expenses() {
       </div>
 
       <ScopeSelector
+        portfolios={scope.orgScopedPortfolios}
         properties={scope.scopedProperties}
         buildings={scope.scopedBuildings}
         units={scope.scopedUnits}
@@ -771,6 +772,7 @@ export default function Expenses() {
         onPropertyChange={handleScopePropertyChange}
         onBuildingChange={handleScopeBuildingChange}
         onUnitChange={handleScopeUnitChange}
+        syncToUrl
       />
 
 

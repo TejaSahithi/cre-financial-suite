@@ -31,6 +31,7 @@ export default function Vendors() {
   const [editItem, setEditItem] = useState(null);
   const [sortField, setSortField] = useState("totalSpend");
   const [sortDir, setSortDir] = useState("desc");
+  const [scopePortfolio, setScopePortfolio] = useState("all");
   const [scopeProperty, setScopeProperty] = useState("all");
   const [form, setForm] = useState({ name: "", company: "", contact_name: "", contact_email: "", contact_phone: "", category: "other", payment_terms: "net_30", notes: "" });
   const queryClient = useQueryClient();
@@ -38,6 +39,7 @@ export default function Vendors() {
 
   const { data: vendors = [], orgId } = useOrgQuery("Vendor");
   const { data: expenses = [] } = useOrgQuery("Expense");
+  const { data: portfolios = [] } = useOrgQuery("Portfolio");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
 
@@ -133,7 +135,13 @@ export default function Vendors() {
 
   const enriched = combinedVendors.map(v => {
     const vExpenses = expenses.filter(e => expenseMatchesVendor(e, v));
-    const propExpenses = scopeProperty !== "all" ? vExpenses.filter(e => e.property_id === scopeProperty) : vExpenses;
+    const portfolioPropertyIds = new Set(properties.filter((property) => property.portfolio_id === scopePortfolio).map((property) => property.id));
+    const scopedExpenses = scopeProperty !== "all"
+      ? vExpenses.filter(e => e.property_id === scopeProperty)
+      : scopePortfolio !== "all"
+      ? vExpenses.filter((e) => portfolioPropertyIds.has(e.property_id))
+      : vExpenses;
+    const propExpenses = scopedExpenses;
     const propIds = [...new Set(propExpenses.map(e => e.property_id).filter(Boolean))];
     const lastExpense = propExpenses.sort((a, b) => (b.expense_date || b.date || '').localeCompare(a.expense_date || a.date || ''))[0];
     return {
@@ -195,7 +203,20 @@ export default function Vendors() {
         </div>
       </PageHeader>
 
-      <ScopeSelector properties={properties} buildings={buildings} units={[]} selectedProperty={scopeProperty} onPropertyChange={setScopeProperty} showUnit={false} />
+      <ScopeSelector
+        portfolios={portfolios}
+        properties={properties}
+        buildings={buildings}
+        units={[]}
+        selectedPortfolio={scopePortfolio}
+        selectedProperty={scopeProperty}
+        onPortfolioChange={(value) => {
+          setScopePortfolio(value);
+          setScopeProperty("all");
+        }}
+        onPropertyChange={setScopeProperty}
+        showUnit={false}
+      />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <MetricCard label="Total Vendors" value={vendors.length} icon={Users} color="bg-blue-50 text-blue-600" />

@@ -9,9 +9,7 @@ import {
   FileText,
   FileX,
   Loader2,
-  Printer,
   RefreshCw,
-  Send,
   Undo2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -3231,52 +3229,6 @@ export default function LeaseReview() {
             )}
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {lease?.abstract_status !== "approved" && (
-            <Button
-              variant="outline"
-              onClick={() => setShowReextractConfirm(true)}
-              disabled={reextracting || !resolvedSourceFileId}
-              title={
-                resolvedSourceFileId
-                  ? "Re-run the AI extraction on the source PDF and refresh values + evidence on this lease"
-                  : "No source file is linked to this lease. Use Extraction Debug -> Re-link Source Document first."
-              }
-            >
-              {reextracting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
-              {reextracting
-                ? reextractStage === "polling"
-                  ? "Waiting on extraction-"
-                  : reextractStage === "applying"
-                    ? "Applying values..."
-                    : "Re-extracting..."
-                : "Re-extract Lease"}
-            </Button>
-          )}
-          <Button
-            variant="outline"
-            onClick={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)}
-          >
-              Review expense rules
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => navigate(createPageUrl("LeaseExpenseClassification", { id: lease.id }))}
-          >
-            Expense Classification
-          </Button>
-          <Button variant="outline" onClick={() => window.print()}>
-            <Printer className="mr-1 h-4 w-4" />
-            Print
-          </Button>
-          <Button
-            className="bg-blue-600 hover:bg-blue-700"
-            onClick={() => setShowSignature(true)}
-          >
-            <Send className="mr-1 h-4 w-4" />
-            Request Signature
-          </Button>
-        </div>
       </div>
 
 
@@ -3299,13 +3251,7 @@ export default function LeaseReview() {
       {showPostApprovalBanner && (
         <div className="mx-4 mt-3 flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm">
           <span className="text-amber-800">
-            Lease approved. Expense rules are being extracted - review and approve them before running CAM calculations.{" "}
-            <button
-              className="font-medium underline"
-              onClick={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)}
-            >
-              Review expense rules
-            </button>
+            Lease approved. Expense rules are being extracted before CAM calculations.
           </span>
           <button
             className="ml-3 text-amber-400 hover:text-amber-600"
@@ -3685,20 +3631,6 @@ export default function LeaseReview() {
                 <p className="text-xs text-slate-500">
                   Expenses/CAM live under a separate rule set. Approve them there before approving the lease abstract.
                 </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)}
-                >
-              Review expense rules
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => navigate(createPageUrl("LeaseExpenseClassification", { id: lease.id }))}
-                >
-                  Expense Classification
-                </Button>
               </div>
             </CardContent>
           </Card>
@@ -4207,20 +4139,6 @@ export default function LeaseReview() {
           ) : (
             <>
               <div className="ml-auto flex flex-wrap items-center gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => setShowReextractConfirm(true)}
-                  disabled={reextracting || !resolvedSourceFileId}
-                  className="border-blue-300 text-blue-700 hover:bg-blue-50"
-                  title={
-                    resolvedSourceFileId
-                      ? "Re-run AI extraction on the source PDF"
-                      : "No source file linked. Use Extraction Debug -> Re-link first."
-                  }
-                >
-                  {reextracting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
-                  {reextracting ? "Re-extracting..." : "Re-extract Lease"}
-                </Button>
                 <Button
                   variant="outline"
                   onClick={() => setShowReject(true)}
