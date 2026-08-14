@@ -10,11 +10,9 @@ const corsHeaders = {
 const DEFAULT_FRONTEND_URL = 'https://www.proformaos.ai';
 
 function resolveFrontendUrl(value?: string | null) {
-  let url = String(value || '').trim().replace(/\/$/, '');
-  if (!url) return DEFAULT_FRONTEND_URL;
-  if (!url.startsWith('http://') && !url.startsWith('https://')) {
-    url = `https://${url}`;
-  }
+  let url = String(value || '').trim().replace(/\/+$/, '');
+  if (!url || /(vercel\.app|localhost)/i.test(url)) return DEFAULT_FRONTEND_URL;
+  if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
   return url;
 }
 
