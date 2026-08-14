@@ -253,13 +253,17 @@ export function runPolicySteps(
         const capAdjustment = round6(cappedControllable - controllableShare);
         running = round6(before + capAdjustment); // only the controllable portion is reduced; uncontrollable passes through untouched
         if (running !== 0) controllableFraction = cappedControllable / running; // keep the fraction in sync for any later cap step
+        const cpiEvidence = step.parameters?.cpi_resolved_cap_evidence as any;
+        const cpiEvidenceText = cpiEvidence?.inputs
+          ? `; CPI source ${cpiEvidence.inputs.provider || "provider"}/${cpiEvidence.inputs.seriesId || "series"} base ${cpiEvidence.inputs.basePeriod || "-"} current ${cpiEvidence.inputs.currentPeriod || "-"}, applied ${cpiEvidence.applied_change_percent ?? "-"}%`
+          : "";
         pushLine({
           line_type: "CAP", category: null, formula_code: `CAP_${capType.toUpperCase()}`,
           input_amount: before, output_amount: running, adjustment: capAdjustment,
           policy_step_id: step.id,
           explanation: permittedForSegment !== null
-            ? `${capType} cap: controllable ${controllableShare} capped to permitted ${permittedForSegment} (annual ceiling ${permitted} prorated to this segment)`
-            : `${capType} cap: no baseline available, passed through uncapped`,
+            ? `${capType} cap: controllable ${controllableShare} capped to permitted ${permittedForSegment} (annual ceiling ${permitted} prorated to this segment)${cpiEvidenceText}`
+            : `${capType} cap: no baseline available, passed through uncapped${cpiEvidenceText}`,
         });
         break;
       }

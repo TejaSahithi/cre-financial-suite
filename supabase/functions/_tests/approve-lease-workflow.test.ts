@@ -6,6 +6,7 @@ import {
 import {
   buildAbstractSnapshot,
   buildCriticalDateRows,
+  materializeApprovedLeaseObligations,
   validateApprovalPayload,
 } from "../_shared/lease-approval-workflow.ts";
 
@@ -217,4 +218,44 @@ Deno.test("buildCriticalDateRows does not treat rent commencement or lease date 
   }, "2026-06-02");
 
   assertEquals(rows.map((row) => row.date_type), ["lease_date", "rent_commencement"]);
+});
+
+Deno.test("materializeApprovedLeaseObligations creates idempotent operational obligations", async () => {
+  let capturedTable = "";
+  let capturedRows: Record<string, unknown>[] = [];
+  let capturedConflict = "";
+  const supabaseAdmin = {
+    from(table: string) {
+      capturedTable = table;
+      return {
+        upsert(rows: Record<string, unknown>[], options: Record<string, unknown>) {
+          capturedRows = rows;
+          capturedConflict = String(options?.onConflict || "");
+          return Promise.resolve({ error: null });
+        },
+      };
+    },
+  };
+
+  const result = await materializeApprovedLeaseObligations({
+    supabaseAdmin,
+    orgId: "org-1",
+    lease: { id: "lease-1", property_id: "property-1", abstract_version: 2 },
+    criticalDates: [{
+      org_id: "org-1",
+      lease_id: "lease-1",
+      property_id: "property-1",
+      date_type: "renewal_notice",
+      due_date: "2027-04-01",
+      status: "open",
+      source: "derived",
+    }],
+  });
+
+  assertEquals(result, { status: "ok", obligations_persisted: 1 });
+  assertEquals(capturedTable, "lease_obligations");
+  assertEquals(capturedConflict, "org_id,lease_id,source_key");
+  assertEquals(capturedRows[0].source_key, "approved_critical_date:renewal_notice:2027-04-01");
+  assertEquals(capturedRows[0].cadence, "once");
+  assertEquals(capturedRows[0].due_rule, { due_date: "2027-04-01" });
 });

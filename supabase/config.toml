@@ -69,7 +69,7 @@ verify_jwt = true
 enabled = true
 verify_jwt = true
 
-# Internal background worker â€” called by ingest-file using the service role key.
+# Internal background worker Ã¢â‚¬â€ called by ingest-file using the service role key.
 # verify_jwt=false because Supabase's platform JWT check rejects service-role
 # Bearer tokens issued from within another edge function; auth is handled
 # internally via WORKER_INTERNAL_SECRET / SUPABASE_SERVICE_ROLE_KEY check.
@@ -101,6 +101,50 @@ enabled = true
 verify_jwt = false
 
 
+# Operational client-domain functions
+[functions.resolve-lease-terms]
+enabled = true
+verify_jwt = true
+
+[functions.compute-percentage-rent]
+enabled = true
+verify_jwt = true
+
+[functions.generate-obligation-occurrences]
+enabled = true
+verify_jwt = true
+
+[functions.evaluate-coi-compliance]
+enabled = true
+verify_jwt = true
+
+[functions.check-vendor-eligibility]
+enabled = true
+verify_jwt = true
+
+[functions.run-financial-controls]
+enabled = true
+verify_jwt = true
+
+[functions.compute-management-fee]
+enabled = true
+verify_jwt = true
+
+[functions.compute-cpi-rent-adjustment]
+enabled = true
+verify_jwt = true
+
+[functions.resolve-reference-observation]
+enabled = true
+verify_jwt = true
+
+[functions.operational-review-command]
+enabled = true
+verify_jwt = true
+
+[functions.tenant-reconciliation-command]
+enabled = true
+verify_jwt = true
 [functions.review-approve]
 enabled = true
 verify_jwt = true

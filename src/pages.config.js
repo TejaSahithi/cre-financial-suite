@@ -57,6 +57,7 @@ const Approvals = lazy(() => import('./pages/Approvals'));
 const ApprovalPolicies = lazy(() => import('./pages/ApprovalPolicies'));
 const AuditLog = lazy(() => import('./pages/AuditLog'));
 const ApprovalWorkflows = lazy(() => import('./pages/ApprovalWorkflows'));
+const AutomationReadiness = lazy(() => import('./pages/AutomationReadiness'));
 const FieldMappingRules = lazy(() => import('./pages/FieldMappingRules'));
 const BudgetDashboard = lazy(() => import('./pages/BudgetDashboard'));
 const BudgetReview = lazy(() => import('./pages/BudgetReview'));
@@ -143,6 +144,7 @@ export const PAGES = {
     "ApprovalPolicies": ApprovalPolicies,
     "AuditLog": AuditLog,
     "ApprovalWorkflows": ApprovalWorkflows,
+    "AutomationReadiness": AutomationReadiness,
     "FieldMappingRules": FieldMappingRules,
     "BudgetDashboard": BudgetDashboard,
     "BudgetReview": BudgetReview,

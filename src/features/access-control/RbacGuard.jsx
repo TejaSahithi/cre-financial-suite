@@ -9,6 +9,7 @@ import LayoutWrapper from '@/app/LayoutWrapper';
 export default function RbacGuard({ pageName, children }) {
   const { user } = useAuth();
   const { isPageEnabled, pageAccess } = useModuleAccess();
+  const permissionPageName = pageName === "AutomationReadiness" ? "Workflows" : pageName;
 
   if (PUBLIC_PAGES.includes(pageName) || MANDATORY_SETUP_PAGES.includes(pageName)) return children;
 
@@ -23,7 +24,7 @@ export default function RbacGuard({ pageName, children }) {
 
   const hasExplicitPagePermissions = Object.keys(pageAccess || {}).length > 0;
   const roleAllowsPage = hasExplicitPagePermissions 
-    ? Boolean(pageAccess?.[pageName]) 
+    ? Boolean(pageAccess?.[pageName] || pageAccess?.[permissionPageName])
     : canAccess(user.role, pageName, user);
 
   if (!roleAllowsPage) {

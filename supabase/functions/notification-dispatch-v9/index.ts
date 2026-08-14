@@ -4,6 +4,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { isNotificationsEnabled } from "../_shared/extraction/document-intelligence-v3/feature-flag.ts";
 import { buildNotification } from "../_shared/integrations/notification-service.ts";
+import { deliveryIdempotencyKey, recipientIdempotencyKey } from "../_shared/obligations/obligation-notifications.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || "";
 const TWILIO_ACCOUNT_SID = Deno.env.get("TWILIO_ACCOUNT_SID") || "";
@@ -677,6 +678,45 @@ const EVENT_POLICIES = Object.freeze({
       assigned(TYPES.ACTION_REQUIRED, { permission: "critical_dates.manage" }),
     ],
   },
+  "obligation.due_soon": {
+    module: "lease_obligations",
+    entityType: "lease_obligation_occurrence",
+    scope: "PROPERTY",
+    permission: "critical_dates.view",
+    recipients: [
+      role(ROLES.ORG_OWNER, TYPES.INFORMATIONAL),
+      role(ROLES.ORG_ADMIN, TYPES.INFORMATIONAL),
+      role(ROLES.PROPERTY_MANAGER, TYPES.ACTION_REQUIRED, { permission: "critical_dates.manage" }),
+      role(ROLES.ASSET_OWNER, TYPES.INFORMATIONAL, { external: true }),
+      assigned(TYPES.ACTION_REQUIRED, { permission: "critical_dates.manage" }),
+    ],
+  },
+  "obligation.due_today": {
+    module: "lease_obligations",
+    entityType: "lease_obligation_occurrence",
+    scope: "PROPERTY",
+    permission: "critical_dates.view",
+    recipients: [
+      role(ROLES.ORG_OWNER, TYPES.INFORMATIONAL),
+      role(ROLES.ORG_ADMIN, TYPES.INFORMATIONAL),
+      role(ROLES.PROPERTY_MANAGER, TYPES.ACTION_REQUIRED, { permission: "critical_dates.manage" }),
+      role(ROLES.ASSET_OWNER, TYPES.INFORMATIONAL, { external: true }),
+      assigned(TYPES.ACTION_REQUIRED, { permission: "critical_dates.manage" }),
+    ],
+  },
+  "obligation.overdue": {
+    module: "lease_obligations",
+    entityType: "lease_obligation_occurrence",
+    scope: "PROPERTY",
+    permission: "critical_dates.view",
+    recipients: [
+      role(ROLES.ORG_OWNER, TYPES.CRITICAL),
+      role(ROLES.ORG_ADMIN, TYPES.CRITICAL),
+      role(ROLES.PROPERTY_MANAGER, TYPES.CRITICAL, { permission: "critical_dates.manage" }),
+      role(ROLES.ASSET_OWNER, TYPES.INFORMATIONAL, { external: true }),
+      assigned(TYPES.ACTION_REQUIRED, { permission: "critical_dates.manage" }),
+    ],
+  },
 });
 
 const EVENT_EMAIL_TEMPLATES = Object.freeze({
@@ -966,6 +1006,27 @@ const EVENT_EMAIL_TEMPLATES = Object.freeze({
     impact: "Overdue critical dates require prompt escalation because they may represent missed legal, financial, or compliance obligations.",
     nextStep: "Review the overdue item, assign ownership if needed, record the resolution plan, and close the item when complete.",
     actionLabel: "Resolve Overdue Item",
+  },
+  "obligation.due_soon": {
+    title: "Lease Obligation Due Soon",
+    summary: "A lease obligation occurrence is approaching.",
+    impact: "Upcoming obligations need ownership and timely completion to avoid compliance, tenant, or financial risk.",
+    nextStep: "Open the obligation, confirm ownership, and complete or update the required follow-up action.",
+    actionLabel: "Open Obligation",
+  },
+  "obligation.due_today": {
+    title: "Lease Obligation Due Today",
+    summary: "A lease obligation occurrence is due today.",
+    impact: "Same-day obligations may require immediate action or escalation.",
+    nextStep: "Complete the obligation today or update status, owner, and notes.",
+    actionLabel: "Open Obligation",
+  },
+  "obligation.overdue": {
+    title: "Lease Obligation Overdue",
+    summary: "A lease obligation occurrence is overdue.",
+    impact: "Overdue obligations can represent missed compliance, operational, or financial commitments.",
+    nextStep: "Resolve the occurrence, record the outcome, or assign an owner with a remediation plan.",
+    actionLabel: "Resolve Obligation",
   },
 });
 
@@ -1322,6 +1383,7 @@ function stakeholderMatches(stakeholder: any, event: any, roleKey: string) {
 }
 
 function resolveExternalRecipients(event: any, policy: any, rule: any, context: any, map: Map<string, any>) {
+  if (event.metadata?.external_delivery_allowed === false) return;
   if (!rule.external || !conditionMatches(rule, event)) return;
   context.stakeholders.forEach((stakeholder: any) => {
     if (!stakeholderMatches(stakeholder, event, rule.role)) return;
@@ -1577,7 +1639,26 @@ async function logAudit(supabaseAdmin: any, payload: any) {
   });
 }
 
+function notificationIdempotencyKeyFor(event: any, recipient: any) {
+  const base = String(event.idempotency_key || event.idempotencyKey || event.metadata?.idempotency_key || "").trim();
+  if (!base) return null;
+  return `${base}:${recipientIdempotencyKey(recipient)}`;
+}
+
 async function createNotification(supabaseAdmin: any, event: any, recipient: any) {
+  const recipientKey = recipientIdempotencyKey(recipient);
+  const notificationKey = notificationIdempotencyKeyFor(event, recipient);
+  if (notificationKey) {
+    const { data: existing, error: existingError } = await supabaseAdmin
+      .from("notifications")
+      .select("*")
+      .eq("org_id", event.org_id)
+      .eq("idempotency_key", notificationKey)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (existing?.id) return { ...existing, __idempotent_existing: true };
+  }
+
   const { data, error } = await supabaseAdmin
     .from("notifications")
     .insert({
@@ -1601,8 +1682,11 @@ async function createNotification(supabaseAdmin: any, event: any, recipient: any
       read_at: null,
       requires_action: recipient.requires_action,
       priority: recipient.requires_action ? "high" : "normal",
+      idempotency_key: notificationKey,
+      recipient_key: recipientKey,
       metadata: {
         ...(event.metadata || {}),
+        base_idempotency_key: event.idempotency_key || event.idempotencyKey || event.metadata?.idempotency_key || null,
         external_type: recipient.externalType || null,
         external_recipient_id: recipient.id || null,
         matching_reasons: recipient.matching_reasons,
@@ -1617,19 +1701,61 @@ async function createNotification(supabaseAdmin: any, event: any, recipient: any
   return data;
 }
 
-async function createDelivery(supabaseAdmin: any, notificationId: string, channel: string, destination: string, result: any) {
-  await supabaseAdmin.from("notification_deliveries").insert({
+async function loadDeliveryByKey(supabaseAdmin: any, idempotencyKey: string) {
+  const { data, error } = await supabaseAdmin
+    .from("notification_deliveries")
+    .select("*")
+    .eq("idempotency_key", idempotencyKey)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+async function recordDelivery(supabaseAdmin: any, notificationId: string, channel: string, destination: string, result: any, idempotencyKey: string, existing: any = null) {
+  const patch = {
     notification_id: notificationId,
     channel,
     destination: destination || null,
     status: result.status,
     provider_message_id: result.provider_message_id || null,
-    attempts: result.status === "skipped" ? 0 : 1,
-    sent_at: result.sent_at || null,
-    delivered_at: result.delivered_at || null,
+    attempts: result.status === "skipped" ? (existing?.attempts || 0) : ((existing?.attempts || 0) + 1),
+    sent_at: result.sent_at || existing?.sent_at || null,
+    delivered_at: result.delivered_at || existing?.delivered_at || null,
     failed_at: result.status === "failed" ? new Date().toISOString() : null,
     error_message: result.error_message || null,
-  });
+    idempotency_key: idempotencyKey,
+  };
+  if (existing?.id) {
+    const { data, error } = await supabaseAdmin
+      .from("notification_deliveries")
+      .update(patch)
+      .eq("id", existing.id)
+      .select("*")
+      .single();
+    if (error) throw error;
+    return data;
+  }
+  const { data, error } = await supabaseAdmin
+    .from("notification_deliveries")
+    .insert(patch)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function sendDeliveryWithIdempotency(supabaseAdmin: any, event: any, notificationId: string, channel: string, destination: string, sender: () => Promise<any>) {
+  const idempotencyKey = deliveryIdempotencyKey({ notificationId, channel, destination });
+  const existing = await loadDeliveryByKey(supabaseAdmin, idempotencyKey);
+  if (existing && ["sent", "queued", "skipped"].includes(String(existing.status || "").toLowerCase())) {
+    return { ...existing, status: existing.status, idempotent: true, error_message: existing.error_message || "delivery already recorded" };
+  }
+  if (existing && String(existing.status || "").toLowerCase() === "failed" && event.retry_failed_deliveries === false) {
+    return { ...existing, status: "skipped", idempotent: true, error_message: "failed delivery retry disabled" };
+  }
+  const result = await sender();
+  await recordDelivery(supabaseAdmin, notificationId, channel, destination, result, idempotencyKey, existing);
+  return result;
 }
 
 async function dispatchBusinessEvent(req: Request, body: any) {
@@ -1670,6 +1796,8 @@ async function dispatchBusinessEvent(req: Request, body: any) {
     entity_label: body.entity_label || body.entityLabel || body.portfolio_name || body.portfolioName || body.name,
     action_url: body.action_url || body.actionUrl || body.link || "",
     created_by: body.created_by || body.createdBy || user.id,
+    idempotency_key: body.idempotency_key || body.idempotencyKey || null,
+    retry_failed_deliveries: body.retry_failed_deliveries !== false,
   };
 
   const context = await fetchContext(supabaseAdmin, orgId);

@@ -3,6 +3,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { assertPageAccess, getUserOrgId, verifyUser } from "../_shared/supabase.ts";
 import { loadLeaseTermsSnapshot } from "../_shared/lease-terms/load-lease-terms-snapshot.ts";
 import { resolveLeaseTerms } from "../_shared/lease-terms/resolve.ts";
+import { writeOperationalAudit } from "../_shared/operational-audit.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -44,7 +45,20 @@ Deno.serve(async (req: Request) => {
       }, 404);
     }
 
-    return jsonResponse({ data: resolveLeaseTerms(snapshot, asOfDate) });
+    const resolved = resolveLeaseTerms(snapshot, asOfDate);
+    await writeOperationalAudit(supabaseAdmin, {
+      orgId,
+      entityType: "resolved_lease_terms",
+      entityId: leaseId,
+      action: "LEASE_TERMS_RESOLVED",
+      actorEmail: user.email || null,
+      actorUserId: user.id,
+      propertyId: snapshot.propertyId ?? null,
+      source: "resolve-lease-terms",
+      newValue: { as_of_date: asOfDate, unresolved_terms: resolved.unresolvedTerms, source_evidence: resolved.sourceEvidence },
+    });
+
+    return jsonResponse({ data: resolved });
   } catch (error) {
     console.error("[resolve-lease-terms]", error);
     return jsonResponse({

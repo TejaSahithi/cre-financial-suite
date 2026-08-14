@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useSnapshotQuery } from "@/hooks/useSnapshotQuery";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,12 +14,15 @@ import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { createNotificationsForEvent } from "@/services/notificationService";
 import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import { createPageUrl } from "@/utils";
+import { approveTenantReconciliation, calculateTenantReconciliation, listOperationalDomainRows, postTenantReconciliation, rejectTenantReconciliation, submitTenantReconciliation } from "@/services/leaseFinancialOperationsService";
 
 export default function Reconciliation() {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedPropertyId, setSelectedPropertyId] = useState("all");
+  const [selectedLeaseId, setSelectedLeaseId] = useState("all");
 
-  const { data: properties = [] } = useOrgQuery("Property");
+  const queryClient = useQueryClient();
+  const { data: properties = [], orgId } = useOrgQuery("Property");
   const { data: budgets = [] } = useOrgQuery("Budget");
   const { data: expenses = [] } = useOrgQuery("Expense");
   const { data: camCalcs = [] } = useOrgQuery("CAMCalculation");
@@ -59,6 +62,54 @@ export default function Reconciliation() {
     (!activePropertyId || cam.property_id === activePropertyId),
   );
   const filteredLeases = leases.filter((lease) => !activePropertyId || lease.property_id === activePropertyId);
+  const activeLeaseId = selectedLeaseId !== "all" ? selectedLeaseId : filteredLeases[0]?.id || null;
+  const tenantReconciliationPeriodStart = `${selectedYear}-01-01`;
+  const tenantReconciliationPeriodEnd = `${selectedYear}-12-31`;
+
+  const { data: tenantReconciliations = [], isLoading: tenantReconciliationsLoading } = useQuery({
+    queryKey: ["tenant_reconciliations", orgId, activePropertyId, selectedYear],
+    queryFn: () => listOperationalDomainRows("tenant_reconciliations", {
+      orgId,
+      filters: {
+        ...(activePropertyId ? { property_id: activePropertyId } : {}),
+        fiscal_year: selectedYear,
+      },
+      limit: 200,
+    }),
+    enabled: Boolean(orgId),
+  });
+
+  const { data: tenantReconciliationLines = [] } = useQuery({
+    queryKey: ["tenant_reconciliation_lines", orgId, tenantReconciliations.map((row) => row.id).join(",")],
+    queryFn: () => listOperationalDomainRows("tenant_reconciliation_lines", { orgId, limit: 500 }),
+    enabled: Boolean(orgId && tenantReconciliations.length),
+  });
+
+  const refreshTenantReconciliations = () => queryClient.invalidateQueries({ queryKey: ["tenant_reconciliations"] });
+  const tenantCommandMutation = useMutation({
+    mutationFn: async ({ action, row }) => {
+      if (action === "calculate") {
+        if (!activeLeaseId) throw new Error("Select a lease before calculating tenant reconciliation");
+        return calculateTenantReconciliation({
+          leaseId: activeLeaseId,
+          periodStart: tenantReconciliationPeriodStart,
+          periodEnd: tenantReconciliationPeriodEnd,
+          fiscalYear: selectedYear,
+        });
+      }
+      if (!row?.id) throw new Error("Select a reconciliation row first");
+      if (action === "submit") return submitTenantReconciliation({ reconciliationId: row.id });
+      if (action === "approve") return approveTenantReconciliation({ reconciliationId: row.id });
+      if (action === "post") return postTenantReconciliation({ reconciliationId: row.id });
+      if (action === "reject") return rejectTenantReconciliation({ reconciliationId: row.id, reason: "Returned for correction from reconciliation review" });
+      throw new Error(`Unsupported tenant reconciliation action ${action}`);
+    },
+    onSuccess: () => {
+      refreshTenantReconciliations();
+      toast.success("Tenant reconciliation updated");
+    },
+    onError: (error) => toast.error(`Tenant reconciliation failed: ${error?.message || "Unexpected error"}`),
+  });
 
   const preview = useMemo(() => {
     const budgetedCAMPool = filteredBudgets.reduce((sum, budget) => sum + (budget.cam_total || 0), 0);
@@ -185,6 +236,15 @@ export default function Reconciliation() {
   const propertyLabel =
     activeProperty?.name ||
     "selected property";
+  const formatCurrency = (value) => `$${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+  const tenantReconciliationRows = tenantReconciliations
+    .filter((row) => !activeLeaseId || row.lease_id === activeLeaseId || selectedLeaseId === "all")
+    .sort((left, right) => Number(right.version || 0) - Number(left.version || 0));
+  const linesByReconciliationId = tenantReconciliationLines.reduce((acc, line) => {
+    if (!acc[line.tenant_reconciliation_id]) acc[line.tenant_reconciliation_id] = [];
+    acc[line.tenant_reconciliation_id].push(line);
+    return acc;
+  }, {});
 
   return (
     <div className="p-6 space-y-6">
@@ -251,7 +311,7 @@ export default function Reconciliation() {
                       engineVersion ? `Engine: ${engineVersion}` : "",
                       inputsHash ? `Hash: ${inputsHash.slice(0, 8)}` : "",
                       lockedAt ? `Locked: ${new Date(lockedAt).toLocaleDateString()}` : "",
-                    ].filter(Boolean).join(" · ")
+                    ].filter(Boolean).join(" Â· ")
                   : "Preview mode only - no completed reconciliation snapshot yet"}
               </p>
             </div>
@@ -267,14 +327,14 @@ export default function Reconciliation() {
           <CardContent className="p-4">
             <p className="text-[10px] font-semibold text-slate-500 uppercase">Budgeted CAM Pool</p>
             <p className="text-2xl font-bold text-slate-900">${Number(summary.budget_expenses || 0).toLocaleString()}</p>
-            {!hasSnapshot && <p className="text-[10px] text-amber-600 font-medium mt-0.5">Preview estimate — not official</p>}
+            {!hasSnapshot && <p className="text-[10px] text-amber-600 font-medium mt-0.5">Preview estimate â€” not official</p>}
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-slate-500">
           <CardContent className="p-4">
             <p className="text-[10px] font-semibold text-slate-500 uppercase">Actual CAM Pool</p>
             <p className="text-2xl font-bold text-slate-900">${Number(summary.actual_expenses || 0).toLocaleString()}</p>
-            {!hasSnapshot && <p className="text-[10px] text-amber-600 font-medium mt-0.5">Preview estimate — not official</p>}
+            {!hasSnapshot && <p className="text-[10px] text-amber-600 font-medium mt-0.5">Preview estimate â€” not official</p>}
           </CardContent>
         </Card>
         <Card className={`border-l-4 ${Number(summary.expense_variance || 0) > 0 ? "border-l-red-500" : "border-l-emerald-500"}`}>
@@ -283,14 +343,14 @@ export default function Reconciliation() {
             <p className={`text-2xl font-bold ${Number(summary.expense_variance || 0) > 0 ? "text-red-600" : "text-emerald-600"}`}>
               {Number(summary.expense_variance || 0) > 0 ? "+" : ""}${Number(summary.expense_variance || 0).toLocaleString()}
             </p>
-            {!hasSnapshot && <p className="text-[10px] text-amber-600 font-medium mt-0.5">Preview estimate — not official</p>}
+            {!hasSnapshot && <p className="text-[10px] text-amber-600 font-medium mt-0.5">Preview estimate â€” not official</p>}
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-amber-500">
           <CardContent className="p-4">
             <p className="text-[10px] font-semibold text-slate-500 uppercase">Flagged Variances</p>
             <p className="text-2xl font-bold text-slate-900">{(currentData.line_items || []).filter((item) => item.flagged).length}</p>
-            {!hasSnapshot && <p className="text-[10px] text-amber-600 font-medium mt-0.5">Preview estimate — not official</p>}
+            {!hasSnapshot && <p className="text-[10px] text-amber-600 font-medium mt-0.5">Preview estimate â€” not official</p>}
           </CardContent>
         </Card>
       </div>
@@ -362,7 +422,7 @@ export default function Reconciliation() {
           <CardHeader>
             <CardTitle className="text-base">Flagged Items</CardTitle>
             {!hasSnapshot && (
-              <p className="text-[10px] text-amber-600 font-medium">Preview estimate — run reconciliation for authoritative results</p>
+              <p className="text-[10px] text-amber-600 font-medium">Preview estimate â€” run reconciliation for authoritative results</p>
             )}
           </CardHeader>
           <CardContent className="space-y-3">
@@ -392,6 +452,95 @@ export default function Reconciliation() {
           </CardContent>
         </Card>
       </div>
-    </div>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-4">
+          <div>
+            <CardTitle className="text-base">Tenant Additional Rent Reconciliation</CardTitle>
+            <p className="text-xs text-slate-500 mt-1">Consumes posted CAM and approved lease-charge records; missing billed inputs are blocked instead of guessed.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Select value={selectedLeaseId} onValueChange={setSelectedLeaseId}>
+              <SelectTrigger className="w-[260px]"><SelectValue placeholder="Select lease" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All leases</SelectItem>
+                {filteredLeases.map((lease) => (
+                  <SelectItem key={lease.id} value={lease.id}>{lease.tenant_name || lease.name || lease.id.slice(0, 8)}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              onClick={() => tenantCommandMutation.mutate({ action: "calculate" })}
+              disabled={tenantCommandMutation.isPending || !activeLeaseId}
+            >
+              {tenantCommandMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Calculator className="w-4 h-4 mr-2" />}
+              Calculate Tenant
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-slate-50">
+                <TableHead className="text-[11px]">TENANT / PERIOD</TableHead>
+                <TableHead className="text-[11px] text-right">ACTUAL</TableHead>
+                <TableHead className="text-[11px] text-right">BILLED</TableHead>
+                <TableHead className="text-[11px] text-right">ADJ / CREDITS</TableHead>
+                <TableHead className="text-[11px] text-right">FINAL</TableHead>
+                <TableHead className="text-[11px]">STATUS</TableHead>
+                <TableHead className="text-[11px]">SOURCE LINES</TableHead>
+                <TableHead className="text-[11px] text-right">ACTIONS</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {tenantReconciliationsLoading ? (
+                <TableRow><TableCell colSpan={8} className="text-center py-10 text-slate-400">Loading tenant reconciliations...</TableCell></TableRow>
+              ) : tenantReconciliationRows.length === 0 ? (
+                <TableRow><TableCell colSpan={8} className="text-center py-10 text-slate-400">No tenant reconciliations calculated for FY {selectedYear}.</TableCell></TableRow>
+              ) : tenantReconciliationRows.map((row) => {
+                const lease = leases.find((item) => item.id === row.lease_id);
+                const sourceLines = linesByReconciliationId[row.id] || [];
+                const isBlocked = row.status === "blocked" || (row.reason_codes || []).length > 0;
+                return (
+                  <TableRow key={row.id} className={isBlocked ? "bg-amber-50/60" : undefined}>
+                    <TableCell>
+                      <p className="text-sm font-semibold text-slate-900">{lease?.tenant_name || row.lease_id?.slice(0, 8)}</p>
+                      <p className="text-xs text-slate-500">{row.period_start} to {row.period_end} · v{row.version}</p>
+                      {row.supersedes_reconciliation_id && <p className="text-[10px] text-slate-400">Supersedes prior version</p>}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-sm">{formatCurrency(row.actual_responsibility)}</TableCell>
+                    <TableCell className="text-right font-mono text-sm">{formatCurrency(row.billed_amount)}</TableCell>
+                    <TableCell className="text-right font-mono text-sm">{formatCurrency(row.adjustments_amount)} / {formatCurrency(row.credits_amount)}</TableCell>
+                    <TableCell className={`text-right font-mono text-sm font-semibold ${Number(row.final_balance || 0) < 0 ? "text-emerald-600" : "text-slate-900"}`}>{formatCurrency(row.final_balance)}</TableCell>
+                    <TableCell>
+                      <Badge className={isBlocked ? "bg-red-100 text-red-700" : row.status === "posted" ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-blue-700"}>{row.status}</Badge>
+                      {isBlocked && <p className="text-[10px] text-red-600 mt-1">{(row.reason_codes || []).join(", ")}</p>}
+                    </TableCell>
+                    <TableCell>
+                      <div className="space-y-1 max-w-[260px]">
+                        {sourceLines.length === 0 ? <p className="text-xs text-slate-400">Frozen in snapshot</p> : sourceLines.slice(0, 4).map((line) => (
+                          <p key={line.id} className="text-xs text-slate-600 truncate">
+                            {line.line_role}: {line.charge_type} · {line.authoritative_table} · {formatCurrency(line.amount)}
+                          </p>
+                        ))}
+                        {sourceLines.length > 4 && <p className="text-[10px] text-slate-400">+{sourceLines.length - 4} more</p>}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-1 flex-wrap">
+                        <Button size="sm" variant="outline" disabled={row.status !== "calculated" || isBlocked || tenantCommandMutation.isPending} onClick={() => tenantCommandMutation.mutate({ action: "submit", row })}>Submit</Button>
+                        <Button size="sm" variant="outline" disabled={row.status !== "pending_review" || isBlocked || tenantCommandMutation.isPending} onClick={() => tenantCommandMutation.mutate({ action: "approve", row })}>Approve</Button>
+                        <Button size="sm" variant="outline" disabled={!['pending_review','calculated','blocked'].includes(row.status) || tenantCommandMutation.isPending} onClick={() => tenantCommandMutation.mutate({ action: "reject", row })}>Return</Button>
+                        <Button size="sm" disabled={row.status !== "approved" || isBlocked || tenantCommandMutation.isPending} onClick={() => tenantCommandMutation.mutate({ action: "post", row })}>Post</Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>    </div>
   );
 }

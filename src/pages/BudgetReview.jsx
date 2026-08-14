@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import { Link, useLocation } from "react-router-dom";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, ArrowUpRight, ArrowDownRight, Minus, AlertTriangle, Info, Download, ArrowRight, FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -12,6 +12,7 @@ import {
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useSnapshotQuery } from "@/hooks/useSnapshotQuery";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { supabase } from "@/services/supabaseClient";
 import { submitOrReuseModuleApprovalWorkflow } from "@/services/moduleApprovalWorkflowBridge";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { useAuth } from "@/lib/AuthContext";
@@ -353,6 +354,27 @@ export default function BudgetReview() {
   const hasBothYears = currAgg.count > 0 && prevAgg.count > 0;
   const hasAnyBudget = currAgg.count > 0 || prevAgg.count > 0;
   const currentBudget = currBudgets[0] || filteredBudgets[0] || null;
+  const budgetControlFindingsQuery = useQuery({
+    queryKey: ["budget-control-policy-findings", orgId, currentBudget?.property_id || scopeProperty, currentYear],
+    enabled: !!supabase && !!orgId && orgId !== "__none__" && !!(currentBudget?.property_id || (scopeProperty !== "all" && scopeProperty)) && Number.isFinite(currentYear),
+    queryFn: async () => {
+      let query = supabase
+        .from("financial_control_findings")
+        .select("id, property_id, fiscal_year, code, category, severity, status, policy_action, policy_blocks, policy_decision_snapshot, override_reason")
+        .eq("org_id", orgId)
+        .eq("fiscal_year", currentYear)
+        .eq("policy_blocks", true)
+        .not("status", "in", "(resolved,dismissed)")
+        .limit(25);
+      const propertyId = currentBudget?.property_id || (scopeProperty !== "all" ? scopeProperty : null);
+      if (propertyId) query = query.eq("property_id", propertyId);
+      const { data, error } = await query;
+      if (error) throw error;
+      return data || [];
+    },
+  });
+  const budgetPolicyBlocks = budgetControlFindingsQuery.data || [];
+  const budgetPolicyBlockingReason = budgetPolicyBlocks[0]?.policy_decision_snapshot?.reason || budgetPolicyBlocks[0]?.policy_action || null;
   const approvalProperty = scopeProperty !== "all"
     ? properties.find((property) => property.id === scopeProperty)
     : properties.find((property) => property.id === currentBudget?.property_id) || null;
@@ -783,6 +805,19 @@ export default function BudgetReview() {
             </Card>
           )}
 
+          {budgetPolicyBlocks.length > 0 && (
+            <Card className="border-red-200 bg-red-50">
+              <CardContent className="p-4 text-sm text-red-800">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                  <div>
+                    <p className="font-semibold">Budget approval is blocked by financial-control policy.</p>
+                    <p className="text-xs">{budgetPolicyBlocks.length} unresolved policy-blocking finding(s). {budgetPolicyBlockingReason || "Review Automation & Exceptions for override or resolution."}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
           <div className="flex justify-end border-t border-slate-200 pt-4">
             <SendForApprovalButton
               orgId={orgId}
@@ -793,7 +828,7 @@ export default function BudgetReview() {
               portfolioId={scope.portfolioId || currentBudget?.portfolio_id || null}
               propertyId={approvalProperty?.id || currentBudget?.property_id || null}
               actionUrl={createPageUrl("BudgetReview") + location.search}
-              disabled={!budgetApprovalEntityId || orgId === "__none__" || !hasAnyBudget || markBudgetReviewedMutation.isPending}
+              disabled={!budgetApprovalEntityId || orgId === "__none__" || !hasAnyBudget || budgetPolicyBlocks.length > 0 || markBudgetReviewedMutation.isPending}
               onBeforeSend={markBudgetPendingApproval}
               metadata={{
                 source: "budget_review_manual_send_for_approval",

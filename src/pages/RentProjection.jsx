@@ -40,6 +40,7 @@ import {
   scheduleRowsForLease,
 } from "@/lib/rentScheduleUtils";
 import { supabase } from "@/services/supabaseClient";
+import { listLeaseChargeReadModel } from "@/services/leaseFinancialOperationsService";
 import ScopeSelector from "@/components/ScopeSelector";
 import PageHeader from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -139,6 +140,44 @@ function approvedLeaseMonthlyRent(lease) {
   return annual > 0 ? annual / 12 : 0;
 }
 
+
+function ChargeTypeBadge({ type }) {
+  const label = String(type || "charge").replace(/_/g, " ");
+  return <Badge variant="outline" className="text-[10px] capitalize">{label}</Badge>;
+}
+
+function LeaseChargeProjectionTable({ rows, fiscalYear }) {
+  if (!rows.length) {
+    return <div className="p-4 text-sm text-slate-500">No persisted lease-charge calculations found for this fiscal year.</div>;
+  }
+
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow className="bg-slate-50">
+          <TableHead className="text-[11px]">CHARGE</TableHead>
+          <TableHead className="text-[11px]">PERIOD</TableHead>
+          <TableHead className="text-[11px] text-right">AMOUNT</TableHead>
+          <TableHead className="text-[11px]">STATUS</TableHead>
+          <TableHead className="text-[11px]">AUTHORITY</TableHead>
+          <TableHead className="text-[11px]">CALCULATED</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((row) => (
+          <TableRow key={row.charge_key}>
+            <TableCell><ChargeTypeBadge type={row.charge_type} /></TableCell>
+            <TableCell className="font-mono text-xs">{row.period_start} - {row.period_end}</TableCell>
+            <TableCell className="text-right font-mono">{fmtMoney(row.amount)}</TableCell>
+            <TableCell><Badge variant="outline" className="text-[10px] capitalize">{row.status || "unknown"}</Badge></TableCell>
+            <TableCell className="text-xs text-slate-500">{row.authoritative_table}:{row.source_record_id}</TableCell>
+            <TableCell className="text-xs text-slate-500">{row.calculated_at ? row.calculated_at.slice(0, 10) : `FY ${fiscalYear}`}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
 function scopeSelection(propertyId, buildingId, unitId) {
   if (unitId && unitId !== "all") return { scopeLevel: "unit", scopeId: unitId };
   if (buildingId && buildingId !== "all") return { scopeLevel: "building", scopeId: buildingId };
@@ -345,6 +384,18 @@ export default function RentProjection() {
       }
       return data || [];
     },
+    retry: false,
+  });
+  const { data: leaseChargeProjectionRows = [], isLoading: leaseChargesLoading } = useQuery({
+    queryKey: ["rent-projection-lease-charge-read-model", displayedLeaseIds, selectedPropertyId, fiscalYear],
+    enabled: displayedLeaseIds.length > 0,
+    queryFn: () => listLeaseChargeReadModel({
+      leaseIds: displayedLeaseIds,
+      propertyId: selectedPropertyId,
+      periodStart: `${fiscalYear}-01-01`,
+      periodEnd: `${fiscalYear}-12-31`,
+      statuses: ["calculated", "approved", "active", "blocked", "pending_review"],
+    }),
     retry: false,
   });
   const fiscalYearOptions = useMemo(() => buildRentFiscalYearOptions({
@@ -614,6 +665,21 @@ export default function RentProjection() {
         </Card>
       </div>
 
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <TrendingUp className="w-4 h-4 text-blue-600" />
+            Persisted Lease Charges
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {leaseChargesLoading ? (
+            <div className="p-4 text-sm text-slate-500">Loading persisted charge projection...</div>
+          ) : (
+            <LeaseChargeProjectionTable rows={leaseChargeProjectionRows} fiscalYear={fiscalYear} />
+          )}
+        </CardContent>
+      </Card>
       {!selectedPropertyId && (
         <Card className="border-amber-200 bg-amber-50">
           <CardContent className="p-4 flex items-center gap-3">

@@ -5,6 +5,7 @@ import {
   buildAbstractSnapshot,
   buildCriticalDateRows,
   generateApprovedRentSchedule,
+  materializeApprovedLeaseObligations,
   validateApprovalPayload,
 } from "../_shared/lease-approval-workflow.ts";
 import { publishApprovedLeaseExpenseArtifacts } from "../_shared/approved-lease-expense-rules.ts";
@@ -161,11 +162,19 @@ Deno.serve(async (req: Request) => {
       req,
     });
 
+    const obligationSync = await materializeApprovedLeaseObligations({
+      supabaseAdmin,
+      orgId,
+      lease: data?.lease || approvedLeasePreview,
+      criticalDates,
+    });
+
     return jsonResponse({
       error: false,
       ...data,
       rent_schedule: rentSchedule,
       expense_rule_sync: expenseRuleSync,
+      obligation_sync: obligationSync,
     });
   } catch (err) {
     const message = err?.message || "Lease approval workflow failed";

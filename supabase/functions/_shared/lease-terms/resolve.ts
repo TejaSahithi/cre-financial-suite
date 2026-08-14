@@ -9,6 +9,7 @@ import type {
   SourceEvidenceRef,
   UnresolvedTerm,
 } from "./contracts/resolved-lease-terms.ts";
+import { evaluateHvacResponsibility } from "../lease-responsibilities/hvac-responsibility-evaluator.ts";
 
 const BASE_RENT_ROW_TYPES = new Set([
   "base_rent",
@@ -105,6 +106,48 @@ function passThroughSection(
   return values;
 }
 
+
+function resolveHvacSection(
+  snapshot: LeaseTermsSnapshot,
+  unresolvedTerms: UnresolvedTerm[],
+  sourceEvidence: SourceEvidenceRef[],
+): Record<string, unknown> | null {
+  const entry = snapshot.approvedFields.hvac_responsibility;
+  if (!entry) {
+    unresolvedTerms.push({
+      term: "hvac",
+      code: "HVAC_NOT_FOUND",
+      message: "No approved HVAC responsibility field found.",
+    });
+    return null;
+  }
+
+  const evidence = fieldEvidence("hvac_responsibility", snapshot);
+  if (evidence) sourceEvidence.push(evidence);
+  const evaluated = evaluateHvacResponsibility({
+    responsibility: entry.value as string | null,
+    text: entry.source_text || String(entry.value || ""),
+    source: evidence ? { ...evidence } : {},
+  });
+
+  if (evaluated.status === "review_required") {
+    unresolvedTerms.push({
+      term: "hvac",
+      code: evaluated.reasonCodes[0] || "HVAC_REVIEW_REQUIRED",
+      message: "HVAC responsibility could not be deterministically resolved from the approved lease term.",
+    });
+  }
+
+  return {
+    approvedValue: entry.value,
+    status: evaluated.status,
+    responsibility: evaluated.responsibility,
+    thresholdAmount: evaluated.thresholdAmount ?? null,
+    replacementResponsibility: evaluated.replacementResponsibility ?? null,
+    reasonCodes: evaluated.reasonCodes,
+    effectiveDatingSupported: false,
+  };
+}
 function emptyResolvedLeaseTerms(leaseId: string, asOfDate: string): ResolvedLeaseTerms {
   return {
     leaseId,
@@ -245,7 +288,7 @@ export function resolveLeaseTerms(snapshot: LeaseTermsSnapshot, asOfDate: string
     taxes: passThroughSection("taxes", snapshot, unresolvedTerms, sourceEvidence),
     insurance: passThroughSection("insurance", snapshot, unresolvedTerms, sourceEvidence),
     utilities: passThroughSection("utilities", snapshot, unresolvedTerms, sourceEvidence),
-    hvac: passThroughSection("hvac", snapshot, unresolvedTerms, sourceEvidence),
+    hvac: resolveHvacSection(snapshot, unresolvedTerms, sourceEvidence),
     renewalOptions: passThroughSection("renewalOptions", snapshot, unresolvedTerms, sourceEvidence),
     reportingRequirements: null,
     unresolvedTerms,

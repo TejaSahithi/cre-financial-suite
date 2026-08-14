@@ -17,7 +17,7 @@ const ROLE_PAGES = {
     "ActualsVariance", "Actuals", "Variance", "Comparison",
     "Reconciliation",
     "AnalyticsReports", "Reports", "Analytics",
-    "Workflows", "Approvals", "Notifications", "Documents",
+    "Workflows", "AutomationReadiness", "Approvals", "Notifications", "Documents",
     "Integrations",
     "OrgSettings", "ChartOfAccounts", "FieldMappingRules", "ApprovalWorkflows", "ApprovalPolicies",
     "UserManagement", "AuditLog",
@@ -34,7 +34,7 @@ const ROLE_PAGES = {
     "ActualsVariance", "Actuals", "Variance", "Comparison",
     "Reconciliation",
     "AnalyticsReports", "Reports", "Analytics",
-    "Workflows", "Approvals", "Notifications", "Documents",
+    "Workflows", "AutomationReadiness", "Approvals", "Notifications", "Documents",
     "Integrations",
     "OrgSettings", "ChartOfAccounts", "FieldMappingRules", "ApprovalWorkflows", "ApprovalPolicies",
     "UserManagement", "AuditLog",
@@ -49,7 +49,7 @@ const ROLE_PAGES = {
     "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "BudgetReadiness",
     "Billing",
     "BudgetDashboard", "CreateBudget", "BudgetReview",
-    "Documents", "Workflows", "Approvals", "Notifications",
+    "Documents", "Workflows", "AutomationReadiness", "Approvals", "Notifications",
   ],
   property_manager: [
     "Dashboard",
@@ -59,7 +59,7 @@ const ROLE_PAGES = {
     "Expenses", "AddExpense", "BulkImport", "LeaseExpenseRules", "ExpenseProjection", "LeaseExpenseClassification", "ExpenseReview",
     "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "BudgetReadiness",
     "Billing",
-    "Documents", "Workflows", "Approvals", "Notifications",
+    "Documents", "Workflows", "AutomationReadiness", "Approvals", "Notifications",
   ],
   lease_admin: [
     "Dashboard", "PortfolioInsights",
@@ -72,7 +72,7 @@ const ROLE_PAGES = {
     "Reconciliation",
     "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "BudgetReadiness",
     "ChartOfAccounts", "Vendors",
-    "Workflows", "Approvals", "Notifications", "Documents",
+    "Workflows", "AutomationReadiness", "Approvals", "Notifications", "Documents",
   ],
   leasing_agent: [
     "Dashboard", "PortfolioInsights",
@@ -84,7 +84,7 @@ const ROLE_PAGES = {
     "Reconciliation",
     "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "BudgetReadiness",
     "Vendors",
-    "Workflows", "Approvals", "Notifications", "Documents",
+    "Workflows", "AutomationReadiness", "Approvals", "Notifications", "Documents",
   ],
   finance: [
     "Dashboard", "PortfolioInsights",
@@ -95,7 +95,7 @@ const ROLE_PAGES = {
     "CAMDashboard", "CAMSetup", "CAMRun", "CAMPoolDetail", "CAMLeaseDetail", "CAMExceptionReview", "CAMApproval", "BudgetReadiness",
     "AnalyticsReports", "Reports", "Analytics",
     "ChartOfAccounts", "Vendors",
-    "Workflows", "Approvals", "Notifications", "Documents",
+    "Workflows", "AutomationReadiness", "Approvals", "Notifications", "Documents",
   ],
   property_owner: [
     "Dashboard", "PortfolioInsights",
@@ -107,7 +107,7 @@ const ROLE_PAGES = {
     "Revenue", "ActualsVariance", "Actuals", "Variance", "Comparison",
     "AnalyticsReports", "Reports", "Analytics",
     "CAMDashboard", "CAMSetup", "CAMRun", "BudgetReadiness",
-    "Workflows", "Approvals", "Notifications", "Documents",
+    "Workflows", "AutomationReadiness", "Approvals", "Notifications", "Documents",
   ],
   auditor: [
     "Dashboard", "PortfolioInsights",
@@ -118,7 +118,7 @@ const ROLE_PAGES = {
     "Reconciliation",
     "AnalyticsReports", "Reports", "Analytics",
     "CAMDashboard", "CAMSetup", "CAMRun", "BudgetReadiness",
-    "Documents", "Workflows", "Approvals", "Notifications",
+    "Documents", "Workflows", "AutomationReadiness", "Approvals", "Notifications",
   ],
 };
 

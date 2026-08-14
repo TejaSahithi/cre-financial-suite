@@ -65,6 +65,76 @@ export async function generateApprovedRentSchedule(opts: {
   }
 }
 
+function titleForCriticalDateType(dateType: string) {
+  return String(dateType || "custom")
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+/**
+ * Converts approved critical-date facts into operational obligation definitions.
+ * The unique source_key makes this idempotent across approval retries and
+ * already-approved backfills.
+ */
+export async function materializeApprovedLeaseObligations(opts: {
+  supabaseAdmin: any;
+  orgId: string;
+  lease: Record<string, unknown>;
+  criticalDates: Record<string, unknown>[];
+}): Promise<{ status: "ok" | "skipped" | "failed"; obligations_persisted: number; error?: string }> {
+  const { supabaseAdmin, orgId, lease, criticalDates } = opts;
+  const leaseId = String(lease?.id || "");
+  if (!leaseId || !Array.isArray(criticalDates) || criticalDates.length === 0) {
+    return { status: "skipped", obligations_persisted: 0 };
+  }
+
+  const rows = criticalDates
+    .filter((row) => row?.due_date && row?.date_type)
+    .map((row) => {
+      const dateType = String(row.date_type);
+      const dueDate = String(row.due_date);
+      return {
+        org_id: orgId,
+        lease_id: leaseId,
+        property_id: row.property_id ?? lease.property_id ?? null,
+        obligation_type: dateType,
+        title: titleForCriticalDateType(dateType),
+        source_key: `approved_critical_date:${dateType}:${dueDate}`,
+        cadence: "once",
+        due_rule: { due_date: dueDate },
+        effective_start: dueDate,
+        effective_end: dueDate,
+        responsible_party: "internal",
+        communication_policy: "internal_only",
+        status: "active",
+        source: "approved_lease_critical_date",
+        evidence: {
+          lease_id: leaseId,
+          abstract_version: lease.abstract_version ?? null,
+          source_critical_date: row,
+        },
+      };
+    });
+
+  if (rows.length === 0) return { status: "skipped", obligations_persisted: 0 };
+
+  try {
+    const { error } = await supabaseAdmin
+      .from("lease_obligations")
+      .upsert(rows, { onConflict: "org_id,lease_id,source_key" });
+    if (error) throw error;
+    return { status: "ok", obligations_persisted: rows.length };
+  } catch (error) {
+    console.error("[approve-lease-workflow] obligation materialization failed:", error?.message || error);
+    return {
+      status: "failed",
+      obligations_persisted: 0,
+      error: error?.message || "Could not materialize approved lease obligations",
+    };
+  }
+}
 export function validateApprovalPayload(body: Record<string, unknown> = {}) {
   const leaseId = String(body.lease_id || "").trim();
   const signedBy = String(body.signed_by || "").trim();

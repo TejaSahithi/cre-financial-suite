@@ -90,6 +90,7 @@ const navSections = [
   {
     label: "Workflows", icon: GitBranch, children: [
       { label: "Workflow Overview", page: "Workflows" },
+      { label: "Automation & Exceptions", page: "AutomationReadiness" },
       { label: "Approval Inbox", page: "Approvals" },
     ]
   },

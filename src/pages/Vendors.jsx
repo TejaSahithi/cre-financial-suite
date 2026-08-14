@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { vendorService } from "@/services/vendorService";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,20 +19,24 @@ import { downloadCSV } from "@/utils/index";
 import BulkImportModal from "@/components/property/BulkImportModal";
 import { toast } from "sonner";
 import { expenseMatchesVendor } from "@/lib/vendorMatch";
+import { checkVendorEligibility, listOperationalDomainRows, reviewVendorCredential, saveVendorCredential } from "@/services/leaseFinancialOperationsService";
 
 const CATEGORIES = ["maintenance","utilities","insurance","janitorial","landscaping","security","legal","accounting","construction","technology","other"];
-const statusColors = { active: "bg-emerald-100 text-emerald-700", inactive: "bg-slate-100 text-slate-600", pending: "bg-amber-100 text-amber-700" };
+const statusColors = { active: "bg-emerald-100 text-emerald-700", verified: "bg-emerald-100 text-emerald-700", approved: "bg-emerald-100 text-emerald-700", inactive: "bg-slate-100 text-slate-600", pending: "bg-amber-100 text-amber-700", pending_review: "bg-amber-100 text-amber-700", needs_review: "bg-amber-100 text-amber-700", rejected: "bg-red-100 text-red-700", expired: "bg-red-100 text-red-700" };
 
 export default function Vendors() {
   const [search, setSearch] = useState("");
   const [catFilter, setCatFilter] = useState("all");
   const [showDialog, setShowDialog] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showCredentialDialog, setShowCredentialDialog] = useState(false);
+  const [editCredential, setEditCredential] = useState(null);
   const [editItem, setEditItem] = useState(null);
   const [sortField, setSortField] = useState("totalSpend");
   const [sortDir, setSortDir] = useState("desc");
   const [scopeProperty, setScopeProperty] = useState("all");
   const [form, setForm] = useState({ name: "", company: "", contact_name: "", contact_email: "", contact_phone: "", category: "other", payment_terms: "net_30", notes: "" });
+  const [credentialForm, setCredentialForm] = useState({ vendor_id: "", service_type: "", jurisdiction: "", credential_type: "", credential_number: "", effective_date: "", expiration_date: "", verification_source: "", verification_url: "" });
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
@@ -40,6 +44,11 @@ export default function Vendors() {
   const { data: expenses = [] } = useOrgQuery("Expense");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
+  const { data: vendorCredentials = [] } = useQuery({
+    queryKey: ["vendor-credentials", orgId],
+    enabled: Boolean(orgId),
+    queryFn: () => listOperationalDomainRows("vendor_credentials", { orgId, limit: 200 }),
+  });
 
   const createMutation = useMutation({
     mutationFn: (d) => vendorService.create(d),
@@ -75,6 +84,36 @@ export default function Vendors() {
     onError: (error) => toast.error(`Failed to delete vendor: ${error?.message || "Unknown error"}`),
   });
 
+
+  const credentialMutation = useMutation({
+    mutationFn: (payload) => saveVendorCredential(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["vendor-credentials", orgId] });
+      queryClient.invalidateQueries({ queryKey: ["automation-operational-rows", orgId] });
+      setShowCredentialDialog(false);
+      toast.success("Credential saved");
+    },
+    onError: (error) => toast.error(`Failed to save credential: ${error?.message || "Unknown error"}`),
+  });
+
+  const credentialReviewMutation = useMutation({
+    mutationFn: (payload) => reviewVendorCredential(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["vendor-credentials", orgId] });
+      queryClient.invalidateQueries({ queryKey: ["automation-operational-rows", orgId] });
+      toast.success("Credential updated");
+    },
+    onError: (error) => toast.error(`Credential action failed: ${error?.message || "Unknown error"}`),
+  });
+
+  const eligibilityMutation = useMutation({
+    mutationFn: (payload) => checkVendorEligibility(payload),
+    onSuccess: (result) => {
+      if (result?.eligible) toast.success(result.status === "not_required" ? "Credential not required for this service" : "Vendor eligible");
+      else toast.error((result?.reasonCodes || ["Vendor blocked"]).join(", "));
+    },
+    onError: (error) => toast.error(`Eligibility check failed: ${error?.message || "Unknown error"}`),
+  });
   const combinedVendors = React.useMemo(() => {
     const map = new Map();
 
@@ -164,6 +203,27 @@ export default function Vendors() {
 
   const openNew = () => { setEditItem(null); setForm({ name: "", company: "", contact_name: "", contact_email: "", contact_phone: "", category: "other", payment_terms: "net_30", notes: "" }); setShowDialog(true); };
   const openEdit = (v) => { setEditItem(v); setForm({ name: v.name, company: v.company || "", contact_name: v.contact_name || "", contact_email: v.contact_email || "", contact_phone: v.contact_phone || "", category: v.category || "other", payment_terms: v.payment_terms || "net_30", notes: v.notes || "" }); setShowDialog(true); };
+  const openNewCredential = (vendor = null) => {
+    setEditCredential(null);
+    setCredentialForm({ vendor_id: vendor?.id || "", service_type: "", jurisdiction: "", credential_type: "", credential_number: "", effective_date: "", expiration_date: "", verification_source: "", verification_url: "" });
+    setShowCredentialDialog(true);
+  };
+  const openEditCredential = (credential) => {
+    setEditCredential(credential);
+    setCredentialForm({
+      vendor_id: credential.vendor_id || "",
+      service_type: credential.service_type || "",
+      jurisdiction: credential.jurisdiction || "",
+      credential_type: credential.credential_type || "",
+      credential_number: credential.credential_number || "",
+      effective_date: credential.effective_date || "",
+      expiration_date: credential.expiration_date || "",
+      verification_source: credential.verification_source || "",
+      verification_url: credential.verification_url || "",
+    });
+    setShowCredentialDialog(true);
+  };
+  const handleCredentialSave = () => credentialMutation.mutate({ ...credentialForm, id: editCredential?.id || undefined });
   const handleSave = () => {
     const payload = { ...form, org_id: orgId || "", status: "active" };
     if (editItem && !editItem.isSynthetic) updateMutation.mutate({ id: editItem.id, d: payload });
@@ -185,7 +245,7 @@ export default function Vendors() {
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
-      <PageHeader icon={Truck} title="Vendor Management" subtitle={`${enriched.length} vendors · Linked to expense records`} iconColor="from-blue-700 to-blue-600">
+      <PageHeader icon={Truck} title="Vendor Management" subtitle={`${enriched.length} vendors - Linked to expense records`} iconColor="from-blue-700 to-blue-600">
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => downloadCSV(enriched, 'vendors.csv')}><Download className="w-3.5 h-3.5 mr-1 text-slate-500" />Export</Button>
           <Button variant="outline" size="sm" onClick={() => setShowImport(true)}><Upload className="w-3.5 h-3.5 mr-1" />Import</Button>
@@ -201,7 +261,7 @@ export default function Vendors() {
         <MetricCard label="Total Vendors" value={vendors.length} icon={Users} color="bg-blue-50 text-blue-600" />
         <MetricCard label="Total Spend" value={`$${(totalSpend / 1000).toFixed(0)}K`} icon={DollarSign} color="bg-emerald-50 text-emerald-600" sub="all linked expenses" />
         <MetricCard label="Avg. Spend/Vendor" value={`$${(avgSpendPerVendor / 1000).toFixed(1)}K`} icon={TrendingUp} color="bg-blue-50 text-blue-600" />
-        <MetricCard label="Top Vendor" value={topVendor?.name || "—"} icon={Receipt} color="bg-amber-50 text-amber-600" sub={topVendor ? `$${(topVendor.totalSpend / 1000).toFixed(0)}K spend` : ""} />
+        <MetricCard label="Top Vendor" value={topVendor?.name || "-"} icon={Receipt} color="bg-amber-50 text-amber-600" sub={topVendor ? `$${(topVendor.totalSpend / 1000).toFixed(0)}K spend` : ""} />
       </div>
 
       <div className="flex gap-3 items-center flex-wrap">
@@ -259,7 +319,7 @@ export default function Vendors() {
                   <span className="text-xs font-semibold bg-slate-100 px-2 py-0.5 rounded-full">{v.propertiesServed}</span>
                 </TableCell>
                 <TableCell className="text-xs text-slate-500">
-                  {v.lastActivity ? new Date(v.lastActivity).toLocaleDateString() : '—'}
+                  {v.lastActivity ? new Date(v.lastActivity).toLocaleDateString() : '-'}
                 </TableCell>
                 <TableCell><Badge className={`${statusColors[v.status] || statusColors.pending} text-[9px] uppercase`}>{v.status}</Badge></TableCell>
                 <TableCell>
@@ -275,6 +335,56 @@ export default function Vendors() {
       </Card>
       <p className="text-[10px] text-slate-400 text-right">{filtered.length} vendors</p>
 
+
+      <Card className="overflow-hidden border-slate-200/80">
+        <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Vendor Credentials</h2>
+            <p className="text-xs text-slate-500">Regulated services such as HVAC, electrical, plumbing, fire, and life-safety require verified credentials.</p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => openNewCredential()}><Plus className="w-3.5 h-3.5 mr-1" />Add Credential</Button>
+        </div>
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-slate-50">
+              <TableHead className="text-[10px] font-bold tracking-wider">VENDOR</TableHead>
+              <TableHead className="text-[10px] font-bold tracking-wider">SERVICE</TableHead>
+              <TableHead className="text-[10px] font-bold tracking-wider">CREDENTIAL</TableHead>
+              <TableHead className="text-[10px] font-bold tracking-wider">EXPIRATION</TableHead>
+              <TableHead className="text-[10px] font-bold tracking-wider">STATUS</TableHead>
+              <TableHead className="text-[10px] font-bold tracking-wider text-right">ACTIONS</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {vendorCredentials.length === 0 ? (
+              <TableRow><TableCell colSpan={6} className="text-center py-8 text-sm text-slate-400">No credentials recorded.</TableCell></TableRow>
+            ) : vendorCredentials.map((credential) => {
+              const vendor = combinedVendors.find((v) => v.id === credential.vendor_id);
+              const status = String(credential.status || "needs_review").toLowerCase();
+              return (
+                <TableRow key={credential.id}>
+                  <TableCell className="font-semibold text-sm">{vendor?.name || credential.vendor_id}</TableCell>
+                  <TableCell className="text-sm capitalize">{credential.service_type}{credential.jurisdiction ? ` / ${credential.jurisdiction}` : ""}</TableCell>
+                  <TableCell>
+                    <div className="text-sm font-medium">{credential.credential_type}</div>
+                    <div className="text-xs text-slate-500 font-mono">{credential.credential_number || "-"}</div>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{credential.expiration_date || "-"}</TableCell>
+                  <TableCell><Badge className={`${statusColors[status] || statusColors.pending} text-[9px] uppercase`}>{credential.status}</Badge></TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="sm" className="h-7 px-2" onClick={() => openEditCredential(credential)}>Edit</Button>
+                      {!(["verified", "approved", "active"].includes(status)) && <Button variant="outline" size="sm" className="h-7 px-2" onClick={() => credentialReviewMutation.mutate({ credentialId: credential.id, status: "verified" })}>Verify</Button>}
+                      {["verified", "approved", "active"].includes(status) && <Button variant="outline" size="sm" className="h-7 px-2 text-red-600" onClick={() => credentialReviewMutation.mutate({ credentialId: credential.id, status: "rejected", reason: window.prompt("Reason") || "Revoked" })}>Revoke</Button>}
+                      <Button variant="ghost" size="sm" className="h-7 px-2" onClick={() => eligibilityMutation.mutate({ vendorId: credential.vendor_id, serviceType: credential.service_type, jurisdiction: credential.jurisdiction })}>Check</Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </Card>
       {/* Create/Edit Dialog */}
       <Dialog open={showDialog} onOpenChange={setShowDialog}>
         <DialogContent>
@@ -306,6 +416,37 @@ export default function Vendors() {
         </DialogContent>
       </Dialog>
 
+
+      <Dialog open={showCredentialDialog} onOpenChange={setShowCredentialDialog}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{editCredential ? "Edit" : "New"} Credential</DialogTitle><DialogDescription>Credential facts are verified separately from vendor profile details.</DialogDescription></DialogHeader>
+          <div className="space-y-3">
+            <div><Label className="text-xs">Vendor *</Label>
+              <Select value={credentialForm.vendor_id} onValueChange={v => setCredentialForm({...credentialForm, vendor_id: v})}>
+                <SelectTrigger><SelectValue placeholder="Select vendor" /></SelectTrigger>
+                <SelectContent>{combinedVendors.filter(v => !v.isSynthetic).map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label className="text-xs">Service *</Label><Input value={credentialForm.service_type} onChange={e => setCredentialForm({...credentialForm, service_type: e.target.value})} /></div>
+              <div><Label className="text-xs">Jurisdiction</Label><Input value={credentialForm.jurisdiction} onChange={e => setCredentialForm({...credentialForm, jurisdiction: e.target.value})} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label className="text-xs">Credential Type *</Label><Input value={credentialForm.credential_type} onChange={e => setCredentialForm({...credentialForm, credential_type: e.target.value})} /></div>
+              <div><Label className="text-xs">Number</Label><Input value={credentialForm.credential_number} onChange={e => setCredentialForm({...credentialForm, credential_number: e.target.value})} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label className="text-xs">Effective</Label><Input type="date" value={credentialForm.effective_date} onChange={e => setCredentialForm({...credentialForm, effective_date: e.target.value})} /></div>
+              <div><Label className="text-xs">Expiration</Label><Input type="date" value={credentialForm.expiration_date} onChange={e => setCredentialForm({...credentialForm, expiration_date: e.target.value})} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label className="text-xs">Verification Source</Label><Input value={credentialForm.verification_source} onChange={e => setCredentialForm({...credentialForm, verification_source: e.target.value})} /></div>
+              <div><Label className="text-xs">Verification URL</Label><Input value={credentialForm.verification_url} onChange={e => setCredentialForm({...credentialForm, verification_url: e.target.value})} /></div>
+            </div>
+          </div>
+          <DialogFooter><Button onClick={handleCredentialSave} disabled={!credentialForm.vendor_id || !credentialForm.service_type || !credentialForm.credential_type}>Save Credential</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
       <BulkImportModal 
         isOpen={showImport} 
         onClose={() => setShowImport(false)} 

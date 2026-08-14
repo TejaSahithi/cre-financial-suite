@@ -22,7 +22,7 @@ export const MODULE_DEFINITIONS = {
   comparison:     { label: "YoY Comparison",     pages: ["Comparison"] },
   reconciliation: { label: "Reconciliation",     pages: ["Reconciliation"] },
   analytics_reports: { label: "Analytics & Reports", pages: ["AnalyticsReports", "Reports", "Analytics", "PortfolioInsights"] },
-  workflows:      { label: "Workflows",          pages: ["Workflows", "Approvals"] },
+  workflows:      { label: "Workflows",          pages: ["Workflows", "AutomationReadiness", "Approvals"] },
   notifications:  { label: "Notifications",      pages: ["Notifications"] },
   documents:      { label: "Documents",          pages: ["Documents"] },
   integrations:   { label: "Integrations",       pages: ["Integrations"] },
