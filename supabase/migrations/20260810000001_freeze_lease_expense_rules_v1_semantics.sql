@@ -1,4 +1,4 @@
-﻿-- Lease Expense Rules V1 frozen semantic contract columns.
+-- Lease Expense Rules V1 frozen semantic contract columns.
 -- These columns preserve the business interpretation produced by the
 -- approved-lease rule normalizer so downstream classification does not have
 -- to infer UI/workflow route from legacy CAM fields alone.

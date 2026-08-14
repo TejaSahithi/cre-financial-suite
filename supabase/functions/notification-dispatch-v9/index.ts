@@ -1567,6 +1567,7 @@ async function sendEmail(to: string, event: any, recipient: any) {
   if (!RESEND_API_KEY) return { status: "failed", error_message: "RESEND_API_KEY is not configured" };
   if (!to) return { status: "skipped", error_message: "Recipient has no email address" };
   const model = buildEmailModel(event, recipient);
+  const attachments = sanitizeEmailAttachments(event.email_attachments);
 
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -1577,6 +1578,7 @@ async function sendEmail(to: string, event: any, recipient: any) {
       subject: `${BRAND_NAME}: ${model.subject}`,
       html: emailHtml(model),
       text: emailText(model),
+      ...(attachments.length > 0 ? { attachments } : {}),
     }),
   });
 
@@ -1589,6 +1591,18 @@ async function sendEmail(to: string, event: any, recipient: any) {
     };
   }
   return { status: "sent", provider_message_id: payload?.id || null, sent_at: new Date().toISOString() };
+}
+
+function sanitizeEmailAttachments(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 3).map((attachment) => {
+    const filename = String(attachment?.filename || "").trim().replace(/[^\w .()-]/g, "_").slice(0, 120);
+    const content = String(attachment?.content || "").trim();
+    if (!filename || !content) return null;
+    if (content.length > 5_600_000) return null;
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(content)) return null;
+    return { filename, content };
+  }).filter(Boolean);
 }
 
 function normalizePhone(value: unknown) {
@@ -1787,6 +1801,7 @@ async function dispatchBusinessEvent(req: Request, body: any) {
     organization_id: orgId,
     event_type: eventType,
     metadata: normalizeObject(body.metadata),
+    email_attachments: sanitizeEmailAttachments(body.email_attachments || body.emailAttachments),
     entity_type: body.entity_type || policy.entityType,
     entity_id: normalizeId(body.entity_id || body.entityId || body.id),
     portfolio_id: normalizeId(body.portfolio_id || body.portfolioId),

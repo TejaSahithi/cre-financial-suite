@@ -193,6 +193,9 @@ export default function SendForApprovalButton({
         : {};
       const updatedEntity = beforeSendResult?.entity || {};
       const updatedMetadata = beforeSendResult?.metadata || {};
+      const emailAttachments = Array.isArray(beforeSendResult?.emailAttachments)
+        ? beforeSendResult.emailAttachments
+        : [];
 
       await createNotificationsForEvent({
         org_id: orgId,
@@ -208,6 +211,7 @@ export default function SendForApprovalButton({
         message: note.trim()
           ? `${entityLabel || "This item"} was sent for approval. Note: ${note.trim()}`
           : `${entityLabel || "This item"} was sent for approval.`,
+        email_attachments: emailAttachments,
         metadata: {
           ...metadata,
           ...updatedMetadata,

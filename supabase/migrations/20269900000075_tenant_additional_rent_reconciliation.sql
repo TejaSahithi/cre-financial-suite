@@ -1,4 +1,4 @@
-﻿-- Final Pass 3: tenant additional-rent reconciliation projection.
+-- Final Pass 3: tenant additional-rent reconciliation projection.
 -- This is a durable workflow result over existing authoritative CAM and lease-charge records.
 -- It is not a generalized financial source of truth and does not change CAM V2.
 

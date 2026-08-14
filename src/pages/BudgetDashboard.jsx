@@ -588,6 +588,7 @@ export default function BudgetDashboard() {
       )}
 
       <ScopeSelector
+        portfolios={scope.orgScopedPortfolios}
         properties={scope.scopedProperties}
         buildings={scope.scopedBuildings}
         units={scope.scopedUnits}
@@ -597,6 +598,7 @@ export default function BudgetDashboard() {
         onPropertyChange={setScopeProperty}
         onBuildingChange={setScopeBuilding}
         onUnitChange={setScopeUnit}
+        syncToUrl
       />
 
       {isLoading ? (

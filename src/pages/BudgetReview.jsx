@@ -464,6 +464,7 @@ export default function BudgetReview() {
       </PageHeader>
 
       <ScopeSelector
+        portfolios={scope.orgScopedPortfolios}
         properties={scope.scopedProperties}
         buildings={scope.scopedBuildings}
         units={scope.scopedUnits}
@@ -473,6 +474,7 @@ export default function BudgetReview() {
         onPropertyChange={setScopeProperty}
         onBuildingChange={setScopeBuilding}
         onUnitChange={setScopeUnit}
+        syncToUrl
       />
 
       {(budgetEngineVersion || budgetLockedAt || currBudgets.some(b => b.status === "locked")) && (

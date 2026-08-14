@@ -1,9 +1,12 @@
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import { budgetService } from "@/services/budgetService";
 import { expenseService } from "@/services/expenseService";
 import { useQuery } from "@tanstack/react-query";
+import useOrgQuery from "@/hooks/useOrgQuery";
+import ScopeSelector from "@/components/ScopeSelector";
+import { buildHierarchyScope, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -13,7 +16,14 @@ import { AlertTriangle, TrendingUp, TrendingDown, Target } from "lucide-react";
 export default function Variance() {
   const location = useLocation();
   const fiscalYear = new Date().getFullYear();
+  const [scopeProperty, setScopeProperty] = useState("all");
+  const [scopeBuilding, setScopeBuilding] = useState("all");
+  const [scopeUnit, setScopeUnit] = useState("all");
   useAssistantPageContext({ page: "Variance", route: location.pathname + location.search, fiscalYear });
+  const { data: portfolios = [] } = useOrgQuery("Portfolio");
+  const { data: properties = [] } = useOrgQuery("Property");
+  const { data: buildings = [] } = useOrgQuery("Building");
+  const { data: units = [] } = useOrgQuery("Unit");
   const { data: budgets = [] } = useQuery({
     queryKey: ['budgets'],
     queryFn: () => budgetService.list(),
@@ -24,15 +34,29 @@ export default function Variance() {
     queryFn: () => expenseService.list(),
   });
 
-  const totalBudgetedExpenses = budgets.reduce((s, b) => s + (b.total_expenses || 0), 0);
-  const totalActualExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
-  const totalBudgetedRevenue = budgets.reduce((s, b) => s + (b.total_revenue || 0), 0);
+  const scope = useMemo(
+    () => buildHierarchyScope({ search: location.search, portfolios, properties, buildings, units }),
+    [location.search, portfolios, properties, buildings, units],
+  );
+
+  useEffect(() => {
+    setScopeProperty(scope.propertyId || "all");
+    setScopeBuilding(scope.buildingId || "all");
+    setScopeUnit(scope.unitId || "all");
+  }, [scope.propertyId, scope.buildingId, scope.unitId]);
+
+  const scopedBudgets = budgets.filter((budget) => matchesHierarchyScope(budget, scope));
+  const scopedExpenses = expenses.filter((expense) => matchesHierarchyScope(expense, scope));
+
+  const totalBudgetedExpenses = scopedBudgets.reduce((s, b) => s + (b.total_expenses || 0), 0);
+  const totalActualExpenses = scopedExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+  const totalBudgetedRevenue = scopedBudgets.reduce((s, b) => s + (b.total_revenue || 0), 0);
   const variance = totalBudgetedExpenses - totalActualExpenses;
   const variancePct = totalBudgetedExpenses ? ((variance / totalBudgetedExpenses) * 100) : 0;
 
   // Category variance
   const budgetByCategory = {};
-  budgets.forEach(b => {
+  scopedBudgets.forEach(b => {
     (b.expense_items || []).forEach(item => {
       const cat = item.category || 'Other';
       budgetByCategory[cat] = (budgetByCategory[cat] || 0) + (item.amount || 0);
@@ -40,7 +64,7 @@ export default function Variance() {
   });
 
   const actualByCategory = {};
-  expenses.forEach(e => {
+  scopedExpenses.forEach(e => {
     const cat = e.category || 'other';
     actualByCategory[cat] = (actualByCategory[cat] || 0) + (e.amount || 0);
   });
@@ -61,6 +85,24 @@ export default function Variance() {
         <h1 className="text-[28px] font-bold text-slate-900">Variance Engine</h1>
         <p className="text-sm text-slate-500">Budget vs actual performance analysis</p>
       </div>
+
+      <ScopeSelector
+        portfolios={scope.orgScopedPortfolios}
+        properties={properties}
+        buildings={buildings}
+        units={units}
+        selectedPortfolio={scope.portfolioId || "all"}
+        selectedProperty={scopeProperty}
+        selectedBuilding={scopeBuilding}
+        selectedUnit={scopeUnit}
+        onPropertyChange={setScopeProperty}
+        onBuildingChange={(value) => {
+          setScopeBuilding(value);
+          setScopeUnit("all");
+        }}
+        onUnitChange={setScopeUnit}
+        syncToUrl
+      />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[

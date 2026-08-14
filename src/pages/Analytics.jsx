@@ -1,5 +1,6 @@
 import React from "react";
 import { PropertyService, LeaseService, ExpenseService } from "@/services/api";
+import { supabase } from "@/services/supabaseClient";
 
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";

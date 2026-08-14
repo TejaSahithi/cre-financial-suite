@@ -6,7 +6,7 @@
  * are seeded from approved-lease columns; user-added reminders are full
  * citizens with assignees and completion status.
  */
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -228,6 +228,12 @@ export default function CriticalDates() {
   const [scopeBuilding, setScopeBuilding] = useState(scope.buildingId || "all");
   const [scopeUnit, setScopeUnit] = useState(scope.unitId || "all");
 
+  useEffect(() => {
+    setScopeProperty(scope.propertyId || "all");
+    setScopeBuilding(scope.buildingId || "all");
+    setScopeUnit(scope.unitId || "all");
+  }, [scope.propertyId, scope.buildingId, scope.unitId]);
+
   const { data: criticalDates = [], isLoading } = useQuery({
     queryKey: ["lease-critical-dates"],
     queryFn: () => listCriticalDates(),
@@ -445,6 +451,7 @@ export default function CriticalDates() {
       </PageHeader>
 
       <ScopeSelector
+        portfolios={scope.orgScopedPortfolios}
         properties={scope.scopedProperties}
         buildings={scope.scopedBuildings}
         units={scope.scopedUnits}
@@ -454,6 +461,7 @@ export default function CriticalDates() {
         onPropertyChange={setScopeProperty}
         onBuildingChange={setScopeBuilding}
         onUnitChange={setScopeUnit}
+        syncToUrl
       />
 
       {/* Stat cards */}

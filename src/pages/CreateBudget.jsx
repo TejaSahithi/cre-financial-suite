@@ -234,6 +234,9 @@ export default function CreateBudget() {
     },
   });
 
+  const filteredProperties = form.portfolio_id
+    ? scope.orgScopedProperties.filter((property) => property.portfolio_id === form.portfolio_id)
+    : scope.scopedProperties;
   const filteredBuildings = form.property_id ? scope.scopedBuildings.filter((building) => building.property_id === form.property_id) : scope.scopedBuildings;
   const filteredUnits = form.building_id
     ? scope.scopedUnits.filter((unit) => unit.building_id === form.building_id)
@@ -590,7 +593,34 @@ export default function CreateBudget() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div>
+                  <Label className="text-xs">Portfolio</Label>
+                  <Select
+                    value={form.portfolio_id || "__all__"}
+                    onValueChange={(value) =>
+                      setForm((current) => ({
+                        ...current,
+                        portfolio_id: value === "__all__" ? "" : value,
+                        property_id: "",
+                        building_id: "",
+                        unit_id: "",
+                      }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a portfolio" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">All Portfolios</SelectItem>
+                      {scope.orgScopedPortfolios.map((portfolio) => (
+                        <SelectItem key={portfolio.id} value={portfolio.id}>
+                          {portfolio.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div>
                   <Label className="text-xs">Property *</Label>
                   <Select
@@ -609,7 +639,7 @@ export default function CreateBudget() {
                       <SelectValue placeholder="Select a property" />
                     </SelectTrigger>
                     <SelectContent>
-                      {scope.scopedProperties.map((property) => (
+                      {filteredProperties.map((property) => (
                         <SelectItem key={property.id} value={property.id}>
                           {property.name} {property.city ? `(${property.city}, ${property.state})` : ""}
                         </SelectItem>

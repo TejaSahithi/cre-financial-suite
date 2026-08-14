@@ -925,6 +925,7 @@ export default function LeaseExpenseRules() {
       </Card>
 
       <ScopeSelector
+        portfolios={scope.orgScopedPortfolios}
         properties={scope.scopedProperties}
         buildings={scope.scopedBuildings}
         units={scope.scopedUnits}
@@ -934,6 +935,7 @@ export default function LeaseExpenseRules() {
         onPropertyChange={setScopeProperty}
         onBuildingChange={setScopeBuilding}
         onUnitChange={setScopeUnit}
+        syncToUrl
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">

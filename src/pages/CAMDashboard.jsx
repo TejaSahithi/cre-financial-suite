@@ -74,6 +74,7 @@ export default function CAMDashboard() {
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
+  const { data: portfolios = [] } = useOrgQuery("Portfolio");
   const { data: leaseList = [] } = useOrgQuery("Lease");
   const { data: expenses = [] } = useOrgQuery("Expense");
 
@@ -316,6 +317,7 @@ export default function CAMDashboard() {
       </PageHeader>
 
       <ScopeSelector
+        portfolios={portfolios}
         properties={properties}
         buildings={buildings}
         units={units}
@@ -333,6 +335,7 @@ export default function CAMDashboard() {
         }}
         onUnitChange={setScopeUnit}
         showUnit
+        syncToUrl
       />
 
       {!scope.targetPropertyId ? (
@@ -636,4 +639,3 @@ export default function CAMDashboard() {
     </div>
   );
 }
-

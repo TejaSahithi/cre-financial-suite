@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import { PropertyService, LeaseService, ExpenseService } from "@/services/api";
+import { supabase } from "@/services/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -13,7 +14,7 @@ export default function AnalyticsReports() {
   const { data: properties = [], error: propError, isLoading: propLoading } = useQuery({ queryKey: ['properties'], queryFn: () => PropertyService.list() });
   const { data: leases = [], error: leaseError, isLoading: leaseLoading } = useQuery({ queryKey: ['leases'], queryFn: () => LeaseService.list() });
   const { data: expenses = [], error: expenseError, isLoading: expenseLoading } = useQuery({ queryKey: ['expenses'], queryFn: () => ExpenseService.list() });
-  const { data: camCalcs = [] } = useQuery({
+  const { data: camCalcs = [], error: camError, isLoading: camLoading } = useQuery({
     queryKey: ["cam-reports-runs"],
     queryFn: async () => {
       const { data, error } = await supabase.from("cam_runs").select("*, cam_run_lease_results(*)");

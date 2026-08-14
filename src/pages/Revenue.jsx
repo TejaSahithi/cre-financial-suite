@@ -16,6 +16,7 @@ import PropertyDrillDown from "@/components/revenue/PropertyDrillDown";
 import TenantDrillDown from "@/components/revenue/TenantDrillDown";
 import { PropertyService, LeaseService, UnitService, BuildingService, PortfolioService } from "@/services/api";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
+import { supabase } from "@/services/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { downloadCSV, createPageUrl } from "@/utils";
 import { useAssistantPageContext } from "@/assistant/useAssistantContext";
@@ -244,6 +245,7 @@ export default function Revenue() {
       )}
 
       <ScopeSelector
+        portfolios={scope.orgScopedPortfolios}
         properties={scope.scopedProperties}
         buildings={scope.scopedBuildings}
         units={scope.scopedUnits}
@@ -253,6 +255,7 @@ export default function Revenue() {
         onPropertyChange={setScopeProperty}
         onBuildingChange={setScopeBuilding}
         onUnitChange={setScopeUnit}
+        syncToUrl
       />
 
       <RevenueKPIStrip totalRevenue={totalRevenue} baseRent={totalBaseRent} camRecovery={totalCamRecovery} otherIncome={otherIncome} yoyGrowth={yoyGrowth} />
@@ -273,5 +276,3 @@ export default function Revenue() {
     </div>
   );
 }
-
-

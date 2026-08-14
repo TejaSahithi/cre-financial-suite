@@ -2,10 +2,10 @@ export function getScopeParams(search = "") {
   const params = new URLSearchParams(search);
   return {
     orgId: params.get("org") || params.get("orgId") || null,
-    portfolioId: params.get("portfolio") || null,
-    propertyId: params.get("property") || null,
-    buildingId: params.get("building") || null,
-    unitId: params.get("unit") || null,
+    portfolioId: params.get("portfolio") || params.get("portfolio_id") || null,
+    propertyId: params.get("property") || params.get("property_id") || null,
+    buildingId: params.get("building") || params.get("building_id") || null,
+    unitId: params.get("unit") || params.get("unit_id") || null,
   };
 }
 

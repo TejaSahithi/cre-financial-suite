@@ -33,6 +33,7 @@ import { useAssistantPageContext } from "@/assistant/useAssistantContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import ScopeSelector from "@/components/ScopeSelector";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -146,14 +147,21 @@ export default function LeaseExpenseClassification() {
 
   const { data: leases = [], isLoading: loadingLeases } = useOrgQuery("Lease", {}, { allowSuperAdminGlobal: true });
   const { data: tenants = [] } = useOrgQuery("Tenant", {}, { allowSuperAdminGlobal: true });
+  const { data: portfolios = [] } = useOrgQuery("Portfolio", {}, { allowSuperAdminGlobal: true });
   const { data: properties = [] } = useOrgQuery("Property", {}, { allowSuperAdminGlobal: true });
   const { data: buildings = [] } = useOrgQuery("Building", {}, { allowSuperAdminGlobal: true });
   const { data: units = [] } = useOrgQuery("Unit", {}, { allowSuperAdminGlobal: true });
 
   const scope = useMemo(
-    () => buildHierarchyScope({ search: "", portfolios: [], properties, buildings, units }),
-    [properties, buildings, units]
+    () => buildHierarchyScope({ search: location.search, portfolios, properties, buildings, units }),
+    [location.search, portfolios, properties, buildings, units]
   );
+
+  useEffect(() => {
+    setScopeProperty(scope.propertyId || "all");
+    setScopeBuilding(scope.buildingId || "all");
+    setScopeUnit(scope.unitId || "all");
+  }, [scope.propertyId, scope.buildingId, scope.unitId]);
 
   useAssistantPageContext({
     page: "LeaseExpenseClassification",
@@ -795,35 +803,19 @@ export default function LeaseExpenseClassification() {
 
       <Card>
         <CardContent className="flex flex-wrap items-center gap-2 p-3 text-xs">
-            <span className="mr-1 font-medium uppercase tracking-wider text-slate-500">Scope:</span>
-            <select className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none focus:ring-1 focus:ring-[var(--accent)]" value={scopeProperty} onChange={(event) => setScopeProperty(event.target.value)}>
-              <option value="all">All Properties</option>
-              {properties.map((property) => (
-                <option key={property.id} value={property.id}>
-                  {property.property_name || property.name}
-                </option>
-              ))}
-            </select>
-            <select className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none focus:ring-1 focus:ring-[var(--accent)]" value={scopeBuilding} onChange={(event) => setScopeBuilding(event.target.value)}>
-              <option value="all">All Buildings</option>
-              {buildings
-                .filter((building) => scopeProperty === "all" || building.property_id === scopeProperty)
-                .map((building) => (
-                  <option key={building.id} value={building.id}>
-                    {building.building_name || building.name}
-                  </option>
-                ))}
-            </select>
-            <select className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none focus:ring-1 focus:ring-[var(--accent)]" value={scopeUnit} onChange={(event) => setScopeUnit(event.target.value)}>
-              <option value="all">All Units</option>
-              {units
-                .filter((unit) => scopeBuilding === "all" || unit.building_id === scopeBuilding)
-                .map((unit) => (
-                  <option key={unit.id} value={unit.id}>
-                    {unit.unit_number || unit.unit_id_code}
-                  </option>
-                ))}
-            </select>
+            <ScopeSelector
+              portfolios={scope.orgScopedPortfolios}
+              properties={scope.scopedProperties}
+              buildings={scope.scopedBuildings}
+              units={scope.scopedUnits}
+              selectedProperty={scopeProperty}
+              selectedBuilding={scopeBuilding}
+              selectedUnit={scopeUnit}
+              onPropertyChange={setScopeProperty}
+              onBuildingChange={setScopeBuilding}
+              onUnitChange={setScopeUnit}
+              syncToUrl
+            />
             <select className="h-9 min-w-[220px] rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none focus:ring-1 focus:ring-[var(--accent)]" value={scopeLease} onChange={(event) => setScopeLease(event.target.value)}>
               <option value="all">All Leases</option>
               {scopedLeases.map((lease) => (

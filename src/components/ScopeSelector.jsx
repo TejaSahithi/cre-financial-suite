@@ -1,18 +1,56 @@
 import React from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Building2, Home, Layers } from "lucide-react";
 
-export default function ScopeSelector({ properties, buildings, units, selectedProperty, selectedBuilding, selectedUnit, onPropertyChange, onBuildingChange, onUnitChange, showUnit = true }) {
-  const hasSelectedProperty = Boolean(selectedProperty && selectedProperty !== "all");
-  const hasSelectedBuilding = Boolean(selectedBuilding && selectedBuilding !== "all");
-  const filteredBuildings = selectedProperty && selectedProperty !== "all" 
-    ? buildings.filter(b => b.property_id === selectedProperty)
+export default function ScopeSelector({
+  portfolios = [],
+  properties = [],
+  buildings = [],
+  units = [],
+  selectedPortfolio,
+  selectedProperty,
+  selectedBuilding,
+  selectedUnit,
+  onPortfolioChange,
+  onPropertyChange,
+  onBuildingChange,
+  onUnitChange,
+  showUnit = true,
+  syncToUrl = false,
+  queryParamNames = {},
+}) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const paramNames = {
+    portfolio: "portfolio",
+    property: "property",
+    building: "building",
+    unit: "unit",
+    ...queryParamNames,
+  };
+  const urlScope = new URLSearchParams(location.search);
+  const urlValue = (key, fallbackKey) => urlScope.get(paramNames[key]) || (fallbackKey ? urlScope.get(fallbackKey) : null);
+  const selectedPropertyRecord = selectedProperty && selectedProperty !== "all"
+    ? properties.find((property) => property.id === selectedProperty)
+    : null;
+  const activePortfolio = selectedPortfolio || urlValue("portfolio", "portfolio_id") || selectedPropertyRecord?.portfolio_id || "all";
+  const filteredProperties = activePortfolio && activePortfolio !== "all"
+    ? properties.filter((p) => p.portfolio_id === activePortfolio)
+    : properties;
+  const filteredPropertyIds = new Set(filteredProperties.map((p) => p.id));
+  const filteredBuildings = selectedProperty && selectedProperty !== "all"
+    ? buildings.filter((b) => b.property_id === selectedProperty)
+    : activePortfolio && activePortfolio !== "all"
+    ? buildings.filter((b) => filteredPropertyIds.has(b.property_id))
     : buildings;
   
   const filteredUnits = selectedBuilding && selectedBuilding !== "all"
     ? units.filter(u => u.building_id === selectedBuilding)
     : selectedProperty && selectedProperty !== "all"
     ? units.filter(u => u.property_id === selectedProperty)
+    : activePortfolio && activePortfolio !== "all"
+    ? units.filter((u) => filteredPropertyIds.has(u.property_id))
     : units;
 
   const visibleUnits = filteredUnits;
@@ -24,25 +62,71 @@ export default function ScopeSelector({ properties, buildings, units, selectedPr
     unit.suite ||
     (unit.id ? `Unit ${String(unit.id).slice(0, 8)}` : "Unnamed Unit");
 
-  const showBuildingSelector = Boolean(onBuildingChange) && hasSelectedProperty;
-  const showUnitSelector = showUnit && Boolean(onUnitChange) && hasSelectedProperty;
+  const showPortfolioSelector = portfolios.length > 0;
+  const showBuildingSelector = Boolean(onBuildingChange);
+  const showUnitSelector = showUnit && Boolean(onUnitChange);
+  const propertyPlaceholder = filteredProperties.length > 0 ? "All Properties" : "No Properties Available";
   const buildingPlaceholder = filteredBuildings.length > 0 ? "All Buildings" : "No Buildings Available";
   const unitPlaceholder = visibleUnits.length > 0 ? "All Units" : "No Units Available";
+  const updateUrlScope = ({ portfolio = activePortfolio, property = selectedProperty, building = selectedBuilding, unit = selectedUnit }) => {
+    if (!syncToUrl) return;
+    const params = new URLSearchParams(location.search);
+    if (portfolio && portfolio !== "all") params.set(paramNames.portfolio, portfolio);
+    else params.delete(paramNames.portfolio);
+    if (property && property !== "all") params.set(paramNames.property, property);
+    else params.delete(paramNames.property);
+    if (building && building !== "all") params.set(paramNames.building, building);
+    else params.delete(paramNames.building);
+    if (unit && unit !== "all") params.set(paramNames.unit, unit);
+    else params.delete(paramNames.unit);
+    navigate({ pathname: location.pathname, search: params.toString() ? `?${params.toString()}` : "" }, { replace: true });
+  };
 
   return (
     <div className="flex items-center gap-2 flex-wrap bg-white border border-slate-200 rounded-xl p-2">
       <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400 uppercase tracking-wider px-2">
         <Layers className="w-4 h-4" /> Scope
       </div>
+
+      {showPortfolioSelector && (
+        <Select
+          value={activePortfolio}
+          onValueChange={(v) => {
+            if (onPortfolioChange) onPortfolioChange(v);
+            if (onPropertyChange) onPropertyChange("all");
+            if (onBuildingChange) onBuildingChange("all");
+            if (onUnitChange) onUnitChange("all");
+            updateUrlScope({ portfolio: v, property: "all", building: "all", unit: "all" });
+          }}
+        >
+          <SelectTrigger className="w-48 h-9 text-sm border-slate-200 bg-slate-50">
+            <Layers className="w-3 h-3 mr-1.5 text-blue-500 flex-shrink-0" />
+            <SelectValue placeholder="All Portfolios" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Portfolios</SelectItem>
+            {portfolios.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      )}
       
-      <Select value={selectedProperty || "all"} onValueChange={(v) => { onPropertyChange(v); if (onBuildingChange) onBuildingChange("all"); if (onUnitChange) onUnitChange("all"); }}>
+      <Select
+        value={selectedProperty || "all"}
+        disabled={filteredProperties.length === 0}
+        onValueChange={(v) => {
+          onPropertyChange(v);
+          if (onBuildingChange) onBuildingChange("all");
+          if (onUnitChange) onUnitChange("all");
+          updateUrlScope({ property: v, building: "all", unit: "all" });
+        }}
+      >
         <SelectTrigger className="w-48 h-9 text-sm border-slate-200 bg-slate-50">
           <Home className="w-3 h-3 mr-1.5 text-blue-500 flex-shrink-0" />
-          <SelectValue placeholder="All Properties" />
+          <SelectValue placeholder={propertyPlaceholder} />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">All Properties</SelectItem>
-          {properties.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+          {filteredProperties.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
         </SelectContent>
       </Select>
 
@@ -50,7 +134,11 @@ export default function ScopeSelector({ properties, buildings, units, selectedPr
         <Select
           value={selectedBuilding || "all"}
           disabled={filteredBuildings.length === 0}
-          onValueChange={(v) => { if (onBuildingChange) onBuildingChange(v); if (onUnitChange) onUnitChange("all"); }}
+          onValueChange={(v) => {
+            if (onBuildingChange) onBuildingChange(v);
+            if (onUnitChange) onUnitChange("all");
+            updateUrlScope({ building: v, unit: "all" });
+          }}
         >
           <SelectTrigger className="w-44 h-9 text-sm border-slate-200 bg-slate-50">
             <Building2 className="w-3.5 h-3.5 mr-1.5 text-blue-500 flex-shrink-0" />
@@ -67,7 +155,10 @@ export default function ScopeSelector({ properties, buildings, units, selectedPr
         <Select
           value={selectedUnit || "all"}
           disabled={visibleUnits.length === 0}
-          onValueChange={(v) => { if (onUnitChange) onUnitChange(v); }}
+          onValueChange={(v) => {
+            if (onUnitChange) onUnitChange(v);
+            updateUrlScope({ unit: v });
+          }}
         >
           <SelectTrigger className="w-40 h-9 text-sm border-slate-200 bg-slate-50">
             <SelectValue placeholder={unitPlaceholder} />

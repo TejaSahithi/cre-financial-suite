@@ -34,7 +34,10 @@ export default function Vendors() {
   const [editItem, setEditItem] = useState(null);
   const [sortField, setSortField] = useState("totalSpend");
   const [sortDir, setSortDir] = useState("desc");
+  const [scopePortfolio, setScopePortfolio] = useState("all");
   const [scopeProperty, setScopeProperty] = useState("all");
+  const [scopeBuilding, setScopeBuilding] = useState("all");
+  const [scopeUnit, setScopeUnit] = useState("all");
   const [form, setForm] = useState({ name: "", company: "", contact_name: "", contact_email: "", contact_phone: "", category: "other", payment_terms: "net_30", notes: "" });
   const [credentialForm, setCredentialForm] = useState({ vendor_id: "", service_type: "", jurisdiction: "", credential_type: "", credential_number: "", effective_date: "", expiration_date: "", verification_source: "", verification_url: "" });
   const queryClient = useQueryClient();
@@ -42,13 +45,18 @@ export default function Vendors() {
 
   const { data: vendors = [], orgId } = useOrgQuery("Vendor");
   const { data: expenses = [] } = useOrgQuery("Expense");
+  const { data: portfolios = [] } = useOrgQuery("Portfolio");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
+<<<<<<< HEAD
   const { data: vendorCredentials = [] } = useQuery({
     queryKey: ["vendor-credentials", orgId],
     enabled: Boolean(orgId),
     queryFn: () => listOperationalDomainRows("vendor_credentials", { orgId, limit: 200 }),
   });
+=======
+  const { data: units = [] } = useOrgQuery("Unit");
+>>>>>>> f93b73e626fefe8dd1c9ad2be66f1c8ee2fe259c
 
   const createMutation = useMutation({
     mutationFn: (d) => vendorService.create(d),
@@ -172,7 +180,21 @@ export default function Vendors() {
 
   const enriched = combinedVendors.map(v => {
     const vExpenses = expenses.filter(e => expenseMatchesVendor(e, v));
-    const propExpenses = scopeProperty !== "all" ? vExpenses.filter(e => e.property_id === scopeProperty) : vExpenses;
+    const portfolioPropertyIds = new Set(properties.filter((property) => property.portfolio_id === scopePortfolio).map((property) => property.id));
+    let scopedExpenses = vExpenses;
+    if (scopePortfolio !== "all") {
+      scopedExpenses = scopedExpenses.filter((e) => portfolioPropertyIds.has(e.property_id));
+    }
+    if (scopeProperty !== "all") {
+      scopedExpenses = scopedExpenses.filter((e) => e.property_id === scopeProperty);
+    }
+    if (scopeBuilding !== "all") {
+      scopedExpenses = scopedExpenses.filter((e) => e.building_id === scopeBuilding);
+    }
+    if (scopeUnit !== "all") {
+      scopedExpenses = scopedExpenses.filter((e) => e.unit_id === scopeUnit);
+    }
+    const propExpenses = scopedExpenses;
     const propIds = [...new Set(propExpenses.map(e => e.property_id).filter(Boolean))];
     const lastExpense = propExpenses.sort((a, b) => (b.expense_date || b.date || '').localeCompare(a.expense_date || a.date || ''))[0];
     return {
@@ -255,7 +277,32 @@ export default function Vendors() {
         </div>
       </PageHeader>
 
-      <ScopeSelector properties={properties} buildings={buildings} units={[]} selectedProperty={scopeProperty} onPropertyChange={setScopeProperty} showUnit={false} />
+      <ScopeSelector
+        portfolios={portfolios}
+        properties={properties}
+        buildings={buildings}
+        units={units}
+        selectedPortfolio={scopePortfolio}
+        selectedProperty={scopeProperty}
+        selectedBuilding={scopeBuilding}
+        selectedUnit={scopeUnit}
+        onPortfolioChange={(value) => {
+          setScopePortfolio(value);
+          setScopeProperty("all");
+          setScopeBuilding("all");
+          setScopeUnit("all");
+        }}
+        onPropertyChange={(value) => {
+          setScopeProperty(value);
+          setScopeBuilding("all");
+          setScopeUnit("all");
+        }}
+        onBuildingChange={(value) => {
+          setScopeBuilding(value);
+          setScopeUnit("all");
+        }}
+        onUnitChange={setScopeUnit}
+      />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <MetricCard label="Total Vendors" value={vendors.length} icon={Users} color="bg-blue-50 text-blue-600" />
