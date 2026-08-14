@@ -33,6 +33,8 @@ export default function Vendors() {
   const [sortDir, setSortDir] = useState("desc");
   const [scopePortfolio, setScopePortfolio] = useState("all");
   const [scopeProperty, setScopeProperty] = useState("all");
+  const [scopeBuilding, setScopeBuilding] = useState("all");
+  const [scopeUnit, setScopeUnit] = useState("all");
   const [form, setForm] = useState({ name: "", company: "", contact_name: "", contact_email: "", contact_phone: "", category: "other", payment_terms: "net_30", notes: "" });
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -42,6 +44,7 @@ export default function Vendors() {
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
+  const { data: units = [] } = useOrgQuery("Unit");
 
   const createMutation = useMutation({
     mutationFn: (d) => vendorService.create(d),
@@ -136,11 +139,19 @@ export default function Vendors() {
   const enriched = combinedVendors.map(v => {
     const vExpenses = expenses.filter(e => expenseMatchesVendor(e, v));
     const portfolioPropertyIds = new Set(properties.filter((property) => property.portfolio_id === scopePortfolio).map((property) => property.id));
-    const scopedExpenses = scopeProperty !== "all"
-      ? vExpenses.filter(e => e.property_id === scopeProperty)
-      : scopePortfolio !== "all"
-      ? vExpenses.filter((e) => portfolioPropertyIds.has(e.property_id))
-      : vExpenses;
+    let scopedExpenses = vExpenses;
+    if (scopePortfolio !== "all") {
+      scopedExpenses = scopedExpenses.filter((e) => portfolioPropertyIds.has(e.property_id));
+    }
+    if (scopeProperty !== "all") {
+      scopedExpenses = scopedExpenses.filter((e) => e.property_id === scopeProperty);
+    }
+    if (scopeBuilding !== "all") {
+      scopedExpenses = scopedExpenses.filter((e) => e.building_id === scopeBuilding);
+    }
+    if (scopeUnit !== "all") {
+      scopedExpenses = scopedExpenses.filter((e) => e.unit_id === scopeUnit);
+    }
     const propExpenses = scopedExpenses;
     const propIds = [...new Set(propExpenses.map(e => e.property_id).filter(Boolean))];
     const lastExpense = propExpenses.sort((a, b) => (b.expense_date || b.date || '').localeCompare(a.expense_date || a.date || ''))[0];
@@ -207,15 +218,27 @@ export default function Vendors() {
         portfolios={portfolios}
         properties={properties}
         buildings={buildings}
-        units={[]}
+        units={units}
         selectedPortfolio={scopePortfolio}
         selectedProperty={scopeProperty}
+        selectedBuilding={scopeBuilding}
+        selectedUnit={scopeUnit}
         onPortfolioChange={(value) => {
           setScopePortfolio(value);
           setScopeProperty("all");
+          setScopeBuilding("all");
+          setScopeUnit("all");
         }}
-        onPropertyChange={setScopeProperty}
-        showUnit={false}
+        onPropertyChange={(value) => {
+          setScopeProperty(value);
+          setScopeBuilding("all");
+          setScopeUnit("all");
+        }}
+        onBuildingChange={(value) => {
+          setScopeBuilding(value);
+          setScopeUnit("all");
+        }}
+        onUnitChange={setScopeUnit}
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

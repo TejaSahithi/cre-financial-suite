@@ -16,6 +16,7 @@ import PropertyDrillDown from "@/components/revenue/PropertyDrillDown";
 import TenantDrillDown from "@/components/revenue/TenantDrillDown";
 import { PropertyService, LeaseService, UnitService, BuildingService, PortfolioService } from "@/services/api";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
+import { supabase } from "@/services/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { downloadCSV, createPageUrl } from "@/utils";
 import { useAssistantPageContext } from "@/assistant/useAssistantContext";
@@ -275,4 +276,3 @@ export default function Revenue() {
     </div>
   );
 }
-

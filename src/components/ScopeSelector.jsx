@@ -18,14 +18,23 @@ export default function ScopeSelector({
   onUnitChange,
   showUnit = true,
   syncToUrl = false,
+  queryParamNames = {},
 }) {
   const location = useLocation();
   const navigate = useNavigate();
+  const paramNames = {
+    portfolio: "portfolio",
+    property: "property",
+    building: "building",
+    unit: "unit",
+    ...queryParamNames,
+  };
   const urlScope = new URLSearchParams(location.search);
+  const urlValue = (key, fallbackKey) => urlScope.get(paramNames[key]) || (fallbackKey ? urlScope.get(fallbackKey) : null);
   const selectedPropertyRecord = selectedProperty && selectedProperty !== "all"
     ? properties.find((property) => property.id === selectedProperty)
     : null;
-  const activePortfolio = selectedPortfolio || urlScope.get("portfolio") || selectedPropertyRecord?.portfolio_id || "all";
+  const activePortfolio = selectedPortfolio || urlValue("portfolio", "portfolio_id") || selectedPropertyRecord?.portfolio_id || "all";
   const filteredProperties = activePortfolio && activePortfolio !== "all"
     ? properties.filter((p) => p.portfolio_id === activePortfolio)
     : properties;
@@ -62,14 +71,14 @@ export default function ScopeSelector({
   const updateUrlScope = ({ portfolio = activePortfolio, property = selectedProperty, building = selectedBuilding, unit = selectedUnit }) => {
     if (!syncToUrl) return;
     const params = new URLSearchParams(location.search);
-    if (portfolio && portfolio !== "all") params.set("portfolio", portfolio);
-    else params.delete("portfolio");
-    if (property && property !== "all") params.set("property", property);
-    else params.delete("property");
-    if (building && building !== "all") params.set("building", building);
-    else params.delete("building");
-    if (unit && unit !== "all") params.set("unit", unit);
-    else params.delete("unit");
+    if (portfolio && portfolio !== "all") params.set(paramNames.portfolio, portfolio);
+    else params.delete(paramNames.portfolio);
+    if (property && property !== "all") params.set(paramNames.property, property);
+    else params.delete(paramNames.property);
+    if (building && building !== "all") params.set(paramNames.building, building);
+    else params.delete(paramNames.building);
+    if (unit && unit !== "all") params.set(paramNames.unit, unit);
+    else params.delete(paramNames.unit);
     navigate({ pathname: location.pathname, search: params.toString() ? `?${params.toString()}` : "" }, { replace: true });
   };
 

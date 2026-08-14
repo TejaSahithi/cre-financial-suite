@@ -33,6 +33,7 @@ import {
 import { createPageUrl } from "@/utils";
 import { buildCamActiveLeaseIdSet, filterCamActiveLeases, filterRowsToCamActiveLeases } from "@/lib/activeLease";
 import PageHeader from "@/components/PageHeader";
+import ScopeSelector from "@/components/ScopeSelector";
 import SendForApprovalButton from "@/components/approvals/SendForApprovalButton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -81,11 +82,27 @@ export default function CAMRun() {
   // searchParams (the same pattern CAMSetup.jsx uses) makes the URL the
   // single source of truth instead of a stale local copy of it.
   const propertyId = searchParams.get("property_id") || "";
+  const buildingId = searchParams.get("building_id") || "";
+  const unitId = searchParams.get("unit_id") || "";
   const periodId = searchParams.get("recovery_period_id") || "";
   const setPropertyId = (v) => setSearchParams((prev) => {
     const next = new URLSearchParams(prev);
     if (v) next.set("property_id", v); else next.delete("property_id");
+    next.delete("building_id");
+    next.delete("unit_id");
     next.delete("recovery_period_id");
+    return next;
+  });
+  const setBuildingId = (v) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (v) next.set("building_id", v); else next.delete("building_id");
+    next.delete("unit_id");
+    next.delete("recovery_period_id");
+    return next;
+  });
+  const setUnitId = (v) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (v) next.set("unit_id", v); else next.delete("unit_id");
     return next;
   });
   const setPeriodId = (v) => setSearchParams((prev) => {
@@ -100,10 +117,18 @@ export default function CAMRun() {
   const [restateDialog, setRestateDialog] = useState(false);
   const [reasonForm, setReasonForm] = useState({ reason: "" });
 
+  const { data: portfolios = [] } = useOrgQuery("Portfolio");
   const { data: properties = [] } = useOrgQuery("Property");
+  const { data: buildings = [] } = useOrgQuery("Building");
+  const { data: units = [] } = useOrgQuery("Unit");
   const { data: leases = [] } = useOrgQuery("Lease");
   const activeLeases = useMemo(() => filterCamActiveLeases(leases), [leases]);
-  const activeLeaseIds = useMemo(() => buildCamActiveLeaseIdSet(activeLeases.filter((lease) => !propertyId || lease.property_id === propertyId)), [activeLeases, propertyId]);
+  const activeLeaseIds = useMemo(() => buildCamActiveLeaseIdSet(activeLeases.filter((lease) => {
+    if (propertyId && lease.property_id !== propertyId) return false;
+    if (buildingId && lease.building_id !== buildingId) return false;
+    if (unitId && lease.unit_id !== unitId) return false;
+    return true;
+  })), [activeLeases, propertyId, buildingId, unitId]);
   const activeLeaseKey = [...activeLeaseIds].sort().join(",");
   const activeProperty = properties.find((property) => property.id === propertyId) || null;
 
@@ -375,10 +400,20 @@ export default function CAMRun() {
 
       {/* Selectors */}
       <div className="flex flex-wrap items-center gap-3">
-        <Select value={propertyId} onValueChange={setPropertyId}>
-          <SelectTrigger className="w-64"><SelectValue placeholder="Select property" /></SelectTrigger>
-          <SelectContent>{properties.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
-        </Select>
+        <ScopeSelector
+          portfolios={portfolios}
+          properties={properties}
+          buildings={buildings}
+          units={units}
+          selectedProperty={propertyId || "all"}
+          selectedBuilding={buildingId || "all"}
+          selectedUnit={unitId || "all"}
+          onPropertyChange={(value) => setPropertyId(value === "all" ? "" : value)}
+          onBuildingChange={(value) => setBuildingId(value === "all" ? "" : value)}
+          onUnitChange={(value) => setUnitId(value === "all" ? "" : value)}
+          syncToUrl
+          queryParamNames={{ portfolio: "portfolio_id", property: "property_id", building: "building_id", unit: "unit_id" }}
+        />
         <Select value={periodId} onValueChange={setPeriodId} disabled={!propertyId || periods.length === 0}>
           <SelectTrigger className="w-64"><SelectValue placeholder={periods.length === 0 ? "No recovery periods yet" : "Select recovery period"} /></SelectTrigger>
           <SelectContent>{periods.map((p) => <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>)}</SelectContent>

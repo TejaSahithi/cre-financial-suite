@@ -17,20 +17,20 @@ import {
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, Cell } from "recharts";
 
+import useOrgQuery from "@/hooks/useOrgQuery";
 import { budgetService } from "@/services/budgetService";
 import { expenseService } from "@/services/expenseService";
 import { propertyService } from "@/services/propertyService";
+import ScopeSelector from "@/components/ScopeSelector";
+import { buildHierarchyScope, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { createPageUrl } from "@/utils";
 import { supabase } from "@/services/supabaseClient";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const ALL_PROPERTIES = "__all__";
-
 function normalizeProjectionText(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -86,16 +86,32 @@ const CustomTooltip = ({ active, payload, label }) => {
 export default function ExpenseProjection() {
   const location = useLocation();
   const urlParams = new URLSearchParams(location.search);
-  const initProperty = urlParams.get("property") || ALL_PROPERTIES;
+  const initProperty = urlParams.get("property") || "all";
   const [selectedProperty, setSelectedProperty] = useState(initProperty);
+  const [selectedBuilding, setSelectedBuilding] = useState(urlParams.get("building") || "all");
+  const [selectedUnit, setSelectedUnit] = useState(urlParams.get("unit") || "all");
   const currentYear = new Date().getFullYear();
   const prevYear = currentYear - 1;
-  const selectedPropertyId = selectedProperty === ALL_PROPERTIES ? null : selectedProperty;
+  const selectedPropertyId = selectedProperty === "all" ? null : selectedProperty;
 
   const { data: properties = [] } = useQuery({
     queryKey: ["properties-exp-proj"],
     queryFn: () => propertyService.list(),
   });
+  const { data: portfolios = [] } = useOrgQuery("Portfolio");
+  const { data: buildings = [] } = useOrgQuery("Building");
+  const { data: units = [] } = useOrgQuery("Unit");
+
+  const scope = useMemo(
+    () => buildHierarchyScope({ search: location.search, portfolios, properties, buildings, units }),
+    [location.search, portfolios, properties, buildings, units],
+  );
+
+  React.useEffect(() => {
+    setSelectedProperty(scope.propertyId || "all");
+    setSelectedBuilding(scope.buildingId || "all");
+    setSelectedUnit(scope.unitId || "all");
+  }, [scope.propertyId, scope.buildingId, scope.unitId]);
 
   const { data: budgets = [] } = useQuery({
     queryKey: ["budgets-proj", selectedProperty],
@@ -118,6 +134,9 @@ export default function ExpenseProjection() {
       );
     },
   });
+
+  const scopedBudgets = budgets.filter((budget) => matchesHierarchyScope(budget, scope));
+  const scopedFinalizedClassifications = finalizedClassifications.filter((classification) => matchesHierarchyScope(classification, scope));
 
   const finalizedClassificationIds = useMemo(
     () => finalizedClassifications.map((classification) => classification.id).filter(Boolean),
@@ -148,7 +167,7 @@ export default function ExpenseProjection() {
   );
 
   const expensesForProjection = useMemo(() => {
-    return finalizedClassifications.map((classification) => {
+    return scopedFinalizedClassifications.map((classification) => {
       const dateValue = classificationDate(classification);
       const parsedDate = dateValue
         ? new Date(String(dateValue).length === 10 ? `${dateValue}T00:00:00` : dateValue)
@@ -176,10 +195,10 @@ export default function ExpenseProjection() {
         month,
       };
     });
-  }, [currentYear, finalizedClassifications]);
+  }, [currentYear, scopedFinalizedClassifications]);
 
   const hasFinalizedData = expensesForProjection.length > 0;
-  const currentBudget = budgets.find((budget) => budget.budget_year === currentYear);
+  const currentBudget = scopedBudgets.find((budget) => budget.budget_year === currentYear);
   const currentExpenses = expensesForProjection.filter((expense) => expense.fiscal_year === currentYear);
   const prevExpenses = expensesForProjection.filter((expense) => expense.fiscal_year === prevYear);
 
@@ -335,7 +354,13 @@ export default function ExpenseProjection() {
     [currentExpenses, prevExpenses, totalBudgeted]
   );
 
-  const selectedPropertyName = properties.find((p) => p.id === selectedProperty)?.name || "All Properties";
+  const selectedScopeName =
+    scope.activeUnit?.unit_number ||
+    scope.activeUnit?.name ||
+    scope.activeBuilding?.name ||
+    scope.activeProperty?.name ||
+    scope.activePortfolio?.name ||
+    "All Properties";
 
   return (
     <div className="p-4 lg:p-8 space-y-6 bg-[var(--surface-2)] min-h-screen">
@@ -352,7 +377,7 @@ export default function ExpenseProjection() {
                 Financial Forecasting Hub
               </Badge>
               <Badge variant="outline" className="border-[color-mix(in_srgb,var(--border-cre)_35%,transparent)] text-[var(--muted)] text-xs">
-                Scope: {selectedPropertyName}
+                Scope: {selectedScopeName}
               </Badge>
             </div>
             <h1 className="text-[28px] font-extrabold tracking-tight text-[var(--ink)]">Expense Projection</h1>
@@ -361,24 +386,23 @@ export default function ExpenseProjection() {
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 rounded-[8px] border border-[var(--border-cre)] bg-[var(--surface-2)] p-1.5">
-              <Building2 className="w-4 h-4 text-[var(--muted)] ml-2" />
-              <Select value={selectedProperty} onValueChange={setSelectedProperty}>
-                <SelectTrigger className="w-56 h-9 border-none bg-transparent text-xs text-[var(--ink)] focus:ring-0">
-                  <SelectValue placeholder="Select Property" />
-                </SelectTrigger>
-                <SelectContent className="bg-[var(--ink)] text-white border-[var(--border-cre)]">
-                  <SelectItem value={ALL_PROPERTIES}>All Properties</SelectItem>
-                  {properties.map((property) => (
-                    <SelectItem key={property.id} value={property.id}>
-                      {property.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
+          <ScopeSelector
+            portfolios={scope.orgScopedPortfolios}
+            properties={properties}
+            buildings={buildings}
+            units={units}
+            selectedPortfolio={scope.portfolioId || "all"}
+            selectedProperty={selectedProperty}
+            selectedBuilding={selectedBuilding}
+            selectedUnit={selectedUnit}
+            onPropertyChange={setSelectedProperty}
+            onBuildingChange={(value) => {
+              setSelectedBuilding(value);
+              setSelectedUnit("all");
+            }}
+            onUnitChange={setSelectedUnit}
+            syncToUrl
+          />
         </div>
 
         {/* Hero Quick Stats Row */}

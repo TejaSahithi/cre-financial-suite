@@ -37,6 +37,7 @@ import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { createPageUrl } from "@/utils";
 import PageHeader from "@/components/PageHeader";
+import ScopeSelector from "@/components/ScopeSelector";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -220,6 +221,7 @@ export default function CAMSetup() {
   const [conflictReasons, setConflictReasons] = useState({});
 
   // ---- Data queries ---------------------------------------------------------
+  const { data: portfolios = [] } = useOrgQuery("Portfolio");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: leases = [] } = useOrgQuery("Lease");
   const activeLeases = useMemo(() => filterCamActiveLeases(leases), [leases]);
@@ -882,16 +884,20 @@ export default function CAMSetup() {
             {properties.length === 0 ? (
               <p className="text-sm text-slate-500">No properties found in this organization. Create a property first to set up CAM.</p>
             ) : (
-              <Select value={propertyId} onValueChange={(v) => setPropertyId(v)}>
-                <SelectTrigger id="s1-property" className="w-full max-w-md bg-white">
-                  <SelectValue placeholder="Choose property..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {properties.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <ScopeSelector
+                portfolios={portfolios}
+                properties={properties}
+                buildings={buildings}
+                units={scopeUnits}
+                selectedProperty={propertyId || "all"}
+                selectedBuilding={buildingId || "all"}
+                selectedUnit={unitId || "all"}
+                onPropertyChange={(value) => setPropertyId(value === "all" ? "" : value)}
+                onBuildingChange={(value) => setBuildingId(value === "all" ? "" : value)}
+                onUnitChange={(value) => setUnitId(value === "all" ? "" : value)}
+                syncToUrl
+                queryParamNames={{ portfolio: "portfolio_id", property: "property_id", building: "building_id", unit: "unit_id" }}
+              />
             )}
           </CardContent>
         </Card>
@@ -2833,26 +2839,20 @@ export default function CAMSetup() {
       <Card className="sticky top-0 z-10 border-slate-300 shadow-sm">
         <CardContent className="p-3">
           <div className="flex flex-wrap items-center gap-2">
-            <Select value={propertyId} onValueChange={setPropertyId}>
-              <SelectTrigger id="scope-property" className="w-56"><SelectValue placeholder="Property..." /></SelectTrigger>
-              <SelectContent>{properties.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
-            </Select>
-            <Select value={buildingId || "all"} onValueChange={(value) => { setBuildingId(value === "all" ? "" : value); setUnitId(""); }} disabled={!propertyId || buildings.length === 0}>
-              <SelectTrigger id="scope-building" className="w-44"><SelectValue placeholder="All Buildings" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Buildings</SelectItem>
-                {buildings.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            <Select value={unitId || "all"} onValueChange={(value) => setUnitId(value === "all" ? "" : value)} disabled={!propertyId || scopeUnits.length === 0}>
-              <SelectTrigger id="scope-unit" className="w-40"><SelectValue placeholder="All Units" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Units</SelectItem>
-                {scopeUnits.map((unit) => (
-                  <SelectItem key={unit.id} value={unit.id}>{unit.unit_number || unit.unit_id_code || unit.name || unit.id}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <ScopeSelector
+              portfolios={portfolios}
+              properties={properties}
+              buildings={buildings}
+              units={scopeUnits}
+              selectedProperty={propertyId || "all"}
+              selectedBuilding={buildingId || "all"}
+              selectedUnit={unitId || "all"}
+              onPropertyChange={(value) => setPropertyId(value === "all" ? "" : value)}
+              onBuildingChange={(value) => setBuildingId(value === "all" ? "" : value)}
+              onUnitChange={(value) => setUnitId(value === "all" ? "" : value)}
+              syncToUrl
+              queryParamNames={{ portfolio: "portfolio_id", property: "property_id", building: "building_id", unit: "unit_id" }}
+            />
             <Select value={activeCalendar?.id || ""} disabled>
               <SelectTrigger id="scope-calendar" className="w-40"><SelectValue placeholder="Calendar" /></SelectTrigger>
               <SelectContent>{activeCalendar && <SelectItem value={activeCalendar.id}>{activeCalendar.name}</SelectItem>}</SelectContent>
