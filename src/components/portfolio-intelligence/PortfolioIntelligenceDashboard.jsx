@@ -7,13 +7,15 @@ import PortfolioSearchCommand from "./PortfolioSearchCommand";
 import RentRollReconciliationPanel from "./RentRollReconciliationPanel";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatPortfolioMoney } from "@/lib/portfolio-intelligence/statusPresentation";
+import { EMPTY_PORTFOLIO_VIEW_MODEL } from "@/lib/portfolio-intelligence/types";
 
 function Metric({ icon: Icon, label, value, subtext }) {
   return <Card className="border-slate-200 shadow-sm rounded-lg"><CardContent className="p-4"><div className="flex items-start justify-between"><div><div className="text-xs text-slate-500">{label}</div><div className="text-2xl font-semibold text-slate-900 tabular-nums">{value}</div><div className="text-[11px] text-slate-400">{subtext}</div></div><Icon className="w-4 h-4 text-slate-500" /></div></CardContent></Card>;
 }
 
 export default function PortfolioIntelligenceDashboard({ viewModel, criticalDateEvents = [], reconciliationFindings = [], isLoading = false, error = null }) {
-  const summary = viewModel.summary;
+  const model = viewModel || EMPTY_PORTFOLIO_VIEW_MODEL;
+  const summary = model.summary;
   return (
     <div className="p-4 lg:p-6 space-y-4">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
@@ -32,9 +34,9 @@ export default function PortfolioIntelligenceDashboard({ viewModel, criticalDate
       </div>
 
       <div className="grid gap-4 xl:grid-cols-3">
-        <PortfolioCoveragePanel coverage={viewModel.coverage} />
-        <PortfolioRiskDashboard risks={viewModel.risks} findings={viewModel.findings} />
-        <PortfolioCriticalDatesPanel summary={viewModel.criticalDates} events={criticalDateEvents} />
+        <PortfolioCoveragePanel coverage={model.coverage} />
+        <PortfolioRiskDashboard risks={model.risks} findings={model.findings} />
+        <PortfolioCriticalDatesPanel summary={model.criticalDates} events={criticalDateEvents} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
