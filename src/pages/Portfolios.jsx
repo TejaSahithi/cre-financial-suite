@@ -42,11 +42,13 @@ import PageHeader from "@/components/PageHeader";
 import MetricCard from "@/components/MetricCard";
 import ViewModeToggle from "@/components/ViewModeToggle";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
+import ManagerAssignmentBadges from "@/components/ManagerAssignmentBadges";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useModuleAccess } from "@/lib/ModuleAccessContext";
 import { getStoredActingOrgId, setStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { assertCanWritePage, describePermissionError } from "@/lib/userPermissions";
+import useManagerAssignments from "@/hooks/useManagerAssignments";
 
 async function ensureCreatorPortfolioAccess({ portfolioId, orgId, user }) {
   if (!portfolioId || !orgId || !user || ["super_admin", "org_admin"].includes(user._raw_role)) return;
@@ -410,6 +412,13 @@ export default function Portfolios() {
     : leases.filter((lease) => lease.org_id === selectedOrgId);
 
   const visiblePortfolioIds = new Set(visiblePortfolios.map((portfolio) => portfolio.id));
+  const visiblePortfolioIdList = visiblePortfolios.map((portfolio) => portfolio.id).filter(Boolean);
+  const visiblePortfolioOrgIds = visiblePortfolios.map((portfolio) => portfolio.org_id).filter(Boolean);
+  const { data: portfolioManagersById = {} } = useManagerAssignments({
+    scope: "portfolio",
+    scopeIds: visiblePortfolioIdList,
+    orgIds: visiblePortfolioOrgIds,
+  });
   const visibleProperties = orgProperties.filter(
     (property) => property.portfolio_id && visiblePortfolioIds.has(property.portfolio_id)
   );
@@ -450,6 +459,11 @@ export default function Portfolios() {
   const filtered = enriched.filter((portfolio) =>
     portfolio.name?.toLowerCase().includes(search.toLowerCase())
   );
+
+  const exportRows = enriched.map((portfolio) => ({
+    ...portfolio,
+    managers: (portfolioManagersById[portfolio.id] || []).map((manager) => manager.label).join("; "),
+  }));
 
   const allFilteredSelected = filtered.length > 0 && filtered.every((portfolio) => selectedPortfolioIds.includes(portfolio.id));
 
@@ -492,7 +506,7 @@ export default function Portfolios() {
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
-            onClick={() => downloadCSV(enriched, "portfolios.csv")}
+            onClick={() => downloadCSV(exportRows, "portfolios.csv")}
             className="border-slate-200 hover:bg-slate-50 shadow-sm"
           >
             <Download className="w-4 h-4 mr-2 text-slate-500" />
@@ -620,6 +634,9 @@ export default function Portfolios() {
                         <Badge className="text-[10px] bg-emerald-100 text-emerald-700">Active</Badge>
                         {isAdmin && <Badge variant="outline" className="text-[10px]">{portfolio._orgName}</Badge>}
                       </div>
+                      <div className="mt-2">
+                        <ManagerAssignmentBadges managers={portfolioManagersById[portfolio.id] || []} emptyLabel="No portfolio manager" />
+                      </div>
                     </div>
                   </div>
                   <Button
@@ -706,6 +723,9 @@ export default function Portfolios() {
                     {portfolio.description && <p className="text-xs text-slate-400 truncate">{portfolio.description}</p>}
                     {isAdmin && <Badge variant="outline" className="text-[10px]">{portfolio._orgName}</Badge>}
                   </div>
+                  <div className="mt-1">
+                    <ManagerAssignmentBadges managers={portfolioManagersById[portfolio.id] || []} emptyLabel="No portfolio manager" />
+                  </div>
                 </div>
                 <div className="hidden md:flex items-center gap-6 text-xs text-slate-600">
                   <div className="text-center"><p className="font-bold text-sm">{portfolio._propCount}</p><p className="text-slate-400">Properties</p></div>
@@ -749,6 +769,7 @@ export default function Portfolios() {
                 </TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">PORTFOLIO</TableHead>
                 {isAdmin && <TableHead className="text-xs font-bold tracking-wider">ORG</TableHead>}
+                <TableHead className="text-xs font-bold tracking-wider">MANAGER</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">STATUS</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">PROPERTIES</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">BUILDINGS</TableHead>
@@ -782,6 +803,9 @@ export default function Portfolios() {
                     </div>
                   </TableCell>
                   {isAdmin && <TableCell className="text-sm">{portfolio._orgName}</TableCell>}
+                  <TableCell>
+                    <ManagerAssignmentBadges managers={portfolioManagersById[portfolio.id] || []} emptyLabel="No portfolio manager" />
+                  </TableCell>
                   <TableCell><Badge className="bg-emerald-100 text-emerald-700">Active</Badge></TableCell>
                   <TableCell className="text-sm font-medium">{portfolio._propCount}</TableCell>
                   <TableCell className="text-sm">{portfolio._buildingCount}</TableCell>

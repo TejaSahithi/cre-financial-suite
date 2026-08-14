@@ -22,10 +22,12 @@ import MetricCard from "@/components/MetricCard";
 import ViewModeToggle from "@/components/ViewModeToggle";
 import BulkImportModal from "@/components/property/BulkImportModal";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
+import ManagerAssignmentBadges from "@/components/ManagerAssignmentBadges";
 import { useModuleAccess } from "@/lib/ModuleAccessContext";
 import { assertCanWritePage, isPagePermissionError } from "@/lib/userPermissions";
 import { useAuth } from "@/lib/AuthContext";
 import { createNotificationsForEvent } from "@/services/notificationService";
+import useManagerAssignments, { mergeManagerAssignments } from "@/hooks/useManagerAssignments";
 
 export default function Properties() {
   const { user } = useAuth();
@@ -173,11 +175,40 @@ export default function Properties() {
     ? properties.filter((property) => property.portfolio_id === activePortfolioId)
     : properties;
 
+  const propertyIds = scopedProperties.map((property) => property.id).filter(Boolean);
+  const propertyOrgIds = scopedProperties.map((property) => property.org_id || currentOrgId || orgId).filter(Boolean);
+  const portfolioIdsForProperties = scopedProperties.map((property) => property.portfolio_id).filter(Boolean);
+  const portfolioOrgIdsForProperties = portfolios
+    .filter((portfolio) => portfolioIdsForProperties.includes(portfolio.id))
+    .map((portfolio) => portfolio.org_id)
+    .filter(Boolean);
+
+  const { data: propertyManagersById = {} } = useManagerAssignments({
+    scope: "property",
+    scopeIds: propertyIds,
+    orgIds: propertyOrgIds,
+  });
+  const { data: portfolioManagersById = {} } = useManagerAssignments({
+    scope: "portfolio",
+    scopeIds: portfolioIdsForProperties,
+    orgIds: portfolioOrgIdsForProperties,
+  });
+
+  const getPropertyManagers = (property) => mergeManagerAssignments(
+    propertyManagersById[property.id] || [],
+    portfolioManagersById[property.portfolio_id] || []
+  );
+
   const filtered = scopedProperties.filter(p => {
     const matchSearch = p.name?.toLowerCase().includes(search.toLowerCase()) || p.address?.toLowerCase().includes(search.toLowerCase());
     const matchStructure = structureFilter === "all" || p.structure_type === structureFilter;
     return matchSearch && matchStructure;
   });
+
+  const exportRows = scopedProperties.map((property) => ({
+    ...property,
+    managers: getPropertyManagers(property).map((manager) => manager.label).join("; "),
+  }));
 
   const singleTenantProps = scopedProperties.filter(p => p.structure_type === 'single');
   const multiTenantProps = scopedProperties.filter(p => p.structure_type === 'multi');
@@ -273,7 +304,7 @@ export default function Properties() {
     <div className="p-6 space-y-6">
       <PageHeader icon={Home} title="Properties" subtitle={`${scopedProperties.length} properties${scopeSubtitle} · ${singleTenantProps.length} single · ${multiTenantProps.length} multi-building`} iconColor="from-blue-700 to-blue-600">
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" disabled={scopedProperties.length === 0} onClick={() => downloadCSV(scopedProperties, 'properties.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
+          <Button variant="outline" size="sm" disabled={scopedProperties.length === 0} onClick={() => downloadCSV(exportRows, 'properties.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
           <Button variant="outline" size="sm" disabled={noPortfolioAccess || !canEditProperties} onClick={() => setShowImport(true)}><Upload className="w-4 h-4 mr-1" />Bulk Upload</Button>
           <Button size="sm" disabled={noPortfolioAccess || !canEditProperties} onClick={() => setShowCreate(true)} className="bg-gradient-to-r from-blue-700 to-blue-600 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Property</Button>
         </div>
@@ -383,6 +414,9 @@ export default function Properties() {
                           {p.structure_type === 'multi' ? 'Multi' : 'Single'}
                         </Badge>
                       </div>
+                      <div className="mt-2">
+                        <ManagerAssignmentBadges managers={getPropertyManagers(p)} emptyLabel="No manager assigned" />
+                      </div>
                     </div>
                     <Button
                       variant="ghost"
@@ -446,6 +480,9 @@ export default function Properties() {
                   <div className="flex-1 min-w-0">
                     <h3 className="text-sm font-bold text-slate-900 truncate">{p.name}</h3>
                     <p className="text-xs text-slate-400 truncate">{p.address}{p.city ? `, ${p.city}` : ''}{p.state ? `, ${p.state}` : ''}</p>
+                    <div className="mt-1">
+                      <ManagerAssignmentBadges managers={getPropertyManagers(p)} emptyLabel="No manager assigned" />
+                    </div>
                   </div>
                   <div className="hidden md:flex items-center gap-6 text-xs text-slate-600 flex-shrink-0">
                     <div className="text-center"><p className="font-bold text-sm">{propBuildings.length || p.total_buildings || 1}</p><p className="text-slate-400">Bldgs</p></div>
@@ -489,6 +526,7 @@ export default function Properties() {
                   />
                 </TableHead>
                 <TableHead>PROPERTY</TableHead>
+                <TableHead>MANAGER</TableHead>
                 <TableHead>ADDRESS</TableHead>
                 <TableHead>TYPE</TableHead>
                 <TableHead>STRUCTURE</TableHead>
@@ -502,9 +540,9 @@ export default function Properties() {
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={11} className="text-center py-12"><Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={12} className="text-center py-12"><Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" /></TableCell></TableRow>
               ) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={11} className="text-center py-12 text-sm text-slate-400">No properties found</TableCell></TableRow>
+                <TableRow><TableCell colSpan={12} className="text-center py-12 text-sm text-slate-400">No properties found</TableCell></TableRow>
               ) : (
                 filtered.map(p => {
                   const propBuildings = getPropBuildings(p.id);
@@ -529,6 +567,9 @@ export default function Properties() {
                             <p className="text-xs text-slate-400">ID: {p.property_id_code}</p>
                           </div>
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        <ManagerAssignmentBadges managers={getPropertyManagers(p)} emptyLabel="No manager assigned" />
                       </TableCell>
                       <TableCell className="text-sm text-slate-600">{p.address}{p.city ? `, ${p.city}` : ''}{p.state ? `, ${p.state}` : ''}</TableCell>
                       <TableCell><Badge variant="outline" className="text-xs capitalize">{p.property_type?.replace('_', ' ')}</Badge></TableCell>

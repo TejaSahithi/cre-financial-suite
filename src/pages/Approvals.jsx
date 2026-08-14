@@ -30,6 +30,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import ElectronicSignatureBlock from "@/components/approvals/ElectronicSignatureBlock";
 
 const PENDING_STATUSES = new Set([
   WORKFLOW_STATUSES.SUBMITTED,
@@ -187,6 +188,7 @@ export default function Approvals() {
   const [selectedAction, setSelectedAction] = useState(null);
   const [comments, setComments] = useState("");
   const [rejectionReason, setRejectionReason] = useState("");
+  const [approvalSignature, setApprovalSignature] = useState(null);
 
   const inboxQuery = useQuery({
     queryKey: ["approval-inbox", orgId, user?.id],
@@ -239,6 +241,7 @@ export default function Approvals() {
           metadata: {
             source: "approval_inbox",
             stage_key: activeStep?.stage_key || workflow?.current_stage || null,
+            electronic_signature: selectedAction === "approve" ? approvalSignature : null,
           },
         },
       });
@@ -249,6 +252,7 @@ export default function Approvals() {
       setSelectedAction(null);
       setComments("");
       setRejectionReason("");
+      setApprovalSignature(null);
       queryClient.invalidateQueries({ queryKey: ["approval-inbox", orgId, user?.id] });
     },
     onError: (error) => toast.error(error?.message || "Could not record workflow action."),
@@ -259,11 +263,15 @@ export default function Approvals() {
     setSelectedAction(action);
     setComments("");
     setRejectionReason("");
+    setApprovalSignature(null);
   };
 
   const currentRows = rowsByTab[activeTab] || [];
   const requiresReason = selectedAction === "reject" || selectedAction === "return_for_changes";
-  const canSubmitAction = selectedAction === "approve" || (comments.trim().length > 0 && rejectionReason.trim().length > 0);
+  const requiresSignature = selectedAction === "approve";
+  const canSubmitAction = requiresSignature
+    ? Boolean(approvalSignature?.valid)
+    : (comments.trim().length > 0 && rejectionReason.trim().length > 0);
 
   return (
     <div className="min-h-screen bg-[var(--bg)] p-6">
@@ -401,7 +409,7 @@ export default function Approvals() {
       </Tabs>
 
       <Dialog open={Boolean(selectedWorkflow && selectedAction)} onOpenChange={(open) => !open && setSelectedWorkflow(null)}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto p-5">
           <DialogHeader>
             <DialogTitle>{labelize(selectedAction)} Workflow</DialogTitle>
             <DialogDescription>
@@ -469,6 +477,13 @@ export default function Approvals() {
                   placeholder="Reviewer comments"
                 />
               </div>
+              {requiresSignature && (
+                <ElectronicSignatureBlock
+                  user={user}
+                  attestationText={`I reviewed this ${labelize(selectedWorkflow.workflow_type)} workflow and authorize this approval to be recorded at this point in time.`}
+                  onChange={setApprovalSignature}
+                />
+              )}
             </div>
           )}
 
