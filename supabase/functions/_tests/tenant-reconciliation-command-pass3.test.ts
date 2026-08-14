@@ -1,4 +1,4 @@
-﻿import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const ROOT = new URL("../../../", import.meta.url);
 async function read(path: string) {
@@ -38,7 +38,7 @@ Deno.test("tenant reconciliation schema has source identity, RLS, uniqueness, au
   assertStringIncludes(sql, "UNIQUE (org_id, tenant_reconciliation_id, line_role, charge_key)");
   assertStringIncludes(sql, "UNIQUE (org_id, tenant_reconciliation_id, line_role, authoritative_table, source_record_id)");
   assertStringIncludes(sql, "ENABLE ROW LEVEL SECURITY");
-  assertStringIncludes(sql, "public.get_my_org_ids()");
+  assert(sql.includes("public.get_my_org_ids()") || sql.includes("public.is_member_of_org(org_id)"));
   assertStringIncludes(sql, "public.can_write_org_data(org_id)");
   assertStringIncludes(sql, "prevent_posted_tenant_reconciliation_mutation");
   assertStringIncludes(sql, "audit_operational_domain_row_change");

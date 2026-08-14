@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@/services/supabaseClient", () => ({ supabase: null }));
 import {
   buildApprovalPolicyPayload,
   getPolicyResolutionTrace,
@@ -20,9 +22,15 @@ import {
   buildApprovalWorkflowInput,
 } from "@/services/moduleApprovalAdapters";
 
-const orgId = "org-1";
-const propertyA = "property-a";
-const portfolioA = "portfolio-a";
+const orgId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const propertyA = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const portfolioA = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const adminUserId = "11111111-1111-4111-8111-111111111111";
+const ownerUserId = "22222222-2222-4222-8222-222222222222";
+const delegationId = "33333333-3333-4333-8333-333333333333";
+const workflowId = "44444444-4444-4444-8444-444444444444";
+const workflowStepId = "55555555-5555-4555-8555-555555555555";
+const expenseEntityId = "66666666-6666-4666-8666-666666666666";
 
 function user(id, role, membership = {}) {
   return {
@@ -178,15 +186,15 @@ describe("enterprise workflow services", () => {
       action: "approve",
       workflow: {
         status: WORKFLOW_STATUSES.SUBMITTED,
-        current_step_id: "step-1",
+        current_step_id: workflowStepId,
         steps: [
-          { id: "step-1", sequence_number: 1, stage_key: "finance_validate", status: "ACTIVE" },
+          { id: workflowStepId, sequence_number: 1, stage_key: "finance_validate", status: "ACTIVE" },
           { id: "step-2", sequence_number: 2, stage_key: "owner_approve", status: "PENDING" },
         ],
       },
     });
 
-    expect(transition.currentStep.id).toBe("step-1");
+    expect(transition.currentStep.id).toBe(workflowStepId);
     expect(transition.nextStep.id).toBe("step-2");
     expect(transition.workflowUpdate).toMatchObject({
       status: WORKFLOW_STATUSES.PARTIALLY_APPROVED,
@@ -202,7 +210,7 @@ describe("enterprise workflow services", () => {
         status: WORKFLOW_STATUSES.PARTIALLY_APPROVED,
         current_step_id: "step-2",
         steps: [
-          { id: "step-1", sequence_number: 1, stage_key: "finance_validate", status: "APPROVED" },
+          { id: workflowStepId, sequence_number: 1, stage_key: "finance_validate", status: "APPROVED" },
           { id: "step-2", sequence_number: 2, stage_key: "owner_approve", status: "ACTIVE" },
         ],
       },
@@ -233,10 +241,10 @@ describe("enterprise workflow services", () => {
   it("uses the active workflow step action when a module-level approve button advances review or validation", () => {
     const workflow = {
       status: WORKFLOW_STATUSES.SUBMITTED,
-      current_step_id: "step-1",
+      current_step_id: workflowStepId,
       steps: [
         {
-          id: "step-1",
+          id: workflowStepId,
           sequence_number: 1,
           action_required: "validate",
           approver_role: "finance",
@@ -250,11 +258,11 @@ describe("enterprise workflow services", () => {
 
   it("enforces active-step role and granular review/validate/sign permissions", () => {
     const workflow = {
-      id: "workflow-1",
+      id: workflowId,
       org_id: orgId,
       workflow_type: "expense",
       entity_type: "expense",
-      entity_id: "expense-1",
+      entity_id: expenseEntityId,
       portfolio_id: portfolioA,
       property_id: propertyA,
       amount: 1000,
@@ -277,11 +285,11 @@ describe("enterprise workflow services", () => {
 
   it("keeps finance from acting as final business approver on an approval step", () => {
     const workflow = {
-      id: "workflow-1",
+      id: workflowId,
       org_id: orgId,
       workflow_type: "expense",
       entity_type: "expense",
-      entity_id: "expense-1",
+      entity_id: expenseEntityId,
       portfolio_id: portfolioA,
       property_id: propertyA,
       amount: 75000,
@@ -306,19 +314,19 @@ describe("enterprise workflow services", () => {
   it("records delegated authority metadata on workflow actions", async () => {
     const action = await recordWorkflowAction({
       workflow: {
-        id: "workflow-1",
+        id: workflowId,
         org_id: orgId,
         workflow_type: "expense",
         entity_type: "expense",
-        entity_id: "expense-1",
+        entity_id: expenseEntityId,
         portfolio_id: portfolioA,
         property_id: propertyA,
         amount: 1000,
         status: WORKFLOW_STATUSES.SUBMITTED,
-        current_step_id: "step-1",
+        current_step_id: workflowStepId,
         steps: [
           {
-            id: "step-1",
+            id: workflowStepId,
             sequence_number: 1,
             action_required: "approve",
             approver_role: "org_admin",
@@ -326,16 +334,16 @@ describe("enterprise workflow services", () => {
           },
         ],
       },
-      user: user("admin", "org_admin", {
+      user: user(adminUserId, "org_admin", {
         capabilities: { permissions: { expense: { approve: true } } },
       }),
       action: "approve",
       options: {
         delegations: [
           {
-            id: "delegation-1",
-            delegator_user_id: "owner",
-            delegate_user_id: "admin",
+            id: delegationId,
+            delegator_user_id: ownerUserId,
+            delegate_user_id: adminUserId,
             permission: "expense.approve",
             scope_type: "property",
             scope_id: propertyA,
@@ -346,15 +354,15 @@ describe("enterprise workflow services", () => {
           },
         ],
         delegation: {
-          id: "delegation-1",
-          delegator_user_id: "owner",
+          id: delegationId,
+          delegator_user_id: ownerUserId,
         },
       },
     });
 
-    expect(action.delegated_from_user_id).toBe("owner");
-    expect(action.delegated_authority_id).toBe("delegation-1");
-    expect(action.metadata.delegated_authority.id).toBe("delegation-1");
+    expect(action.delegated_from_user_id).toBe(ownerUserId);
+    expect(action.delegated_authority_id).toBe(delegationId);
+    expect(action.metadata.delegated_authority.id).toBe(delegationId);
   });
 
   it("maps module entities into generic workflow input contracts", () => {

@@ -154,6 +154,7 @@ async function insertRule(admin: ReturnType<typeof adminClient>, org: { id: stri
     published_to_cam: true,
     approval_status: "approved",
     payment_treatment: "recoverable",
+    recoverable_from_tenant: "yes",
     is_excluded: false,
     rule_type: "expense_recovery",
     ...overrides,
@@ -175,9 +176,19 @@ async function insertReadyClassification(
   property: { id: string },
   lease: { id: string },
   expense: { id: string; amount: number },
-  rule: { id: string } | null,
+  rule: { id: string; expense_category_id?: string } | null,
   overrides: Record<string, unknown> = {},
 ) {
+  let categoryId = rule?.expense_category_id ?? null;
+  if (!categoryId) {
+    const category = await insertOne(admin, "expense_categories", {
+      org_id: org.id,
+      category_name: `CAM Pub Ready Category ${crypto.randomUUID()}`,
+      normalized_key: `cam_pub_ready_category_${crypto.randomUUID()}`,
+    });
+    categoryId = category.id;
+  }
+
   return insertOne(admin, "expense_classifications", {
     org_id: org.id,
     property_id: property.id,
@@ -185,6 +196,8 @@ async function insertReadyClassification(
     expense_id: expense.id,
     actual_expense_id: expense.id,
     lease_expense_rule_id: rule?.id ?? null,
+    linked_expense_rule_id: rule?.id ?? null,
+    expense_category_id: categoryId,
     classification_key: `cam-pub:${crypto.randomUUID()}`,
     classification_status: "finalized",
     approved_status: "approved",
@@ -505,13 +518,28 @@ Deno.test({
     const suffix = crypto.randomUUID();
     const { org, accessToken, property, lease } = await setUpOrgPropertyLease(admin, suffix);
     const expense = await insertExpense(admin, org, property, { amount: 1000 });
+    const rule = await insertRule(admin, org, lease, property);
+    const category = await insertOne(admin, "expense_categories", {
+      org_id: org.id,
+      category_name: `CAM Pub Direct Category ${crypto.randomUUID()}`,
+      normalized_key: `cam_pub_direct_category_${crypto.randomUUID()}`,
+    });
     const classification = await insertOne(admin, "expense_classifications", {
       org_id: org.id,
       property_id: property.id,
       expense_id: expense.id,
       actual_expense_id: expense.id,
+      lease_expense_rule_id: rule.id,
+      linked_expense_rule_id: rule.id,
+      expense_category_id: rule.expense_category_id,
+      service_period_start: "2026-03-15",
+      service_period_end: "2026-03-31",
       classification_key: `cam-pub:${crypto.randomUUID()}`,
       classification_status: "matched",
+      recovery_status: "recoverable",
+      recoverability_result: "recoverable",
+      cam_eligible: "yes",
+      condition_resolved: true,
       amount: 1500, // exceeds the expense's own amount of 1000
     });
 
@@ -562,13 +590,28 @@ Deno.test({
     const suffix = crypto.randomUUID();
     const { org, accessToken, property, lease } = await setUpOrgPropertyLease(admin, suffix);
     const expense = await insertExpense(admin, org, property, { amount: 1000 });
+    const rule = await insertRule(admin, org, lease, property);
+    const category = await insertOne(admin, "expense_categories", {
+      org_id: org.id,
+      category_name: `CAM Pub Direct Category ${crypto.randomUUID()}`,
+      normalized_key: `cam_pub_direct_category_${crypto.randomUUID()}`,
+    });
     const classification = await insertOne(admin, "expense_classifications", {
       org_id: org.id,
       property_id: property.id,
       expense_id: expense.id,
       actual_expense_id: expense.id,
+      lease_expense_rule_id: rule.id,
+      linked_expense_rule_id: rule.id,
+      expense_category_id: rule.expense_category_id,
+      service_period_start: "2026-03-15",
+      service_period_end: "2026-03-31",
       classification_key: `cam-pub:${crypto.randomUUID()}`,
       classification_status: "matched",
+      recovery_status: "recoverable",
+      recoverability_result: "recoverable",
+      cam_eligible: "yes",
+      condition_resolved: true,
       amount: 700, // deliberate partial allocation, remainder = 300
     });
 
@@ -592,13 +635,28 @@ Deno.test({
     const suffix = crypto.randomUUID();
     const { org, accessToken, property, lease } = await setUpOrgPropertyLease(admin, suffix);
     const expense = await insertExpense(admin, org, property, { amount: 1000 });
+    const rule = await insertRule(admin, org, lease, property);
+    const category = await insertOne(admin, "expense_categories", {
+      org_id: org.id,
+      category_name: `CAM Pub Direct Category ${crypto.randomUUID()}`,
+      normalized_key: `cam_pub_direct_category_${crypto.randomUUID()}`,
+    });
     const classification = await insertOne(admin, "expense_classifications", {
       org_id: org.id,
       property_id: property.id,
       expense_id: expense.id,
       actual_expense_id: expense.id,
+      lease_expense_rule_id: rule.id,
+      linked_expense_rule_id: rule.id,
+      expense_category_id: rule.expense_category_id,
+      service_period_start: "2026-03-15",
+      service_period_end: "2026-03-31",
       classification_key: `cam-pub:${crypto.randomUUID()}`,
       classification_status: "matched",
+      recovery_status: "recoverable",
+      recoverability_result: "recoverable",
+      cam_eligible: "yes",
+      condition_resolved: true,
       amount: 700,
     });
 
@@ -676,6 +734,14 @@ Deno.test({
 
     // Republishing requires re-finalizing first (withdraw resets
     // classification_status to 'matched', and send-to-cam requires 'finalized').
+    await admin.from("expense_classifications").update({
+      service_period_start: "2026-03-15",
+      service_period_end: "2026-03-31",
+      recovery_status: "recoverable",
+      recoverability_result: "recoverable",
+      cam_eligible: "yes",
+      condition_resolved: true,
+    }).eq("id", classification.id);
     const refinalize = await (await callReview(accessToken, { classification_id: classification.id, action: "finalize", recovery_status: "recoverable" })).json();
     assertEquals(refinalize.row.classification_status, "finalized");
 
@@ -838,10 +904,6 @@ Deno.test({
     const { org, accessToken, property, lease } = await setUpOrgPropertyLease(admin, suffix);
     const expense = await insertExpense(admin, org, property);
     const classification = await insertReadyClassification(admin, org, property, lease, expense, null);
-
-    const finalizeRes = await callReview(accessToken, { classification_id: classification.id, action: "finalize", recovery_status: "recoverable" });
-    assertEquals(finalizeRes.status, 200);
-
     const reopenRes = await callReview(accessToken, { classification_id: classification.id, action: "reopen" });
     const reopenBody = await reopenRes.json();
     assertEquals(reopenRes.status, 200, JSON.stringify(reopenBody));
@@ -858,14 +920,29 @@ Deno.test({
     const suffix = crypto.randomUUID();
     const { org, property, lease } = await setUpOrgPropertyLease(admin, suffix);
     const expense = await insertExpense(admin, org, property, { amount: 1000 });
+    const rule = await insertRule(admin, org, lease, property);
+    const category = await insertOne(admin, "expense_categories", {
+      org_id: org.id,
+      category_name: `CAM Pub Allocation Category ${crypto.randomUUID()}`,
+      normalized_key: `cam_pub_allocation_category_${crypto.randomUUID()}`,
+    });
 
     await insertOne(admin, "expense_classifications", {
       org_id: org.id,
       property_id: property.id,
       expense_id: expense.id,
       actual_expense_id: expense.id,
+      lease_expense_rule_id: rule.id,
+      linked_expense_rule_id: rule.id,
+      expense_category_id: rule.expense_category_id,
+      service_period_start: "2026-03-15",
+      service_period_end: "2026-03-31",
       classification_key: `cam-pub:${crypto.randomUUID()}`,
       classification_status: "matched",
+      recovery_status: "recoverable",
+      recoverability_result: "recoverable",
+      cam_eligible: "yes",
+      condition_resolved: true,
       amount: 600,
     });
 
@@ -876,9 +953,18 @@ Deno.test({
         property_id: property.id,
         expense_id: expense.id, // same expense — a second "allocation line"
         actual_expense_id: expense.id,
-        classification_key: `cam-pub:${crypto.randomUUID()}`,
-        classification_status: "matched",
-        amount: 400,
+      lease_expense_rule_id: rule.id,
+      linked_expense_rule_id: rule.id,
+      expense_category_id: rule.expense_category_id,
+      service_period_start: "2026-03-15",
+      service_period_end: "2026-03-31",
+      classification_key: `cam-pub:${crypto.randomUUID()}`,
+      classification_status: "matched",
+      recovery_status: "recoverable",
+      recoverability_result: "recoverable",
+      cam_eligible: "yes",
+      condition_resolved: true,
+      amount: 400,
       })
       .select("*")
       .single();

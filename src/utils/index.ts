@@ -20,7 +20,8 @@ export function createAbsolutePageUrl(
   pageName: string,
   params?: Record<string, string | number | boolean | null | undefined>,
 ): string {
-  const envBaseUrl = String(import.meta.env.VITE_APP_BASE_URL || '').trim().replace(/\/$/, '');
+  const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env || {};
+  const envBaseUrl = String(viteEnv.VITE_APP_BASE_URL || '').trim().replace(/\/$/, '');
   const baseUrl = envBaseUrl && !/(vercel\.app|localhost)/i.test(envBaseUrl)
     ? envBaseUrl
     : 'https://www.proformaos.ai';

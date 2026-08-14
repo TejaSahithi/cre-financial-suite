@@ -85,6 +85,35 @@ DECLARE
   v_request_id BIGINT;
   v_invoked INTEGER := 0;
 BEGIN
+  IF (v_supabase_url IS NULL OR v_service_role_key IS NULL)
+     AND to_regclass('vault.decrypted_secrets') IS NOT NULL THEN
+    IF v_supabase_url IS NULL THEN
+      EXECUTE $vault$
+        SELECT decrypted_secret
+        FROM vault.decrypted_secrets
+        WHERE name = ANY($1)
+          AND NULLIF(decrypted_secret, '') IS NOT NULL
+        ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+        LIMIT 1
+      $vault$
+      INTO v_supabase_url
+      USING ARRAY['SCHEDULER_SUPABASE_URL', 'SUPABASE_URL'];
+    END IF;
+
+    IF v_service_role_key IS NULL THEN
+      EXECUTE $vault$
+        SELECT decrypted_secret
+        FROM vault.decrypted_secrets
+        WHERE name = ANY($1)
+          AND NULLIF(decrypted_secret, '') IS NOT NULL
+        ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+        LIMIT 1
+      $vault$
+      INTO v_service_role_key
+      USING ARRAY['SCHEDULER_INTERNAL_AUTH_SECRET', 'SCHEDULER_SERVICE_ROLE_KEY', 'SUPABASE_SERVICE_ROLE_KEY'];
+    END IF;
+  END IF;
+
   IF v_supabase_url IS NULL OR v_service_role_key IS NULL THEN
     INSERT INTO public.audit_logs (org_id, entity_type, entity_id, action, new_value, user_email)
     VALUES (

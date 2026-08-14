@@ -9,7 +9,7 @@ const nodes = [
 
 Deno.test("Release 11 retrieval is permission and organization aware", () => {
   const result = retrieveKnowledgeGraph({ intent: "lease_expiration_search", organizationId: "org-1", nodes, permissionDecision: { allowed: true } });
-  assertEquals(result.nodes.map((node) => node.id), ["n1"]);
+  assertEquals(result.nodes.map((node: { id: string }) => node.id), ["n1"]);
 });
 
 Deno.test("Release 11 retrieval denies cross tenant access", () => {

@@ -60,7 +60,7 @@ async function createTestUser(adminClient: any, email: string, orgId: string) {
     .insert({
       user_id: authData.user.id,
       org_id: orgId,
-      role: 'member',
+      role: 'lease_admin',
       status: 'active'
     });
   
@@ -126,7 +126,9 @@ async function cleanup(adminClient: any, orgId: string, userId: string, fileIds:
   }
   
   await adminClient.from('memberships').delete().eq('user_id', userId);
-  await adminClient.auth.admin.deleteUser(userId);
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(userId || ''))) {
+    await adminClient.auth.admin.deleteUser(userId);
+  }
   await adminClient.from('organizations').delete().eq('id', orgId);
 }
 

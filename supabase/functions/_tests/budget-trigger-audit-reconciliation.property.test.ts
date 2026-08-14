@@ -10,7 +10,7 @@
 //      zero trigger-duplicated rows (entity_type='Budget', action='update')
 //      for the same budget.
 //   3. tr_budget_changed's notification side effects still fire for both
-//      the INSERT (Budget Created) and UPDATE (Budget Approved) paths —
+//      the INSERT (Budget Created) and UPDATE (Budget Locked) paths —
 //      only the redundant audit insert was removed, not the trigger itself.
 //   4. Direct client INSERT/UPDATE/DELETE on budgets remains rejected by RLS
 //      (already covered end-to-end by budget-rls-lockdown.property.test.ts;
@@ -189,9 +189,9 @@ Deno.test({
       .from("notifications")
       .select("id, title")
       .eq("org_id", org.id)
-      .eq("title", "Budget Approved");
+      .eq("title", "Budget Locked");
     assertNoError(notifErr2);
-    assertEquals((approvedNotifications?.length ?? 0) > 0, true, "tr_budget_changed's 'Budget Approved' notification must still fire");
+    assertEquals((approvedNotifications?.length ?? 0) > 0, true, "tr_budget_changed's 'Budget Locked' notification must still fire");
 
     // --- Property 4: direct client writes remain blocked by RLS ---
     const anon = createClient(SUPABASE_URL, ANON_KEY, {

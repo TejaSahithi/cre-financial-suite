@@ -50,7 +50,7 @@ Deno.test("Direct Recovery Isolation: 4 Acceptance Verification Conditions", () 
   assertEquals(noLeaseBlockers.includes("invalid_scope"), true, "Condition 2: Direct expense without property scope is blocked with invalid_scope");
 
   // Condition 3: A direct expense never enters a shared recovery pool
-  const directRuleTreatment = "direct_assign";
+  const directRuleTreatment: string = "direct_assign";
   const entersSharedPool = directRuleTreatment === "reimbursable" && !validDirectExpenseBlockers.includes("explicit_exclusion");
   assertEquals(entersSharedPool, false, "Condition 3: Direct expense never enters a shared recovery pool");
 
@@ -132,7 +132,7 @@ Deno.test("Scenario 3: Direct Assignment to single tenant requires reason if rul
       service_period_start: "2026-01-01",
       service_period_end: "2026-01-31",
     },
-    { id: "exp-3", amount: 3500, approval_status: "approved" },
+    { id: "exp-3", amount: 3500, approval_status: "approved", lease_id: "lease-3" },
     {
       id: "rule-3",
       published_to_cam: false,
@@ -158,7 +158,7 @@ Deno.test("Scenario 3: Direct Assignment to single tenant requires reason if rul
       service_period_start: "2026-01-01",
       service_period_end: "2026-01-31",
     },
-    { id: "exp-3", amount: 3500, approval_status: "approved" },
+    { id: "exp-3", amount: 3500, approval_status: "approved", lease_id: "lease-3" },
     {
       id: "rule-3",
       published_to_cam: true,

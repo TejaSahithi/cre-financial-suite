@@ -203,12 +203,7 @@ Deno.test({
     const approveRes = await callComputeBudget("approve");
     const approveBody = await approveRes.json();
     assertEquals(approveRes.status, 200, `expected approve from 'reviewed' to succeed: ${JSON.stringify(approveBody)}`);
-    assertEquals(approveBody.status, "approved");
-
-    const lockRes = await callComputeBudget("lock");
-    const lockBody = await lockRes.json();
-    assertEquals(lockRes.status, 200, `expected lock from 'approved' to succeed: ${JSON.stringify(lockBody)}`);
-    assertEquals(lockBody.status, "locked");
+    assertEquals(approveBody.status, "locked");
 
     // Locked budgets must not be regenerable — the existing protection
     // compute-budget already enforces, now the only path CreateBudget.jsx
@@ -220,7 +215,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "HTTP compute-budget approve: still works from 'under_review' (regression)",
+  name: "HTTP compute-budget approve: under_review must be marked reviewed before approve_and_lock",
   sanitizeResources: false,
   sanitizeOps: false,
   fn: async () => {
@@ -282,7 +277,32 @@ Deno.test({
       body: JSON.stringify({ action: "approve", property_id: property.id, fiscal_year: fiscalYear }),
     });
     const approveBody = await approveRes.json();
-    assertEquals(approveRes.status, 200, `expected approve from 'under_review' to still succeed: ${JSON.stringify(approveBody)}`);
-    assertEquals(approveBody.status, "approved");
+    assertEquals(approveBody.error, true, "approve from under_review must be blocked until mark_reviewed runs");
+
+    const markReviewedRes = await fetch(`${SUPABASE_URL}/functions/v1/compute-budget`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${accessToken}`,
+        "apikey": ANON_KEY,
+      },
+      body: JSON.stringify({ action: "mark_reviewed", property_id: property.id, fiscal_year: fiscalYear }),
+    });
+    const markReviewedBody = await markReviewedRes.json();
+    assertEquals(markReviewedRes.status, 200, `expected mark_reviewed from under_review to succeed: ${JSON.stringify(markReviewedBody)}`);
+    assertEquals(markReviewedBody.status, "reviewed");
+
+    const approvedAfterReviewRes = await fetch(`${SUPABASE_URL}/functions/v1/compute-budget`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${accessToken}`,
+        "apikey": ANON_KEY,
+      },
+      body: JSON.stringify({ action: "approve", property_id: property.id, fiscal_year: fiscalYear }),
+    });
+    const approvedAfterReviewBody = await approvedAfterReviewRes.json();
+    assertEquals(approvedAfterReviewRes.status, 200, `expected approve after mark_reviewed to lock: ${JSON.stringify(approvedAfterReviewBody)}`);
+    assertEquals(approvedAfterReviewBody.status, "locked");
   },
 });

@@ -75,7 +75,7 @@ async function createTestUser(adminClient: any, email: string, orgId: string) {
     .insert({
       user_id: authData.user.id,
       org_id: orgId,
-      role: 'editor', // 'member' is not in memberships_role_check; the role vocabulary is super_admin|org_admin|manager|editor|viewer|finance|auditor
+      role: 'org_admin', // canonical writer role for org-scoped setup
       status: 'active'
     });
   
@@ -158,24 +158,31 @@ async function createTestLease(adminClient: any, orgId: string, propertyId: stri
 /**
  * Test helper: Create a test expense
  */
-async function createTestExpense(adminClient: any, orgId: string, propertyId: string, amount: number) {
-  const { data, error } = await adminClient
-    .from('expenses')
-    .insert({
-      org_id: orgId,
-      property_id: propertyId,
-      category: 'Maintenance',
-      amount: amount,
-      classification: 'recoverable',
-      fiscal_year: 2024,
-      month: 1,
-      date: '2024-01-15'
-    })
-    .select()
-    .single();
-  
-  if (error) throw new Error(`Failed to create expense: ${error.message}`);
-  return data;
+async function createTestExpense(accessToken: string, propertyId: string, amount: number) {
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/create-expense-workflow`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`,
+      'apikey': SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify({
+      expense: {
+        property_id: propertyId,
+        category: 'Maintenance',
+        amount: amount,
+        classification: 'recoverable',
+        vendor: 'Test Vendor',
+        fiscal_year: 2024,
+        month: 1,
+        date: '2024-01-15',
+        source: 'test_fixture'
+      }
+    }),
+  });
+  const body = await response.json();
+  if (!response.ok || body.error) throw new Error(`Failed to create expense: ${JSON.stringify(body)}`);
+  return body.expense;
 }
 
 /**
@@ -238,12 +245,13 @@ Deno.test({
             
             const user1 = await createTestUser(adminClient, `user1-${Date.now()}@test.com`, org1.id);
             const user2 = await createTestUser(adminClient, `user2-${Date.now()}@test.com`, org2.id);
+            const client1 = createUserClient(user1.accessToken);
+            const client2 = createUserClient(user2.accessToken);
             
-            const file1 = await createTestUploadedFile(adminClient, org1.id, fileName1);
-            const file2 = await createTestUploadedFile(adminClient, org2.id, fileName2);
+            const file1 = await createTestUploadedFile(client1, org1.id, fileName1);
+            const file2 = await createTestUploadedFile(client2, org2.id, fileName2);
             
             // Test: User 1 can access their own file
-            const client1 = createUserClient(user1.accessToken);
             const { data: ownFile, error: ownError } = await client1
               .from('uploaded_files')
               .select('*')
@@ -263,21 +271,41 @@ Deno.test({
             
             assertEquals(otherFile, null, 'User should not retrieve other org file');
             
-            // Test: User 1 cannot update User 2's file
-            const { error: updateError } = await client1
+            // Test: User 1 cannot update User 2's file. PostgREST reports
+            // RLS-hidden writes as zero affected rows rather than an auth error.
+            const { error: updateError, count: updateCount } = await client1
               .from('uploaded_files')
-              .update({ status: 'parsed' })
+              .update({ status: 'parsed' }, { count: 'exact' })
               .eq('id', file2.id);
             
-            assertExists(updateError, 'User should not be able to update other org file');
-            
-            // Test: User 1 cannot delete User 2's file
-            const { error: deleteError } = await client1
+            assertEquals(updateError, null, 'RLS-hidden cross-org update should not error');
+            assertEquals(updateCount, 0, 'Cross-org update must affect zero rows');
+
+            const { data: file2AfterUpdate, error: file2AfterUpdateError } = await client2
               .from('uploaded_files')
-              .delete()
+              .select('id,status')
+              .eq('id', file2.id)
+              .single();
+            assertEquals(file2AfterUpdateError, null, 'Owner org should still read the file after cross-org update attempt');
+            assertExists(file2AfterUpdate, 'Cross-org update must not remove the file');
+            assertEquals(file2AfterUpdate.status, 'uploaded', 'Cross-org update must not mutate the file');
+            
+            // Test: User 1 cannot delete User 2's file.
+            const { error: deleteError, count: deleteCount } = await client1
+              .from('uploaded_files')
+              .delete({ count: 'exact' })
               .eq('id', file2.id);
             
-            assertExists(deleteError, 'User should not be able to delete other org file');
+            assertEquals(deleteError, null, 'RLS-hidden cross-org delete should not error');
+            assertEquals(deleteCount, 0, 'Cross-org delete must affect zero rows');
+
+            const { data: file2AfterDelete, error: file2AfterDeleteError } = await client2
+              .from('uploaded_files')
+              .select('id')
+              .eq('id', file2.id)
+              .single();
+            assertEquals(file2AfterDeleteError, null, 'Owner org should still read the file after cross-org delete attempt');
+            assertExists(file2AfterDelete, 'Cross-org delete must not remove the file');
             
             // Cleanup for this iteration
             await cleanupTestData(adminClient, [org1.id, org2.id]);
@@ -316,12 +344,13 @@ Deno.test({
             
             const user1 = await createTestUser(adminClient, `user1-${Date.now()}@test.com`, org1.id);
             const user2 = await createTestUser(adminClient, `user2-${Date.now()}@test.com`, org2.id);
+            const client1 = createUserClient(user1.accessToken);
+            const client2 = createUserClient(user2.accessToken);
             
-            const property1 = await createTestProperty(adminClient, org1.id, propertyName1);
-            const property2 = await createTestProperty(adminClient, org2.id, propertyName2);
+            const property1 = await createTestProperty(client1, org1.id, propertyName1);
+            const property2 = await createTestProperty(client2, org2.id, propertyName2);
             
             // Test: User 1 can access their own property
-            const client1 = createUserClient(user1.accessToken);
             const { data: ownProperty, error: ownError } = await client1
               .from('properties')
               .select('*')
@@ -377,14 +406,16 @@ Deno.test({
             
             const user1 = await createTestUser(adminClient, `user1-${Date.now()}@test.com`, org1.id);
             
-            const property1 = await createTestProperty(adminClient, org1.id, 'Property 1');
-            const property2 = await createTestProperty(adminClient, org2.id, 'Property 2');
+            const user2 = await createTestUser(adminClient, `user2-${Date.now()}@test.com`, org2.id);
+            const client1 = createUserClient(user1.accessToken);
+            const client2 = createUserClient(user2.accessToken);
+            const property1 = await createTestProperty(client1, org1.id, 'Property 1');
+            const property2 = await createTestProperty(client2, org2.id, 'Property 2');
             
-            const lease1 = await createTestLease(adminClient, org1.id, property1.id, tenantName1);
-            const lease2 = await createTestLease(adminClient, org2.id, property2.id, tenantName2);
+            const lease1 = await createTestLease(client1, org1.id, property1.id, tenantName1);
+            const lease2 = await createTestLease(client2, org2.id, property2.id, tenantName2);
             
             // Test: User 1 can access their own lease
-            const client1 = createUserClient(user1.accessToken);
             const { data: ownLease, error: ownError } = await client1
               .from('leases')
               .select('*')
@@ -439,14 +470,16 @@ Deno.test({
             
             const user1 = await createTestUser(adminClient, `user1-${Date.now()}@test.com`, org1.id);
             
-            const property1 = await createTestProperty(adminClient, org1.id, 'Property 1');
-            const property2 = await createTestProperty(adminClient, org2.id, 'Property 2');
+            const user2 = await createTestUser(adminClient, `user2-${Date.now()}@test.com`, org2.id);
+            const client1 = createUserClient(user1.accessToken);
+            const client2 = createUserClient(user2.accessToken);
+            const property1 = await createTestProperty(client1, org1.id, 'Property 1');
+            const property2 = await createTestProperty(client2, org2.id, 'Property 2');
             
-            const expense1 = await createTestExpense(adminClient, org1.id, property1.id, amount1);
-            const expense2 = await createTestExpense(adminClient, org2.id, property2.id, amount2);
+            const expense1 = await createTestExpense(user1.accessToken, property1.id, amount1);
+            const expense2 = await createTestExpense(user2.accessToken, property2.id, amount2);
             
             // Test: User 1 can access their own expense
-            const client1 = createUserClient(user1.accessToken);
             const { data: ownExpense, error: ownError } = await client1
               .from('expenses')
               .select('*')
@@ -500,14 +533,16 @@ Deno.test({
             
             const user1 = await createTestUser(adminClient, `user1-${Date.now()}@test.com`, org1.id);
             
-            const property1 = await createTestProperty(adminClient, org1.id, 'Property 1');
-            const property2 = await createTestProperty(adminClient, org2.id, 'Property 2');
+            const user2 = await createTestUser(adminClient, `user2-${Date.now()}@test.com`, org2.id);
+            const client1 = createUserClient(user1.accessToken);
+            const client2 = createUserClient(user2.accessToken);
+            const property1 = await createTestProperty(client1, org1.id, 'Property 1');
+            const property2 = await createTestProperty(client2, org2.id, 'Property 2');
             
-            const snapshot1 = await createTestComputationSnapshot(adminClient, org1.id, property1.id);
-            const snapshot2 = await createTestComputationSnapshot(adminClient, org2.id, property2.id);
+            const snapshot1 = await createTestComputationSnapshot(client1, org1.id, property1.id);
+            const snapshot2 = await createTestComputationSnapshot(client2, org2.id, property2.id);
             
             // Test: User 1 can access their own computation snapshot
-            const client1 = createUserClient(user1.accessToken);
             const { data: ownSnapshot, error: ownError } = await client1
               .from('computation_snapshots')
               .select('*')

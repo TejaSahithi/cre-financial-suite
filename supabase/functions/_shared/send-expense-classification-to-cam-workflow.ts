@@ -46,7 +46,9 @@ export function deriveExpenseCamSendBlockers(
   const isDirectTenantCharge =
     Boolean(classification.lease_id || expense?.lease_id) ||
     normalize(classification.cam_input_type) === "direct_tenant" ||
-    paymentTreatment === "direct_assign";
+    paymentTreatment === "direct_assign" ||
+    paymentTreatment === "tenant_direct_contract" ||
+    paymentTreatment === "included_in_base_rent";
 
   const automatic =
     hasActual &&
@@ -57,13 +59,16 @@ export function deriveExpenseCamSendBlockers(
     (!isDirectTenantCharge || (rule?.published_to_cam === true && paymentTreatment !== "included_in_base_rent" && paymentTreatment !== "tenant_direct_contract" && rule?.is_excluded !== true));
 
   if (alreadySent) return ["already_sent"];
-  if (isDirectTenantCharge && !classification.lease_id && !expense?.lease_id) {
+  if ((isDirectTenantCharge || (!hasActual && !hasRule && !classification.property_id && !expense?.property_id)) && !classification.lease_id && !expense?.lease_id) {
     blockers.push("MISSING_DIRECT_LEASE");
   }
-  if (!hasActual && !hasRule && !isDirectTenantCharge) {
-    blockers.push("MISSING_DIRECT_LEASE");
+  if (!hasActual && !hasRule) {
+    blockers.push("missing_actual_or_rule");
   }
-  if (amount <= 0) blockers.push("INVALID_AMOUNT");
+  if (amount <= 0) {
+    blockers.push("INVALID_AMOUNT");
+    blockers.push("missing_amount");
+  }
   if (recoverability === "conditional" && !classification.condition_resolved) {
     blockers.push("unresolved_conditional");
   }
@@ -77,7 +82,7 @@ export function deriveExpenseCamSendBlockers(
   }
 
   // Rule-related blockers apply ONLY when classification is explicitly dependent on one lease/rule
-  if (isDirectTenantCharge && rule) {
+  if (rule) {
     if (normalize(rule.approval_status) === "superseded") blockers.push("rule_superseded");
     if (normalize(rule.approval_status) !== "approved") blockers.push("rule_not_approved");
     if (rule.published_to_cam !== true && !hasReason) blockers.push("rule_not_published_to_cam");
@@ -96,7 +101,7 @@ export function deriveExpenseCamSendBlockers(
     if (!approvedByEither) blockers.push("expense_not_approved");
   }
 
-  if (!automatic && !hasReason && isDirectTenantCharge) {
+  if (!automatic && !hasReason) {
     blockers.push("manual_reason_required");
   }
 

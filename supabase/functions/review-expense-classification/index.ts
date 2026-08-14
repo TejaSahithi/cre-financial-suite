@@ -49,7 +49,7 @@ function validatePayload(body: Record<string, unknown> = {}) {
 function errorStatus(message: string) {
   if (/unauthorized|missing authorization/i.test(message)) return 401;
   if (/access denied|permission/i.test(message)) return 403;
-  if (/required|not found|action must be|recovery_status must be|approved_status must be|exceeds the approved expense amount|unallocated/i.test(message)) return 400;
+  if (/required|not found|action must be|recovery_status must be|approved_status must be|exceeds the approved expense amount|unallocated|Cannot finalize/i.test(message)) return 400;
   return 500;
 }
 

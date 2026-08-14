@@ -7,8 +7,10 @@
 import {
   assertEquals,
   assertExists,
+  assertThrows,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.99.2";
+import { buildAbstractSnapshot, generateApprovedRentSchedule } from "../_shared/lease-approval-workflow.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "http://127.0.0.1:54321";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -120,6 +122,8 @@ Deno.test({
       approval_document_url: "https://example.test/approved-lease.pdf",
       field_reviews: {
         start_date: { status: "accepted", value: "2026-01-01" },
+        end_date: { status: "accepted", value: "2026-12-31" },
+        monthly_rent: { status: "accepted", value: 5000 },
       },
       idempotency_key: idempotencyKey,
     };
@@ -186,4 +190,57 @@ Deno.test({
       "retry must not duplicate rent_schedules rows",
     );
   },
+});
+
+Deno.test("approve-lease-workflow guard: missing approved rent authority is rejected before persistence", () => {
+  assertThrows(
+    () => buildAbstractSnapshot({
+      lease: {
+        id: crypto.randomUUID(),
+        org_id: crypto.randomUUID(),
+        start_date: "2026-01-01",
+        end_date: "2026-12-31",
+        monthly_rent: 5000,
+      },
+      fieldReviews: {
+        start_date: { status: "accepted", value: "2026-01-01" },
+      },
+      version: 1,
+      approvedBy: "Atomicity Tester",
+      approvedAt: "2026-01-01T12:00:00.000Z",
+    }),
+    Error,
+    "Approved lease requires approved commencement/start date, expiration/end date, and rent amount before approval",
+  );
+});
+
+Deno.test("approve-lease-workflow rent schedule helper fails closed when compute produces no authoritative rows", async () => {
+  const previousUrl = Deno.env.get("SUPABASE_URL");
+  const previousServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const originalFetch = globalThis.fetch;
+  Deno.env.set("SUPABASE_URL", "http://127.0.0.1:54321");
+  Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "test-service-key");
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      error: false,
+      lease_id: crypto.randomUUID(),
+      approved_rent_schedule_rows: [],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+
+    const result = await generateApprovedRentSchedule({
+      orgId: crypto.randomUUID(),
+      leaseId: crypto.randomUUID(),
+      req: new Request("http://localhost/functions/v1/approve-lease-workflow"),
+    });
+
+    assertEquals(result.status, "failed");
+    assertEquals(result.error, "NO_AUTHORITATIVE_RENT_SCHEDULE_ROWS");
+    assertEquals(result.rows_generated, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousUrl == null) Deno.env.delete("SUPABASE_URL");
+    else Deno.env.set("SUPABASE_URL", previousUrl);
+    if (previousServiceKey == null) Deno.env.delete("SUPABASE_SERVICE_ROLE_KEY");
+    else Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", previousServiceKey);
+  }
 });

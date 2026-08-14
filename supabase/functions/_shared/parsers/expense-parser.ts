@@ -45,7 +45,7 @@ export interface ExpenseParseResult {
  * Maps various column name variations to standardized field names
  */
 const COLUMN_MAPPINGS: Record<string, string[]> = {
-  category: ['category', 'expense_category', 'expense category'],
+  category: ['category', 'expense_category', 'expense category', 'type', 'expense_type'],
   expense_subcategory: ['subcategory', 'sub category', 'expense_subcategory', 'expense subcategory', 'service type'],
   amount: ['amount', 'expense_amount', 'expense amount', 'cost', 'total', 'expense'],
   date: ['date', 'expense_date', 'expense date', 'transaction_date', 'transaction date'],
@@ -80,13 +80,23 @@ function findStandardFieldName(columnHeader: string): string | null {
  * Convert date string to ISO 8601 format (YYYY-MM-DD)
  * Handles formats: MM/DD/YYYY, M/D/YYYY, YYYY-MM-DD
  */
-export function normalizeDate(dateStr: string | null): string | null {
-  if (!dateStr || dateStr.trim() === '') {
+export function normalizeDate(dateStr: unknown): string | null {
+  if (dateStr == null) {
+    return null;
+  }
+
+  const trimmed = String(dateStr).trim();
+  if (trimmed === '') {
     return null;
   }
   
-  const trimmed = dateStr.trim();
-  
+  const serial = Number(trimmed);
+  if (/^\d+(?:\.\d+)?$/.test(trimmed) && Number.isFinite(serial) && serial >= 20_000 && serial <= 60_000) {
+    const epoch = Date.UTC(1899, 11, 30);
+    const date = new Date(epoch + Math.floor(serial) * 86_400_000);
+    return date.toISOString().slice(0, 10);
+  }
+
   // Already in ISO format (YYYY-MM-DD)
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
     return trimmed;
@@ -118,12 +128,15 @@ export function normalizeDate(dateStr: string | null): string | null {
  * Convert currency string to numeric value
  * Removes currency symbols, commas, and spaces
  */
-export function normalizeCurrency(currencyStr: string | null): number | null {
-  if (!currencyStr || currencyStr.trim() === '') {
+export function normalizeCurrency(currencyStr: unknown): number | null {
+  if (currencyStr == null) {
     return null;
   }
-  
-  const trimmed = currencyStr.trim();
+
+  const trimmed = String(currencyStr).trim();
+  if (trimmed === '') {
+    return null;
+  }
   
   // Remove currency symbols, commas, and spaces
   const cleaned = trimmed
@@ -142,12 +155,15 @@ export function normalizeCurrency(currencyStr: string | null): number | null {
 /**
  * Convert string to number
  */
-export function normalizeNumber(numStr: string | null): number | null {
-  if (!numStr || numStr.trim() === '') {
+export function normalizeNumber(numStr: unknown): number | null {
+  if (numStr == null) {
     return null;
   }
-  
-  const trimmed = numStr.trim();
+
+  const trimmed = String(numStr).trim();
+  if (trimmed === '') {
+    return null;
+  }
   
   // Remove commas
   const cleaned = trimmed.replace(/,/g, '');

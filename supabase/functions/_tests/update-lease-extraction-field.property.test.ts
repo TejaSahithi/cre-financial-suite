@@ -38,9 +38,11 @@ const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
 if (!SERVICE_ROLE_KEY || !ANON_KEY) {
   throw new Error("update-lease-extraction-field tests require local SUPABASE_SERVICE_ROLE_KEY and SUPABASE_ANON_KEY env vars");
 }
+const SERVICE_ROLE_KEY_REQUIRED: string = SERVICE_ROLE_KEY;
+const ANON_KEY_REQUIRED: string = ANON_KEY;
 
 function adminClient() {
-  return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+  return createClient(SUPABASE_URL, SERVICE_ROLE_KEY_REQUIRED, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 }
@@ -83,7 +85,7 @@ async function createOrgUser(admin: ReturnType<typeof adminClient>, suffix: stri
     role,
   });
 
-  const anon = createClient(SUPABASE_URL, ANON_KEY);
+  const anon = createClient(SUPABASE_URL, ANON_KEY_REQUIRED);
   const { data: signInData, error: signInError } = await anon.auth.signInWithPassword({ email, password });
   assertNoError(signInError);
   const accessToken = signInData.session?.access_token;
@@ -98,7 +100,7 @@ function callUpdateField(accessToken: string, body: Record<string, unknown>) {
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${accessToken}`,
-      "apikey": ANON_KEY,
+      "apikey": ANON_KEY_REQUIRED,
     },
     body: JSON.stringify(body),
   });

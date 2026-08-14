@@ -320,10 +320,12 @@ Deno.test({
     const admin = adminClient();
     const suffix = crypto.randomUUID();
     const { org, accessToken } = await setUpScope(admin, suffix);
-    const file = await insertUploadedFile(admin, org);
+    const generationId = crypto.randomUUID();
+    const file = await insertUploadedFile(admin, org, { active_generation_id: generationId });
     const job = await insertOne(admin, "pipeline_jobs", {
       org_id: org.id,
       uploaded_file_id: file.id,
+      generation_id: generationId,
       job_type: "lease_extraction",
       stage: "parse",
       status: "completed",

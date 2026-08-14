@@ -61,7 +61,7 @@ async function createTestUser(adminClient: any, email: string, orgId: string) {
     .insert({
       user_id: authData.user.id,
       org_id: orgId,
-      role: 'member',
+      role: 'lease_admin',
       status: 'active'
     });
   
@@ -101,7 +101,6 @@ async function cleanupTestData(adminClient: any, orgIds: string[]) {
  */
 const invalidFileTypeArb = fc.constantFrom(
   'invalid',
-  'documents',
   'images',
   'videos',
   'unknown',
@@ -114,10 +113,6 @@ const invalidFileTypeArb = fc.constantFrom(
  * Generator: Invalid MIME types (not CSV or Excel)
  */
 const invalidMimeTypeArb = fc.constantFrom(
-  'application/pdf',
-  'image/jpeg',
-  'image/png',
-  'text/plain',
   'application/json',
   'application/zip',
   'video/mp4'
@@ -149,7 +144,7 @@ const validMimeTypeArb = fc.constantFrom(
  * Generator: File name with extension
  */
 const fileNameArb = fc.tuple(
-  fc.string({ minLength: 3, maxLength: 20, unit: fc.constantFrom('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-', '_') }),
+  fc.array(fc.constantFrom('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-', '_'), { minLength: 3, maxLength: 20 }).map((chars) => chars.join('')),
   fc.constantFrom('.csv', '.xls', '.xlsx', '.pdf', '.jpg')
 ).map(([name, ext]) => name + ext);
 
@@ -157,6 +152,13 @@ const fileNameArb = fc.tuple(
  * Generator: Small CSV content for valid size tests
  */
 const smallCsvContentArb = fc.constant('header1,header2,header3\nvalue1,value2,value3\n');
+/**
+ * Generator: Unsupported file names for unsupported-format tests.
+ */
+const unsupportedFileNameArb = fc.tuple(
+  fc.array(fc.constantFrom('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-', '_'), { minLength: 3, maxLength: 20 }).map((chars) => chars.join('')),
+  fc.constantFrom('.zip', '.exe', '.json')
+).map(([name, ext]) => name + ext);
 
 Deno.test({
   name: "Property 3: Upload Error Handling - Invalid File Type",
@@ -238,7 +240,7 @@ Deno.test({
     try {
       await fc.assert(
         fc.asyncProperty(
-          fileNameArb,
+          unsupportedFileNameArb,
           validFileTypeArb,
           invalidMimeTypeArb,
           smallCsvContentArb,

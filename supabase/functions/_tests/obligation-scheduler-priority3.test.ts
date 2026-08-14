@@ -1,4 +1,4 @@
-﻿import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { generateObligationOccurrences } from "../_shared/obligations/obligation-engine.ts";
 import {
   deliveryIdempotencyKey,
@@ -90,6 +90,7 @@ Deno.test({
     assertStringIncludes(sql, "invoke_lease_obligation_occurrence_scheduler");
     assertStringIncludes(sql, "cron.schedule");
     assertStringIncludes(sql, "generate-obligation-occurrences");
+    assertStringIncludes(sql, "vault.decrypted_secrets");
   },
 });
 

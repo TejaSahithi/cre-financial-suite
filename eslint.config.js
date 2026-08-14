@@ -12,6 +12,7 @@ export default [
       "src/components/ui/**/*",
       "node_modules/**",
       "dist/**",
+      ".claude/**",
     ],
   },
   {

@@ -50,8 +50,8 @@ Deno.test({
     assertEquals(/CREATE TABLE IF NOT EXISTS public\.lease_charge_read_model/i.test(sql), false);
     assertEquals(/SECURITY\s+DEFINER[\s\S]{0,400}lease_charge_read_model/i.test(sql), false);
 
-    const percentagePolicy = /CREATE POLICY percentage_rent_calculations_select ON public\.percentage_rent_calculations[\s\S]*?FOR SELECT USING \(public\.is_super_admin\(\) OR org_id IN \(SELECT public\.get_my_org_ids\(\)\)\);/i;
-    const leaseChargePolicy = /CREATE POLICY lease_charge_calculations_select ON public\.lease_charge_calculations[\s\S]*?FOR SELECT USING \(public\.is_super_admin\(\) OR org_id IN \(SELECT public\.get_my_org_ids\(\)\)\);/i;
+    const percentagePolicy = /CREATE POLICY percentage_rent_calculations_select ON public\.percentage_rent_calculations[\s\S]*?FOR SELECT USING \(public\.is_member_of_org\(org_id\)\);/i;
+    const leaseChargePolicy = /CREATE POLICY lease_charge_calculations_select ON public\.lease_charge_calculations[\s\S]*?FOR SELECT USING \(public\.is_member_of_org\(org_id\)\);/i;
     assertEquals(percentagePolicy.test(sql), true);
     assertEquals(leaseChargePolicy.test(sql), true);
   },

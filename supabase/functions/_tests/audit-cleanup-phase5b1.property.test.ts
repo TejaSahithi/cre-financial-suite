@@ -113,6 +113,12 @@ Deno.test({
       status: "active",
     });
 
+    const category = await insertOne(admin, "expense_categories", {
+      org_id: org.id,
+      category_name: `Audit Cleanup CAM ${suffix}`,
+      normalized_key: `audit_cleanup_cam_${suffix.replaceAll("-", "_")}`,
+    });
+
     const expense = await insertOne(admin, "expenses", {
       org_id: org.id,
       property_id: property.id,
@@ -134,6 +140,9 @@ Deno.test({
       cam_eligible: "yes",
       cam_status: "needs_review",
       approved_status: "draft",
+      expense_category_id: category.id,
+      service_period_start: "2026-03-01",
+      service_period_end: "2026-03-31",
       // Same hardening: the classification must be finalized before it can
       // be sent to CAM.
       classification_status: "finalized",

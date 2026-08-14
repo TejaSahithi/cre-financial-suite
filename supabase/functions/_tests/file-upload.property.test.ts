@@ -63,7 +63,7 @@ async function createTestUser(adminClient: any, email: string, orgId: string) {
     .insert({
       user_id: authData.user.id,
       org_id: orgId,
-      role: 'member',
+      role: 'lease_admin',
       status: 'active'
     });
   
@@ -97,10 +97,10 @@ async function cleanupTestData(adminClient: any, orgIds: string[], fileIds: stri
     try {
       const { data: files } = await adminClient.storage
         .from('financial-uploads')
-        .list(`financial-uploads/${orgId}`);
+        .list(`${orgId}`);
       
       if (files && files.length > 0) {
-        const filePaths = files.map(f => `financial-uploads/${orgId}/${f.name}`);
+        const filePaths = files.map(f => `${orgId}/${f.name}`);
         await adminClient.storage
           .from('financial-uploads')
           .remove(filePaths);
@@ -138,8 +138,10 @@ const validMimeTypeArb = fc.constantFrom(
 /**
  * Generator: File name with extension
  */
+const fileStemArb = fc.array(fc.constantFrom('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-', '_'), { minLength: 3, maxLength: 20 })
+  .map((chars) => chars.join(''));
 const fileNameArb = fc.tuple(
-  fc.string({ minLength: 3, maxLength: 20, unit: fc.constantFrom('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-', '_') }),
+  fileStemArb,
   fc.constantFrom('.csv', '.xls', '.xlsx')
 ).map(([name, ext]) => name + ext);
 
@@ -266,9 +268,9 @@ Deno.test({
             
             // Property Assertion 12: Storage path follows correct format
             assertEquals(
-              result.storage_path.startsWith(`financial-uploads/${org.id}/`),
+              result.storage_path.startsWith(`${org.id}/`),
               true,
-              'Storage path should follow financial-uploads/{org_id}/{file_id} format'
+              'Storage path should follow {org_id}/{file_id} format'
             );
             
             // Property Assertion 13: File exists in storage (Requirement 1.1)

@@ -139,11 +139,20 @@ async function setUpScope(admin: ReturnType<typeof adminClient>, suffix: string)
     org_id: org.id,
     property_id: property.id,
     tenant_name: `Tester Tenant ${suffix}`,
+    start_date: "2026-01-01",
+    end_date: "2026-12-31",
+    status: "approved",
+  });
+
+  const ruleSet = await insertOne(admin, "lease_expense_rule_sets", {
+    org_id: org.id,
+    lease_id: lease.id,
     status: "approved",
   });
 
   const rule = await insertOne(admin, "lease_expense_rules", {
     org_id: org.id,
+    rule_set_id: ruleSet.id,
     lease_id: lease.id,
     property_id: property.id,
     expense_category_id: category.id,
@@ -568,10 +577,19 @@ Deno.test({
       org_id: org.id,
       property_id: property.id,
       tenant_name: `Direct Recovery Tenant ${suffix}`,
+      start_date: "2026-01-01",
+      end_date: "2026-12-31",
       status: "approved",
     });
+    const directRuleSet = await insertOne(admin, "lease_expense_rule_sets", {
+      org_id: org.id,
+      lease_id: directLease.id,
+      status: "approved",
+    });
+
     const directRule = await insertOne(admin, "lease_expense_rules", {
       org_id: org.id,
+      rule_set_id: directRuleSet.id,
       lease_id: directLease.id,
       property_id: property.id,
       expense_category_id: category.id,

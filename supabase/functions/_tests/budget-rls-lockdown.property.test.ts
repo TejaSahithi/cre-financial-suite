@@ -208,7 +208,7 @@ Deno.test({
       .maybeSingle();
     assertExists(rowAfterDeleteAttempt, "budget row must still exist after the rejected direct DELETE attempt");
 
-    // --- 5. compute-budget mark_reviewed/approve/lock still succeed ---
+    // --- 5. compute-budget mark_reviewed/approve-and-lock still succeed ---
     const reviewRes = await callComputeBudget(accessToken, { action: "mark_reviewed", property_id: property.id, fiscal_year: fiscalYear });
     const reviewBody = await reviewRes.json();
     assertEquals(reviewRes.status, 200, `mark_reviewed must still succeed: ${JSON.stringify(reviewBody)}`);
@@ -217,12 +217,7 @@ Deno.test({
     const approveRes = await callComputeBudget(accessToken, { action: "approve", property_id: property.id, fiscal_year: fiscalYear });
     const approveBody = await approveRes.json();
     assertEquals(approveRes.status, 200, `approve must still succeed: ${JSON.stringify(approveBody)}`);
-    assertEquals(approveBody.status, "approved");
-
-    const lockRes = await callComputeBudget(accessToken, { action: "lock", property_id: property.id, fiscal_year: fiscalYear });
-    const lockBody = await lockRes.json();
-    assertEquals(lockRes.status, 200, `lock must still succeed: ${JSON.stringify(lockBody)}`);
-    assertEquals(lockBody.status, "locked");
+    assertEquals(approveBody.status, "locked");
 
     // --- 6. Locked/approved regeneration is still blocked ---
     const regenerateRes = await callComputeBudget(accessToken, {

@@ -522,12 +522,9 @@ Deno.test({
       const approveBody = await approveRes.json();
       assertEquals(approveRes.status, 200, JSON.stringify(approveBody));
       assertEquals(approveBody.budget_id, legacyBudget.id, "the legacy row must be the one found and transitioned");
-      assertEquals(approveBody.status, "approved");
+      assertEquals(approveBody.status, "locked");
 
-      const lockRes = await callComputeBudget(accessToken, { action: "lock", scope: "property", property_id: property.id, fiscal_year: fiscalYear });
-      const lockBody = await lockRes.json();
-      assertEquals(lockRes.status, 200, JSON.stringify(lockBody));
-      assertEquals(lockBody.status, "locked");
+
     } finally {
       await admin.from("organizations").delete().eq("id", org.id);
     }

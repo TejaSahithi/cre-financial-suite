@@ -318,7 +318,7 @@ Deno.test({
       assertEquals(res.status, 200, JSON.stringify(body));
       assertEquals(body.budget_id, bldgBudget.id);
 
-      assertEquals(await getBudgetStatus(admin, bldgBudget.id), "approved");
+      assertEquals(await getBudgetStatus(admin, bldgBudget.id), "locked");
       assertEquals(await getBudgetStatus(admin, propBudget.id), "reviewed", "the property budget must be completely untouched by approving the building budget");
     } finally {
       await admin.from("organizations").delete().eq("id", org.id);
@@ -607,7 +607,7 @@ Deno.test({
 
       const statuses = await Promise.all(budgets.map((b) => getBudgetStatus(admin, b.id)));
       for (const status of statuses) {
-        assertEquals(status, "approved");
+        assertEquals(status, "locked");
       }
 
       // Final sanity: exactly 4 budgets rows exist for this property/year,

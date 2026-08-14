@@ -62,7 +62,7 @@ async function createTestUser(adminClient: any, email: string, orgId: string) {
     .insert({
       user_id: authData.user.id,
       org_id: orgId,
-      role: 'member',
+      role: 'lease_admin',
       status: 'active'
     });
   
@@ -131,10 +131,10 @@ async function cleanupTestData(adminClient: any, orgIds: string[], fileIds: stri
     try {
       const { data: files } = await adminClient.storage
         .from('financial-uploads')
-        .list(`financial-uploads/${orgId}`);
+        .list(`${orgId}`);
       
       if (files && files.length > 0) {
-        const filePaths = files.map(f => `financial-uploads/${orgId}/${f.name}`);
+        const filePaths = files.map(f => `${orgId}/${f.name}`);
         await adminClient.storage
           .from('financial-uploads')
           .remove(filePaths);
@@ -281,7 +281,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "Upload Edge Case: Rejects PDF file format",
+  name: "Upload Edge Case: Accepts PDF lease document format",
   fn: async () => {
     const adminClient = createAdminClient();
     const testOrgIds: string[] = [];
@@ -294,7 +294,7 @@ Deno.test({
       
       const user = await createTestUser(adminClient, `user-${Date.now()}@test.com`, org.id);
       
-      // Create PDF file (unsupported format)
+      // Create PDF file (supported lease document format)
       const pdfContent = '%PDF-1.4\n%Test PDF content';
       const pdfFile = new File([pdfContent], 'test-document.pdf', { type: 'application/pdf' });
       
@@ -315,19 +315,9 @@ Deno.test({
       const result = await response.json();
       
       // Assertions
-      assertEquals(response.status, 400, 'Should return 400 Bad Request');
-      assertEquals(result.error, true, 'Should have error');
-      assertExists(result.message, 'Should have error message');
-      assertEquals(
-        result.message.includes('Unsupported file format'),
-        true,
-        'Error message should mention unsupported format'
-      );
-      assertEquals(
-        result.message.includes('CSV') || result.message.includes('Excel'),
-        true,
-        'Error message should mention supported formats'
-      );
+      assertEquals(response.status, 200, 'Should accept supported PDF documents');
+      assertEquals(result.error, false, 'Should not have error');
+      assertExists(result.file_id, 'Should return file_id');
       
     } finally {
       await cleanupTestData(adminClient, testOrgIds, testFileIds);
@@ -338,7 +328,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "Upload Edge Case: Rejects image file format",
+  name: "Upload Edge Case: Accepts image document format",
   fn: async () => {
     const adminClient = createAdminClient();
     const testOrgIds: string[] = [];
@@ -351,7 +341,7 @@ Deno.test({
       
       const user = await createTestUser(adminClient, `user-${Date.now()}@test.com`, org.id);
       
-      // Create image file (unsupported format)
+      // Create image file (supported document format)
       const imageContent = new Uint8Array([0xFF, 0xD8, 0xFF, 0xE0]); // JPEG header
       const imageFile = new File([imageContent], 'test-image.jpg', { type: 'image/jpeg' });
       
@@ -372,14 +362,9 @@ Deno.test({
       const result = await response.json();
       
       // Assertions
-      assertEquals(response.status, 400, 'Should return 400 Bad Request');
-      assertEquals(result.error, true, 'Should have error');
-      assertExists(result.message, 'Should have error message');
-      assertEquals(
-        result.message.includes('Unsupported file format'),
-        true,
-        'Error message should mention unsupported format'
-      );
+      assertEquals(response.status, 200, 'Should accept supported image documents');
+      assertEquals(result.error, false, 'Should not have error');
+      assertExists(result.file_id, 'Should return file_id');
       
     } finally {
       await cleanupTestData(adminClient, testOrgIds, testFileIds);

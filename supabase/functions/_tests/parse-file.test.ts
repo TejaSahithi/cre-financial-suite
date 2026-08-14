@@ -61,7 +61,7 @@ async function createTestUser(adminClient: any, email: string, orgId: string) {
     .insert({
       user_id: authData.user.id,
       org_id: orgId,
-      role: 'member',
+      role: 'lease_admin',
       status: 'active'
     });
   
@@ -133,7 +133,9 @@ async function cleanup(adminClient: any, orgId: string, userId: string, fileIds:
   await adminClient.from('memberships').delete().eq('user_id', userId);
   
   // Delete user
-  await adminClient.auth.admin.deleteUser(userId);
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(userId || ''))) {
+    await adminClient.auth.admin.deleteUser(userId);
+  }
   
   // Delete org
   await adminClient.from('organizations').delete().eq('id', orgId);
@@ -181,7 +183,7 @@ Deno.test({
       // Verify parsed data structure
       assertEquals(result.parsed_data[0].tenant_name, 'Test Tenant');
       assertEquals(result.parsed_data[0].start_date, '2024-01-01');
-      assertEquals(result.parsed_data[0].monthly_rent, '1000');
+      assertEquals(result.parsed_data[0].monthly_rent, 1000);
       
       // Verify database record was updated
       const { data: updatedRecord } = await adminClient
@@ -396,14 +398,25 @@ Deno.test({
     const org1 = await createTestOrg(adminClient, `Test Org 1 ${Date.now()}`);
     const org2 = await createTestOrg(adminClient, `Test Org 2 ${Date.now()}`);
     
+    let user2: { userId: string; accessToken: string } | null = null;
     try {
       const user1 = await createTestUser(adminClient, `user1-${Date.now()}@test.com`, org1.id);
       
-      // Create file for org2
-      const csvContent = 'tenant_name,monthly_rent\nTest Tenant,1000\n';
-      const fileRecord = await uploadTestFile(adminClient, org2.id, csvContent);
+      user2 = await createTestUser(adminClient, `user2-${Date.now()}@test.com`, org2.id);
+
+      const uploadForm = new FormData();
+      uploadForm.append('file', new Blob(['tenant_name,monthly_rent\nTest Tenant,1000\n'], { type: 'text/csv' }), 'foreign.csv');
+      uploadForm.append('file_type', 'leases');
+
+      const uploadResponse = await fetch(`${SUPABASE_URL}/functions/v1/upload-handler`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${user2.accessToken}` },
+        body: uploadForm
+      });
+      const uploadResult = await uploadResponse.json();
+      assertEquals(uploadResponse.status, 200, 'Org2 upload setup should succeed through the real upload path');
+      const fileRecord = { id: uploadResult.file_id };
       testFileIds.push(fileRecord.id);
-      
       // Try to parse with user1 (from org1)
       const response = await fetch(PARSE_FILE_URL, {
         method: 'POST',
@@ -422,11 +435,11 @@ Deno.test({
       assertEquals(result.message.includes('not found'), true, 'Error should indicate file not found');
       
       await cleanup(adminClient, org1.id, user1.userId, []);
-      await cleanup(adminClient, org2.id, '', testFileIds);
+      await cleanup(adminClient, org2.id, user2?.userId ?? '', testFileIds);
       await adminClient.from('organizations').delete().eq('id', org2.id);
     } catch (error) {
       await cleanup(adminClient, org1.id, '', []);
-      await cleanup(adminClient, org2.id, '', testFileIds);
+      await cleanup(adminClient, org2.id, user2?.userId ?? '', testFileIds);
       throw error;
     }
   }

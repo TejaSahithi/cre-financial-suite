@@ -166,7 +166,7 @@ Deno.test({
   async fn() {
     const sql = await Deno.readTextFile(new URL("../../migrations/20269900000071_major_client_financial_domains.sql", import.meta.url));
     assertEquals(/UNIQUE \(org_id, provider, series_id, period\)/i.test(sql), true);
-    assertEquals(/CREATE POLICY reference_observations_select[\s\S]*org_id IN \(SELECT public\.get_my_org_ids\(\)\)/i.test(sql), true);
-    assertEquals(/CREATE POLICY reference_series_selections_select[\s\S]*org_id IN \(SELECT public\.get_my_org_ids\(\)\)/i.test(sql), true);
+    assertEquals(/CREATE POLICY reference_observations_select[\s\S]*public\.(is_member_of_org\(org_id\)|get_my_org_ids\(\))/i.test(sql), true);
+    assertEquals(/CREATE POLICY reference_series_selections_select[\s\S]*public\.(is_member_of_org\(org_id\)|get_my_org_ids\(\))/i.test(sql), true);
   },
 });

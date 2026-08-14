@@ -7,7 +7,7 @@
  * 
  * Tests the upload-handler Edge Function which:
  * - Accepts file uploads (CSV/Excel) with file_type parameter
- * - Stores files in Supabase Storage at financial-uploads/{org_id}/{file_id}
+ * - Stores files in Supabase Storage at {org_id}/{file_id}
  * - Creates uploaded_files record with status='uploaded'
  * - Enforces 50MB file size limit
  * - Returns file_id and storage_path
@@ -64,7 +64,7 @@ async function createTestUser(adminClient: any, email: string, orgId: string) {
     .insert({
       user_id: authData.user.id,
       org_id: orgId,
-      role: 'member',
+      role: 'lease_admin',
       status: 'active'
     });
   
@@ -200,7 +200,7 @@ Deno.test({
       
       // Verify storage path format
       assertEquals(
-        result.storage_path.startsWith(`financial-uploads/${org.id}/`),
+        result.storage_path.startsWith(`${org.id}/`),
         true,
         'Storage path should follow correct format'
       );
@@ -416,7 +416,7 @@ Deno.test({
       const user = await createTestUser(adminClient, `user-${Date.now()}@test.com`, org.id);
       
       // Create test file with unsupported format
-      const testFile = new File(['test content'], 'test.txt', { type: 'text/plain' });
+      const testFile = new File(['test content'], 'test.zip', { type: 'application/zip' });
       
       // Create form data
       const formData = new FormData();

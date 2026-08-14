@@ -99,6 +99,10 @@ Deno.serve(async (req: Request) => {
         const headerRow = XLSX.utils.sheet_to_json(worksheet, { header: 1 })[0] as string[];
         headers = headerRow || [];
       }
+
+      if (rawRows.length === 0 && headers.length === 0) {
+        throw new Error('File is empty or contains no parseable rows or headers');
+      }
       
       const parseResult: ParseResult = {
         rows: rawRows,

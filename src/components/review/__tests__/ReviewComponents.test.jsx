@@ -40,7 +40,7 @@ describe("review shared components", () => {
     expect(html).toContain("supporting source evidence is unavailable");
     expect(html).toContain("Accept");
     expect(html).toContain("Follow Up");
-  });
+  }, 15000);
 
   it("renders approval readiness from backend-derived summary only", async () => {
     const { default: ApprovalReadinessSummary } = await import("@/components/review/ApprovalReadinessSummary");

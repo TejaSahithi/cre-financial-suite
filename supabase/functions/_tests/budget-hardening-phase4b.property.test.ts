@@ -221,10 +221,10 @@ Deno.test({
 
     // Drive the budget to locked, then confirm reject is blocked.
     await callComputeBudget(accessToken, { action: "mark_reviewed", property_id: property.id, fiscal_year: fiscalYear });
-    await callComputeBudget(accessToken, { action: "approve", property_id: property.id, fiscal_year: fiscalYear });
-    const lockRes = await callComputeBudget(accessToken, { action: "lock", property_id: property.id, fiscal_year: fiscalYear });
-    const lockBody = await lockRes.json();
-    assertEquals(lockRes.status, 200, `expected lock to succeed: ${JSON.stringify(lockBody)}`);
+    const approveAndLockRes = await callComputeBudget(accessToken, { action: "approve", property_id: property.id, fiscal_year: fiscalYear });
+    const approveAndLockBody = await approveAndLockRes.json();
+    assertEquals(approveAndLockRes.status, 200, `expected approve_and_lock to succeed: ${JSON.stringify(approveAndLockBody)}`);
+    assertEquals(approveAndLockBody.status, "locked");
 
     const rejectLockedRes = await callComputeBudget(accessToken, {
       action: "reject",

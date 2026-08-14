@@ -60,7 +60,7 @@ async function createTestUser(adminClient: any, email: string, orgId: string) {
     .insert({
       user_id: authData.user.id,
       org_id: orgId,
-      role: 'member',
+      role: 'lease_admin',
       status: 'active'
     });
   
@@ -126,7 +126,9 @@ async function cleanup(adminClient: any, orgId: string, userId: string, fileIds:
   }
   
   await adminClient.from('memberships').delete().eq('user_id', userId);
-  await adminClient.auth.admin.deleteUser(userId);
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(userId || ''))) {
+    await adminClient.auth.admin.deleteUser(userId);
+  }
   await adminClient.from('organizations').delete().eq('id', orgId);
 }
 
@@ -162,8 +164,8 @@ Deno.test({
       assertEquals(response.status, 200);
       assertEquals(result.parsed_data[0].name, 'Sunset Plaza', 'Should map property name to name');
       assertEquals(result.parsed_data[0].address, '123 Main St', 'Should map street address to address');
-      assertEquals(result.parsed_data[0].zip_code, '90001', 'Should map zip code to zip_code');
-      assertEquals(result.parsed_data[0].square_footage, 50000, 'Should convert sqft to number');
+      assertEquals(result.parsed_data[0].zip, '90001', 'Should map zip code to zip');
+      assertEquals(result.parsed_data[0].total_sf, 50000, 'Should convert sqft to total_sf number');
       assertEquals(result.parsed_data[0].property_type, 'Office', 'Should map asset type to property_type');
       
       await cleanup(adminClient, org.id, user.userId, testFileIds);
@@ -202,9 +204,9 @@ Deno.test({
       const result = await response.json();
       
       assertEquals(response.status, 200);
-      assertEquals(result.parsed_data[0].portfolio_name, 'West Coast Portfolio');
-      assertEquals(result.parsed_data[0].building_name, 'Building A');
-      assertEquals(result.parsed_data[0].unit_number, 'Suite 100');
+      assertEquals(result.parsed_data[0]['portfolio name'], 'West Coast Portfolio');
+      assertEquals(result.parsed_data[0]['building name'], 'Building A');
+      assertEquals(result.parsed_data[0]['unit number'], 'Suite 100');
       
       await cleanup(adminClient, org.id, user.userId, testFileIds);
     } catch (error) {
@@ -242,9 +244,9 @@ Deno.test({
       const result = await response.json();
       
       assertEquals(response.status, 200);
-      assertEquals(result.parsed_data[0].square_footage, 125000, 'Should convert square footage to number');
+      assertEquals(result.parsed_data[0].total_sf, 125000, 'Should convert square footage to total_sf number');
       assertEquals(result.parsed_data[0].year_built, 1985, 'Should convert year_built to number');
-      assertEquals(result.parsed_data[0].number_of_units, 24, 'Should convert number_of_units to number');
+      assertEquals(result.parsed_data[0].total_units, 24, 'Should convert number_of_units to total_units number');
       
       await cleanup(adminClient, org.id, user.userId, testFileIds);
     } catch (error) {
@@ -285,7 +287,7 @@ Deno.test({
       assertEquals(result.parsed_data[0].name, 'Simple Property');
       assertEquals(result.parsed_data[0].address, '123 Main St');
       assertEquals(result.parsed_data[0].city, null, 'Missing city should be null');
-      assertEquals(result.parsed_data[0].square_footage, null, 'Missing square_footage should be null');
+      assertEquals(result.parsed_data[0].total_sf, null, 'Missing square_footage should be null as total_sf');
       
       await cleanup(adminClient, org.id, user.userId, testFileIds);
     } catch (error) {

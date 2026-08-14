@@ -16,7 +16,7 @@ export async function generateApprovedRentSchedule(opts: {
   orgId: string;
   leaseId: string;
   req: Request;
-}): Promise<{ status: "ok" | "skipped" | "failed"; error?: string }> {
+}): Promise<{ status: "ok" | "skipped" | "failed"; error?: string; rows_generated?: number }> {
   const { orgId, leaseId } = opts;
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -58,7 +58,21 @@ export async function generateApprovedRentSchedule(opts: {
       return { status: "failed", error: `HTTP ${res.status}` };
     }
 
-    return { status: "ok" };
+    const body = await res.json().catch(() => ({}));
+    const rowCount = Array.isArray(body?.approved_rent_schedule_rows)
+      ? body.approved_rent_schedule_rows.length
+      : Array.isArray(body?.results)
+        ? body.results.reduce((sum: number, result: Record<string, unknown>) => (
+          sum + (Array.isArray(result?.approved_rent_schedule_rows) ? result.approved_rent_schedule_rows.length : 0)
+        ), 0)
+        : 0;
+
+    if (rowCount <= 0) {
+      console.error("[approve-lease-workflow] compute-lease produced no authoritative rent schedule rows");
+      return { status: "failed", error: "NO_AUTHORITATIVE_RENT_SCHEDULE_ROWS", rows_generated: 0 };
+    }
+
+    return { status: "ok", rows_generated: rowCount };
   } catch (err) {
     console.error("[approve-lease-workflow] compute-lease call failed:", err?.message || err);
     return { status: "failed", error: err?.message || "network error" };
@@ -309,6 +323,14 @@ export function validateApprovedSnapshotIntegrity(snapshot: Record<string, unkno
     Math.abs(annualRent - monthlyRent * 12) > 1
   ) {
     throw new Error("Approved monthly and annual rent conflict; resolve the amount/frequency before approval");
+  }
+
+  const rentPerSf = toNumber(approvedSnapshotValue(approved, ["rent_per_sf", "base_rent_psf"]));
+  const groundRent = toNumber(approvedSnapshotValue(approved, ["ground_rent"]));
+  const hasApprovedRentAmount = [monthlyRent, annualRent, rentPerSf, groundRent]
+    .some((value) => value != null && value > 0);
+  if (!commencement || !expiration || !hasApprovedRentAmount) {
+    throw new Error("Approved lease requires approved commencement/start date, expiration/end date, and rent amount before approval");
   }
 }
 

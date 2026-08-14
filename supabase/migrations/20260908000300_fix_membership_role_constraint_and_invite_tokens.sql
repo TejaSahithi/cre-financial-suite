@@ -46,6 +46,15 @@ AS $$
   END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.normalize_membership_role_before_write()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.role := COALESCE(public.cre_normalize_role(NEW.role), NEW.role);
+  RETURN NEW;
+END;
+$$;
 ALTER TABLE public.memberships
   DROP CONSTRAINT IF EXISTS memberships_role_check;
 
@@ -71,6 +80,11 @@ ALTER TABLE public.memberships
     'custom_role'
   ));
 
+DROP TRIGGER IF EXISTS normalize_membership_role_before_write ON public.memberships;
+CREATE TRIGGER normalize_membership_role_before_write
+BEFORE INSERT OR UPDATE OF role ON public.memberships
+FOR EACH ROW
+EXECUTE FUNCTION public.normalize_membership_role_before_write();
 -- Team-member invites are not public/org access requests. Keep
 -- pending_approval reserved for SuperAdmin-reviewed access requests so invited
 -- members do not fall into the organization onboarding approval route.
