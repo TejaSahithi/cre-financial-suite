@@ -949,7 +949,7 @@ export default function FileUploader({
 }
 
 const ACTIVE_EXTRACTION_STATUSES = new Set([
-  "uploaded", "parsing", "pdf_parsed", "validating", "validated", "storing", "computing",
+  "uploaded", "parsing", "pdf_parsed", "validating", "normalize_field_partition_pending", "validated", "storing", "computing",
 ]);
 
 const STATUS_COLORS = {

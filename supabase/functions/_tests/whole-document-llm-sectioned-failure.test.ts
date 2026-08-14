@@ -357,7 +357,8 @@ Deno.test("field-partitioned merge fails closed when the normalize deadline leav
 });
 Deno.test("field-partitioned extraction passes field-group index as provider chunk index", () => {
   const source = Deno.readTextFileSync("supabase/functions/_shared/extraction/whole-document-llm/extractor.ts");
-  assertEquals(source.includes("for (const [index, group] of groups.entries())"), true);
+  assertEquals(source.includes("for (let index = startIndex; index < groups.length; index++)"), true);
+  assertEquals(source.includes("const group = groups[index];"), true);
   assertEquals(source.includes("operation: \"whole_document_lease_extraction_field_partition_v1\""), true);
   assertEquals(source.includes("section: { index: index + 1, count: groups.length }"), true);
 });

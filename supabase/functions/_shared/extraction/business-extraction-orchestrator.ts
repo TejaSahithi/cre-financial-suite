@@ -19,7 +19,7 @@
 
 import { runExtractionPipeline } from "./pipeline.ts";
 import { runOpenAIFactLedgerPipeline } from "./openai-fact-ledger/orchestrator.ts";
-import { runWholeDocumentLlmPipeline } from "./whole-document-llm/extractor.ts";
+import { runWholeDocumentLlmPipeline, type WholeDocumentFieldPartitionProgress, type WholeDocumentFieldPartitionResumeState } from "./whole-document-llm/extractor.ts";
 import { isWholeDocumentLlmActive } from "./whole-document-llm/feature-mode.ts";
 import { isLeaseModuleType } from "./lease-module.ts";
 import type { ExtractionPipelineResult, DoclingOutput } from "./types.ts";
@@ -118,6 +118,8 @@ export interface RunBusinessExtractionOptions {
   };
   factLedgerProgress?: (progress: Record<string, unknown>) => Promise<void> | void;
   factLedgerResume?: import("./openai-fact-ledger/types.ts").FactLedgerResumeState;
+  wholeDocumentFieldPartitionProgress?: (progress: WholeDocumentFieldPartitionProgress) => Promise<void> | void;
+  wholeDocumentFieldPartitionResume?: WholeDocumentFieldPartitionResumeState;
 }
 
 function factLedgerDebug(debug: Record<string, unknown>): Record<string, unknown> {
@@ -300,6 +302,8 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
         document: opts.document ?? opts.docling,
         moduleType: opts.moduleType,
         deadlineAt: startTime + OPENAI_TOTAL_BUDGET_MS,
+        ...(opts.wholeDocumentFieldPartitionResume ? { fieldPartitionResume: opts.wholeDocumentFieldPartitionResume } : {}),
+        ...(opts.wholeDocumentFieldPartitionProgress ? { fieldPartitionProgress: opts.wholeDocumentFieldPartitionProgress } : {}),
         ...(opts.provenance ? { provenance: opts.provenance } : {}),
       });
     }

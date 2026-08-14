@@ -402,6 +402,25 @@ Perform these review passes silently before producing the JSON response:
    does not fit the fixed schema and report each one in dynamicFindings.
 11. Challenge every proposed value against competing evidence and common field-confusion risks.
 
+CLIENT-CRITICAL DOMAIN CHECKLIST
+
+Before returning JSON, explicitly sweep the document for these domains. For each domain, either
+produce fixed claims, expenseRuleCandidates, or dynamicFindings with exact source evidence, or
+allow the fixed fields to appear in notStatedFieldKeys when the complete document is silent:
+- Base rent, stepped rent, free rent, option rent, additional rent, CPI/index/fixed escalations,
+  percentage rent, breakpoints, sales reporting, deposits, TI allowances, and charge schedules.
+- CAM/common area, operating expenses, tax recoveries, property insurance recoveries, utility
+  recoveries, reconciliations, audit rights, estimates, statements, payment timing, and billing
+  authority.
+- Pro-rata share, allocation basis, premises rentable area, building/property rentable area,
+  occupancy/vacancy treatment, gross-up threshold, management fee basis, administrative fee
+  percentage, caps, exclusions, nonrecoverable costs, capital expenditure treatment, and
+  controllable-expense limits.
+- Insurance/COI obligations, additional insured requirements, waiver of subrogation, minimum
+  liability limits, HVAC obligations, vendor/service contracts, repairs, replacement, utilities,
+  maintenance, janitorial, trash, landscaping, snow, and other operational/vendor rules.
+- Renewal, expansion, ROFR/ROFO, termination, assignment/transfer, default/cure, notice periods,
+  critical dates, audit deadlines, reconciliation deadlines, and reporting deadlines.
 CRE EXECUTIVE EXTRACTION PLAYBOOK
 
 Date taxonomy:

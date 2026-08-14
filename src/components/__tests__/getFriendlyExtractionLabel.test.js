@@ -7,6 +7,7 @@ describe("getFriendlyExtractionLabel", () => {
     ["parsing", "Preparing document"],
     ["pdf_parsed", "Reading document"],
     ["validating", "Extracting lease fields"],
+    ["normalize_field_partition_pending", "Continuing large lease extraction"],
     ["validated", "Preparing review"],
     ["storing", "Preparing review"],
     ["stored", "Preparing review"],

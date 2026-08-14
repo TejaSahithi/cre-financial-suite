@@ -16,6 +16,8 @@ export function getFriendlyExtractionLabel(status) {
       return "Reading document";
     case "validating":
       return "Extracting lease fields";
+    case "normalize_field_partition_pending":
+      return "Continuing large lease extraction";
     case "validated":
     case "storing":
     case "stored":

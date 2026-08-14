@@ -2290,6 +2290,77 @@ async function persistFactLedgerProgress(args: {
   }
 }
 
+function normalizeWholeDocumentFieldPartitionResume(value: unknown): import("../_shared/extraction/whole-document-llm/extractor.ts").WholeDocumentFieldPartitionResumeState | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const groupResults = Array.isArray(raw.groupResults) ? raw.groupResults : [];
+  const processedGroups = Array.isArray(raw.processedGroups) ? raw.processedGroups.map((name) => String(name)) : [];
+  const nextGroupIndex = Math.floor(Number(raw.nextGroupIndex ?? raw.next_group_index ?? groupResults.length) || 0);
+  if ((!Number.isFinite(nextGroupIndex) || nextGroupIndex <= 0) && groupResults.length === 0) return undefined;
+  return {
+    nextGroupIndex: Number.isFinite(nextGroupIndex) && nextGroupIndex > 0 ? nextGroupIndex : groupResults.length,
+    processedGroups,
+    groupResults: groupResults as any[],
+  };
+}
+
+function readWholeDocumentContinuationLedger(result: any): Record<string, unknown> | null {
+  const ledger = result?.metadata?.extractionDebug?.openai_fact_ledger ?? result?.metadata?.extractionDebug?.vertex_fact_ledger ?? null;
+  if (!ledger || typeof ledger !== "object") return null;
+  return ledger.continuation_required === true || ledger.failure_classification === "FIELD_PARTITION_DEADLINE_EXHAUSTED_PARTIAL"
+    ? ledger as Record<string, unknown>
+    : null;
+}
+
+async function persistWholeDocumentFieldPartitionProgress(args: {
+  supabaseAdmin: any;
+  logger: any;
+  pipelineJobId?: string | null;
+  fileId: string;
+  progress: Record<string, unknown>;
+}): Promise<void> {
+  const progress = {
+    ...args.progress,
+    updated_at: new Date().toISOString(),
+    continuation_enqueue_supported: true,
+  };
+
+  await args.logger.event("normalize", "progress", {
+    kind: "whole_document_field_partition_progress",
+    whole_document_field_partition_progress: {
+      architecture: progress.architecture,
+      groupCount: progress.groupCount,
+      processedGroupCount: progress.processedGroupCount,
+      nextGroupIndex: progress.nextGroupIndex,
+      continuationRequired: progress.continuationRequired,
+      continuationReason: progress.continuationReason ?? null,
+    },
+  });
+
+  if (!args.pipelineJobId) return;
+
+  try {
+    const { data: existing } = await args.supabaseAdmin
+      .from("pipeline_jobs")
+      .select("metadata")
+      .eq("id", args.pipelineJobId)
+      .maybeSingle();
+
+    const metadata = existing?.metadata && typeof existing.metadata === "object" ? existing.metadata : {};
+    await args.supabaseAdmin
+      .from("pipeline_jobs")
+      .update({
+        metadata: {
+          ...metadata,
+          whole_document_field_partition_progress: progress,
+        },
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", args.pipelineJobId);
+  } catch (error) {
+    console.warn(`[normalize-pdf-output] field partition progress persist failed file_id=${args.fileId}`, error);
+  }
+}
 const ENRICH_READY_STATUSES = new Set(["review_required", "validated", "approved"]);
 
 /**
@@ -3424,7 +3495,7 @@ Deno.serve(async (req: Request) => {
       // generation-scoped dispatch. Named distinctly from the pre-existing
       // `extractionRunId` local below (a debug/trace id unrelated to the
       // extraction_runs table) to avoid confusion between the two concepts.
-      generation_id, extraction_run_id: provenanceExtractionRunId,
+      generation_id, extraction_run_id: provenanceExtractionRunId, whole_document_field_partition_resume,
     } = body;
 
     // dry_run=true: validate auth and optionally run extraction on sample_text.
@@ -3911,6 +3982,7 @@ Deno.serve(async (req: Request) => {
       // outcomes; review payload building and persistence consume that shape.
       const mockOpenAIScenario = resolveMockOpenAIScenario(req, body as Record<string, unknown>, businessExtractionProvider);
       const factLedgerResume = normalizeFactLedgerResume((body as any)?.fact_ledger_resume);
+      const wholeDocumentFieldPartitionResume = normalizeWholeDocumentFieldPartitionResume(whole_document_field_partition_resume ?? (body as any)?.whole_document_field_partition_resume);
       const result = await runBusinessExtraction({
         requestedProvider: businessExtractionProvider,
         moduleType: extractionModuleType,
@@ -3931,6 +4003,14 @@ Deno.serve(async (req: Request) => {
           progress,
         }),
         ...(factLedgerResume ? { factLedgerResume } : {}),
+        ...(wholeDocumentFieldPartitionResume ? { wholeDocumentFieldPartitionResume } : {}),
+        wholeDocumentFieldPartitionProgress: (progress: Record<string, unknown>) => persistWholeDocumentFieldPartitionProgress({
+          supabaseAdmin,
+          logger,
+          pipelineJobId: finalPipelineJobId,
+          fileId: file_id,
+          progress,
+        }),
         ...(stage?.stageRunId
           ? {
             provenance: {
@@ -3952,6 +4032,61 @@ Deno.serve(async (req: Request) => {
         ...(result.metadata ?? {}),
         generation_id: extractionGenerationId,
       };
+      const wholeDocumentContinuation = readWholeDocumentContinuationLedger(result);
+      if (wholeDocumentContinuation) {
+        const storedProgress = finalPipelineJobId
+          ? await supabaseAdmin
+            .from("pipeline_jobs")
+            .select("metadata")
+            .eq("id", finalPipelineJobId)
+            .maybeSingle()
+          : { data: null };
+        const existingPartitionProgress = (storedProgress as any)?.data?.metadata?.whole_document_field_partition_progress;
+        const progress = {
+          architecture: "llm_field_partitioned",
+          groupCount: Number(wholeDocumentContinuation.group_count ?? existingPartitionProgress?.groupCount ?? 0) || null,
+          processedGroupCount: Number(wholeDocumentContinuation.processed_group_count ?? existingPartitionProgress?.processedGroupCount ?? 0) || null,
+          nextGroupIndex: Number(wholeDocumentContinuation.next_group_index ?? wholeDocumentContinuation.processed_group_count ?? existingPartitionProgress?.nextGroupIndex ?? 0) || null,
+          processedGroups: Array.isArray(wholeDocumentContinuation.processed_groups)
+            ? wholeDocumentContinuation.processed_groups
+            : (Array.isArray(existingPartitionProgress?.processedGroups) ? existingPartitionProgress.processedGroups : []),
+          groupResults: Array.isArray(existingPartitionProgress?.groupResults) ? existingPartitionProgress.groupResults : [],
+          continuationRequired: true,
+          continuationReason: wholeDocumentContinuation.continuation_reason ?? wholeDocumentContinuation.failure_classification ?? "field_partition_deadline_exhausted",
+        };
+        await persistWholeDocumentFieldPartitionProgress({
+          supabaseAdmin,
+          logger,
+          pipelineJobId: finalPipelineJobId,
+          fileId: file_id,
+          progress,
+        });
+        await supabaseAdmin.from("uploaded_files").update({
+          processing_status: "normalize_field_partition_pending",
+          failed_step: null,
+          error_message: null,
+          updated_at: new Date().toISOString(),
+        }).eq("id", file_id).eq("org_id", orgId);
+        await logger.event("normalize", "continuation_required", {
+          error_code: "FIELD_PARTITION_DEADLINE_EXHAUSTED_PARTIAL",
+          error_message: String(wholeDocumentContinuation.continuation_reason ?? "Field-partitioned whole-document extraction requires continuation"),
+          metadata: progress,
+        });
+        await stage?.complete({
+          outcome: "continuation_required",
+          fieldsProduced: Number(progress.processedGroupCount ?? 0),
+          workflowOutputPresent: false,
+        });
+        return jsonResponse({
+          error: false,
+          file_id,
+          processing_status: "normalize_field_partition_pending",
+          normalize_status: "normalize_continuation_required",
+          continuation_required: true,
+          continuation_kind: "whole_document_field_partition",
+          progress,
+        }, 202);
+      }
       assertAuthoritativeLeaseExtractionResult(extractionModuleType, result as Record<string, any>);
       stampBusinessExtractionPersistedAt(result, new Date().toISOString());
       console.log(`[normalize-pdf-output] STAGE pipeline_done file_id=${file_id} rows=${result.rows?.length ?? 0} method=${result.method} provider=${businessExtractionProvider}`);

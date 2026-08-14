@@ -43,6 +43,7 @@ const ACTIVE_STATUSES = new Set([
   "parsed",
   "pdf_parsed",
   "validating",
+  "normalize_field_partition_pending",
   "validated",
   "storing",
   "stored",
@@ -213,7 +214,7 @@ function statusFromDisplayState(displayState) {
 // Status-like values that should never be surfaced as error codes in the UI.
 const STATUS_VALUES = new Set([
   "ready_for_review", "review_required", "parsing", "parsed", "pdf_parsed",
-  "validating", "validated", "storing", "stored", "computing", "completed",
+  "validating", "normalize_field_partition_pending", "validated", "storing", "stored", "computing", "completed",
   "uploaded", "lease_extraction_queued", "pending", "queued", "running",
 ]);
 
