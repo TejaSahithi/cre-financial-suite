@@ -58,7 +58,7 @@ describe("role-based notification recipient resolver", () => {
     expect(result.recipients.map((recipient) => recipient.userId)).not.toContain("pm-b");
   });
 
-  it("allows a lease reviewer custom role to receive review but not approval notifications", () => {
+  it("sends lease review and approval notifications only to explicitly assigned eligible users", () => {
     const customLeaseReviewer = membership({
       user_id: "lease-reviewer",
       role: "viewer",
@@ -76,6 +76,7 @@ describe("role-based notification recipient resolver", () => {
         event_type: "lease.review_required",
         portfolio_id: portfolioA,
         property_id: propertyA,
+        assigned_user_ids: ["lease-reviewer"],
       },
       {
         memberships: [customLeaseReviewer],
@@ -89,6 +90,7 @@ describe("role-based notification recipient resolver", () => {
         event_type: "lease.ready_for_approval",
         portfolio_id: portfolioA,
         property_id: propertyA,
+        assigned_user_ids: ["lease-reviewer"],
       },
       {
         memberships: [customLeaseReviewer],

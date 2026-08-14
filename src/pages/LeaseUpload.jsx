@@ -35,6 +35,7 @@ import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { getLeaseUploadPipelineState } from "@/lib/leaseUploadPipelineState";
 import { createPageUrl } from "@/utils";
+import { useAuth } from "@/lib/AuthContext";
 
 // Statuses that still need polling because a backend stage is in flight.
 const ACTIVE_STATUSES = new Set([
@@ -295,6 +296,7 @@ function buildPipelineFailure(record, reviewPayload) {
 export default function LeaseUpload() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const urlParams = new URLSearchParams(location.search);
   const queryPropertyId = urlParams.get("property");
   const queryBuildingId = urlParams.get("building");
@@ -464,17 +466,21 @@ export default function LeaseUpload() {
       portfolio_id: effectiveProperty?.portfolio_id || null,
       property_id: record?.property_id || effectivePropertyId || null,
       action_url: actionUrl,
+      created_by: user?.id || null,
+      assigned_user_id: user?.id || null,
+      idempotency_key: `lease-upload:${targetFileId || "unknown"}:${generationKey}:${eventType}`,
       metadata: {
         source,
         uploaded_file_id: targetFileId || null,
         file_name: record?.file_name || fileRecord?.file_name || null,
         status: record?.status || null,
+        uploader_user_id: user?.id || null,
       },
     }).catch((error) => {
       notifiedFileEvents.current.delete(notificationKey);
       console.warn("[LeaseUpload] notification event failed:", error?.message || error);
     });
-  }, [effectiveProperty, effectivePropertyId, fileId, fileRecord, linkedLeaseId]);
+  }, [effectiveProperty, effectivePropertyId, fileId, fileRecord, linkedLeaseId, user?.id]);
 
   const updateScopeParams = ({ property = scopeProperty, building = scopeBuilding, unit = scopeUnit }) => {
     const params = new URLSearchParams(location.search);
@@ -630,7 +636,6 @@ export default function LeaseUpload() {
     }
     if (status === "review_required" || processingStatus === "review_required" || fileRecord.review_required === true) {
       notifyLeaseEvent("lease.extraction_completed", "lease_upload_status_review_required", fileRecord);
-      notifyLeaseEvent("lease.review_required", "lease_upload_status_review_required", fileRecord);
     }
   }, [fileRecord, notifyLeaseEvent]);
 

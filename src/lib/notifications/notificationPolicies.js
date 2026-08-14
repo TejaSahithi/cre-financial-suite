@@ -173,9 +173,7 @@ const policies = {
     scope: NOTIFICATION_SCOPES.PROPERTY,
     permission: "lease.view",
     recipients: [
-      role(ROLE_KEYS.PROPERTY_MANAGER, NOTIFICATION_TYPES.INFORMATIONAL),
-      role(ROLE_KEYS.AUDITOR, NOTIFICATION_TYPES.INFORMATIONAL),
-      assigned(NOTIFICATION_TYPES.INFORMATIONAL, { permission: "lease.view" }),
+      assigned(NOTIFICATION_TYPES.INFORMATIONAL, { permission: "lease.view", requiresAction: false }),
     ],
   },
   "lease.review_required": {
@@ -184,11 +182,7 @@ const policies = {
     scope: NOTIFICATION_SCOPES.PROPERTY,
     permission: "lease.review",
     recipients: [
-      role(ROLE_KEYS.ORG_OWNER, NOTIFICATION_TYPES.INFORMATIONAL),
-      role(ROLE_KEYS.ORG_ADMIN, NOTIFICATION_TYPES.INFORMATIONAL),
-      role(ROLE_KEYS.PROPERTY_MANAGER, NOTIFICATION_TYPES.ACTION_REQUIRED, { permission: "lease.review" }),
-      role(ROLE_KEYS.AUDITOR, NOTIFICATION_TYPES.ACTION_REQUIRED, { permission: "lease.review" }),
-      assigned(NOTIFICATION_TYPES.INFORMATIONAL, { permission: "lease.view" }),
+      assigned(NOTIFICATION_TYPES.ACTION_REQUIRED, { permission: "lease.review" }),
     ],
   },
   "lease.ready_for_approval": {
@@ -197,11 +191,6 @@ const policies = {
     scope: NOTIFICATION_SCOPES.PROPERTY,
     permission: "lease.approve",
     recipients: [
-      role(ROLE_KEYS.ORG_OWNER, NOTIFICATION_TYPES.INFORMATIONAL),
-      role(ROLE_KEYS.ORG_ADMIN, NOTIFICATION_TYPES.INFORMATIONAL),
-      role(ROLE_KEYS.PROPERTY_MANAGER, NOTIFICATION_TYPES.ACTION_REQUIRED, { permission: "lease.approve" }),
-      role(ROLE_KEYS.ASSET_OWNER, NOTIFICATION_TYPES.ACTION_REQUIRED, { external: true, permission: "lease.approve" }),
-      role(ROLE_KEYS.AUDITOR, NOTIFICATION_TYPES.INFORMATIONAL),
       assigned(NOTIFICATION_TYPES.APPROVAL_REQUIRED),
     ],
   },

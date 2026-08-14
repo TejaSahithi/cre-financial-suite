@@ -246,9 +246,7 @@ const EVENT_POLICIES = Object.freeze({
     scope: "PROPERTY",
     permission: "lease.view",
     recipients: [
-      role(ROLES.PROPERTY_MANAGER, TYPES.INFORMATIONAL),
-      role(ROLES.AUDITOR, TYPES.INFORMATIONAL),
-      assigned(TYPES.INFORMATIONAL, { permission: "lease.view" }),
+      assigned(TYPES.INFORMATIONAL, { permission: "lease.view", requiresAction: false }),
     ],
   },
   "lease.review_required": {
@@ -257,11 +255,7 @@ const EVENT_POLICIES = Object.freeze({
     scope: "PROPERTY",
     permission: "lease.review",
     recipients: [
-      role(ROLES.ORG_OWNER, TYPES.INFORMATIONAL),
-      role(ROLES.ORG_ADMIN, TYPES.INFORMATIONAL),
-      role(ROLES.PROPERTY_MANAGER, TYPES.ACTION_REQUIRED, { permission: "lease.review" }),
-      role(ROLES.AUDITOR, TYPES.ACTION_REQUIRED, { permission: "lease.review" }),
-      assigned(TYPES.INFORMATIONAL, { permission: "lease.view" }),
+      assigned(TYPES.ACTION_REQUIRED, { permission: "lease.review" }),
     ],
   },
   "lease.ready_for_approval": {
@@ -270,11 +264,6 @@ const EVENT_POLICIES = Object.freeze({
     scope: "PROPERTY",
     permission: "lease.approve",
     recipients: [
-      role(ROLES.ORG_OWNER, TYPES.INFORMATIONAL),
-      role(ROLES.ORG_ADMIN, TYPES.INFORMATIONAL),
-      role(ROLES.PROPERTY_MANAGER, TYPES.ACTION_REQUIRED, { permission: "lease.approve" }),
-      role(ROLES.ASSET_OWNER, TYPES.ACTION_REQUIRED, { external: true, permission: "lease.approve" }),
-      role(ROLES.AUDITOR, TYPES.INFORMATIONAL),
       assigned(TYPES.APPROVAL_REQUIRED),
     ],
   },
@@ -1840,11 +1829,22 @@ async function dispatchBusinessEvent(req: Request, body: any) {
     const notification = await createNotification(supabaseAdmin, event, recipient);
     const email = await resolveRecipientEmail(supabaseAdmin, recipient);
     const phone = normalizePhone(recipient.phone);
-    const emailResult = await sendEmail(email, event, recipient);
-    const smsResult = await sendSms(phone, recipient.message);
-
-    await createDelivery(supabaseAdmin, notification.id, CHANNELS.EMAIL, email, emailResult);
-    await createDelivery(supabaseAdmin, notification.id, CHANNELS.SMS, phone, smsResult);
+    const emailResult = await sendDeliveryWithIdempotency(
+      supabaseAdmin,
+      event,
+      notification.id,
+      CHANNELS.EMAIL,
+      email,
+      () => sendEmail(email, event, recipient),
+    );
+    const smsResult = await sendDeliveryWithIdempotency(
+      supabaseAdmin,
+      event,
+      notification.id,
+      CHANNELS.SMS,
+      phone,
+      () => sendSms(phone, recipient.message),
+    );
 
     await logAudit(supabaseAdmin, {
       action: "notification_recipient_dispatched",
