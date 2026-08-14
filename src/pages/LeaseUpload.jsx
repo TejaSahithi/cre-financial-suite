@@ -247,10 +247,19 @@ function buildPipelineFailure(record, reviewPayload) {
   let recovery = "Re-run extraction after fixing the document or backend configuration.";
 
   const combined = `${parserStatus} ${errorCode} ${rawMessage}`;
+  const parserCompletedWithReadableText =
+    /completed|pdf_parsed|parsed/i.test(parserStatus) &&
+    Number.isFinite(fullTextChars) &&
+    fullTextChars > 0;
   if (/DOWNSTREAM_AUTH_FAILED|401|parse.*returned 401|unauthorized.*parse/i.test(combined)) {
     reason = rawMessage || "The extraction worker could not authenticate to the document parser.";
     recovery = "Ensure WORKER_INTERNAL_SECRET is set in Supabase secrets and redeploy the Edge Functions, then retry.";
-  } else if (/parse_timeout|PARSE_TIMEOUT|timed out|timeout/i.test(combined)) {
+  } else if (/WHOLE_DOCUMENT_LLM_FAILED/i.test(errorCode)) {
+    reason = rawMessage || "Authoritative whole-document AI extraction failed after the document was parsed.";
+    recovery = parserCompletedWithReadableText
+      ? "Retry extraction after deploying the large-document/field-partitioned lease extraction path or increasing the AI extraction worker budget."
+      : "Retry extraction after confirming parser output and AI extraction configuration.";
+  } else if (/parse_timeout|PARSE_TIMEOUT/i.test(`${parserStatus} ${errorCode}`) || (/timed out|timeout/i.test(rawMessage) && !parserCompletedWithReadableText)) {
     reason = "The document parser timed out before it could produce readable lease text.";
     recovery = "Upload a smaller/optimized PDF, or deploy a longer-running/background parser before retrying.";
   } else if (/EMPTY_PARSE_TEXT|parse_completed_empty_text/i.test(`${parserStatus} ${errorCode}`)) {

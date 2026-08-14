@@ -145,6 +145,17 @@ describe("getCurrentGenerationFailureNotice", () => {
     });
     expect(notice.show).toBe(false);
   });
+  it("reports whole-document LLM failures before generic timeout recovery", () => {
+    const uploadSource = readFileSync(resolve(process.cwd(), "src/pages/LeaseUpload.jsx"), "utf8");
+    const wholeDocumentBranch = uploadSource.indexOf("/WHOLE_DOCUMENT_LLM_FAILED/i.test(errorCode)");
+    const genericTimeoutBranch = uploadSource.indexOf("/parse_timeout|PARSE_TIMEOUT/i.test");
+
+    expect(wholeDocumentBranch).toBeGreaterThan(-1);
+    expect(genericTimeoutBranch).toBeGreaterThan(-1);
+    expect(wholeDocumentBranch).toBeLessThan(genericTimeoutBranch);
+    expect(uploadSource).toContain("parserCompletedWithReadableText");
+    expect(uploadSource).toContain("field-partitioned lease extraction path");
+  });
 });
 
 describe("ensureLeaseReviewDraftForUpload", () => {

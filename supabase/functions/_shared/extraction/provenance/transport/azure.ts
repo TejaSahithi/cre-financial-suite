@@ -105,7 +105,7 @@ export async function analyzeWithAzureLayoutAndProvenance(
     return callFn(args);
   }
 
-  const providerAttempt = context.providerAttempt ?? 1;
+  const providerAttempt = context.providerAttempt ?? context.stageAttempt ?? 1;
   const invocationKey = [
     context.generationId,
     context.stageRunId,

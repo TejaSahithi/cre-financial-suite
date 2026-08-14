@@ -17,7 +17,7 @@ import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { __test__ } from "../_shared/extraction/whole-document-llm/extractor.ts";
 import { getSchema } from "../_shared/extraction/schemas.ts";
 
-const { directFieldPartitionMinDocumentChars, maxSectionFailureRatio, mergeSectionedWholeDocumentResults, shouldRetryDirectWholeDocumentWithSectioned, shouldStartWithFieldPartitioned } = __test__;
+const { directFieldPartitionMinDocumentChars, maxSectionFailureRatio, mergeFieldPartitionedResults, mergeSectionedWholeDocumentResults, shouldRetryDirectWholeDocumentWithSectioned, shouldStartWithFieldPartitioned } = __test__;
 
 const FIELDS = Object.entries(getSchema("lease"))
   .filter(([, def]) => !(def as any).derived)
@@ -333,4 +333,31 @@ Deno.test("sectioned merge: raising LEASE_WHOLE_DOCUMENT_LLM_MAX_SECTION_FAILURE
     if (original === undefined) Deno.env.delete("LEASE_WHOLE_DOCUMENT_LLM_MAX_SECTION_FAILURE_RATIO");
     else Deno.env.set("LEASE_WHOLE_DOCUMENT_LLM_MAX_SECTION_FAILURE_RATIO", original);
   }
+});
+
+
+Deno.test("field-partitioned merge fails closed when the normalize deadline leaves groups unprocessed", () => {
+  const result = mergeFieldPartitionedResults({
+    startedAt: Date.now(),
+    moduleType: "lease",
+    groupNames: ["party_entities", "premises_identity"],
+    groupResults: [successSection("Acme Corp"), successSection("Acme Corp")],
+    totalGroupCount: 12,
+    deadlineExhausted: true,
+  });
+
+  assertEquals(result.method, "fallback");
+  assertEquals(result.rows, []);
+  const debug = (result.metadata as any).extractionDebug.openai_fact_ledger;
+  assertEquals(debug.failure_classification, "FIELD_PARTITION_DEADLINE_EXHAUSTED_PARTIAL");
+  assertEquals(debug.group_count, 12);
+  assertEquals(debug.processed_group_count, 2);
+  assertEquals(debug.skipped_group_count, 10);
+  assertEquals(debug.field_partition_deadline_exhausted, true);
+});
+Deno.test("field-partitioned extraction passes field-group index as provider chunk index", () => {
+  const source = Deno.readTextFileSync("supabase/functions/_shared/extraction/whole-document-llm/extractor.ts");
+  assertEquals(source.includes("for (const [index, group] of groups.entries())"), true);
+  assertEquals(source.includes("operation: \"whole_document_lease_extraction_field_partition_v1\""), true);
+  assertEquals(source.includes("section: { index: index + 1, count: groups.length }"), true);
 });

@@ -88,7 +88,7 @@ export async function callOpenAIWithProvenance(
     return callFn(opts);
   }
 
-  const providerAttempt = context.providerAttempt ?? 1;
+  const providerAttempt = context.providerAttempt ?? context.stageAttempt ?? 1;
   const invocationKey = [
     context.generationId,
     context.stageRunId,

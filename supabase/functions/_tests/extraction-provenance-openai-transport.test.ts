@@ -137,6 +137,23 @@ Deno.test("callOpenAIWithProvenance: invocation_key includes providerAttempt so 
   Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
 });
 
+Deno.test("callOpenAIWithProvenance: providerAttempt defaults to stageAttempt for stage-level retries", async () => {
+  Deno.env.set("ENABLE_EXTRACTION_PROVENANCE", "true");
+  const supabaseAdmin = makeMockSupabase({
+    start_provider_invocation: [
+      { data: null, error: { message: "boom" } },
+      { data: null, error: { message: "boom" } },
+    ],
+  });
+  const mockCallFn = async () => ({} as any);
+  await assertRejects(() => callOpenAIWithProvenance(supabaseAdmin, { ...BASE_CONTEXT, stageAttempt: 1 }, { userPrompt: "test" }, mockCallFn));
+  await assertRejects(() => callOpenAIWithProvenance(supabaseAdmin, { ...BASE_CONTEXT, stageAttempt: 2 }, { userPrompt: "test" }, mockCallFn));
+
+  const starts = supabaseAdmin.calls.filter((c) => c.fn === "start_provider_invocation");
+  assertEquals(starts.map((c) => c.args.p_provider_attempt), [1, 2]);
+  assertEquals(new Set(starts.map((c) => c.args.p_invocation_key)).size, 2);
+  Deno.env.delete("ENABLE_EXTRACTION_PROVENANCE");
+});
 Deno.test("callOpenAIWithProvenance: a running invocation exists BEFORE the mocked call resolves", async () => {
   Deno.env.set("ENABLE_EXTRACTION_PROVENANCE", "true");
   const supabaseAdmin = makeMockSupabase({

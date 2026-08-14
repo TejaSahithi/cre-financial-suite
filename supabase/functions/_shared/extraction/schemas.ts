@@ -144,12 +144,16 @@ export const LEASE_SCHEMA: ModuleSchema = {
       /(?:^|\n)\s*tenant\s*[:.]\s*([A-Z][A-Za-z0-9.,&'\- ]{2,100}(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Bank|Holdings|Partners?))/i,
       // Opening-clause format: "by and between [Landlord], and Cress Family Restaurants, LLC, (referred to as "Tenant")"
       /,\s*and\s+([A-Z][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Holdings|Partners?))\s*[,\s]+\(?referred\s+to\s+as\s+["']?Tenant["']?\)?/i,
+      // Opening-clause format where the tenant is one or more individuals:
+      // "... and Tawanda Roberts, Tommie Roberts, and William Roberts (collectively referred to as "Tenant")"
+      /,\s*and\s+([A-Z][A-Za-z.' -]{1,60}(?:,\s*[A-Z][A-Za-z.' -]{1,60})*(?:,?\s+and\s+[A-Z][A-Za-z.' -]{1,60})?)\s*\((?:collectively\s+)?referred\s+to\s+as\s+["']?Tenant["']?\)/i,
     ],
     description:
       "LEGAL ENTITY name of the tenant ONLY (e.g. 'Riverside Consulting, Inc.'). " +
       "DO NOT use the signatory, signer, contact person, or 'By:' name. " +
       "If the lease reads 'Tenant: Riverside Consulting, Inc.  By: John Doe', return 'Riverside Consulting, Inc.', NOT 'John Doe'. " +
-      "Also look for opening-clause format: 'between [Landlord Entity] ... and [Tenant Entity] (referred to as \"Tenant\")'.",
+      "Also look for opening-clause format: 'between [Landlord Entity] ... and [Tenant Entity] (referred to as \"Tenant\")'. " +
+      "If the lease expressly defines one or more individual people as the Tenant in the opening paragraph, return those individual names exactly as the tenant_name.",
     domain: "parties",
     evidencePolicy: "enforced",
     // Migrated from the old hardcoded isLlmSourceTextRelevantToField() guard —
@@ -1890,6 +1894,7 @@ const LEASE_GROUPS: FieldGroup[] = [
     fields: ["tenant_name", "tenant_signatory_name", "landlord_name", "landlord_signatory_name"],
     hint:
       "Identify the LEGAL ENTITIES: tenant_name and landlord_name are the company/LLC names ONLY. " +
+      "If the opening paragraph expressly defines individual person(s) as Tenant, return those individual names exactly; do not null them merely because they are not an entity. " +
       "Signatory names (the individual who signed 'By:') go into tenant_signatory_name and landlord_signatory_name — never into *_name. " +
       "CRITICAL: Leases name parties in the opening paragraph in two formats: " +
       "(1) 'between [LANDLORD ENTITY], or its assigns (referred to as \"Landlord\"), and [TENANT ENTITY] (referred to as \"Tenant\")' " +

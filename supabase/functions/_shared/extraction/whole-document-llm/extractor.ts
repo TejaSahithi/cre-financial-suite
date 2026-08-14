@@ -1803,8 +1803,10 @@ function mergeFieldPartitionedResults(args: {
   moduleType: ModuleType;
   groupNames: string[];
   groupResults: ExtractionPipelineResult[];
+  totalGroupCount: number;
+  deadlineExhausted?: boolean;
 }): ExtractionPipelineResult {
-  const { startedAt, moduleType, groupNames, groupResults } = args;
+  const { startedAt, moduleType, groupNames, groupResults, totalGroupCount, deadlineExhausted = false } = args;
 
   const mergedRow: Record<string, unknown> = { _row: 1 };
   const mergedConfidences: Record<string, number> = {};
@@ -1824,6 +1826,7 @@ function mergeFieldPartitionedResults(args: {
   let factsExtractedCount = 0;
   let factsMappedCount = 0;
   let model: string | null = null;
+  const skippedGroupCount = Math.max(0, totalGroupCount - groupResults.length);
 
   groupResults.forEach((result, index) => {
     const groupName = groupNames[index] ?? `group_${index + 1}`;
@@ -1875,6 +1878,24 @@ function mergeFieldPartitionedResults(args: {
         architecture: "llm_field_partitioned",
         group_count: groupResults.length,
         failed_groups: failedGroups,
+      },
+    );
+  }
+  if (skippedGroupCount > 0) {
+    return failureResult(
+      startedAt,
+      `Field-partitioned whole-document LLM stopped after ${groupResults.length} of ${totalGroupCount} field ` +
+      `group call(s) to avoid the normalize worker deadline. Partial extraction was withheld because remaining ` +
+      `groups may contain required lease, rent, CAM, and budget-authority terms.`,
+      {
+        failure_classification: "FIELD_PARTITION_DEADLINE_EXHAUSTED_PARTIAL",
+        architecture: "llm_field_partitioned",
+        group_count: totalGroupCount,
+        processed_group_count: groupResults.length,
+        skipped_group_count: skippedGroupCount,
+        processed_groups: groupNames,
+        failed_groups: failedGroups,
+        field_partition_deadline_exhausted: Boolean(deadlineExhausted),
       },
     );
   }
@@ -1996,8 +2017,10 @@ async function runFieldPartitionedWholeDocumentLlmPipeline(args: {
 
   const groupResults: ExtractionPipelineResult[] = [];
   const groupNames: string[] = [];
-  for (const group of groups) {
+  let deadlineExhausted = false;
+  for (const [index, group] of groups.entries()) {
     if (args.baseArgs.deadlineAt && Date.now() + sectionDeadlineReserveMs() > args.baseArgs.deadlineAt) {
+      deadlineExhausted = true;
       break;
     }
     groupNames.push(group.name);
@@ -2010,7 +2033,7 @@ async function runFieldPartitionedWholeDocumentLlmPipeline(args: {
       maxInputChars: args.maxInputChars,
       provenance: args.baseArgs.provenance,
       operation: "whole_document_lease_extraction_field_partition_v1",
-      section: null,
+      section: { index: index + 1, count: groups.length },
     }));
   }
 
@@ -2027,6 +2050,8 @@ async function runFieldPartitionedWholeDocumentLlmPipeline(args: {
     moduleType: args.baseArgs.moduleType,
     groupNames,
     groupResults,
+    totalGroupCount: groups.length,
+    deadlineExhausted,
   });
 }
 
