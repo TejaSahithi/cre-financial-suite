@@ -189,8 +189,32 @@ export default function Onboarding() {
 
         if (resolvedOrgId) {
           console.log("[Onboarding] Initializing with Org:", resolvedOrgId);
-          const orgData = await OrganizationService.get(resolvedOrgId);
+          let orgData = await OrganizationService.get(resolvedOrgId);
           console.log("[Onboarding] Org data fetched:", { found: !!orgData, status: orgData?.status, step: orgData?.onboarding_step });
+
+          if (!orgData && resolvedOrgId && authUser?.id) {
+            console.warn("[Onboarding] Org record missing in DB, self-healing with ID:", resolvedOrgId);
+            try {
+              const { data: newOrg } = await supabase
+                .from("organizations")
+                .upsert({
+                  id: resolvedOrgId,
+                  name: authUser?.user_metadata?.company_name || "My Organization",
+                  status: "onboarding",
+                  onboarding_step: 1,
+                  primary_contact_email: authUser?.email,
+                  created_by: authUser?.id,
+                  updated_at: new Date().toISOString(),
+                })
+                .select()
+                .single();
+              if (newOrg) {
+                orgData = newOrg;
+              }
+            } catch (err) {
+              console.error("[Onboarding] Auto-provisioning org failed:", err);
+            }
+          }
 
           if (orgData) {
             setOrg(orgData);
@@ -319,9 +343,35 @@ export default function Onboarding() {
         throw new Error("Unable to initialize your organization. Please refresh and try again.");
       }
 
-      if (targetOrg) {
-        console.log('[Onboarding] Updating existing org:', targetOrg.id);
-        savedOrg = await OrganizationService.update(targetOrg.id, { ...form, onboarding_step: 2 });
+      if (targetOrg?.id) {
+        console.log('[Onboarding] Persisting company info for org:', targetOrg.id);
+        const orgPayload = {
+          id: targetOrg.id,
+          name: form.name,
+          address: form.address || null,
+          phone: form.phone || null,
+          timezone: form.timezone || 'America/New_York',
+          currency: form.currency || 'USD',
+          primary_contact_email: form.primary_contact_email,
+          industry: form.industry || 'commercial_re',
+          plan: form.plan || 'professional',
+          onboarding_step: 2,
+          updated_at: new Date().toISOString(),
+        };
+
+        // Upsert directly into Supabase organizations table to ensure row physically exists
+        const { data: upsertedOrg, error: upsertErr } = await supabase
+          .from('organizations')
+          .upsert(orgPayload)
+          .select()
+          .single();
+
+        if (upsertErr || !upsertedOrg) {
+          console.warn('[Onboarding] Supabase direct upsert error, using fallback:', upsertErr);
+          savedOrg = await OrganizationService.update(targetOrg.id, { ...form, onboarding_step: 2 });
+        } else {
+          savedOrg = upsertedOrg;
+        }
       }
 
       if (savedOrg?.id) {
@@ -766,7 +816,35 @@ function PaymentStep({ user, form, setForm, org, onBack }) {
 
     try {
       const planKey = selectedPlan.key;
-      const orgId = org?.id;
+      let orgId = org?.id;
+
+      if (!orgId && authUser?.id) {
+        const { data: mems } = await supabase
+          .from('memberships')
+          .select('org_id')
+          .eq('user_id', authUser.id)
+          .limit(1);
+        orgId = mems?.[0]?.org_id;
+      }
+
+      if (!orgId) {
+        throw new Error('Organization ID could not be resolved. Please go back to Step 1 to verify your company information.');
+      }
+
+      // Pre-flight check & sync: guarantee the org row exists in Supabase DB before calling edge function
+      try {
+        await supabase.from('organizations').upsert({
+          id: orgId,
+          name: form?.name || org?.name || 'My Organization',
+          status: org?.status || 'onboarding',
+          onboarding_step: 3,
+          primary_contact_email: form?.primary_contact_email || user?.email || authUser?.email,
+          created_by: user?.id || authUser?.id,
+          updated_at: new Date().toISOString(),
+        });
+      } catch (syncErr) {
+        console.warn('[Payment] Pre-checkout org sync notice:', syncErr);
+      }
 
       const { data: { session } } = await supabase.auth.getSession();
       const { data, error: fnError } = await supabase.functions.invoke('create-checkout-session', {

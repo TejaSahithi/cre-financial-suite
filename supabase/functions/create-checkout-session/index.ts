@@ -74,14 +74,36 @@ Deno.serve(async (req: Request) => {
     }
 
     // 3. Validate org state
-    const { data: orgData, error: orgError } = await supabaseAdmin
+    let { data: orgData, error: orgError } = await supabaseAdmin
       .from('organizations')
       .select('status, plan, billing_cycle, stripe_customer_id, stripe_sub_id')
       .eq('id', orgId)
-      .single();
+      .maybeSingle();
 
-    if (orgError || !orgData) {
-      return new Response(JSON.stringify({ error: 'Organization not found' }), { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (orgError) {
+      console.warn(`[create-checkout-session] Org fetch query error for ${orgId}:`, orgError);
+    }
+
+    if (!orgData) {
+      console.warn(`[create-checkout-session] Org ${orgId} missing in DB for user ${user.id}, self-healing record...`);
+      const { data: healedOrg, error: healError } = await supabaseAdmin
+        .from('organizations')
+        .upsert({
+          id: orgId,
+          name: user.user_metadata?.company_name || 'My Organization',
+          status: 'onboarding',
+          onboarding_step: 3,
+          primary_contact_email: user.email,
+          created_by: user.id,
+        })
+        .select('status, plan, billing_cycle, stripe_customer_id, stripe_sub_id')
+        .single();
+
+      if (healError || !healedOrg) {
+        console.error('[create-checkout-session] Failed to heal organization record:', healError);
+        return new Response(JSON.stringify({ error: 'Organization not found' }), { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+      orgData = healedOrg;
     }
 
     if (orgData.stripe_sub_id || (orgData.plan && orgData.billing_cycle && orgData.stripe_customer_id)) {

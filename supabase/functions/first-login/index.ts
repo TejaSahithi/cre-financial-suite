@@ -169,6 +169,29 @@ Deno.serve(async (req) => {
     if (existingMemberships && existingMemberships.length > 0) {
       // If membership exists, normalize the profile state and reuse the existing org.
       const existingOrgId = existingMemberships.find((membership: any) => membership?.org_id)?.org_id || null;
+      if (existingOrgId) {
+        // Verify org actually exists in organizations table
+        const { data: orgCheck } = await supabaseAdmin
+          .from('organizations')
+          .select('id')
+          .eq('id', existingOrgId)
+          .maybeSingle();
+
+        if (!orgCheck) {
+          console.warn(`[first-login] Existing org ${existingOrgId} not found in DB, recreating...`);
+          await supabaseAdmin
+            .from('organizations')
+            .upsert({
+              id: existingOrgId,
+              name: (user.user_metadata?.company_name as string | undefined) || 'My Organization',
+              status: 'onboarding',
+              onboarding_step: 1,
+              primary_contact_email: profile?.email || user.email,
+              created_by: user.id,
+            });
+        }
+      }
+
       await supabaseAdmin
         .from('profiles')
         .update({
