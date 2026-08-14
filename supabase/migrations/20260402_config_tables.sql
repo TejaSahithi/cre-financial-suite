@@ -1,5 +1,5 @@
 -- ============================================================
--- CRE Financial Suite — Configuration Tables
+-- ProForma OS — Configuration Tables
 -- property_config: Property-level business rules
 -- lease_config: Lease-specific overrides
 -- ============================================================

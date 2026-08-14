@@ -138,7 +138,7 @@ async function seedSetupScenario(admin, suffix, password) {
   // Pre-enroll TOTP (same pattern as phase4a spec — avoids StrictMode race)
   const anonClient = createClient(SUPABASE_URL, ANON_KEY);
   await anonClient.auth.signInWithPassword({ email: actor.email, password });
-  const { data: enrollData } = await anonClient.auth.mfa.enroll({ factorType: "totp", issuer: "CRE Suite Smoke" });
+  const { data: enrollData } = await anonClient.auth.mfa.enroll({ factorType: "totp", issuer: "ProForma OS Smoke" });
   const totpSecret = enrollData?.totp?.secret;
   if (!totpSecret) throw new Error("MFA enrollment failed — no secret returned");
   const totpCode = generateTotp(totpSecret);

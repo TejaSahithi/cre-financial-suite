@@ -166,6 +166,7 @@ Deno.serve(async (req: Request) => {
 
     const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
     const frontendUrl = resolveFrontendUrl(Deno.env.get('FRONTEND_URL') || Deno.env.get('SITE_URL'));
+    const warnings: string[] = [];
 
     if (approved) {
       if (accessRequest.request_type === 'demo') {
@@ -303,6 +304,7 @@ Deno.serve(async (req: Request) => {
             <p>Welcome aboard,<br/>${BRAND_NAME} Team</p>
           `);
 
+          try {
             const emailRes = await fetch('https://api.resend.com/emails', {
               method: 'POST',
               headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
@@ -315,11 +317,17 @@ Deno.serve(async (req: Request) => {
             });
             
             if (!emailRes.ok) {
-              console.error(`[approve-request] Resend ACCESS Error:`, await emailRes.text());
-              throw new Error("Failed to send approval email via Resend.");
+              const emailErrorText = await emailRes.text();
+              console.error(`[approve-request] Resend ACCESS Error:`, emailErrorText);
+              warnings.push(`Approval saved, but approval email was not sent (${emailRes.status}).`);
             }
+          } catch (emailErr) {
+            console.error('[approve-request] Approval email error (non-fatal):', emailErr.message);
+            warnings.push('Approval saved, but approval email could not be sent.');
+          }
         } else {
           console.warn('[approve-request] RESEND_API_KEY not set — skipping branded email.');
+          warnings.push('Approval saved, but approval email was skipped because RESEND_API_KEY is not configured.');
         }
       }
 
@@ -328,11 +336,16 @@ Deno.serve(async (req: Request) => {
         action: 'approve', actor_user_id: user.id, actor_email: user.email, 
         after: { status: newStatus }, severity: 'info', source: 'edge_function',
       });
-      if (auditErr) throw new Error(`Audit log failed: ${auditErr.message}`);
+      if (auditErr) {
+        console.error('[approve-request] Audit log failed (non-fatal):', auditErr.message);
+        warnings.push('Approval saved, but audit logging failed.');
+      }
 
       return new Response(JSON.stringify({ 
         success: true, status: newStatus,
-        message: `Approval completed for ${accessRequest.email}.`
+        message: `Approval completed for ${accessRequest.email}.`,
+        warning: warnings.join(' '),
+        warnings,
       }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
@@ -381,11 +394,16 @@ Deno.serve(async (req: Request) => {
       action: 'reject', actor_user_id: user.id, actor_email: user.email, 
       after: { status: newStatus }, severity: 'info', source: 'edge_function',
     });
-    if (auditErr) throw new Error(`Audit log failed: ${auditErr.message}`);
+    if (auditErr) {
+      console.error('[approve-request] Audit log failed (non-fatal):', auditErr.message);
+      warnings.push('Rejection saved, but audit logging failed.');
+    }
 
     return new Response(JSON.stringify({ 
       success: true, status: newStatus,
-      message: `Request rejected. Email sent to ${accessRequest.email}.`
+      message: `Request rejected. Email sent to ${accessRequest.email}.`,
+      warning: warnings.join(' '),
+      warnings,
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (err: any) {

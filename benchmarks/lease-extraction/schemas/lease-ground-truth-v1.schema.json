@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cre-financial-suite.local/schemas/lease-ground-truth-v1.schema.json",
+  "$id": "https://proformaos.ai/schemas/lease-ground-truth-v1.schema.json",
   "title": "Lease Extraction Ground Truth Fixture v1",
   "type": "object",
   "required": ["fixtureVersion", "fixtureId", "documentName", "documentType", "propertyType", "sourceFile", "expectedDocumentPages", "expectedFields", "forbiddenExtractions", "expectedApprovalBlockers", "adjudication"],

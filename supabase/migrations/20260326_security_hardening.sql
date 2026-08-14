@@ -1,5 +1,5 @@
 -- ============================================================
--- CRE Financial Suite — Security Hardening Migration
+-- ProForma OS — Security Hardening Migration
 -- Ensures secure state by cleaning up any lingering insecure
 -- policies on critical tables like notifications and audit logs.
 -- NOTE: The primary fixes for memberships, organizations, and

@@ -131,7 +131,7 @@ async function seedReadyProperty(admin, suffix, password) {
   const anonForMfa = createClient(SUPABASE_URL, ANON_KEY);
   const { error: mfaSignInError } = await anonForMfa.auth.signInWithPassword({ email: actor.email, password });
   if (mfaSignInError) throw new Error(JSON.stringify(mfaSignInError));
-  const { data: enrollData, error: enrollError } = await anonForMfa.auth.mfa.enroll({ factorType: "totp", issuer: "CRE Suite", friendlyName: `Seed_${suffix}` });
+  const { data: enrollData, error: enrollError } = await anonForMfa.auth.mfa.enroll({ factorType: "totp", issuer: "ProForma OS", friendlyName: `Seed_${suffix}` });
   if (enrollError) throw new Error(JSON.stringify(enrollError));
   const totpSecret = enrollData.totp.secret;
   const { error: verifyError } = await anonForMfa.auth.mfa.challengeAndVerify({ factorId: enrollData.id, code: generateTotp(totpSecret) });

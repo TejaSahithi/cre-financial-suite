@@ -1,4 +1,4 @@
-# Deployment Guide — CRE Financial Suite
+# Deployment Guide — ProForma OS
 
 Follow these steps **in order** to get the app fully working in production.
 Each step maps to a finding in the audit report.

@@ -1,4 +1,4 @@
-# Schema Sync Checklist — CRE Financial Suite
+# Schema Sync Checklist — ProForma OS
 
 Use this checklist before every staging/production deployment to ensure the
 database schema matches what the application code expects.

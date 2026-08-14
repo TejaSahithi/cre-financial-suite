@@ -1,5 +1,5 @@
 -- ============================================================
--- CRE Financial Suite — Core Schema Extension
+-- ProForma OS — Core Schema Extension
 -- Migrated from Base44 to Native Supabase Triggers
 -- ============================================================
 

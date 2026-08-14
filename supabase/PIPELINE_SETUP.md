@@ -113,7 +113,7 @@ Each Edge Function has a placeholder with TODO comments indicating what needs to
 ### Files Created
 
 ```
-cre-financial-suite-main/
+proforma-os-main/
 ├── supabase/
 │   ├── migrations/
 │   │   └── 20260402_config_tables.sql (NEW)

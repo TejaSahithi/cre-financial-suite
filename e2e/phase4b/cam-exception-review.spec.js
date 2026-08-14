@@ -129,7 +129,7 @@ async function seedRunWithException(admin, suffix, password, exceptionSeverity =
   // Pre-enroll MFA
   const anonClient = createClient(SUPABASE_URL, ANON_KEY);
   await anonClient.auth.signInWithPassword({ email: actor.email, password });
-  const { data: enrollData } = await anonClient.auth.mfa.enroll({ factorType: "totp", issuer: "CRE Suite Smoke" });
+  const { data: enrollData } = await anonClient.auth.mfa.enroll({ factorType: "totp", issuer: "ProForma OS Smoke" });
   const totpSecret = enrollData?.totp?.secret;
   const totpCode = generateTotp(totpSecret);
   const { data: challengeData } = await anonClient.auth.mfa.challenge({ factorId: enrollData.id });

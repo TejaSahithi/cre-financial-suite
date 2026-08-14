@@ -1,5 +1,5 @@
 -- ============================================================
--- CRE Financial Suite — PDF / Docling support
+-- ProForma OS — PDF / Docling support
 -- Adds docling_raw column to uploaded_files for raw OCR output
 -- and extends the status check constraint to include 'pdf_parsed'
 -- ============================================================

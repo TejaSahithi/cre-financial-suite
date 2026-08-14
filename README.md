@@ -1,4 +1,4 @@
-# CRE Financial Suite
+# ProForma OS
 
 A full-stack commercial real estate (CRE) financial management platform that automates lease abstraction, expense tracking, CAM reconciliation, budget creation, and portfolio reporting — replacing manual spreadsheet workflows with an AI-assisted, approval-gated pipeline.
 
@@ -6,7 +6,7 @@ A full-stack commercial real estate (CRE) financial management platform that aut
 
 ## What the Platform Does
 
-Property owners, asset managers, and accountants use CRE Financial Suite to:
+Property owners, asset managers, and accountants use ProForma OS to:
 
 - **Upload a lease PDF** and have the system extract every material term (parties, rent, dates, CAM, security deposit, lease type, etc.) using a hybrid AI + rule-based pipeline, then review and approve the abstract in a structured workflow.
 - **Track operating expenses** against lease-backed recovery rules, classify them automatically, and flag discrepancies before they reach the ledger.

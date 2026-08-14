@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cre-financial-suite.local/schemas/golden-truth-v1.schema.json",
+  "$id": "https://proformaos.ai/schemas/golden-truth-v1.schema.json",
   "title": "Lease Intelligence Golden Truth v1",
   "type": "object",
   "required": ["schemaVersion", "documentId", "documentRole", "fields", "definitions", "crossReferences", "amendmentEffects", "familyEffectiveFields", "expectedFindings"],

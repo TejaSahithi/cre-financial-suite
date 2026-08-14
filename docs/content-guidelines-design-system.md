@@ -1,8 +1,8 @@
-# CRE Financial Suite Content and UI Design System
+# ProForma OS Content and UI Design System
 
 ## Purpose
 
-This document is the design and content system for CRE Financial Suite. Claude Code and any other implementation agent must use this document when building or modifying every page, component, workflow, notification, modal, table, form, chart, and user-facing message in the application.
+This document is the design and content system for ProForma OS. Claude Code and any other implementation agent must use this document when building or modifying every page, component, workflow, notification, modal, table, form, chart, and user-facing message in the application.
 
 The product must feel like a premium financial platform for commercial real estate operations. It should be modern, disciplined, data-dense, audit-aware, and professional. It must not feel like a marketing site, consumer app, generic admin template, or decorative dashboard.
 

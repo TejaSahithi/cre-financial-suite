@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document maps where notifications are mandatory and where notifications can be incorporated in CRE Financial Suite. It is based on the current product flow: lease abstraction, expense tracking, budget review, CAM setup/calculation, CAM reconciliation, critical dates, reporting, and administration.
+This document maps where notifications are mandatory and where notifications can be incorporated in ProForma OS. It is based on the current product flow: lease abstraction, expense tracking, budget review, CAM setup/calculation, CAM reconciliation, critical dates, reporting, and administration.
 
 The app already has a centralized `notifications` table and `Notifications` page. The recommended approach is to continue using that model for in-app notifications, with optional email delivery for time-sensitive or externally owned events.
 
@@ -342,4 +342,3 @@ The current `type` values mix workflow types and generic `approval`. For impleme
 8. Add email delivery for high-priority deadlines, review assignments, rejected budgets, failed computations, and true-up approvals.
 9. Show notification counts in the layout bell or sidebar so users do not have to open the Notification Center to discover urgent work.
 10. Create a daily digest that groups low/medium events by module to prevent notification fatigue.
-

@@ -2,7 +2,7 @@
 
 ## Introduction
 
-The `cre-financial-suite` Vite/React app fails to produce a production build due to two separate bugs. The first is a Rollup module resolution failure caused by an unused import in `src/pages/OrgSettings.jsx` that breaks the module graph and prevents `UserService` from being resolved. The second is a duplicate object key `"draft"` in `src/pages/Workflows.jsx` that esbuild rejects during the transform phase. Both bugs must be fixed for `vite build` to succeed.
+The `proforma-os` Vite/React app fails to produce a production build due to two separate bugs. The first is a Rollup module resolution failure caused by an unused import in `src/pages/OrgSettings.jsx` that breaks the module graph and prevents `UserService` from being resolved. The second is a duplicate object key `"draft"` in `src/pages/Workflows.jsx` that esbuild rejects during the transform phase. Both bugs must be fixed for `vite build` to succeed.
 
 ## Bug Analysis
 

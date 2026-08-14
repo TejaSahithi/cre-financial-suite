@@ -1,5 +1,5 @@
 -- ================================================================
--- CRE Financial Suite — Expense Schema + Storage Fixes
+-- ProForma OS — Expense Schema + Storage Fixes
 -- 1. Add attachment_url column to expenses table
 -- 2. Ensure financial-uploads bucket allows images/PDFs (receipts)
 -- 3. Fix storage RLS so org-less paths like `expenses/filename`

@@ -74,7 +74,7 @@ async function callRpc(client, fn, args) {
 
 async function enrollMfa(anonClient, email, password) {
   await anonClient.auth.signInWithPassword({ email, password });
-  const { data: enrollData } = await anonClient.auth.mfa.enroll({ factorType: "totp", issuer: "CRE Suite Smoke" });
+  const { data: enrollData } = await anonClient.auth.mfa.enroll({ factorType: "totp", issuer: "ProForma OS Smoke" });
   const totpSecret = enrollData?.totp?.secret;
   const totpCode = generateTotp(totpSecret);
   const { data: challengeData } = await anonClient.auth.mfa.challenge({ factorId: enrollData.id });

@@ -1,5 +1,5 @@
 -- ============================================================
--- CRE Financial Suite — Supabase Schema
+-- ProForma OS — Supabase Schema
 -- Profiles, Organizations, Memberships, Access Requests
 -- + Row-Level Security (RLS) policies
 -- ============================================================

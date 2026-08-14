@@ -1,5 +1,5 @@
 -- ============================================================
--- CRE Financial Suite — Pipeline: uploaded_files table
+-- ProForma OS — Pipeline: uploaded_files table
 -- Tracks file uploads through the processing pipeline.
 -- Status flow: uploaded → parsing → validating → processed → failed
 -- ============================================================

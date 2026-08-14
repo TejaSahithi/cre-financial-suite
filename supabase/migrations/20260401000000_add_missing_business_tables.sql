@@ -1,5 +1,5 @@
 -- ============================================================
--- CRE Financial Suite — Missing Business Entity Tables
+-- ProForma OS — Missing Business Entity Tables
 -- Date: 2026-04-01
 -- Adds all business-logic tables that were missing from prior
 -- migrations: CAM, stakeholders, GL accounts, documents,

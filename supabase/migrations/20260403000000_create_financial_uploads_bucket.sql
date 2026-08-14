@@ -1,5 +1,5 @@
 -- ============================================================
--- CRE Financial Suite — Storage: financial-uploads bucket
+-- ProForma OS — Storage: financial-uploads bucket
 -- Creates storage bucket for file uploads in the pipeline
 -- ============================================================
 

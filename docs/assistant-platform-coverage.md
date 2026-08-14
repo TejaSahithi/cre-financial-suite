@@ -1,6 +1,6 @@
 # Assistant Platform Coverage Matrix
 
-This is the ground-truth audit of what the CRE Financial Suite Assistant can and cannot answer,
+This is the ground-truth audit of what the ProForma OS Assistant can and cannot answer,
 page by page, as of this pass. It was built by reading the actual page registry
 (`src/pages.config.js`, 84 routes), `src/lib/rbac.js`/`src/lib/moduleConfig.js`, and the real
 component source for every high-traffic page — not inferred from labels.

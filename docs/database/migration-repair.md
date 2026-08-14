@@ -43,7 +43,7 @@ The 2026-06-03 reset applied all migrations through `20260603110000_send_expense
 After removing a stale `debug-user` function config entry, `supabase db reset --local` completed successfully. On Windows with Supabase CLI `2.84.2`, Kong may still route auth traffic to the old auth container IP after reset. If `/auth/v1/health` returns `502` while the auth container is healthy, restart only the local Kong container and rerun the test:
 
 ```powershell
-docker restart supabase_kong_cre-financial-suite-main
+docker restart supabase_kong_proforma-os-main
 deno test --allow-all supabase/functions/_tests/finance-chain-integration.test.ts
 ```
 

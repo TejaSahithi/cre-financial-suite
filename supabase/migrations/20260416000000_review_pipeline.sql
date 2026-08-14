@@ -1,5 +1,5 @@
 -- ============================================================
--- CRE Financial Suite — Review Pipeline (Phase 0)
+-- ProForma OS — Review Pipeline (Phase 0)
 -- ============================================================
 -- Adds the columns and tables required for the canonical
 -- "one standard extraction pipeline" defined in the principal
