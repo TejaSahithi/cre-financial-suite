@@ -332,6 +332,34 @@ const OPEN_APPROVAL_WORKFLOW_STATUSES = [
   "RESUBMITTED",
 ];
 
+const ACTIVE_APPROVER_STATUSES = new Set(["active", "owner", "approved", "accepted"]);
+const LEASE_APPROVER_ROLE_KEYS = new Set(["org_owner", "org_admin", "property_manager"]);
+const LEASE_APPROVER_ROLE_ALIASES = {
+  owner: "org_owner",
+  org_owner: "org_owner",
+  admin: "org_admin",
+  org_admin: "org_admin",
+  property_manager: "property_manager",
+};
+
+function normalizeLeaseApproverRole(role, status) {
+  if (String(status || "").toLowerCase() === "owner") return "org_owner";
+  const roleKey = String(role || "").trim().toLowerCase();
+  return LEASE_APPROVER_ROLE_ALIASES[roleKey] || roleKey;
+}
+
+function userHasLeaseApproverRole(user, orgId) {
+  const memberships = Array.isArray(user?.memberships) ? user.memberships : [];
+  const orgMemberships = memberships.filter((membership) =>
+    (!orgId || membership?.org_id === orgId) &&
+    ACTIVE_APPROVER_STATUSES.has(String(membership?.status || "active").toLowerCase())
+  );
+  const roles = orgMemberships.length > 0
+    ? orgMemberships.map((membership) => normalizeLeaseApproverRole(membership?.role, membership?.status))
+    : [normalizeLeaseApproverRole(user?._raw_role || user?.role, user?.status)];
+  return roles.some((role) => LEASE_APPROVER_ROLE_KEYS.has(role));
+}
+
 function isApprovalLookupSchemaMissing(error) {
   const message = String(error?.message || error || "");
   return error?.code === "42P01" || error?.code === "PGRST116" || error?.code === "PGRST205" || /does not exist|schema cache|Could not find/i.test(message);
@@ -1790,7 +1818,10 @@ export default function LeaseReview() {
   }
 
   const canApprove = approvalBlockers.length === 0;
-  const canCurrentUserApproveLeaseRequest = Boolean(canApprove && approvalAssignmentQuery.data?.isAssigned);
+  const canCurrentUserSendOrApproveLease = userHasLeaseApproverRole(user, lease?.org_id);
+  const canCurrentUserApproveLeaseRequest = Boolean(
+    canApprove && canCurrentUserSendOrApproveLease && approvalAssignmentQuery.data?.isAssigned
+  );
   const approvalDisabledTooltip = canApprove
     ? "Approve the lease abstract"
     : approvalBlockers
@@ -4368,49 +4399,51 @@ export default function LeaseReview() {
                   {savingDraft && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
                   Save Review Draft
                 </Button>
-                <SendForApprovalButton
-                  orgId={lease.org_id}
-                  eventType="lease.ready_for_approval"
-                  entityType="lease"
-                  entityId={lease.id}
-                  entityLabel={lease.tenant_name ? `${lease.tenant_name} Lease` : "Lease Abstract"}
-                  portfolioId={lease.portfolio_id || null}
-                  propertyId={lease.property_id || null}
-                  actionUrl={`${createPageUrl("LeaseReview")}?id=${lease.id}`}
-                  disabled={!lease.id || !lease.org_id || !canApprove}
-                  title={canApprove ? "Send this lease abstract for approval" : approvalDisabledTooltip}
-                  onBeforeSend={markLeasePendingApproval}
-                  onSent={() => {
-                    queryClient.invalidateQueries({ queryKey: ["lease-approval-assignment", lease?.org_id, lease?.id] });
-                    queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
-                  }}
-                  metadata={{
-                    source: "lease_review_manual_send_for_approval",
-                    abstract_status: lease.abstract_status || null,
-                    extraction_status: lease.extraction_status || null,
-                  }}
-                />
+                {canCurrentUserSendOrApproveLease && (
+                  <SendForApprovalButton
+                    orgId={lease.org_id}
+                    eventType="lease.ready_for_approval"
+                    entityType="lease"
+                    entityId={lease.id}
+                    entityLabel={lease.tenant_name ? `${lease.tenant_name} Lease` : "Lease Abstract"}
+                    portfolioId={lease.portfolio_id || null}
+                    propertyId={lease.property_id || null}
+                    actionUrl={`${createPageUrl("LeaseReview")}?id=${lease.id}`}
+                    disabled={!lease.id || !lease.org_id || !canApprove}
+                    title={canApprove ? "Send this lease abstract for approval" : approvalDisabledTooltip}
+                    onBeforeSend={markLeasePendingApproval}
+                    onSent={() => {
+                      queryClient.invalidateQueries({ queryKey: ["lease-approval-assignment", lease?.org_id, lease?.id] });
+                      queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+                    }}
+                    metadata={{
+                      source: "lease_review_manual_send_for_approval",
+                      abstract_status: lease.abstract_status || null,
+                      extraction_status: lease.extraction_status || null,
+                    }}
+                  />
+                )}
                 {canCurrentUserApproveLeaseRequest && (
                   <Button
-                  className={
-                    canApprove
-                      ? "bg-emerald-600 hover:bg-emerald-700"
-                      : "border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
-                  }
-                  onClick={() => {
-                    if (!canApprove) {
-                      approvalBlockers.forEach((b) =>
-                        toast.error(b.title, { description: b.detail, duration: 7000 })
-                      );
-                      return;
+                    className={
+                      canApprove
+                        ? "bg-emerald-600 hover:bg-emerald-700"
+                        : "border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
                     }
-                    setShowApproval(true);
-                  }}
-                  disabled={!canApprove}
-                  title={approvalDisabledTooltip}
-                >
-                  <CheckCircle2 className="mr-1 h-4 w-4" />
-                  Approve Lease Abstract
+                    onClick={() => {
+                      if (!canApprove) {
+                        approvalBlockers.forEach((b) =>
+                          toast.error(b.title, { description: b.detail, duration: 7000 })
+                        );
+                        return;
+                      }
+                      setShowApproval(true);
+                    }}
+                    disabled={!canApprove}
+                    title={approvalDisabledTooltip}
+                  >
+                    <CheckCircle2 className="mr-1 h-4 w-4" />
+                    Approve Lease Abstract
                   </Button>
                 )}
               </div>

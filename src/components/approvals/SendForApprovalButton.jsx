@@ -21,6 +21,24 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
 const ACTIVE_STATUSES = new Set(["active", "owner", "approved", "accepted"]);
+const APPROVER_ROLE_KEYS = new Set(["org_owner", "org_admin", "property_manager"]);
+const APPROVER_ROLE_ALIASES = {
+  owner: "org_owner",
+  org_owner: "org_owner",
+  admin: "org_admin",
+  org_admin: "org_admin",
+  property_manager: "property_manager",
+};
+
+function normalizeApproverRole(role, status) {
+  if (String(status || "").toLowerCase() === "owner") return "org_owner";
+  const roleKey = String(role || "").trim().toLowerCase();
+  return APPROVER_ROLE_ALIASES[roleKey] || roleKey;
+}
+
+function isApprovalRecipientRole(membership) {
+  return APPROVER_ROLE_KEYS.has(normalizeApproverRole(membership?.role, membership?.status));
+}
 
 function roleLabel(role) {
   return String(role || "member")
@@ -78,7 +96,8 @@ export default function SendForApprovalButton({
 
         const activeMemberships = (membershipRows || [])
           .filter((membership) => ACTIVE_STATUSES.has(String(membership.status || "active").toLowerCase()))
-          .filter((membership) => membership.user_id && membership.user_id !== user?.id);
+          .filter((membership) => membership.user_id && membership.user_id !== user?.id)
+          .filter(isApprovalRecipientRole);
 
         const profileIds = [...new Set(activeMemberships.map((membership) => membership.user_id).filter(Boolean))];
         const { data: profileRows, error: profileError } = profileIds.length > 0
@@ -97,7 +116,7 @@ export default function SendForApprovalButton({
             return {
               id: membership.id,
               user_id: membership.user_id,
-              role: membership.custom_role || membership.role,
+              role: normalizeApproverRole(membership.role, membership.status) || membership.role,
               full_name: profile.full_name,
               email: profile.email,
             };
@@ -245,7 +264,7 @@ export default function SendForApprovalButton({
                   </div>
                 ) : members.length === 0 ? (
                   <div className="px-4 py-6 text-center text-sm text-slate-500">
-                    No active approvers found in this organization.
+                    No active org owners, org admins, or property managers found in this organization.
                   </div>
                 ) : (
                   members.map((member) => (

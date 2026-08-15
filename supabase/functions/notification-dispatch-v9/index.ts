@@ -64,6 +64,7 @@ const ROLE_ALIASES = Object.freeze({
   asset_owner: ROLES.ASSET_OWNER,
   tenant: ROLES.TENANT,
 });
+const LEASE_APPROVER_ROLES = new Set([ROLES.ORG_OWNER, ROLES.ORG_ADMIN, ROLES.PROPERTY_MANAGER]);
 const STANDARD_PERMISSIONS = Object.freeze({
   [ROLES.ORG_OWNER]: ["*.*"],
   [ROLES.ORG_ADMIN]: ["*.*"],
@@ -1325,6 +1326,14 @@ function addRecipient(map: Map<string, any>, event: any, policy: any, rule: any,
   });
 }
 
+function isLeaseApprovalRecipientRule(event: any, rule: any) {
+  return String(event?.entity_type || "").toLowerCase() === "lease" && rule?.notificationType === TYPES.APPROVAL_REQUIRED;
+}
+
+function memberHasLeaseApprovalRole(membership: any) {
+  return LEASE_APPROVER_ROLES.has(normalizeRole(membership?.role, membership));
+}
+
 function resolveInternalRecipients(event: any, policy: any, rule: any, context: any, map: Map<string, any>) {
   if (!conditionMatches(rule, event)) return;
   const assignedUserIds = new Set([
@@ -1336,6 +1345,8 @@ function resolveInternalRecipients(event: any, policy: any, rule: any, context: 
   ].filter(Boolean));
 
   context.memberships.forEach((membership: any) => {
+    if (isLeaseApprovalRecipientRule(event, rule) && !memberHasLeaseApprovalRole(membership)) return;
+
     const isAssignedMatch = rule.assigned && assignedUserIds.has(membership.user_id);
     const isRoleMatch = rule.role ? memberMatchesRole(membership, rule.role) : false;
     const permission = requiredPermission(rule, policy);
