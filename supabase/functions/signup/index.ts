@@ -655,6 +655,12 @@ async function sendFlowEmail({
     ? `Complete your ${BRAND_NAME} account setup`
     : `Confirm your ${BRAND_NAME} account`;
 
+  console.info("[signup] sending auth flow email:", {
+    to: email,
+    subject,
+    flow,
+  });
+
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
@@ -668,9 +674,23 @@ async function sendFlowEmail({
 
   if (!res.ok) {
     const body = await res.text();
-    console.error("[signup] Resend error:", body);
+    console.error("[signup] Resend error:", {
+      status: res.status,
+      to: email,
+      subject,
+      flow,
+      error: body || res.statusText,
+    });
     throw new Error(`Resend failed to send ${flow} email: ${body || res.statusText}`);
   }
+
+  const payload = await res.json().catch(() => ({}));
+  console.info("[signup] auth flow email sent:", {
+    to: email,
+    subject,
+    flow,
+    provider_message_id: payload?.id || null,
+  });
 }
 
 /**

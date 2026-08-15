@@ -1783,7 +1783,13 @@ async function recordDelivery(supabaseAdmin: any, notificationId: string, channe
 async function sendDeliveryWithIdempotency(supabaseAdmin: any, event: any, notificationId: string, channel: string, destination: string, sender: () => Promise<any>) {
   const idempotencyKey = deliveryIdempotencyKey({ notificationId, channel, destination });
   const existing = await loadDeliveryByKey(supabaseAdmin, idempotencyKey);
-  if (existing && ["sent", "queued", "skipped"].includes(String(existing.status || "").toLowerCase())) {
+  if (existing && ["sent", "queued"].includes(String(existing.status || "").toLowerCase())) {
+    console.info("[notification-dispatch-v9] delivery already recorded:", {
+      notification_id: notificationId,
+      channel,
+      status: existing.status,
+      idempotency_key: idempotencyKey,
+    });
     return { ...existing, status: existing.status, idempotent: true, error_message: existing.error_message || "delivery already recorded" };
   }
   if (existing && String(existing.status || "").toLowerCase() === "failed" && event.retry_failed_deliveries === false) {
@@ -1846,6 +1852,25 @@ async function dispatchBusinessEvent(req: Request, body: any) {
   let smsSentCount = 0;
   let smsFailedCount = 0;
   let smsSkippedCount = 0;
+
+  console.info("[notification-dispatch-v9] dispatch started:", {
+    event_type: eventType,
+    org_id: orgId,
+    entity_type: event.entity_type,
+    entity_id: event.entity_id || null,
+    portfolio_id: event.portfolio_id || null,
+    property_id: event.property_id || null,
+    recipient_count: recipients.length,
+  });
+
+  if (recipients.length === 0) {
+    console.warn("[notification-dispatch-v9] no recipients matched event:", {
+      event_type: eventType,
+      org_id: orgId,
+      entity_type: event.entity_type,
+      entity_id: event.entity_id || null,
+    });
+  }
 
   await logAudit(supabaseAdmin, {
     action: "notification_event_created",
@@ -1929,6 +1954,22 @@ async function dispatchBusinessEvent(req: Request, body: any) {
       sms_error: smsResult.error_message || null,
     });
   }
+
+  console.info("[notification-dispatch-v9] dispatch completed:", {
+    event_type: eventType,
+    org_id: orgId,
+    recipient_count: recipients.length,
+    email: {
+      sent: emailSentCount,
+      failed: emailFailedCount,
+      skipped: emailSkippedCount,
+    },
+    sms: {
+      sent: smsSentCount,
+      failed: smsFailedCount,
+      skipped: smsSkippedCount,
+    },
+  });
 
   return jsonResponse({
     schemaVersion: "notification-dispatch-response-v2",

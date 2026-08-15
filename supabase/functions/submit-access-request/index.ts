@@ -133,6 +133,11 @@ async function sendEmail({ resendKey, from, to, subject, html }: any) {
     return { ok: false, warning: "RESEND_API_KEY is not configured." };
   }
 
+  console.info("[submit-access-request] sending email:", {
+    to: Array.isArray(to) ? to : [to],
+    subject,
+  });
+
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
@@ -146,10 +151,21 @@ async function sendEmail({ resendKey, from, to, subject, html }: any) {
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
+    console.error("[submit-access-request] Resend email failed:", {
+      status: response.status,
+      to: Array.isArray(to) ? to : [to],
+      subject,
+      error: errorText || response.statusText,
+    });
     return { ok: false, warning: `Email send failed (${response.status}): ${errorText || response.statusText}` };
   }
 
   const payload = await response.json().catch(() => ({}));
+  console.info("[submit-access-request] email sent:", {
+    to: Array.isArray(to) ? to : [to],
+    subject,
+    provider_message_id: payload?.id || null,
+  });
   return { ok: true, id: payload?.id || null };
 }
 

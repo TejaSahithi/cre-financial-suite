@@ -403,6 +403,12 @@ Deno.serve(async (req) => {
 
     const body = await req.json();
     const { templateId, variables = {}, to, html, subject, from } = body;
+    console.info('[send-email] request received:', {
+      templateId: templateId || null,
+      hasTo: Boolean(to),
+      hasAuthorization: Boolean(authorization),
+      caller: user?.email || 'anon',
+    });
 
     if (html || subject || from) {
        return new Response(JSON.stringify({ error: 'Arbitrary html, subject, and from are not allowed. Please use templateId and variables.' }), {
@@ -494,7 +500,12 @@ Deno.serve(async (req) => {
     const data = await res.json();
 
     if (!res.ok) {
-      console.error(`[send-email] Resend API error:`, data);
+      console.error(`[send-email] Resend API error:`, {
+        status: res.status,
+        templateId,
+        to: finalTo,
+        error: data,
+      });
       return new Response(JSON.stringify({ error: 'Failed to send email' }), {
         status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });

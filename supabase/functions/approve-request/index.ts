@@ -292,6 +292,12 @@ Deno.serve(async (req: Request) => {
           
           if (!emailRes.ok) {
             console.error(`[approve-request] Resend DEMO Error:`, await emailRes.text());
+          } else {
+            const payload = await emailRes.json().catch(() => ({}));
+            console.info('[approve-request] demo follow-up email sent:', {
+              to: accessRequest.email,
+              provider_message_id: payload?.id || null,
+            });
           }
         }
       } else {
@@ -356,6 +362,10 @@ Deno.serve(async (req: Request) => {
           `);
 
           try {
+            console.info('[approve-request] sending approval email:', {
+              to: accessRequest.email,
+              request_id: requestId,
+            });
             const emailRes = await fetch('https://api.resend.com/emails', {
               method: 'POST',
               headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
@@ -371,6 +381,13 @@ Deno.serve(async (req: Request) => {
               const emailErrorText = await emailRes.text();
               console.error(`[approve-request] Resend ACCESS Error:`, emailErrorText);
               warnings.push(`Approval saved, but approval email was not sent (${emailRes.status}).`);
+            } else {
+              const payload = await emailRes.json().catch(() => ({}));
+              console.info('[approve-request] approval email sent:', {
+                to: accessRequest.email,
+                request_id: requestId,
+                provider_message_id: payload?.id || null,
+              });
             }
           } catch (emailErr) {
             console.error('[approve-request] Approval email error (non-fatal):', emailErr.message);
@@ -442,7 +459,12 @@ Deno.serve(async (req: Request) => {
           // Log but do not fail the rejection operation itself
           console.error(`[approve-request] Rejection email send failed (${rejRes.status}):`, await rejRes.text());
         } else {
-          console.log(`[approve-request] Rejection email sent to ${accessRequest.email}`);
+          const payload = await rejRes.json().catch(() => ({}));
+          console.info('[approve-request] rejection email sent:', {
+            to: accessRequest.email,
+            request_id: requestId,
+            provider_message_id: payload?.id || null,
+          });
         }
       } catch (emailErr) {
         // Email failure must not block the DB rejection

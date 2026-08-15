@@ -550,6 +550,11 @@ Deno.serve(async (req: Request) => {
       </html>`;
 
     try {
+      console.info("[invite-user] sending invite email:", {
+        to: normalizedEmail,
+        subject: title,
+        flow: isNewUser ? "new_user" : "existing_user",
+      });
       const emailResponse = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
@@ -563,7 +568,12 @@ Deno.serve(async (req: Request) => {
       const emailPayload = await emailResponse.json().catch(() => ({}));
       if (!emailResponse.ok) {
         const providerMessage = emailPayload?.message || emailPayload?.error || "Resend rejected the invite email";
-        console.error("[invite-user] Resend error:", providerMessage);
+        console.error("[invite-user] Resend error:", {
+          status: emailResponse.status,
+          to: normalizedEmail,
+          subject: title,
+          error: providerMessage,
+        });
         return new Response(JSON.stringify({
           error: "Invite email failed to send.",
           details: providerMessage,
@@ -572,6 +582,11 @@ Deno.serve(async (req: Request) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
+      console.info("[invite-user] invite email sent:", {
+        to: normalizedEmail,
+        subject: title,
+        provider_message_id: emailPayload?.id || null,
+      });
     } catch (e: any) {
       console.error("[invite-user] email send err:", e.message);
       return new Response(JSON.stringify({
