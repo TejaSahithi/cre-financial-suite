@@ -16,7 +16,11 @@ function resolveFrontendUrl(value?: string | null) {
   let url = String(value || "").trim().replace(/\/+$/, "");
   if (!url || /(vercel\.app|localhost)/i.test(url)) return DEFAULT_FRONTEND_URL;
   if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
-  return url;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return DEFAULT_FRONTEND_URL;
+  }
 }
 
 const SYSTEM_ROLE_ALIASES: Record<string, string> = {
@@ -97,7 +101,7 @@ function formatRoleLabel(role: unknown) {
 }
 
 function buildAcceptInviteUrl(frontendUrl: string, params: Record<string, string>) {
-  const url = new URL("/AcceptInvite", frontendUrl);
+  const url = new URL("/AcceptInvite", resolveFrontendUrl(frontendUrl));
   Object.entries(params).forEach(([key, value]) => {
     if (value) url.searchParams.set(key, value);
   });
