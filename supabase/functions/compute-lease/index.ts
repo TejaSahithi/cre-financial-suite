@@ -3,6 +3,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from "../_shared/supabase.ts";
 import { saveSnapshot, findMatchingCompletedSnapshot } from "../_shared/snapshot.ts";
 import {
+  APPROVED_RENT_SCHEDULE_GENERATOR_VERSION,
   asInteger,
   asNumber,
   asText,
@@ -272,7 +273,8 @@ async function ensureApprovedRentSchedules(
     return !rows.some((row) =>
       row.source === "approved_abstract" &&
       row.phase === "contracted" &&
-      (asInteger(row.abstract_version) ?? 1) === currentVersion,
+      (asInteger(row.abstract_version) ?? 1) === currentVersion &&
+      row?.metadata?.generator_version === APPROVED_RENT_SCHEDULE_GENERATOR_VERSION,
     );
   });
 

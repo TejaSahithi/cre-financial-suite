@@ -49,6 +49,8 @@ export interface RentScheduleRowInput {
   metadata?: Record<string, unknown> | null;
 }
 
+export const APPROVED_RENT_SCHEDULE_GENERATOR_VERSION = "approved-rent-schedule-v2";
+
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export function normalizeProjectionMode(mode?: string | null): ProjectionMode {
@@ -170,6 +172,10 @@ function extractedFields(lease: Record<string, any>): Record<string, any> {
   return safeObject(lease?.extracted_fields);
 }
 
+function reviewFields(lease: Record<string, any>): Record<string, any> {
+  return safeObject(lease?.extraction_data?.field_reviews);
+}
+
 const APPROVED_FIELD_ALIASES: Record<string, string[]> = {
   commencement_date: ["commencement_date", "start_date", "lease_start_date", "term_start_date"],
   rent_commencement_date: ["rent_commencement_date", "commencement_date", "start_date", "lease_start_date", "term_start_date"],
@@ -261,10 +267,26 @@ export function approvedFieldValue(
     if (isPresent(snapshotValue)) return snapshotValue;
   }
 
-  // Current approved leases carry abstract_snapshot.approved. Do not publish
-  // pending extraction fields into schedules. Fall back only for legacy rows
-  // that predate the approval snapshot contract.
-  if (hasAbstractSnapshot(lease)) return null;
+  const reviews = reviewFields(lease);
+  for (const key of candidates) {
+    const reviewEntry = reviews[key];
+    if (!isApprovedSnapshotEntry(reviewEntry)) continue;
+    const reviewValue = valueFromCandidate(reviewEntry);
+    if (isPresent(reviewValue)) return reviewValue;
+  }
+
+  // Approved leases may predate a complete abstract_snapshot.approved payload
+  // or may have approved values mirrored only onto the lease columns. Once the
+  // lease itself is approved, those columns are authoritative enough for rent
+  // schedule publication; before approval we still refuse to publish pending
+  // extraction data.
+  if (hasAbstractSnapshot(lease)) {
+    if (!isApprovedLease(lease)) return null;
+    for (const key of candidates) {
+      if (isPresent(lease?.[key])) return lease[key];
+    }
+    return null;
+  }
 
   const extraction = extractionFields(lease);
   const extracted = extractedFields(lease);
@@ -490,7 +512,8 @@ export function generateApprovedRentScheduleRows(lease: Record<string, any>): Re
       assumption_reason: indexEscalationNote,
       notes: indexEscalationNote,
       metadata: {
-        month_key: monthKey(monthStart),
+          generator_version: APPROVED_RENT_SCHEDULE_GENERATOR_VERSION,
+          month_key: monthKey(monthStart),
         full_month_amount: round2(fullMonthly),
         scheduled_amount: isFreeRent ? 0 : round2(fullMonthly * (overlapDays / monthDays)),
         overlap_days: overlapDays,
@@ -527,6 +550,7 @@ export function generateApprovedRentScheduleRows(lease: Record<string, any>): Re
         approved_by: lease?.abstract_approved_by ?? null,
         source: "approved_abstract",
         metadata: {
+          generator_version: APPROVED_RENT_SCHEDULE_GENERATOR_VERSION,
           month_key: monthKey(monthStart),
           scheduled_amount: round2(extraCharge.monthlyAmount * (overlapDays / monthDays)),
           overlap_days: overlapDays,
@@ -663,6 +687,7 @@ export function buildAssumedRenewalRows(
         source: "assumption",
         assumption_reason: "assumed_renewal",
         metadata: {
+          generator_version: APPROVED_RENT_SCHEDULE_GENERATOR_VERSION,
           month_key: monthKey(monthStart),
           renewal_escalation_percent: renewalEscalationPct,
         },
@@ -690,6 +715,7 @@ export function buildAssumedRenewalRows(
         source: "assumption",
         assumption_reason: "holdover",
         metadata: {
+          generator_version: APPROVED_RENT_SCHEDULE_GENERATOR_VERSION,
           month_key: monthKey(monthStart),
           holdover_multiplier: holdoverMultiplier,
         },

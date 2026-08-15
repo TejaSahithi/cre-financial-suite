@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { supabase } from "@/services/supabaseClient";
 import {
   Sheet,
   SheetContent,
@@ -153,17 +154,53 @@ export default function FieldDetailDrawer({
     && (review?.status === REVIEW_STATUSES.ACCEPTED || review?.status === REVIEW_STATUSES.EDITED);
   const hasStoredOverride = typeof review?.note === "string" && review.note.trim().length > 0;
 
-  // Load audit history when drawer opens.
+  // Load audit history when drawer opens. Keep this best-effort because older
+  // environments have drifted audit schemas, but do not hide history when the
+  // canonical audit table is readable.
   useEffect(() => {
-    // Browser-side audit history is optional. The deployed audit_logs table
-    // has drifted across environments, so probing it from every Actions open
-    // creates noisy 400s even though field review works from
-    // leases.extraction_data.field_reviews. Keep the drawer focused on the
-    // editable review state and leave audit history blank unless a stable
-    // API endpoint is added later.
-    setHistory([]);
-    setHistoryLoading(false);
-  }, [open, field?.key, lease?.id, review?.reviewed_at]);
+    if (!open || !lease?.id || !fieldKey || !supabase) {
+      setHistory([]);
+      setHistoryLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setHistoryLoading(true);
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("audit_logs")
+          .select("id, entity_type, entity_id, action, actor_email, user_email, metadata, before, after, old_value, new_value, timestamp, created_at")
+          .eq("entity_id", lease.id)
+          .order("timestamp", { ascending: false })
+          .limit(75);
+        if (error) throw error;
+
+        const rows = (data || []).filter((row) => {
+          const metadata = row?.metadata && typeof row.metadata === "object" ? row.metadata : {};
+          const before = row?.before && typeof row.before === "object" ? row.before : {};
+          const after = row?.after && typeof row.after === "object" ? row.after : {};
+          return (
+            row?.entity_type === "LeaseFieldReview" ||
+            metadata.field_key === fieldKey ||
+            metadata.fieldKey === fieldKey ||
+            before.field_key === fieldKey ||
+            after.field_key === fieldKey
+          );
+        });
+        if (!cancelled) setHistory(rows.slice(0, 10));
+      } catch (err) {
+        console.warn("[FieldDetailDrawer] audit history unavailable:", err?.message || err);
+        if (!cancelled) setHistory([]);
+      } finally {
+        if (!cancelled) setHistoryLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, fieldKey, lease?.id, review?.reviewed_at]);
 
   if (!field) return null;
 
@@ -455,12 +492,12 @@ export default function FieldDetailDrawer({
                       <span className="text-[10px] text-slate-500">{formatTime(row.timestamp || row.created_at)}</span>
                     </div>
                     <div className="mt-0.5 text-[11px] text-slate-600">
-                      {row.user_email || row.user_name || "system"}
+                      {row.actor_email || row.user_email || "system"}
                     </div>
                     {(row.old_value || row.new_value) && (
                       <div className="mt-0.5 text-[11px] text-slate-500">
-                        {row.old_value ? `from ${row.old_value} ` : ""}
-                        {row.new_value ? `-> ${row.new_value}` : ""}
+                        {row.old_value ? `from ${row.old_value} ` : row.before?.value ? `from ${row.before.value} ` : ""}
+                        {row.new_value ? `-> ${row.new_value}` : row.after?.value ? `-> ${row.after.value}` : ""}
                       </div>
                     )}
                   </li>
