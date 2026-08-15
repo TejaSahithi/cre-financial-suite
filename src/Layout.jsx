@@ -14,6 +14,13 @@ import {
   Search, User, Layers, ArrowLeftRight, Sun, Moon
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import AssistantPanel from "@/assistant/AssistantPanel";
 import ProFormaBrand from "@/components/ProFormaBrand";
 import { useAssistantContext } from "@/assistant/useAssistantContext";
@@ -134,6 +141,11 @@ const SIDEBAR_MIN_WIDTH = 236;
 const SIDEBAR_MAX_WIDTH = 360;
 const SIDEBAR_COLLAPSED_WIDTH = 78;
 
+function formatUserLabel(value, fallback = "User") {
+  const raw = String(value || fallback).replace(/_/g, " ").trim();
+  return raw.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 function NavItem({ item, currentPageName, collapsed, onNavigate }) {
   const [open, setOpen] = useState(false);
   const isActive = item.page === currentPageName || item.children?.some(c => c.page === currentPageName);
@@ -205,6 +217,11 @@ export default function Layout({ children, currentPageName }) {
     : filterNavForRole(navSections, user?.role, user);
   const visibleNav = filterNavForModules(baseNav, enabledModules, user);
   const currentPageLabel = PAGE_LABELS[currentPageName] || currentPageName;
+  const profileName = user?.full_name || user?.profile?.full_name || user?.email?.split("@")[0] || "User";
+  const profileEmail = user?.email || "No email available";
+  const profileRole = isSuperAdmin(user) ? "SuperAdmin" : formatUserLabel(user?.role || user?._raw_role);
+  const profileOrg = user?.activeOrg?.name || user?.activeOrg?.company_name || user?.profile?.company_name || "No active organization";
+  const profileStatus = formatUserLabel(user?.profile?.status || (user ? "active" : "signed_out"), "Active");
 
   // Handle unauthenticated state if on a protected page
   useEffect(() => {
@@ -375,15 +392,58 @@ export default function Layout({ children, currentPageName }) {
               <span className="cre-theme-track"><span className="cre-theme-thumb" /></span>
               <Moon className="h-3.5 w-3.5" />
             </button>
-            <div className="cre-top-action flex items-center gap-2 px-2">
-              <div className="grid h-8 w-8 place-items-center rounded-full bg-[var(--sidebar)] text-xs font-bold text-white">
-                <User className="w-4 h-4" />
-              </div>
-              <div className="hidden min-w-0 lg:block">
-                <p className="max-w-[150px] truncate text-xs font-semibold text-[var(--ink)]">{user?.full_name || "User"}</p>
-                <p className="max-w-[150px] truncate text-[10px] capitalize text-[var(--muted)]">{isSuperAdmin(user) ? "SuperAdmin" : (user?.role || "User").replace("_", " ")}</p>
-              </div>
-            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button type="button" className="cre-top-action flex items-center gap-2 px-2 text-left" aria-label="Open user profile details">
+                  <div className="grid h-8 w-8 place-items-center rounded-full bg-[var(--sidebar)] text-xs font-bold text-white">
+                    <User className="w-4 h-4" />
+                  </div>
+                  <div className="hidden min-w-0 lg:block">
+                    <p className="max-w-[150px] truncate text-xs font-semibold text-[var(--ink)]">{profileName}</p>
+                    <p className="max-w-[150px] truncate text-[10px] text-[var(--muted)]">{profileRole}</p>
+                  </div>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-80 p-0">
+                <div className="border-b border-slate-200 px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="grid h-11 w-11 place-items-center rounded-full bg-[var(--sidebar)] text-white">
+                      <User className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-950">{profileName}</p>
+                      <p className="truncate text-xs text-slate-500">{profileEmail}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-2 px-4 py-3 text-xs">
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="text-slate-500">Role</span>
+                    <span className="text-right font-semibold text-slate-900">{profileRole}</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="text-slate-500">Organization</span>
+                    <span className="max-w-[180px] text-right font-semibold text-slate-900">{profileOrg}</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="text-slate-500">Status</span>
+                    <span className="font-semibold text-emerald-700">{profileStatus}</span>
+                  </div>
+                </div>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild className="cursor-pointer">
+                  <Link to={createPageUrl("OrgSettings")}>Organization settings</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild className="cursor-pointer">
+                  <Link to={createPageUrl("UserManagement")}>Team management</Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem className="cursor-pointer text-red-600 focus:text-red-700" onSelect={() => authContextLogout(true)}>
+                  <LogOut className="h-4 w-4" />
+                  Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </header>
         <main className="cre-main flex-1">{children}</main>
