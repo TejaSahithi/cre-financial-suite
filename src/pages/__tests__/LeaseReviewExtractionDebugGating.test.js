@@ -17,8 +17,8 @@ describe("LeaseReview Extraction Debug tab gating (Task G.1)", () => {
     expect(source).toContain("const isSuperAdminUser = isSuperAdmin(user);");
   });
 
-  it("hides the extraction_debug tab from the tab list for non-superadmins", () => {
-    expect(source).toContain('if (tab.key === "extraction_debug" && !isSuperAdminUser) return null;');
+  it("hides extraction diagnostics tabs from the tab list for non-superadmins", () => {
+    expect(source).toContain('if (["extraction_debug", "extraction_timeline"].includes(tab.key) && !isSuperAdminUser) return null;');
   });
 
   it("only renders <ExtractionDebugPanel> inside an isSuperAdminUser-gated block", () => {

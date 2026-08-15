@@ -119,10 +119,10 @@ describe('expenseService.updateExpenseWorkflow', () => {
     expect(payload.expense.vendor).toBe('New Vendor');
     expect(payload.expense.category).toBe('CAM');
     expect(payload.expense.property_id).toBe('property-1');
-    // Status aliases stay synced so the grid and classification workflows read the same value.
-    expect(payload.expense.approval_status).toBe('pending');
-    expect(payload.expense.approved_status).toBe('pending');
-    expect(payload.expense.review_status).toBe('pending');
+    // Detail edits must not bypass dedicated review/approval workflow commands.
+    expect(payload.expense).not.toHaveProperty('approval_status');
+    expect(payload.expense).not.toHaveProperty('approved_status');
+    expect(payload.expense).not.toHaveProperty('review_status');
     expect(result.id).toBe('expense-1');
     expect(result.amount).toBe(1750);
 

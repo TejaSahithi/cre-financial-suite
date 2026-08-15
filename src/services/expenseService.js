@@ -156,6 +156,16 @@ function buildActualExpenseWorkflowPayload(expense = {}) {
 
 
 
+function buildActualExpenseDetailEditPayload(expense = {}) {
+  const payload = buildActualExpenseWorkflowPayload(expense);
+  // Detail edits use update_expense_details, which intentionally preserves
+  // workflow status through dedicated review/approval commands only.
+  delete payload.approval_status;
+  delete payload.approved_status;
+  delete payload.review_status;
+  return payload;
+}
+
 function normalizeRecoveryStatus(rule) {
   return leaseExpenseRuleService.normalizeRecoveryStatus(rule);
 }
@@ -1693,7 +1703,7 @@ export const expenseService = {
     const { expense } = await this.resolveExpenseLeaseLink(merged);
     const result = await invokeEdgeFunction("update-expense-details", {
       expense_id: id,
-      expense: buildActualExpenseWorkflowPayload(expense),
+      expense: buildActualExpenseDetailEditPayload(expense),
     });
     clearCache();
     this.autoSyncVendorsFromExpenses([expense]).catch(() => null);
