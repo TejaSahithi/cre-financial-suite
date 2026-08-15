@@ -80,6 +80,26 @@ describe("rentScheduleUtils", () => {
     expect(schedule.months[4]).toMatchObject({ month: "May", amount: 1400, isPartial: true });
     expect(schedule.total).toBe(6200);
   });
+  it("applies approved abstract annual escalation when no stored rent schedule exists", () => {
+    const leaseRow = {
+      rent_commencement_date: "2026-02-01",
+      lease_end: "2030-12-31",
+      monthly_rent: 27600,
+      escalation_rate: 3,
+      escalation_timing: "lease_anniversary",
+    };
+
+    const fy2028 = buildLeaseYearSchedule(leaseRow, [], 2028);
+    const fy2029 = buildLeaseYearSchedule(leaseRow, [], 2029);
+
+    expect(fy2028.source).toBe("approved abstract preview (escalated)");
+    expect(fy2028.months[0]).toMatchObject({ month: "Jan", amount: 28428 });
+    expect(fy2028.months[1]).toMatchObject({ month: "Feb", amount: 29280.84 });
+    expect(fy2028.total).toBe(350517.24);
+    expect(fy2029.months[0]).toMatchObject({ month: "Jan", amount: 29280.84 });
+    expect(fy2029.months[1]).toMatchObject({ month: "Feb", amount: 30159.27 });
+    expect(fy2029.total).toBe(361032.81);
+  });
   it("includes lease-active historical fiscal years in the selector options", () => {
     const years = buildRentFiscalYearOptions({
       selectedYear: 2025,

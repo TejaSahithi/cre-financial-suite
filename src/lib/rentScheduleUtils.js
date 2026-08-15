@@ -146,26 +146,146 @@ export function scheduleRowAmountForMonth(row, monthStart, monthEnd) {
   };
 }
 
-export function previewAmountForMonth(row, monthStart, monthEnd) {
-  const rentStart = safeDate(row.rent_commencement_date || row.lease_start || row.commencement_date || row.start_date || row.lease_start_date || row.term_start_date);
-  const leaseEnd = safeDate(row.lease_end || row.expiration_date || row.end_date || row.lease_end_date || row.term_end_date);
-  const monthly = Number(row.monthly_rent || 0) || (Number(row.annualized_rent || 0) / 12);
-  const monthDays = daysInUtcMonth(monthStart);
-  if (!rentStart || !leaseEnd || monthly <= 0 || rentStart > monthEnd || leaseEnd < monthStart) {
-    return { amount: 0, overlapDays: 0, daysInMonth: monthDays, isPartial: false };
+function parseNumberLike(value) {
+  if (value == null) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const match = String(value).replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function readFirstNumber(row = {}, keys = []) {
+  for (const key of keys) {
+    const value = parseNumberLike(row?.[key]);
+    if (value != null) return value;
+  }
+  return null;
+}
+
+function percentageRate(value) {
+  const parsed = parseNumberLike(value);
+  if (parsed == null || parsed <= 0) return 0;
+  const rate = parsed > 1 ? parsed / 100 : parsed;
+  return rate > 0 && rate <= 0.5 ? rate : 0;
+}
+
+function approvedPreviewEscalationRate(row = {}) {
+  const type = normalizeToken(row.escalation_type || row.rent_escalation_type);
+  if (["none", "flat", "fixed", "no_escalation"].includes(type)) return 0;
+  return percentageRate(
+    row.escalation_rate ??
+    row.rent_escalation_rate ??
+    row.annual_increase_percent ??
+    row.renewal_escalation_percent ??
+    row.renewal_escalation_pct,
+  );
+}
+
+function addUtcYearsClamped(date, years) {
+  const year = date.getUTCFullYear() + years;
+  const month = date.getUTCMonth();
+  const day = Math.min(date.getUTCDate(), utcMonthEnd(year, month).getUTCDate());
+  return new Date(Date.UTC(year, month, day));
+}
+
+function completedEscalationSteps(row, rentStart, date) {
+  if (!rentStart || !date || date < rentStart) return 0;
+  const timing = normalizeToken(row.escalation_timing || row.rent_escalation_timing);
+  if (timing.includes("calendar")) {
+    return Math.max(0, date.getUTCFullYear() - rentStart.getUTCFullYear());
   }
 
-  const activeStart = rentStart > monthStart ? rentStart : monthStart;
+  let years = date.getUTCFullYear() - rentStart.getUTCFullYear();
+  if (addUtcYearsClamped(rentStart, years) > date) years -= 1;
+  return Math.max(0, years);
+}
+
+function nextEscalationDateAfter(row, rentStart, afterDate) {
+  const timing = normalizeToken(row.escalation_timing || row.rent_escalation_timing);
+  if (timing.includes("calendar")) {
+    let year = Math.max(rentStart.getUTCFullYear() + 1, afterDate.getUTCFullYear());
+    let candidate = new Date(Date.UTC(year, 0, 1));
+    if (candidate <= afterDate) candidate = new Date(Date.UTC(year + 1, 0, 1));
+    return candidate;
+  }
+
+  let steps = completedEscalationSteps(row, rentStart, afterDate) + 1;
+  let candidate = addUtcYearsClamped(rentStart, steps);
+  while (candidate <= afterDate) {
+    steps += 1;
+    candidate = addUtcYearsClamped(rentStart, steps);
+  }
+  return candidate;
+}
+
+function previewBaseMonthlyAmount(row = {}) {
+  const monthly = readFirstNumber(row, ["monthly_rent", "base_rent_monthly", "base_rent", "monthly_base_rent"]);
+  if (monthly != null && monthly > 0) return monthly;
+  const annual = readFirstNumber(row, ["annualized_rent", "annual_rent", "base_rent_annual", "annual_base_rent"]);
+  if (annual != null && annual > 0) return annual / 12;
+  const rentPerSf = readFirstNumber(row, ["rent_per_sf", "tenant_rent_per_rsf", "base_rent_psf"]);
+  const rsf = readFirstNumber(row, ["rsf", "tenant_rsf", "rentable_area_sqft", "square_footage", "total_sf"]);
+  return rentPerSf != null && rsf != null && rentPerSf > 0 && rsf > 0 ? (rentPerSf * rsf) / 12 : 0;
+}
+
+function previewSegmentsForMonth(row, monthStart, monthEnd) {
+  const rentStart = safeDate(row.rent_commencement_date || row.lease_start || row.commencement_date || row.start_date || row.lease_start_date || row.term_start_date);
+  const leaseEnd = safeDate(row.lease_end || row.expiration_date || row.end_date || row.lease_end_date || row.term_end_date);
+  const baseMonthly = previewBaseMonthlyAmount(row);
+  const monthDays = daysInUtcMonth(monthStart);
+  if (!rentStart || !leaseEnd || baseMonthly <= 0 || rentStart > monthEnd || leaseEnd < monthStart) return [];
+
+  const rate = approvedPreviewEscalationRate(row);
   const activeEnd = leaseEnd < monthEnd ? leaseEnd : monthEnd;
-  const overlapDays = daysBetweenInclusive(activeStart, activeEnd);
+  let cursor = rentStart > monthStart ? rentStart : monthStart;
+  const segments = [];
+
+  while (cursor <= activeEnd) {
+    const nextEscalation = rate > 0 ? nextEscalationDateAfter(row, rentStart, cursor) : null;
+    const segmentEnd = nextEscalation && nextEscalation <= activeEnd
+      ? new Date(nextEscalation.getTime() - 86400000)
+      : activeEnd;
+    const steps = rate > 0 ? completedEscalationSteps(row, rentStart, cursor) : 0;
+    const monthly = Math.round(baseMonthly * Math.pow(1 + rate, steps) * 100) / 100;
+    const overlapDays = daysBetweenInclusive(cursor, segmentEnd);
+    segments.push({
+      amount: Math.round(monthly * (overlapDays / monthDays) * 100) / 100,
+      overlapDays,
+      daysInMonth: monthDays,
+      isPartial: overlapDays > 0 && overlapDays < monthDays,
+      activeStart: cursor.toISOString().slice(0, 10),
+      activeEnd: segmentEnd.toISOString().slice(0, 10),
+      source: rate > 0 ? "approved abstract preview (escalated)" : "approved abstract preview",
+      escalationRate: rate,
+      escalationStep: steps,
+    });
+
+    if (!nextEscalation || nextEscalation > activeEnd) break;
+    cursor = nextEscalation;
+  }
+
+  return segments;
+}
+
+export function previewAmountForMonth(row, monthStart, monthEnd) {
+  const segments = previewSegmentsForMonth(row, monthStart, monthEnd);
+  const monthDays = daysInUtcMonth(monthStart);
+  if (!segments.length) {
+    return { amount: 0, overlapDays: 0, daysInMonth: monthDays, isPartial: false };
+  }
+  const amount = segments.reduce((sum, segment) => sum + segment.amount, 0);
+  const overlapDays = segments.reduce((sum, segment) => sum + segment.overlapDays, 0);
   return {
-    amount: Math.round(monthly * (overlapDays / monthDays) * 100) / 100,
+    amount: Math.round(amount * 100) / 100,
     overlapDays,
     daysInMonth: monthDays,
-    isPartial: overlapDays > 0 && overlapDays < monthDays,
-    activeStart: activeStart.toISOString().slice(0, 10),
-    activeEnd: activeEnd.toISOString().slice(0, 10),
-    source: "approved abstract preview",
+    isPartial: segments.some((segment) => segment.isPartial),
+    activeStart: segments[0]?.activeStart,
+    activeEnd: segments[segments.length - 1]?.activeEnd,
+    source: segments.some((segment) => segment.escalationRate > 0)
+      ? "approved abstract preview (escalated)"
+      : "approved abstract preview",
   };
 }
 
@@ -179,7 +299,7 @@ export function buildLeaseYearSchedule(row, persistedRows = [], year, options = 
       ? scheduleRows
         .map((scheduleRow) => scheduleRowAmountForMonth(scheduleRow, start, end))
         .filter((segment) => segment.overlapDays > 0 || segment.amount !== 0)
-      : [previewAmountForMonth(row, start, end)].filter((segment) => segment.overlapDays > 0 || segment.amount !== 0);
+      : previewSegmentsForMonth(row, start, end).filter((segment) => segment.overlapDays > 0 || segment.amount !== 0);
     const amount = segments.reduce((sum, segment) => sum + segment.amount, 0);
     const overlapDays = segments.reduce((sum, segment) => sum + segment.overlapDays, 0);
     const monthDays = daysInUtcMonth(start);
@@ -197,7 +317,11 @@ export function buildLeaseYearSchedule(row, persistedRows = [], year, options = 
 
   return {
     year,
-    source: hasPersistedRows ? "rent_schedules" : "approved abstract preview",
+    source: hasPersistedRows
+      ? "rent_schedules"
+      : (months.some((month) => month.segments?.some((segment) => segment.escalationRate > 0))
+        ? "approved abstract preview (escalated)"
+        : "approved abstract preview"),
     projectionMode: options.projectionMode || "include_approved_renewals",
     storedRowCount: scheduleRows.length,
     months,

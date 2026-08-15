@@ -52,6 +52,10 @@ const FIELD_ALIASES = {
   monthly_rent: ["monthly_rent", "base_rent_monthly", "base_rent", "monthly_base_rent"],
   annual_rent: ["annual_rent", "base_rent_annual", "annual_base_rent", "yearly_rent"],
   rent_per_sf: ["rent_per_sf", "tenant_rent_per_rsf", "base_rent_psf"],
+  escalation_type: ["escalation_type", "rent_escalation_type"],
+  escalation_rate: ["escalation_rate", "renewal_escalation_percent", "renewal_escalation_pct"],
+  escalation_timing: ["escalation_timing", "rent_escalation_timing"],
+  renewal_escalation_percent: ["renewal_escalation_percent", "renewal_escalation_pct", "escalation_rate"],
   lease_type: ["lease_type", "expense_structure", "lease_structure", "cam_structure"],
 };
 
@@ -106,6 +110,10 @@ function buildLeaseProjectionRow(lease) {
     annualized_rent: annualizedRent,
     rsf,
     rent_psf: rsf > 0 && annualizedRent > 0 ? annualizedRent / rsf : null,
+    escalation_type: approvedFieldValue(lease, ["escalation_type"]) || lease.escalation_type || null,
+    escalation_rate: approvedFieldValue(lease, ["escalation_rate"]) || lease.escalation_rate || null,
+    escalation_timing: approvedFieldValue(lease, ["escalation_timing"]) || lease.escalation_timing || null,
+    renewal_escalation_percent: approvedFieldValue(lease, ["renewal_escalation_percent"]) || lease.renewal_escalation_percent || null,
   };
 }
 
