@@ -5,6 +5,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import useOrgQuery from "@/hooks/useOrgQuery";
 
+const NO_PROPERTY_VALUE = "__no_property__";
+
 export default function PipelineUpload() {
   const location = useLocation();
   const urlParams = new URLSearchParams(location.search);
@@ -29,12 +31,15 @@ export default function PipelineUpload() {
         <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
           Property (optional)
         </Label>
-        <Select value={selectedPropertyId} onValueChange={setSelectedPropertyId}>
+        <Select
+          value={selectedPropertyId || NO_PROPERTY_VALUE}
+          onValueChange={(value) => setSelectedPropertyId(value === NO_PROPERTY_VALUE ? "" : value)}
+        >
           <SelectTrigger className="w-full">
             <SelectValue placeholder="Select a property..." />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">No specific property</SelectItem>
+            <SelectItem value={NO_PROPERTY_VALUE}>No specific property</SelectItem>
             {properties.map((p) => (
               <SelectItem key={p.id} value={p.id}>
                 {p.name}
