@@ -32,7 +32,20 @@ export type { BusinessExtractionMode } from "./business-extraction-provenance.ts
 // outer retry loop around the existing, effectively-uncancellable 32-combo
 // sweep) -- bounded instead by an absolute deadline threaded into
 // the OpenAI fact-ledger provider loop and per-request timeout clamp.
-const OPENAI_TOTAL_BUDGET_MS = 100_000; // ~90-120s target, mid-point default
+function envBoundedInt(name: string, fallback: number, min: number, max: number): number {
+  const raw = (Deno.env.get(name) ?? "").trim();
+  if (raw === "") return fallback;
+  const configured = Number(raw);
+  if (!Number.isFinite(configured) || configured <= 0) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(configured)));
+}
+
+function openAiTotalBudgetMs(): number {
+  return envBoundedInt("LEASE_OPENAI_TOTAL_BUDGET_MS", 140_000, 60_000, 145_000);
+}
+
+/** @deprecated Compatibility alias for old tests/imports. */
+const OPENAI_TOTAL_BUDGET_MS = 140_000;
 /** @deprecated Compatibility alias for old tests/imports. */
 const VERTEX_TOTAL_BUDGET_MS = OPENAI_TOTAL_BUDGET_MS;
 
@@ -299,7 +312,7 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
       return await runWholeDocumentLlmPipeline({
         document: opts.document ?? opts.docling,
         moduleType: opts.moduleType,
-        deadlineAt: startTime + OPENAI_TOTAL_BUDGET_MS,
+        deadlineAt: startTime + openAiTotalBudgetMs(),
         ...(opts.provenance ? { provenance: opts.provenance } : {}),
       });
     }
@@ -313,7 +326,7 @@ export async function runBusinessExtraction(opts: RunBusinessExtractionOptions):
         ...(opts.fileBase64 ? { fileBase64: opts.fileBase64, fileMimeType: opts.fileMimeType || "application/pdf" } : {}),
       },
       {
-        deadlineAt: startTime + OPENAI_TOTAL_BUDGET_MS,
+        deadlineAt: startTime + openAiTotalBudgetMs(),
         ...(opts.provenance ? { provenance: opts.provenance } : {}),
         ...(opts.factLedgerProgress ? { onProgress: opts.factLedgerProgress } : {}),
         ...(opts.factLedgerResume ? { resume: opts.factLedgerResume } : {}),
@@ -486,6 +499,7 @@ export const __test__ = {
   buildMockOpenAIResult,
   buildMockVertexResult,
   runLegacySafely,
+  openAiTotalBudgetMs,
   OPENAI_TOTAL_BUDGET_MS,
   VERTEX_TOTAL_BUDGET_MS,
   contentForHash,
