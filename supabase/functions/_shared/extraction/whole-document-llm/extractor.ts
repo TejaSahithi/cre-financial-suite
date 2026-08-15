@@ -32,35 +32,15 @@ import {
   type WholeDocumentExpenseRuleCandidate,
   type WholeDocumentFieldResult,
 } from "./whole-document-schema.ts";
-import { buildLeaseDomainCoverage } from "./lease-domain-coverage.ts";
 
 export interface RunWholeDocumentLlmArgs {
   document: DoclingOutput | Record<string, unknown>;
   moduleType: ModuleType;
   deadlineAt?: number;
-  fieldPartitionResume?: WholeDocumentFieldPartitionResumeState;
-  fieldPartitionProgress?: (progress: WholeDocumentFieldPartitionProgress) => Promise<void> | void;
   provenance?: {
     supabaseAdmin: any;
     context: import("../provenance/types.ts").ProvenanceContext;
   };
-}
-
-export interface WholeDocumentFieldPartitionProgress {
-  architecture: "llm_field_partitioned";
-  groupCount: number;
-  processedGroupCount: number;
-  nextGroupIndex: number;
-  processedGroups: string[];
-  groupResults: ExtractionPipelineResult[];
-  continuationRequired: boolean;
-  continuationReason?: string | null;
-}
-
-export interface WholeDocumentFieldPartitionResumeState {
-  nextGroupIndex?: number;
-  processedGroups?: string[];
-  groupResults?: ExtractionPipelineResult[];
 }
 
 function maxWholeDocumentPromptChars(): number {
@@ -1284,15 +1264,6 @@ async function runWholeDocumentLlmOnCompact(args: {
   const avgConfidence = confidences.length
     ? Math.round((confidences.reduce((sum, value) => sum + value, 0) / confidences.length) * 100)
     : 0;
-  const domainCoverage = buildLeaseDomainCoverage({
-    architecture: "llm_direct_schema",
-    completeDocumentReviewed: true,
-    requestedFieldKeys: args.fields.map(([fieldKey]) => fieldKey),
-    fieldStatuses,
-    evidenceAnchors,
-    dynamicItems: dynamicResult.items,
-    expenseRuleCandidates: expenseRuleResult.rules,
-  });
 
   return {
     rows,
@@ -1362,7 +1333,6 @@ async function runWholeDocumentLlmOnCompact(args: {
           expense_rule_candidates_returned_count: response.data.expenseRuleCandidates.length,
           expense_rule_candidates_published_count: expenseRuleResult.rules.length,
           rejected_expense_rule_candidates: expenseRuleResult.rejected,
-          domain_coverage: domainCoverage,
           fixed_claims_returned_count: response.data.claims.length,
           not_stated_field_count: response.data.notStatedFieldKeys.length,
           compact_document: {
@@ -1618,17 +1588,6 @@ function mergeSectionedWholeDocumentResults(args: {
       ]),
     ).values(),
   );
-  const domainCoverage = buildLeaseDomainCoverage({
-    architecture: "llm_sectioned_reduce",
-    completeDocumentReviewed: sectionFailureCount === 0 && !args.deadlineExhausted,
-    requestedFieldKeys: args.fields.map(([fieldKey]) => fieldKey),
-    fieldStatuses,
-    evidenceAnchors,
-    dynamicItems,
-    expenseRuleCandidates: dedupedExpenseRuleCandidates,
-    failedGroupNames: sectionFailureCount > 0 ? ["sectioned_reduce"] : [],
-    skippedGroupNames: args.deadlineExhausted ? ["sectioned_reduce"] : [],
-  });
 
   return {
     rows,
@@ -1688,7 +1647,6 @@ function mergeSectionedWholeDocumentResults(args: {
           expense_rule_candidates: dedupedExpenseRuleCandidates,
           expense_rule_candidates_returned_count: expenseRuleCandidates.length,
           expense_rule_candidates_published_count: dedupedExpenseRuleCandidates.length,
-          domain_coverage: domainCoverage,
           compact_document: {
             source: args.parentCompact.source,
             version: args.parentCompact.version,
@@ -1846,10 +1804,9 @@ function mergeFieldPartitionedResults(args: {
   groupNames: string[];
   groupResults: ExtractionPipelineResult[];
   totalGroupCount: number;
-  fieldGroups?: Array<{ name: string; fields: Array<[string, FieldDef]> }>;
   deadlineExhausted?: boolean;
 }): ExtractionPipelineResult {
-  const { startedAt, moduleType, groupNames, groupResults, totalGroupCount, fieldGroups = [], deadlineExhausted = false } = args;
+  const { startedAt, moduleType, groupNames, groupResults, totalGroupCount, deadlineExhausted = false } = args;
 
   const mergedRow: Record<string, unknown> = { _row: 1 };
   const mergedConfidences: Record<string, number> = {};
@@ -1904,26 +1861,6 @@ function mergeFieldPartitionedResults(args: {
     factsMappedCount += Number(debug?.facts_mapped_count ?? 0);
   });
 
-  const allGroupNames = fieldGroups.length > 0
-    ? fieldGroups.map((group) => group.name)
-    : groupNames;
-  const skippedGroupNames = allGroupNames.slice(groupResults.length);
-  const requestedFieldKeys = fieldGroups.length > 0
-    ? fieldGroups.flatMap((group) => group.fields.map(([fieldKey]) => fieldKey))
-    : Array.from(new Set([...Object.keys(fieldStatuses), ...Object.keys(mergedConfidences)]));
-  const domainCoverage = buildLeaseDomainCoverage({
-    architecture: "llm_field_partitioned",
-    completeDocumentReviewed: skippedGroupCount === 0 && failedGroups.length === 0,
-    requestedFieldKeys,
-    fieldStatuses,
-    evidenceAnchors,
-    dynamicItems: dynamicItems as Array<Record<string, unknown>>,
-    expenseRuleCandidates: expenseRuleCandidates as Array<Record<string, unknown>>,
-    processedGroupNames: groupNames,
-    skippedGroupNames,
-    failedGroupNames: failedGroups.map((group) => group.group),
-  });
-
   const rows = [mergedRow];
   computeDerivedFields(rows, moduleType);
 
@@ -1941,7 +1878,6 @@ function mergeFieldPartitionedResults(args: {
         architecture: "llm_field_partitioned",
         group_count: groupResults.length,
         failed_groups: failedGroups,
-        domain_coverage: domainCoverage,
       },
     );
   }
@@ -1958,12 +1894,8 @@ function mergeFieldPartitionedResults(args: {
         processed_group_count: groupResults.length,
         skipped_group_count: skippedGroupCount,
         processed_groups: groupNames,
-        next_group_index: groupResults.length,
-        continuation_required: true,
-        continuation_reason: "field_partition_deadline_exhausted",
         failed_groups: failedGroups,
         field_partition_deadline_exhausted: Boolean(deadlineExhausted),
-        domain_coverage: domainCoverage,
       },
     );
   }
@@ -2044,7 +1976,6 @@ function mergeFieldPartitionedResults(args: {
           evidence_anchors: evidenceAnchors,
           dynamic_items: dynamicItems,
           expense_rule_candidates: expenseRuleCandidates,
-          domain_coverage: domainCoverage,
           group_count: groupResults.length,
           failed_group_count: failedGroups.length,
           failed_groups: failedGroups,
@@ -2084,34 +2015,10 @@ async function runFieldPartitionedWholeDocumentLlmPipeline(args: {
     });
   }
 
-  const resume = args.baseArgs.fieldPartitionResume;
-  const resumedResults = Array.isArray(resume?.groupResults) ? resume.groupResults : [];
-  const resumedNames = Array.isArray(resume?.processedGroups) ? resume.processedGroups : [];
-  const requestedStartIndex = Math.max(0, Math.floor(Number(resume?.nextGroupIndex ?? resumedResults.length) || 0));
-  const startIndex = Math.min(requestedStartIndex, groups.length);
-  const groupResults: ExtractionPipelineResult[] = resumedResults.slice(0, startIndex);
-  const groupNames: string[] = groups.slice(0, startIndex).map((group, index) => resumedNames[index] ?? group.name);
-
-  const emitProgress = async (continuationRequired: boolean, continuationReason?: string | null) => {
-    await args.baseArgs.fieldPartitionProgress?.({
-      architecture: "llm_field_partitioned",
-      groupCount: groups.length,
-      processedGroupCount: groupResults.length,
-      nextGroupIndex: groupResults.length,
-      processedGroups: groupNames,
-      groupResults,
-      continuationRequired,
-      continuationReason: continuationReason ?? null,
-    });
-  };
-
-  if (groupResults.length > 0) {
-    await emitProgress(groupResults.length < groups.length, "resumed_previous_field_groups");
-  }
-
+  const groupResults: ExtractionPipelineResult[] = [];
+  const groupNames: string[] = [];
   let deadlineExhausted = false;
-  for (let index = startIndex; index < groups.length; index++) {
-    const group = groups[index];
+  for (const [index, group] of groups.entries()) {
     if (args.baseArgs.deadlineAt && Date.now() + sectionDeadlineReserveMs() > args.baseArgs.deadlineAt) {
       deadlineExhausted = true;
       break;
@@ -2128,8 +2035,8 @@ async function runFieldPartitionedWholeDocumentLlmPipeline(args: {
       operation: "whole_document_lease_extraction_field_partition_v1",
       section: { index: index + 1, count: groups.length },
     }));
-    await emitProgress(groupResults.length < groups.length, groupResults.length < groups.length ? "field_group_completed" : null);
   }
+
   if (groupResults.length === 0) {
     return failureResult(args.startedAt, "Field-partitioned LLM continuation had no safe time budget for any group call.", {
       failure_classification: "field_partition_deadline_exhausted",

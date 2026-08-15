@@ -532,41 +532,6 @@ async function stopForCancellation(
   });
 }
 
-function dispatchLeaseExtractionWorker(jobId: string, logger?: any) {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  const workerSecret = Deno.env.get("WORKER_INTERNAL_SECRET") ?? "";
-  if (!supabaseUrl || !serviceKey) {
-    console.warn(`[${WORKER_NAME}] Missing service configuration; cannot redispatch worker`);
-    return;
-  }
-
-  const promise = fetch(`${supabaseUrl}/functions/v1/lease-extraction-worker`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${serviceKey}`,
-      "apikey": serviceKey,
-      ...(workerSecret ? { "x-worker-secret": workerSecret } : {}),
-    },
-    body: JSON.stringify({ job_id: jobId }),
-  }).then(async (response) => {
-    if (response.ok) return;
-    const text = await response.text().catch(() => "");
-    const message = text.slice(0, 500) || `HTTP ${response.status}`;
-    console.error(`[${WORKER_NAME}] redispatch failed:`, message);
-    await logger?.event?.("normalize", "redispatch_failed", { error_message: message, metadata: { job_id: jobId } });
-  }).catch(async (error: any) => {
-    const message = error?.message || String(error);
-    console.error(`[${WORKER_NAME}] redispatch failed:`, message);
-    await logger?.event?.("normalize", "redispatch_failed", { error_message: message, metadata: { job_id: jobId } });
-  });
-
-  const edgeRuntime = (globalThis as any).EdgeRuntime;
-  if (edgeRuntime?.waitUntil) {
-    edgeRuntime.waitUntil(promise);
-  }
-}
 async function callInternalFunction(functionName: string, body: Record<string, unknown>, orgId: string, timeoutMs: number) {
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   let response: Response;
@@ -885,18 +850,6 @@ function buildFactLedgerResumeFromMetadata(metadata: any): Record<string, unknow
   };
 }
 
-function buildWholeDocumentFieldPartitionResumeFromMetadata(metadata: any): Record<string, unknown> | null {
-  const progress = metadata?.whole_document_field_partition_progress;
-  if (!progress || typeof progress !== "object") return null;
-  const nextGroupIndex = Number(progress.nextGroupIndex ?? progress.next_group_index ?? progress.processedGroupCount ?? 0);
-  const groupResults = Array.isArray(progress.groupResults) ? progress.groupResults : [];
-  if ((!Number.isFinite(nextGroupIndex) || nextGroupIndex <= 0) && groupResults.length === 0) return null;
-  return {
-    nextGroupIndex: Number.isFinite(nextGroupIndex) && nextGroupIndex > 0 ? Math.floor(nextGroupIndex) : groupResults.length,
-    processedGroups: Array.isArray(progress.processedGroups) ? progress.processedGroups : [],
-    groupResults,
-  };
-}
 function timestampIsFresh(value: unknown, graceMs = NORMALIZE_ACTIVE_GRACE_MS): boolean {
   const ts = typeof value === "string" ? Date.parse(value) : NaN;
   return Number.isFinite(ts) && Date.now() - ts < graceMs;
@@ -910,10 +863,7 @@ async function readNormalizeActivity(supabaseAdmin: any, fileId: string, orgId: 
     .eq("org_id", orgId)
     .maybeSingle();
   const progress = job?.metadata?.openai_fact_ledger_progress;
-  const fieldPartitionProgress = job?.metadata?.whole_document_field_partition_progress;
-  const progressUpdatedAt = progress && typeof progress === "object" ? (progress as any).updated_at : null;
-  const fieldPartitionUpdatedAt = fieldPartitionProgress && typeof fieldPartitionProgress === "object" ? (fieldPartitionProgress as any).updated_at : null;
-  const latestProgressAt = timestampIsFresh(fieldPartitionUpdatedAt) ? fieldPartitionUpdatedAt : progressUpdatedAt;
+  const latestProgressAt = progress && typeof progress === "object" ? (progress as any).updated_at : null;
   const latestActivityAt = timestampIsFresh(latestProgressAt) ? latestProgressAt : fileRow?.updated_at;
   return {
     fileStatus: fileRow?.status ?? null,
@@ -929,9 +879,9 @@ async function resolvePendingNormalizeBeforeRun(
   fileId: string,
   orgId: string,
   logger: any,
-): Promise<{ response: Response | null; factLedgerResume: Record<string, unknown> | null; wholeDocumentFieldPartitionResume: Record<string, unknown> | null }> {
+): Promise<{ response: Response | null; factLedgerResume: Record<string, unknown> | null }> {
   if (!isPendingNormalizeReconciliation(job?.metadata)) {
-    return { response: null, factLedgerResume: null, wholeDocumentFieldPartitionResume: null };
+    return { response: null, factLedgerResume: null };
   }
 
   const reconciled = await reconcileDurableNormalize(supabaseAdmin, fileId, orgId);
@@ -973,7 +923,6 @@ async function resolvePendingNormalizeBeforeRun(
         durable_status: reconciled.status,
       }),
       factLedgerResume: null,
-      wholeDocumentFieldPartitionResume: null,
     };
   }
 
@@ -996,27 +945,9 @@ async function resolvePendingNormalizeBeforeRun(
         message: "Could not determine durable normalize state after a pending timeout; reconciliation requeued.",
       }, 200),
       factLedgerResume: null,
-      wholeDocumentFieldPartitionResume: null,
     };
   }
 
-  const wholeDocumentFieldPartitionResume = buildWholeDocumentFieldPartitionResumeFromMetadata(job.metadata);
-  if (wholeDocumentFieldPartitionResume) {
-    await logger.event("normalize", "resume", {
-      provider: "lease-extraction-worker",
-      metadata: {
-        job_id: job.id,
-        reason: "field_partition_resume_available",
-        next_group_index: wholeDocumentFieldPartitionResume.nextGroupIndex ?? null,
-        processed_group_count: Array.isArray(wholeDocumentFieldPartitionResume.groupResults) ? wholeDocumentFieldPartitionResume.groupResults.length : null,
-      },
-    });
-    return {
-      response: null,
-      factLedgerResume: null,
-      wholeDocumentFieldPartitionResume,
-    };
-  }
   const activity = await readNormalizeActivity(supabaseAdmin, fileId, orgId, job);
   if (activity.active) {
     await resetJobForRetryableReconciliation(supabaseAdmin, job, fileId, "normalize_still_active", {
@@ -1037,15 +968,10 @@ async function resolvePendingNormalizeBeforeRun(
         message: "Normalization is still active; reconciliation requeued without starting duplicate work.",
       }, 200),
       factLedgerResume: null,
-      wholeDocumentFieldPartitionResume: null,
     };
   }
 
-  return {
-    response: null,
-    factLedgerResume: buildFactLedgerResumeFromMetadata(job.metadata),
-    wholeDocumentFieldPartitionResume: buildWholeDocumentFieldPartitionResumeFromMetadata(job.metadata),
-  };
+  return { response: null, factLedgerResume: buildFactLedgerResumeFromMetadata(job.metadata) };
 }
 /**
  * Repair a row that reconciliation has just confirmed holds durable, valid
@@ -2118,7 +2044,6 @@ Deno.serve(async (req: Request) => {
         return pendingNormalizeResolution.response;
       }
       const factLedgerResume = pendingNormalizeResolution.factLedgerResume;
-      const wholeDocumentFieldPartitionResume = pendingNormalizeResolution.wholeDocumentFieldPartitionResume;
       // Fast re-extraction path: when the job is enqueued directly at the
       // "normalize" stage (docling_raw already had usable text, so OCR was
       // skipped), the file status is still "parsing" from enqueueLeaseExtractionJob
@@ -2155,69 +2080,11 @@ Deno.serve(async (req: Request) => {
           generation_id: claimedJob.generation_id,
           extraction_run_id: normalizeExtractionRunId,
           ...(factLedgerResume ? { fact_ledger_resume: factLedgerResume } : {}),
-          ...(wholeDocumentFieldPartitionResume ? { whole_document_field_partition_resume: wholeDocumentFieldPartitionResume } : {}),
         },
         orgId,
         normalizeChainedAfterParse ? CHAINED_NORMALIZE_TIMEOUT_MS : NORMALIZE_TIMEOUT_MS,
       );
       let normalizeReconciledToComplete = false;
-      if (normalizeResult.ok && normalizeResult.data?.continuation_required === true) {
-        const { data: latestJobState } = await supabaseAdmin
-          .from("pipeline_jobs")
-          .select("metadata, max_attempts, attempt")
-          .eq("id", job.id)
-          .maybeSingle();
-        const latestMetadata = latestJobState?.metadata && typeof latestJobState.metadata === "object"
-          ? latestJobState.metadata
-          : (job.metadata || {});
-        const progress = latestMetadata.whole_document_field_partition_progress || normalizeResult.data?.progress || {};
-        const totalGroups = Number(progress.groupCount ?? progress.group_count ?? 0) || 0;
-        const currentMaxAttempts = Number(latestJobState?.max_attempts ?? job.max_attempts ?? 3) || 3;
-        const currentAttempt = Number(latestJobState?.attempt ?? attempt ?? 0) || 0;
-        const continuationMaxAttempts = Math.max(currentMaxAttempts, currentAttempt + Math.max(totalGroups, 3) + 2);
-        const now = new Date();
-        await supabaseAdmin.from("pipeline_jobs").update({
-          status: "queued",
-          error_code: null,
-          error_message: null,
-          available_at: new Date(now.getTime() + NORMALIZE_RETRY_DELAY_MS).toISOString(),
-          max_attempts: continuationMaxAttempts,
-          updated_at: now.toISOString(),
-          metadata: {
-            ...latestMetadata,
-            normalize_pending: true,
-            retry_stage: "normalize",
-            whole_document_field_partition_continuation: true,
-            continuation_requeued_at: now.toISOString(),
-            continuation_retry_delay_ms: NORMALIZE_RETRY_DELAY_MS,
-          },
-        }).eq("id", job.id);
-        await logger.event("normalize", "retry_queued", {
-          provider: "lease-extraction-worker",
-          metadata: {
-            job_id: job.id,
-            reason: "whole_document_field_partition_continuation",
-            progress: {
-              groupCount: progress.groupCount ?? progress.group_count ?? null,
-              processedGroupCount: progress.processedGroupCount ?? progress.processed_group_count ?? null,
-              nextGroupIndex: progress.nextGroupIndex ?? progress.next_group_index ?? null,
-            },
-            max_attempts: continuationMaxAttempts,
-          },
-        });
-        dispatchLeaseExtractionWorker(job.id, logger);
-        return jsonResponse({
-          error: false,
-          error_code: "NORMALIZE_CONTINUATION_QUEUED",
-          job_id: job.id,
-          stage: "normalize",
-          retryable: true,
-          continuation_required: true,
-          continuation_kind: normalizeResult.data?.continuation_kind ?? "whole_document_field_partition",
-          progress,
-          message: "Large lease extraction yielded after a bounded field-group slice; continuation was queued.",
-        }, 200);
-      }
 
       if (!normalizeResult.ok) {
         const message = normalizeResult.error || "Document normalization failed";

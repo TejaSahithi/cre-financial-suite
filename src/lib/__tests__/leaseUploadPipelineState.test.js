@@ -29,18 +29,6 @@ describe("getLeaseUploadPipelineState", () => {
   });
 
 
-
-  it("treats large-lease field partition continuation as active work", () => {
-    const state = getLeaseUploadPipelineState({
-      status: "validating",
-      processing_status: "normalize_field_partition_pending",
-      updated_at: "2026-07-22T14:59:00.000Z",
-    }, now);
-
-    expect(state.stage).toBe("normalize_field_partition_pending");
-    expect(state.isWaiting).toBe(true);
-    expect(state.isLongRunning).toBe(false);
-  });
   it("does not keep complete uploads waiting because of a completed job stage", () => {
     const state = getLeaseUploadPipelineState({
       status: "validated",

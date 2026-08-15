@@ -4,7 +4,6 @@ const ACTIVE_UPLOAD_STATUSES = new Set([
   "parsed",
   "pdf_parsed",
   "validating",
-  "normalize_field_partition_pending",
   "validated",
   "storing",
   "stored",
