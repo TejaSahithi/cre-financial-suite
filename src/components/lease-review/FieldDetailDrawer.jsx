@@ -106,7 +106,8 @@ export default function FieldDetailDrawer({
   const actionField = field && fieldKey ? { ...field, key: fieldKey } : field;
   const fieldLabel = field?.label || field?.field_label || (fieldKey ? getLeaseFieldLabel(fieldKey, fieldKey) : "Field");
   const resolvedValue = fieldKey ? readFieldValue(lease, fieldKey) : null;
-  const value = field ? (field.normalized_value ?? field.normalizedValue ?? field.value ?? resolvedValue) : null;
+  const reviewValue = review?.value ?? review?.normalized_value ?? review?.normalizedValue ?? null;
+  const value = field ? (resolvedValue ?? reviewValue ?? field.normalized_value ?? field.normalizedValue ?? field.value) : null;
   const resolvedEvidence = field
     ? readFieldEvidence(lease, fieldKey)
     : { rawValue: null, sourcePage: null, sourceText: null, extractionStatus: null };

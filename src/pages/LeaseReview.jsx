@@ -1694,7 +1694,9 @@ export default function LeaseReview() {
   const canApprove = approvalBlockers.length === 0;
   const approvalDisabledTooltip = canApprove
     ? "Approve the lease abstract"
-    : approvalBlockers.map((blocker) => blocker.title).join("; ");
+    : approvalBlockers
+        .map((blocker) => blocker.detail ? `${blocker.title}: ${blocker.detail}` : blocker.title)
+        .join("; ");
   const approvalRequiredKeySet = new Set([
     ...bulkEvaluation.requiredBlockers,
     ...bulkEvaluation.validationBlockers.map((blocker) => blocker.key).filter(Boolean),
@@ -4034,8 +4036,18 @@ export default function LeaseReview() {
           }
           setFieldSaving(true);
           try {
-            const prevField = lease.extraction_data?.fields?.[key] || null;
-            const prevEvidence = lease.extraction_data?.field_evidence?.[key] || null;
+            const cached = queryClient.getQueryData(["lease", leaseId]);
+            const freshLeaseForEvidence = Array.isArray(cached) ? (cached[0] ?? leaseFull ?? lease) : (cached || leaseFull || lease);
+            const prevField = freshLeaseForEvidence?.extraction_data?.fields?.[key] || {};
+            const prevEvidence = freshLeaseForEvidence?.extraction_data?.field_evidence?.[key] || {};
+            const currentValue = readFieldValue(freshLeaseForEvidence, key)
+              ?? f?.normalized_value
+              ?? f?.normalizedValue
+              ?? f?.value
+              ?? prevField?.value
+              ?? prevEvidence?.value
+              ?? null;
+            const normalizedCurrentValue = normalizeColumnValueForReviewField(key, currentValue) ?? currentValue;
             const cleanPatch = {
               raw_value: evidencePatch.raw_value ?? null,
               source_page:
@@ -4043,44 +4055,66 @@ export default function LeaseReview() {
                   ? evidencePatch.source_page
                   : null,
               source_text: evidencePatch.source_text ?? null,
-              extraction_status: evidencePatch.extraction_status ?? null,
+              extraction_status: evidencePatch.extraction_status ?? prevEvidence.extraction_status ?? prevField.extraction_status ?? "evidence_reviewed",
             };
             const confValue =
               typeof evidencePatch.confidence === "number" && Number.isFinite(evidencePatch.confidence)
                 ? Math.max(0, Math.min(100, Math.round(evidencePatch.confidence)))
                 : null;
-
+            const confidencePatch = confValue != null
+              ? { confidence: confValue, confidence_score: confValue }
+              : {};
+            const mergedEvidenceRecord = {
+              ...prevEvidence,
+              value: normalizedCurrentValue,
+              raw_value: cleanPatch.raw_value ?? prevEvidence.raw_value ?? prevField.raw_value ?? normalizedCurrentValue,
+              source_page: cleanPatch.source_page,
+              page_number: cleanPatch.source_page,
+              source_text: cleanPatch.source_text,
+              exact_source_text: cleanPatch.source_text,
+              source_clause: cleanPatch.source_text,
+              extraction_status: cleanPatch.extraction_status,
+              ...confidencePatch,
+            };
             const fieldPatch = {
-              ...cleanPatch,
-              confidence: confValue,
+              ...prevField,
+              value: normalizedCurrentValue,
+              raw_value: mergedEvidenceRecord.raw_value,
+              source_page: cleanPatch.source_page,
+              page: cleanPatch.source_page,
+              page_number: cleanPatch.source_page,
+              source_text: cleanPatch.source_text,
+              exact_source_text: cleanPatch.source_text,
+              source_clause: cleanPatch.source_text,
+              snippet: cleanPatch.source_text,
+              extraction_status: cleanPatch.extraction_status,
+              ...confidencePatch,
               manually_edited_evidence: true,
               edited_at: new Date().toISOString(),
             };
-            // update_lease_extraction_field's field_value area only accepts
-            // field/field_evidence/confidence_score patch keys, and merges
-            // (not replaces) them onto the existing fields[key]/
-            // field_evidence[key] server-side. confidence_score is omitted
-            // entirely when null so confidence_scores[key] is left untouched
-            // (matching the prior direct-write behavior).
+            // update_lease_field_and_columns merges these records server-side.
+            // Evidence edits must carry the existing normalized value so an
+            // evidence-only save cannot make Accept or approval think the
+            // field became empty.
             const updateResult = await persistCanonicalFieldValue({
               key,
               fieldPatch,
-              evidencePatch: cleanPatch,
+              evidencePatch: mergedEvidenceRecord,
               confidenceScore: confValue,
-              value: prevField?.value ?? readFieldValue(leaseFull || lease, key),
+              value: normalizedCurrentValue,
             });
             const nextExtraction = updateResult?.extraction_data || {
-              ...(lease.extraction_data || {}),
+              ...(freshLeaseForEvidence.extraction_data || {}),
               fields: {
-                ...(lease.extraction_data?.fields || {}),
+                ...(freshLeaseForEvidence.extraction_data?.fields || {}),
                 [key]: { ...(prevField || {}), ...fieldPatch },
               },
               field_evidence: {
-                ...(lease.extraction_data?.field_evidence || {}),
-                [key]: cleanPatch,
+                ...(freshLeaseForEvidence.extraction_data?.field_evidence || {}),
+                [key]: { ...(prevEvidence || {}), ...mergedEvidenceRecord },
               },
               confidence_scores: {
-                ...(lease.extraction_data?.confidence_scores || {}),
+                ...(freshLeaseForEvidence.extraction_data?.confidence_scores || {}),
                 ...(confValue != null ? { [key]: confValue } : {}),
               },
             };
@@ -4191,6 +4225,25 @@ export default function LeaseReview() {
             </>
           ) : (
             <>
+              {!canApprove && approvalBlockers.length > 0 && (
+                <div className="min-w-[280px] max-w-3xl flex-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                    <div className="min-w-0 space-y-1">
+                      <div className="font-semibold">Approval blocked</div>
+                      {approvalBlockers.slice(0, 3).map((blocker) => (
+                        <div key={blocker.kind} className="break-words leading-snug">
+                          <span className="font-medium">{blocker.title}</span>
+                          {blocker.detail ? <span className="ml-1 text-amber-800">{blocker.detail}</span> : null}
+                        </div>
+                      ))}
+                      {approvalBlockers.length > 3 ? (
+                        <div className="text-amber-800">+{approvalBlockers.length - 3} more blocker(s)</div>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="ml-auto flex flex-wrap items-center gap-2">
                 <Button
                   variant="outline"

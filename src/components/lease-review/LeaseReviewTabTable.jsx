@@ -297,7 +297,7 @@ export default function LeaseReviewTabTable({
               const confidence = row.confidencePercent ?? normalizeConfidence(row.confidence);
               const canFieldAction = row.rowType !== "read_only_reference";
               const canRuleAction = row.rowType === "expense_rule" || row.rowType === "cam_rule";
-              const hasSourceEvidence = Boolean(row.sourceText || row.source_text || row.sourcePage || row.source_page || row.page_number);
+              const hasSourceEvidence = Boolean(row.sourceText || row.source_text || row.derivationTrace || row.derivation_trace || row.calculationTrace || row.calculation_trace || row.sourcePage || row.source_page || row.page_number);
               const viewSource = () => {
                 if (onQuickAction) onQuickAction(row, "view_source");
                 else onOpenDetail?.(row);
@@ -305,6 +305,7 @@ export default function LeaseReviewTabTable({
               const fKey = row.fieldKey || row.field_key || row.canonicalKey || row.key;
               const requiredForApproval = Boolean(row.requiredForApproval || row.required || approvalRequiredKeys?.has?.(fKey));
               const reviewField = reviewFields?.[fKey] ?? null;
+              const sourceEvidenceText = row.sourceText ?? row.source_text ?? row.derivationTrace ?? row.derivation_trace ?? row.calculationTrace ?? row.calculation_trace ?? reviewField?.source_text ?? reviewField?.exact_source_text ?? reviewField?.derivation_trace ?? reviewField?.note ?? null;
               const rawRowValue = row.value ?? row.normalized_value ?? row.normalizedValue;
               const displayRowValue = row.displayValue ?? row.display_value ?? rawRowValue;
               const fullRowValue = formatValue(displayRowValue, row);
@@ -342,7 +343,7 @@ export default function LeaseReviewTabTable({
                   <TableCell className="text-xs"><Badge variant="outline" className={extractionModeMeta.className}>{extractionModeMeta.label}</Badge></TableCell>
                   <TableCell className="text-center text-xs text-slate-600">{row.sourcePage ?? row.source_page ?? row.page_number ?? "-"}</TableCell>
                   <TableCell className="text-xs text-slate-600">
-                    <span title={sourcePreview(row.sourceText ?? row.source_text)}>{sourcePreview(row.sourceText ?? row.source_text)}</span>
+                    <span title={sourcePreview(sourceEvidenceText)}>{sourcePreview(sourceEvidenceText)}</span>
                     {sourceNotes.map((note) => (
                       <div key={note} className="mt-1 flex items-start gap-1 text-[10px] leading-snug text-amber-700" title={note}>
                         <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-600" />
