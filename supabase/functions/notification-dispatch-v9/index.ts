@@ -1155,7 +1155,7 @@ function userAccessIsActive(grant: any) {
   return new Date(grant.expires_at).getTime() > Date.now();
 }
 
-function memberHasScopeAccess(membership: any, event: any, userAccess: any[]) {
+function memberHasScopeAccess(membership: any, event: any, context: any) {
   const roleKey = normalizeRole(membership.role, membership);
   if ([ROLES.ORG_OWNER, ROLES.ORG_ADMIN].includes(roleKey)) return true;
 
@@ -1167,11 +1167,18 @@ function memberHasScopeAccess(membership: any, event: any, userAccess: any[]) {
     ...normalizeArray(scopeAccess.portfolio_ids),
   ]);
   const assignedPropertyIds = new Set(normalizeArray(scopeAccess.property_ids));
+  const portfolioIdByPropertyId = new Map(
+    (context.properties || [])
+      .filter((property: any) => property?.id)
+      .map((property: any) => [property.id, property.portfolio_id || null])
+  );
+  const inheritedPortfolioId = event.property_id ? portfolioIdByPropertyId.get(event.property_id) : null;
 
   if (event.portfolio_id && assignedPortfolioIds.has(event.portfolio_id)) return true;
   if (event.property_id && assignedPropertyIds.has(event.property_id)) return true;
+  if (inheritedPortfolioId && assignedPortfolioIds.has(inheritedPortfolioId)) return true;
 
-  const grants = userAccess.filter((grant) =>
+  const grants = (context.userAccess || []).filter((grant: any) =>
     grant.user_id === membership.user_id &&
     grant.org_id === event.org_id &&
     userAccessIsActive(grant)
@@ -1179,12 +1186,12 @@ function memberHasScopeAccess(membership: any, event: any, userAccess: any[]) {
   if (!event.portfolio_id && !event.property_id) return true;
   if (grants.length === 0 && [ROLES.FINANCE, ROLES.ACCOUNTING, ROLES.AUDITOR].includes(roleKey)) return true;
 
-  return grants.some((grant) =>
+  return grants.some((grant: any) =>
     (grant.scope === "portfolio" && event.portfolio_id && grant.scope_id === event.portfolio_id) ||
+    (grant.scope === "portfolio" && inheritedPortfolioId && grant.scope_id === inheritedPortfolioId) ||
     (grant.scope === "property" && event.property_id && grant.scope_id === event.property_id)
   );
 }
-
 function memberMatchesRole(membership: any, roleKey: string) {
   const capabilities = normalizeObject(membership.capabilities);
   return [
@@ -1357,7 +1364,7 @@ function resolveInternalRecipients(event: any, policy: any, rule: any, context: 
 
     if (!isAssignedMatch && !isRoleMatch && !isCustomPermissionMatch) return;
     if (!isAssignedMatch && permission && !hasPermission(membership, permission)) return;
-    if (!isAssignedMatch && !memberHasScopeAccess(membership, event, context.userAccess)) return;
+    if (!isAssignedMatch && !memberHasScopeAccess(membership, event, context)) return;
 
     const profile = context.profilesByUserId[membership.user_id] || {};
     addRecipient(map, event, policy, rule, {
@@ -1409,7 +1416,7 @@ function resolveRecipients(event: any, policy: any, context: any) {
 }
 
 async function fetchContext(supabaseAdmin: any, orgId: string) {
-  const [membershipsResult, userAccessResult, stakeholdersResult] = await Promise.all([
+  const [membershipsResult, userAccessResult, stakeholdersResult, propertiesResult] = await Promise.all([
     supabaseAdmin
       .from("memberships")
       .select("user_id, org_id, role, status, phone, custom_role, assigned_portfolios, capabilities, module_permissions, page_permissions")
@@ -1423,10 +1430,15 @@ async function fetchContext(supabaseAdmin: any, orgId: string) {
       .from("stakeholders")
       .select("id, org_id, property_id, name, email, role")
       .eq("org_id", orgId),
+    supabaseAdmin
+      .from("properties")
+      .select("id, portfolio_id")
+      .eq("org_id", orgId),
   ]);
   if (membershipsResult.error) throw membershipsResult.error;
   if (userAccessResult.error) throw userAccessResult.error;
   if (stakeholdersResult.error) throw stakeholdersResult.error;
+  if (propertiesResult.error) throw propertiesResult.error;
 
   const memberships = (membershipsResult.data || []).filter((membership: any) => isActiveStatus(membership.status));
   const userIds = [...new Set(memberships.map((membership: any) => membership.user_id).filter(Boolean))];
@@ -1439,10 +1451,10 @@ async function fetchContext(supabaseAdmin: any, orgId: string) {
     memberships,
     userAccess: userAccessResult.data || [],
     stakeholders: stakeholdersResult.data || [],
+    properties: propertiesResult.data || [],
     profilesByUserId: Object.fromEntries((profilesResult.data || []).map((profile: any) => [profile.id, profile])),
   };
 }
-
 function escapeHtml(value: unknown) {
   return String(value || "")
     .replace(/&/g, "&amp;")

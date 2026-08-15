@@ -618,11 +618,33 @@ function deriveAccessGrantRole(selectedRoles, pagePerms) {
   return hasWritePageAccess ? "custom_role" : "auditor";
 }
 
-async function syncUserAccessGrants({ userId, orgId, dataScope, role }) {
+async function resolveEffectiveDataScopeForAccessGrants({ orgId, dataScope }) {
   const normalized = {
     portfolios: [...new Set((dataScope?.portfolios || []).filter(Boolean))],
     properties: [...new Set((dataScope?.properties || []).filter(Boolean))],
   };
+
+  if (!orgId || normalized.portfolios.length === 0 || dataScope?.allPortfolios || dataScope?.allProperties) {
+    return normalized;
+  }
+
+  const { data, error } = await supabase
+    .from("properties")
+    .select("id, portfolio_id")
+    .eq("org_id", orgId)
+    .in("portfolio_id", normalized.portfolios);
+
+  if (error) throw error;
+
+  for (const property of data || []) {
+    if (property?.id) normalized.properties.push(property.id);
+  }
+  normalized.properties = [...new Set(normalized.properties)];
+  return normalized;
+}
+
+async function syncUserAccessGrants({ userId, orgId, dataScope, role }) {
+  const normalized = await resolveEffectiveDataScopeForAccessGrants({ orgId, dataScope });
 
   const { error: deleteError } = await supabase
     .from("user_access")

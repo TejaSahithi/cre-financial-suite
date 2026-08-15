@@ -256,8 +256,16 @@ function memberHasScopeAccess(membership, event, context) {
     ...normalizeArray(scopeAccess.property_ids),
   ]);
 
+  const portfolioIdByPropertyId = new Map(
+    (context.properties || [])
+      .filter((property) => property?.id)
+      .map((property) => [property.id, property.portfolio_id || null])
+  );
+  const inheritedPortfolioId = event.property_id ? portfolioIdByPropertyId.get(event.property_id) : null;
+
   if (event.portfolio_id && assignedPortfolioIds.has(event.portfolio_id)) return true;
   if (event.property_id && assignedPropertyIds.has(event.property_id)) return true;
+  if (inheritedPortfolioId && assignedPortfolioIds.has(inheritedPortfolioId)) return true;
 
   const grants = (context.userAccess || []).filter((grant) =>
     grant.user_id === membership.user_id &&
@@ -270,6 +278,7 @@ function memberHasScopeAccess(membership, event, context) {
 
   return grants.some((grant) => {
     if (grant.scope === "portfolio" && event.portfolio_id && grant.scope_id === event.portfolio_id) return true;
+    if (grant.scope === "portfolio" && inheritedPortfolioId && grant.scope_id === inheritedPortfolioId) return true;
     if (grant.scope === "property" && event.property_id && grant.scope_id === event.property_id) return true;
     return false;
   });

@@ -104,6 +104,31 @@ function buildAcceptInviteUrl(frontendUrl: string, params: Record<string, string
   return url.toString();
 }
 
+async function resolveEffectiveAccessScopes(adminClient: any, orgId: string, accessScopes: any) {
+  const normalized = {
+    portfolios: Array.isArray(accessScopes?.portfolios) ? [...new Set(accessScopes.portfolios.filter(Boolean))] : [],
+    properties: Array.isArray(accessScopes?.properties) ? [...new Set(accessScopes.properties.filter(Boolean))] : [],
+  };
+
+  if (!orgId || normalized.portfolios.length === 0 || accessScopes?.allPortfolios || accessScopes?.allProperties) {
+    return normalized;
+  }
+
+  const { data, error } = await adminClient
+    .from("properties")
+    .select("id, portfolio_id")
+    .eq("org_id", orgId)
+    .in("portfolio_id", normalized.portfolios);
+
+  if (error) throw error;
+
+  for (const property of data || []) {
+    if (property?.id) normalized.properties.push(property.id);
+  }
+  normalized.properties = [...new Set(normalized.properties)];
+  return normalized;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   const authorization = req.headers.get("Authorization");
@@ -388,10 +413,7 @@ Deno.serve(async (req: Request) => {
         });
       }
 
-      const normalizedScope = {
-        portfolios: Array.isArray(access_scopes?.portfolios) ? [...new Set(access_scopes.portfolios.filter(Boolean))] : [],
-        properties: Array.isArray(access_scopes?.properties) ? [...new Set(access_scopes.properties.filter(Boolean))] : [],
-      };
+      const normalizedScope = await resolveEffectiveAccessScopes(adminClient, org_id, access_scopes);
       const normalizedAccessRole = SYSTEM_ROLES.has(normalizeRoleValue(access_role))
         ? normalizeRoleValue(access_role)
         : (membershipRole || "auditor");

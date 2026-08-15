@@ -147,6 +147,7 @@ async function fetchNotificationContext(orgId) {
       memberships: [],
       userAccess: [],
       stakeholders: [],
+      properties: [],
       notificationPreferences: [],
       profilesByUserId: {},
     };
@@ -156,6 +157,7 @@ async function fetchNotificationContext(orgId) {
     memberships,
     userAccess,
     stakeholders,
+    properties,
     notificationPreferences,
   ] = await Promise.all([
     safeSelect(supabase
@@ -171,6 +173,10 @@ async function fetchNotificationContext(orgId) {
       .from('stakeholders')
       .select('id, org_id, property_id, name, email, role')
       .eq('org_id', orgId), [], 'stakeholders'),
+    safeSelect(supabase
+      .from('properties')
+      .select('id, portfolio_id')
+      .eq('org_id', orgId), [], 'properties'),
     safeSelect(supabase
       .from('notification_preferences')
       .select('user_id, email_enabled, sms_enabled')
@@ -196,6 +202,7 @@ async function fetchNotificationContext(orgId) {
     memberships: normalizedMemberships,
     userAccess,
     stakeholders,
+    properties,
     notificationPreferences,
     profilesByUserId,
   };
