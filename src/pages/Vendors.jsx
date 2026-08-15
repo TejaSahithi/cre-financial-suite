@@ -47,6 +47,7 @@ export default function Vendors() {
   const { data: expenses = [] } = useOrgQuery("Expense");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
   const { data: properties = [] } = useOrgQuery("Property");
+  const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
   const { data: vendorCredentials = [] } = useQuery({
     queryKey: ["vendor-credentials", orgId],
