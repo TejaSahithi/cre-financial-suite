@@ -308,6 +308,42 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_lease public.leases%ROWTYPE;
+  v_tbl TEXT;
+  v_tables TEXT[] := ARRAY[
+    'tenant_reconciliation_lines',
+    'tenant_reconciliations',
+    'cpi_rent_adjustment_proposals',
+    'percentage_rent_calculations',
+    'tenant_sales_reports',
+    'lease_percentage_rent_terms',
+    'lease_charge_calculations',
+    'lease_insurance_compliance_results',
+    'coi_documents',
+    'reference_series_selections',
+    'cam_tenant_shares',
+    'cam_tenant_caps',
+    'cam_tenant_admin_fees',
+    'cam_prior_period_adjustments',
+    'cam_pool_exclusions',
+    'cam_recovery_profile_exclusions',
+    'recovery_pool_lease_participants',
+    'cam_pool_lease_shares',
+    'cam_run_statements',
+    'cam_statements',
+    'cam_charge_exports',
+    'cam_estimate_schedules',
+    'lease_expense_rules',
+    'lease_expense_rule_sets',
+    'expenses',
+    'rent_schedules',
+    'lease_critical_dates',
+    'document_intelligence_runs',
+    'extraction_runs',
+    'lease_document_packages',
+    'pipeline_jobs',
+    'uploaded_files',
+    'documents'
+  ];
 BEGIN
   IF target_lease_id IS NULL THEN
     RAISE EXCEPTION 'target_lease_id is required';
@@ -324,51 +360,27 @@ BEGIN
   PERFORM set_config('app.allow_lease_cascade_delete', 'true', true);
   PERFORM set_config('app.allow_cascade_delete', 'true', true);
 
-  -- Downstream financial domain tables
-  DELETE FROM public.tenant_reconciliation_lines WHERE lease_id = target_lease_id;
-  DELETE FROM public.tenant_reconciliations WHERE lease_id = target_lease_id;
-  DELETE FROM public.cpi_rent_adjustment_proposals WHERE lease_id = target_lease_id;
-  DELETE FROM public.lease_obligation_occurrences WHERE org_id = v_lease.org_id AND obligation_id IN (SELECT id FROM public.lease_obligations WHERE lease_id = target_lease_id);
-  DELETE FROM public.lease_obligations WHERE lease_id = target_lease_id;
-  DELETE FROM public.percentage_rent_calculations WHERE lease_id = target_lease_id;
-  DELETE FROM public.tenant_sales_reports WHERE lease_id = target_lease_id;
-  DELETE FROM public.lease_percentage_rent_terms WHERE lease_id = target_lease_id;
-  DELETE FROM public.lease_charge_calculations WHERE lease_id = target_lease_id;
-  DELETE FROM public.lease_insurance_compliance_results WHERE lease_id = target_lease_id;
-  DELETE FROM public.coi_documents WHERE lease_id = target_lease_id;
-  DELETE FROM public.reference_series_selections WHERE lease_id = target_lease_id;
-
-  -- CAM V2 downstream records
-  DELETE FROM public.cam_tenant_shares WHERE lease_id = target_lease_id;
-  DELETE FROM public.cam_tenant_caps WHERE lease_id = target_lease_id;
-  DELETE FROM public.cam_tenant_admin_fees WHERE lease_id = target_lease_id;
-  DELETE FROM public.cam_prior_period_adjustments WHERE lease_id = target_lease_id;
-  DELETE FROM public.cam_pool_exclusions WHERE lease_id = target_lease_id;
-  IF to_regclass('public.cam_recovery_profile_exclusions') IS NOT NULL THEN
-    DELETE FROM public.cam_recovery_profile_exclusions WHERE lease_id = target_lease_id;
+  -- Obligation occurrences
+  IF to_regclass('public.lease_obligations') IS NOT NULL AND to_regclass('public.lease_obligation_occurrences') IS NOT NULL THEN
+    DELETE FROM public.lease_obligation_occurrences 
+     WHERE org_id = v_lease.org_id 
+       AND obligation_id IN (SELECT id FROM public.lease_obligations WHERE lease_id = target_lease_id);
+    DELETE FROM public.lease_obligations WHERE lease_id = target_lease_id;
+  ELSIF to_regclass('public.lease_obligations') IS NOT NULL THEN
+    DELETE FROM public.lease_obligations WHERE lease_id = target_lease_id;
   END IF;
 
-  -- Lease expense rules
-  DELETE FROM public.lease_expense_rules WHERE lease_id = target_lease_id;
-  DELETE FROM public.lease_expense_rule_sets WHERE lease_id = target_lease_id;
-
-  -- Actual expenses associated with this lease
-  DELETE FROM public.expenses WHERE lease_id = target_lease_id;
-
-  -- Rent schedules and critical dates
-  DELETE FROM public.rent_schedules WHERE lease_id = target_lease_id;
-  DELETE FROM public.lease_critical_dates WHERE lease_id = target_lease_id;
-
-  -- Document intelligence and extraction runs
-  IF to_regclass('public.document_intelligence_runs') IS NOT NULL THEN
-    DELETE FROM public.document_intelligence_runs WHERE lease_id = target_lease_id;
-  END IF;
-  IF to_regclass('public.extraction_runs') IS NOT NULL THEN
-    DELETE FROM public.extraction_runs WHERE lease_id = target_lease_id;
-  END IF;
-  IF to_regclass('public.lease_document_packages') IS NOT NULL THEN
-    DELETE FROM public.lease_document_packages WHERE lease_id = target_lease_id;
-  END IF;
+  -- Downstream tables (dynamically checked so missing tables never cause errors)
+  FOREACH v_tbl IN ARRAY v_tables
+  LOOP
+    IF to_regclass('public.' || v_tbl) IS NOT NULL THEN
+      BEGIN
+        EXECUTE format('DELETE FROM public.%I WHERE lease_id = $1', v_tbl) USING target_lease_id;
+      EXCEPTION WHEN OTHERS THEN
+        -- Continue gracefully if column or table has unexpected structure
+      END;
+    END IF;
+  END LOOP;
 
   -- Finally delete the lease itself
   DELETE FROM public.leases WHERE id = target_lease_id;
