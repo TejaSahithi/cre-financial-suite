@@ -4437,7 +4437,6 @@ export default function LeaseReview() {
                       }
                       setShowApproval(true);
                     }}
-                    disabled={!canApprove}
                     title={approvalDisabledTooltip}
                   >
                     <CheckCircle2 className="mr-1 h-4 w-4" />

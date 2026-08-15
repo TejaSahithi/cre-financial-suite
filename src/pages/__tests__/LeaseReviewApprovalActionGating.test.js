@@ -17,9 +17,9 @@ describe("LeaseReview approval action gating", () => {
     expect(source).not.toContain("disabled={!lease.id || !lease.org_id || !canApprove}");
   });
 
-  it("still blocks final approval when unresolved approval blockers remain", () => {
+  it("keeps final approval clickable while unresolved blockers remain", () => {
     expect(source).toContain("if (!canApprove) {");
     expect(source).toContain("approvalBlockers.forEach((b) =>");
-    expect(source).toContain("disabled={!canApprove}");
+    expect(source).not.toContain("disabled={!canApprove}");
   });
 });
