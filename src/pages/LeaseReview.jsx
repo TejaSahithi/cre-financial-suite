@@ -519,7 +519,7 @@ export default function LeaseReview() {
   const isLeasePendingAssignedApproval = [lease?.abstract_status, lease?.status]
     .map((status) => String(status || "").toLowerCase())
     .some((status) => ["pending_review", "pending_approval", "submitted", "under_review"].includes(status));
-  const approvalAssignmentQuery = useQuery({
+  useQuery({
     queryKey: ["lease-approval-assignment", lease?.org_id, lease?.id, user?.id],
     enabled: Boolean(lease?.org_id && lease?.id && user?.id && isLeasePendingAssignedApproval),
     queryFn: () => fetchLeaseApprovalAssignment({
@@ -1819,9 +1819,7 @@ export default function LeaseReview() {
 
   const canApprove = approvalBlockers.length === 0;
   const canCurrentUserSendOrApproveLease = userHasLeaseApproverRole(user, lease?.org_id);
-  const canCurrentUserApproveLeaseRequest = Boolean(
-    canApprove && canCurrentUserSendOrApproveLease && approvalAssignmentQuery.data?.isAssigned
-  );
+  const canCurrentUserApproveLeaseRequest = canCurrentUserSendOrApproveLease;
   const approvalDisabledTooltip = canApprove
     ? "Approve the lease abstract"
     : approvalBlockers
@@ -2405,7 +2403,7 @@ export default function LeaseReview() {
       return;
     }
     if (!canCurrentUserApproveLeaseRequest) {
-      toast.error("This lease approval is assigned to another reviewer.");
+      toast.error("Only org owners, org admins, and property managers can approve lease abstracts.");
       return;
     }
     if (!approvalSignature?.valid) {
@@ -4409,8 +4407,8 @@ export default function LeaseReview() {
                     portfolioId={lease.portfolio_id || null}
                     propertyId={lease.property_id || null}
                     actionUrl={`${createPageUrl("LeaseReview")}?id=${lease.id}`}
-                    disabled={!lease.id || !lease.org_id || !canApprove}
-                    title={canApprove ? "Send this lease abstract for approval" : approvalDisabledTooltip}
+                    disabled={!lease.id || !lease.org_id}
+                    title="Send this lease abstract for approval"
                     onBeforeSend={markLeasePendingApproval}
                     onSent={() => {
                       queryClient.invalidateQueries({ queryKey: ["lease-approval-assignment", lease?.org_id, lease?.id] });
