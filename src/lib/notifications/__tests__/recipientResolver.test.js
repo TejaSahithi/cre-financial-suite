@@ -334,6 +334,36 @@ describe("role-based notification recipient resolver", () => {
     expect(result.recipients.map((recipient) => recipient.id)).not.toContain("asset-owner-b");
   });
 
+  it("notifies scoped internal and asset-owner recipients when a unit is created", () => {
+    const result = resolveNotificationRecipients(
+      {
+        org_id: orgId,
+        event_type: "unit.created",
+        portfolio_id: portfolioA,
+        property_id: propertyA,
+        entity_id: "unit-a",
+      },
+      {
+        memberships: [
+          membership({ user_id: "owner", role: "owner" }),
+          membership({ user_id: "pm-a", role: "property_manager" }),
+          membership({ user_id: "pm-b", role: "property_manager" }),
+        ],
+        userAccess: [portfolioGrant("pm-a", portfolioA), portfolioGrant("pm-b", portfolioB)],
+        stakeholders: [
+          { id: "asset-owner-a", org_id: orgId, role: "asset_owner", property_id: propertyA, email: "a@example.com" },
+          { id: "asset-owner-b", org_id: orgId, role: "asset_owner", property_id: propertyB, email: "b@example.com" },
+        ],
+      }
+    );
+
+    expect(result.recipients.map((recipient) => recipient.userId)).toContain("owner");
+    expect(result.recipients.map((recipient) => recipient.userId)).toContain("pm-a");
+    expect(result.recipients.map((recipient) => recipient.userId)).not.toContain("pm-b");
+    expect(result.recipients.map((recipient) => recipient.id)).toContain("asset-owner-a");
+    expect(result.recipients.map((recipient) => recipient.id)).not.toContain("asset-owner-b");
+  });
+
   it("keeps tenants out of internal CAM review and includes them after reconciliation publication", () => {
     const context = {
       stakeholders: [

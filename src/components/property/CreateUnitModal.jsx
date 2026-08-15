@@ -7,6 +7,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DoorOpen, Loader2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { UnitService } from "@/services/api";
+import { createNotificationsForEvent } from "@/services/notificationService";
+import { createPageUrl } from "@/utils";
 import { toast } from "sonner";
 
 export default function CreateUnitModal({ isOpen, onClose, buildings = [], unitToEdit = null }) {
@@ -50,11 +52,32 @@ export default function CreateUnitModal({ isOpen, onClose, buildings = [], unitT
   }, [isOpen, unitToEdit, firstBuildingId]);
 
   const saveMutation = useMutation({
-    mutationFn: (data) => {
+    mutationFn: async (data) => {
       if (isEditing) {
         return UnitService.update(unitToEdit.id, data);
       }
-      return UnitService.create(data);
+      const created = await UnitService.create(data);
+      const building = buildingById.get(created?.building_id || data.building_id) || null;
+
+      createNotificationsForEvent({
+        org_id: created?.org_id || building?.org_id || data.org_id,
+        event_type: "unit.created",
+        entity_type: "unit",
+        entity_id: created?.id,
+        entity_label: created?.unit_number || data.unit_number,
+        portfolio_id: building?.portfolio_id || null,
+        property_id: created?.property_id || data.property_id,
+        action_url: createPageUrl("BuildingsUnits"),
+        metadata: {
+          source: "unit_create_modal",
+          unit_number: created?.unit_number || data.unit_number,
+          building_name: building?.name || null,
+        },
+      }).catch((error) => {
+        console.warn("[CreateUnitModal] notification event failed:", error?.message || error);
+      });
+
+      return created;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bu-units"] });

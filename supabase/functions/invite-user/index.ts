@@ -16,7 +16,11 @@ function resolveFrontendUrl(value?: string | null) {
   let url = String(value || "").trim().replace(/\/+$/, "");
   if (!url || /(vercel\.app|localhost)/i.test(url)) return DEFAULT_FRONTEND_URL;
   if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
-  return url;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return DEFAULT_FRONTEND_URL;
+  }
 }
 
 const SYSTEM_ROLE_ALIASES: Record<string, string> = {
@@ -97,7 +101,7 @@ function formatRoleLabel(role: unknown) {
 }
 
 function buildAcceptInviteUrl(frontendUrl: string, params: Record<string, string>) {
-  const url = new URL("/AcceptInvite", frontendUrl);
+  const url = new URL("/AcceptInvite", resolveFrontendUrl(frontendUrl));
   Object.entries(params).forEach(([key, value]) => {
     if (value) url.searchParams.set(key, value);
   });
@@ -177,6 +181,7 @@ Deno.serve(async (req: Request) => {
       approval_limits, notification_preferences,
       access_scopes, access_role
     } = await req.json();
+    const normalizedEmail = String(email || "").trim().toLowerCase();
 
     const CANONICAL_ASSIGNABLE_ROLES = [
       "org_owner", "org_admin", "portfolio_manager", "property_manager",
@@ -201,7 +206,7 @@ Deno.serve(async (req: Request) => {
           action: "privilege_escalation_blocked",
           entity_type: "membership",
           entity_id: null,
-          metadata: { requested_role: role, email },
+          metadata: { requested_role: role, email: normalizedEmail },
           severity: "critical",
           source: "edge_function",
           error_message: "Forbidden: org_admin attempted to assign super_admin"
@@ -228,7 +233,7 @@ Deno.serve(async (req: Request) => {
       accessRole: access_role,
     });
 
-    if (!email || !org_id) {
+    if (!normalizedEmail || !org_id) {
       return new Response(JSON.stringify({ error: "Missing required fields: email, org_id" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -252,7 +257,7 @@ Deno.serve(async (req: Request) => {
 
     // ── Check if user already exists ──────────────────────────────────────────
     const { data: existingUsers } = await adminClient.auth.admin.listUsers();
-    const existingUser = existingUsers?.users?.find((u: any) => u.email === email);
+    const existingUser = existingUsers?.users?.find((u: any) => String(u.email || "").toLowerCase() === normalizedEmail);
 
     const frontendUrl = resolveFrontendUrl(Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL"));
     let userId = existingUser?.id;
@@ -260,14 +265,14 @@ Deno.serve(async (req: Request) => {
     let inviteLink = buildAcceptInviteUrl(frontendUrl, {
       existing: "1",
       org_id,
-      email,
+      email: normalizedEmail,
     });
 
     if (isNewUser) {
       // Use generateLink to get a secure signup URL without sending the system email
       const { data: linkData, error: linkErr } = await adminClient.auth.admin.generateLink({
         type: "invite",
-        email: email,
+        email: normalizedEmail,
         options: {
           redirectTo: `${frontendUrl}/AcceptInvite`,
           data: {
@@ -311,7 +316,7 @@ Deno.serve(async (req: Request) => {
     if (userId) {
       const membershipCapabilities = {
         ...incomingCapabilities,
-        invited_email: email,
+        invited_email: normalizedEmail,
         invited_full_name: full_name || null,
       };
       const normalizedIncomingRole = normalizeRoleValue(role);
@@ -394,7 +399,7 @@ Deno.serve(async (req: Request) => {
 
       const { error: profileErr } = await adminClient.from("profiles").upsert({
         id: userId,
-        email,
+        email: normalizedEmail,
         full_name: full_name || null,
         status: nextProfileStatus,
         onboarding_type: "invited",
@@ -466,7 +471,7 @@ Deno.serve(async (req: Request) => {
     const { error: revokeExistingInvitesError } = await adminClient
       .from("invitations")
       .update({ status: "revoked", updated_at: new Date().toISOString() })
-      .eq("email", email)
+      .eq("email", normalizedEmail)
       .eq("org_id", org_id)
       .in("status", ["pending", "pending_approval"]);
 
@@ -482,9 +487,9 @@ Deno.serve(async (req: Request) => {
     }
 
     const { error: inviteLogErr } = await adminClient.from("invitations").insert({
-      email,
+      email: normalizedEmail,
       org_id,
-      role: displayRole,
+      role: membershipRole,
       token: crypto.randomUUID(),
       status: invitationStatus,
       expires_at: new Date(Date.now() + 86400000).toISOString(), // 24h
@@ -503,51 +508,94 @@ Deno.serve(async (req: Request) => {
 
     // ── Send Branded Email via Resend ──────────────────────────────────────────
     const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
-    if (RESEND_API_KEY) {
-      try {
-        const roleLabel = formatRoleLabel(displayRole);
-        const title = isNewUser ? "Complete your account setup" : "You've been added to a new organization";
-        const bodyText = isNewUser 
-          ? `You've been invited to join <strong>${orgName}</strong> as <strong>${roleLabel}</strong>. Please create your account to get started.`
-          : `Your existing ${BRAND_NAME} account has been given access to <strong>${orgName}</strong> as <strong>${roleLabel}</strong>.`;
-        const ctaText = isNewUser ? "Create Account" : "Sign In";
+    if (!RESEND_API_KEY) {
+      return new Response(JSON.stringify({
+        error: "Email service is not configured. Invite email was not sent.",
+      }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
-        const html = `<!DOCTYPE html>
-          <html lang="en">
-            <head>
-              <meta charset="UTF-8" />
-              <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-              <title>${BRAND_NAME}</title>
-            </head>
-            <body style="margin:0;padding:40px 16px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-              <div style="max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-                <div style="padding:26px 36px;background:#071326;">
-                  <div style="display:flex;align-items:center;gap:10px;">
-                    <img src="${LOGO_URL}" alt="${BRAND_NAME}" style="width:196px;height:auto;display:block;background:#ffffff;border-radius:8px;padding:8px 10px;" />
-                  </div>
-                </div>
-                <div style="padding:32px 36px;color:#475569;font-size:15px;line-height:1.6;">
-                  <h2 style="margin:0 0 12px;color:#0f172a;font-size:24px;">${title}</h2>
-                  <p style="margin:0 0 16px;">Hi ${full_name || "there"},</p>
-                  <p style="margin:0 0 20px;">${bodyText}</p>
-                  <a href="${inviteLink}" style="display:inline-block;background:#1a2744;color:#ffffff;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:600;font-size:16px;">${ctaText}</a>
-                </div>
-                <div style="border-top:1px solid #e2e8f0;background:#f8fafc;padding:18px 36px;text-align:center;color:#94a3b8;font-size:12px;">${BRAND_NAME} · ${SUPPORT_EMAIL}</div>
+    const roleLabel = formatRoleLabel(displayRole);
+    const title = isNewUser ? "Complete your account setup" : "You've been added to a new organization";
+    const bodyText = isNewUser
+      ? `You've been invited to join <strong>${orgName}</strong> as <strong>${roleLabel}</strong>. Please create your account to get started.`
+      : `Your existing ${BRAND_NAME} account has been given access to <strong>${orgName}</strong> as <strong>${roleLabel}</strong>.`;
+    const ctaText = isNewUser ? "Create Account" : "Sign In";
+
+    const html = `<!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>${BRAND_NAME}</title>
+        </head>
+        <body style="margin:0;padding:40px 16px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+          <div style="max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+            <div style="padding:26px 36px;background:#071326;">
+              <div style="display:flex;align-items:center;gap:10px;">
+                <img src="${LOGO_URL}" alt="${BRAND_NAME}" style="width:196px;height:auto;display:block;background:#ffffff;border-radius:8px;padding:8px 10px;" />
               </div>
-            </body>
-          </html>`;
+            </div>
+            <div style="padding:32px 36px;color:#475569;font-size:15px;line-height:1.6;">
+              <h2 style="margin:0 0 12px;color:#0f172a;font-size:24px;">${title}</h2>
+              <p style="margin:0 0 16px;">Hi ${full_name || "there"},</p>
+              <p style="margin:0 0 20px;">${bodyText}</p>
+              <a href="${inviteLink}" style="display:inline-block;background:#1a2744;color:#ffffff;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:600;font-size:16px;">${ctaText}</a>
+            </div>
+            <div style="border-top:1px solid #e2e8f0;background:#f8fafc;padding:18px 36px;text-align:center;color:#94a3b8;font-size:12px;">${BRAND_NAME} · ${SUPPORT_EMAIL}</div>
+          </div>
+        </body>
+      </html>`;
 
-        await fetch("https://api.resend.com/emails", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ 
-            from: `${BRAND_NAME} <${SUPPORT_EMAIL}>`, 
-            to: email, 
-            subject: title, 
-            html 
-          }),
+    try {
+      console.info("[invite-user] sending invite email:", {
+        to: normalizedEmail,
+        subject: title,
+        flow: isNewUser ? "new_user" : "existing_user",
+      });
+      const emailResponse = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from: `${BRAND_NAME} <${SUPPORT_EMAIL}>`,
+          to: normalizedEmail,
+          subject: title,
+          html,
+        }),
+      });
+      const emailPayload = await emailResponse.json().catch(() => ({}));
+      if (!emailResponse.ok) {
+        const providerMessage = emailPayload?.message || emailPayload?.error || "Resend rejected the invite email";
+        console.error("[invite-user] Resend error:", {
+          status: emailResponse.status,
+          to: normalizedEmail,
+          subject: title,
+          error: providerMessage,
         });
-      } catch (e: any) { console.error("[invite-user] email send err:", e.message); }
+        return new Response(JSON.stringify({
+          error: "Invite email failed to send.",
+          details: providerMessage,
+        }), {
+          status: 502,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      console.info("[invite-user] invite email sent:", {
+        to: normalizedEmail,
+        subject: title,
+        provider_message_id: emailPayload?.id || null,
+      });
+    } catch (e: any) {
+      console.error("[invite-user] email send err:", e.message);
+      return new Response(JSON.stringify({
+        error: "Invite email failed to send.",
+        details: e.message,
+      }), {
+        status: 502,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     return new Response(JSON.stringify({ success: true, isNewUser, warnings }), {

@@ -120,6 +120,18 @@ const policies = {
       role(ROLE_KEYS.ASSET_OWNER, NOTIFICATION_TYPES.INFORMATIONAL, { external: true }),
     ],
   },
+  "unit.created": {
+    module: NOTIFICATION_MODULES.PROPERTY,
+    entityType: "unit",
+    scope: NOTIFICATION_SCOPES.PROPERTY,
+    permission: "property.view",
+    recipients: [
+      role(ROLE_KEYS.ORG_OWNER, NOTIFICATION_TYPES.INFORMATIONAL),
+      role(ROLE_KEYS.ORG_ADMIN, NOTIFICATION_TYPES.INFORMATIONAL),
+      role(ROLE_KEYS.PROPERTY_MANAGER, NOTIFICATION_TYPES.INFORMATIONAL),
+      role(ROLE_KEYS.ASSET_OWNER, NOTIFICATION_TYPES.INFORMATIONAL, { external: true }),
+    ],
+  },
   "property.manager_assigned": {
     module: NOTIFICATION_MODULES.PROPERTY,
     entityType: "property",

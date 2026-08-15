@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const migration = readFileSync(
   resolve(process.cwd(), 'supabase/migrations/20260878000000_expand_delete_lease_cascade_all_related_data.sql'),
   'utf8',
 );
+const migrationsDir = resolve(process.cwd(), 'supabase/migrations');
 
 describe('delete_lease_cascade migration contract', () => {
   it('deletes lease-owned enterprise extraction, package, financial, and upload data', () => {
@@ -84,5 +85,20 @@ describe('delete_lease_cascade migration contract', () => {
       expect(body, `${fn} must require the cascade GUC`).toContain("current_setting('app.allow_lease_cascade_delete', true) = 'true'");
     }
   });
-});
 
+  it('keeps the final delete_lease_cascade definition free of retired CAM tables', () => {
+    const definingMigrations = readdirSync(migrationsDir)
+      .filter((file) => file.endsWith('.sql'))
+      .sort()
+      .map((file) => ({
+        file,
+        sql: readFileSync(resolve(migrationsDir, file), 'utf8'),
+      }))
+      .filter(({ sql }) => sql.includes('CREATE OR REPLACE FUNCTION public.delete_lease_cascade'));
+    const latestDefinition = definingMigrations.at(-1);
+
+    expect(latestDefinition?.file).toBe('20269900000082_fix_delete_lease_cascade_missing_legacy_cam_tables.sql');
+    expect(latestDefinition?.sql).not.toContain('cam_tenant_shares');
+    expect(latestDefinition?.sql).toContain("to_regclass(format('public.%I', child_table))");
+  });
+});
