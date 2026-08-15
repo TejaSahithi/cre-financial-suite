@@ -108,9 +108,9 @@ function sectionedRetryAfterDirectFailureEnabled(): boolean {
 function directFieldPartitionMinDocumentChars(): number {
   const raw = (Deno.env.get("LEASE_WHOLE_DOCUMENT_LLM_FIELD_PARTITION_MIN_DOCUMENT_CHARS") ?? "").trim().toLowerCase();
   if (raw === "off" || raw === "false") return Number.POSITIVE_INFINITY;
-  if (raw === "") return 75_000;
+  if (raw === "") return 150_000;
   const configured = Number(raw);
-  return Number.isFinite(configured) && configured >= 10_000 ? Math.floor(configured) : 75_000;
+  return Number.isFinite(configured) && configured >= 10_000 ? Math.floor(configured) : 150_000;
 }
 
 function shouldStartWithFieldPartitioned(compact: CompactLeaseDocument): boolean {

@@ -192,7 +192,7 @@ Deno.test("direct whole-document valid rows do not retry with sectioned extracti
 
   assertEquals(shouldRetryDirectWholeDocumentWithSectioned(result), false);
 });
-Deno.test("large readable documents start with field-partitioned extraction by default", () => {
+Deno.test("moderate readable documents use direct extraction before field-partition fallback by default", () => {
   const original = Deno.env.get("LEASE_WHOLE_DOCUMENT_LLM_FIELD_PARTITION_MIN_DOCUMENT_CHARS");
   const restore = () => {
     if (original === undefined) Deno.env.delete("LEASE_WHOLE_DOCUMENT_LLM_FIELD_PARTITION_MIN_DOCUMENT_CHARS");
@@ -202,14 +202,14 @@ Deno.test("large readable documents start with field-partitioned extraction by d
     Deno.env.delete("LEASE_WHOLE_DOCUMENT_LLM_FIELD_PARTITION_MIN_DOCUMENT_CHARS");
     const large = {
       ...PARENT_COMPACT,
-      diagnostics: { ...PARENT_COMPACT.diagnostics, characterCount: 75_000 },
+      diagnostics: { ...PARENT_COMPACT.diagnostics, characterCount: 150_000 },
     };
     const small = {
       ...PARENT_COMPACT,
-      diagnostics: { ...PARENT_COMPACT.diagnostics, characterCount: 74_999 },
+      diagnostics: { ...PARENT_COMPACT.diagnostics, characterCount: 149_999 },
     };
 
-    assertEquals(directFieldPartitionMinDocumentChars(), 75_000);
+    assertEquals(directFieldPartitionMinDocumentChars(), 150_000);
     assertEquals(shouldStartWithFieldPartitioned(large), true);
     assertEquals(shouldStartWithFieldPartitioned(small), false);
 
