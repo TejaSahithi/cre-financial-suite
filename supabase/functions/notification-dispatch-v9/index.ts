@@ -1345,8 +1345,8 @@ function resolveInternalRecipients(event: any, policy: any, rule: any, context: 
       hasPermission(membership, permission);
 
     if (!isAssignedMatch && !isRoleMatch && !isCustomPermissionMatch) return;
-    if (permission && !hasPermission(membership, permission)) return;
-    if (!memberHasScopeAccess(membership, event, context.userAccess)) return;
+    if (!isAssignedMatch && permission && !hasPermission(membership, permission)) return;
+    if (!isAssignedMatch && !memberHasScopeAccess(membership, event, context.userAccess)) return;
 
     const profile = context.profilesByUserId[membership.user_id] || {};
     addRecipient(map, event, policy, rule, {

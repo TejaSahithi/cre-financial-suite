@@ -20,18 +20,6 @@ import {
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
-const APPROVAL_ROLE_KEYS = new Set([
-  "org_owner",
-  "owner",
-  "org_admin",
-  "admin",
-  "portfolio_manager",
-  "property_manager",
-  "finance",
-  "custom",
-  "custom_role",
-]);
-
 const ACTIVE_STATUSES = new Set(["active", "owner", "approved", "accepted"]);
 
 function roleLabel(role) {
@@ -40,23 +28,6 @@ function roleLabel(role) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
-}
-
-function normalizeRole(role) {
-  return String(role || "").trim().toLowerCase();
-}
-
-function normalizeObject(value) {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value;
-  if (typeof value === "string" && value.trim().startsWith("{")) {
-    try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-    } catch {
-      return {};
-    }
-  }
-  return {};
 }
 
 function memberDisplayName(member) {
@@ -100,24 +71,14 @@ export default function SendForApprovalButton({
       try {
         const { data: membershipRows, error: membershipError } = await supabase
           .from("memberships")
-          .select("id,user_id,role,status,custom_role,capabilities")
+          .select("id,user_id,role,status,custom_role")
           .eq("org_id", orgId);
 
         if (membershipError) throw membershipError;
 
         const activeMemberships = (membershipRows || [])
           .filter((membership) => ACTIVE_STATUSES.has(String(membership.status || "active").toLowerCase()))
-          .filter((membership) => membership.user_id && membership.user_id !== user?.id)
-          .filter((membership) => {
-            const role = normalizeRole(membership.role);
-            const capabilities = normalizeObject(membership.capabilities);
-            const capabilityRoles = Array.isArray(capabilities.roles)
-              ? capabilities.roles.map(normalizeRole)
-              : [];
-            return Boolean(membership.custom_role) ||
-              APPROVAL_ROLE_KEYS.has(role) ||
-              capabilityRoles.some((capabilityRole) => APPROVAL_ROLE_KEYS.has(capabilityRole));
-          });
+          .filter((membership) => membership.user_id && membership.user_id !== user?.id);
 
         const profileIds = [...new Set(activeMemberships.map((membership) => membership.user_id).filter(Boolean))];
         const { data: profileRows, error: profileError } = profileIds.length > 0

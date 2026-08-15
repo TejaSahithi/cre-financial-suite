@@ -317,6 +317,84 @@ function isReviewDraftRouteBlocked(error) {
   return /financial-active review draft saves|package-active review draft saves|P4 reviewer decision routes/i.test(String(error?.message || error || ""));
 }
 
+const LEASE_APPROVAL_EVENT_TYPES = [
+  "lease.ready_for_approval",
+  "lease.asset_owner_approval_required",
+  "lease.org_owner_approval_required",
+];
+
+const OPEN_APPROVAL_WORKFLOW_STATUSES = [
+  "SUBMITTED",
+  "UNDER_REVIEW",
+  "FINANCE_REVIEW",
+  "PENDING_APPROVAL",
+  "PARTIALLY_APPROVED",
+  "RESUBMITTED",
+];
+
+function isApprovalLookupSchemaMissing(error) {
+  const message = String(error?.message || error || "");
+  return error?.code === "42P01" || error?.code === "PGRST116" || error?.code === "PGRST205" || /does not exist|schema cache|Could not find/i.test(message);
+}
+
+async function fetchLeaseApprovalAssignment({ orgId, leaseId, userId }) {
+  if (!supabase || !orgId || !leaseId || !userId) return { isAssigned: false };
+
+  const notificationResult = await supabase
+    .from("notifications")
+    .select("id, event_type, recipient_user_id, requires_action, created_at")
+    .eq("org_id", orgId)
+    .eq("entity_type", "lease")
+    .eq("entity_id", leaseId)
+    .eq("recipient_user_id", userId)
+    .eq("requires_action", true)
+    .in("event_type", LEASE_APPROVAL_EVENT_TYPES)
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (notificationResult.error && !isApprovalLookupSchemaMissing(notificationResult.error)) {
+    throw notificationResult.error;
+  }
+  if ((notificationResult.data || []).length > 0) {
+    return { isAssigned: true, source: "notification", notification: notificationResult.data[0] };
+  }
+
+  const workflowResult = await supabase
+    .from("approval_workflow_instances")
+    .select("id, current_step_id, status")
+    .eq("org_id", orgId)
+    .eq("entity_type", "lease")
+    .eq("entity_id", leaseId)
+    .in("status", OPEN_APPROVAL_WORKFLOW_STATUSES)
+    .order("created_at", { ascending: false })
+    .limit(20);
+
+  if (workflowResult.error) {
+    if (isApprovalLookupSchemaMissing(workflowResult.error)) return { isAssigned: false };
+    throw workflowResult.error;
+  }
+
+  const workflowIds = (workflowResult.data || []).map((workflow) => workflow.id).filter(Boolean);
+  if (workflowIds.length === 0) return { isAssigned: false };
+
+  const stepResult = await supabase
+    .from("approval_workflow_steps")
+    .select("id, workflow_instance_id, approver_user_id, status")
+    .in("workflow_instance_id", workflowIds)
+    .eq("approver_user_id", userId)
+    .eq("status", "ACTIVE")
+    .limit(1);
+
+  if (stepResult.error) {
+    if (isApprovalLookupSchemaMissing(stepResult.error)) return { isAssigned: false };
+    throw stepResult.error;
+  }
+
+  return (stepResult.data || []).length > 0
+    ? { isAssigned: true, source: "workflow_step", step: stepResult.data[0] }
+    : { isAssigned: false };
+}
+
 export default function LeaseReview() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -408,6 +486,20 @@ export default function LeaseReview() {
     queryFn: () => leaseService.filter({ id: leaseId }),
     enabled: !!leaseId,
     select: (data) => data?.[0],
+  });
+
+  const isLeasePendingAssignedApproval = [lease?.abstract_status, lease?.status]
+    .map((status) => String(status || "").toLowerCase())
+    .some((status) => ["pending_review", "pending_approval", "submitted", "under_review"].includes(status));
+  const approvalAssignmentQuery = useQuery({
+    queryKey: ["lease-approval-assignment", lease?.org_id, lease?.id, user?.id],
+    enabled: Boolean(lease?.org_id && lease?.id && user?.id && isLeasePendingAssignedApproval),
+    queryFn: () => fetchLeaseApprovalAssignment({
+      orgId: lease.org_id,
+      leaseId: lease.id,
+      userId: user.id,
+    }),
+    staleTime: 10000,
   });
 
   // Fetch the source uploaded_file so readFieldValue can resolve extraction
@@ -1698,6 +1790,7 @@ export default function LeaseReview() {
   }
 
   const canApprove = approvalBlockers.length === 0;
+  const canCurrentUserApproveLeaseRequest = Boolean(canApprove && approvalAssignmentQuery.data?.isAssigned);
   const approvalDisabledTooltip = canApprove
     ? "Approve the lease abstract"
     : approvalBlockers
@@ -2278,6 +2371,10 @@ export default function LeaseReview() {
       approvalBlockers.forEach((b) =>
         toast.error(b.title, { description: b.detail, duration: 7000 })
       );
+      return;
+    }
+    if (!canCurrentUserApproveLeaseRequest) {
+      toast.error("This lease approval is assigned to another reviewer.");
       return;
     }
     if (!approvalSignature?.valid) {
@@ -3110,7 +3207,7 @@ export default function LeaseReview() {
     }
   };
 
-  const markLeasePendingApproval = async () => {
+  const markLeasePendingApproval = async ({ selectedIds = [] } = {}) => {
     // 1. Bulk accept/review all eligible extracted fields and auto-NA missing optional fields
     const { eligibleFields, autoNaFields: fieldsToAutoNa, optionalUnresolved } = bulkEvaluation;
     const nowIso = new Date().toISOString();
@@ -3161,6 +3258,7 @@ export default function LeaseReview() {
       metadata: {
         approval_status: "pending_review",
         record_status_updated: true,
+        approval_recipient_ids: selectedIds,
       },
     };
   };
@@ -4282,13 +4380,18 @@ export default function LeaseReview() {
                   disabled={!lease.id || !lease.org_id || !canApprove}
                   title={canApprove ? "Send this lease abstract for approval" : approvalDisabledTooltip}
                   onBeforeSend={markLeasePendingApproval}
+                  onSent={() => {
+                    queryClient.invalidateQueries({ queryKey: ["lease-approval-assignment", lease?.org_id, lease?.id] });
+                    queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+                  }}
                   metadata={{
                     source: "lease_review_manual_send_for_approval",
                     abstract_status: lease.abstract_status || null,
                     extraction_status: lease.extraction_status || null,
                   }}
                 />
-                <Button
+                {canCurrentUserApproveLeaseRequest && (
+                  <Button
                   className={
                     canApprove
                       ? "bg-emerald-600 hover:bg-emerald-700"
@@ -4308,7 +4411,8 @@ export default function LeaseReview() {
                 >
                   <CheckCircle2 className="mr-1 h-4 w-4" />
                   Approve Lease Abstract
-                </Button>
+                  </Button>
+                )}
               </div>
             </>
           )}
