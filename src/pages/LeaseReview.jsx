@@ -352,6 +352,12 @@ export default function LeaseReview() {
   const [reextractError, setReextractError] = useState(null);
   const [showReextractConfirm, setShowReextractConfirm] = useState(false);
 
+  useEffect(() => {
+    if (!isSuperAdminUser && ["extraction_debug", "extraction_timeline"].includes(activeTab)) {
+      setActiveTab("summary");
+    }
+  }, [activeTab, isSuperAdminUser]);
+
   // Approval form
   const [approvalSignedBy, setApprovalSignedBy] = useState("");
   const [approvalSignedAt, setApprovalSignedAt] = useState("");
@@ -3594,7 +3600,7 @@ export default function LeaseReview() {
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex h-auto flex-wrap justify-start gap-1 border bg-white">
           {LEASE_REVIEW_TABS.map((tab) => {
-            if (tab.key === "extraction_debug" && !isSuperAdminUser) return null;
+            if (["extraction_debug", "extraction_timeline"].includes(tab.key) && !isSuperAdminUser) return null;
             const tabFields = enterpriseTabs[tab.key] || [];
             const extractedInTab = tabFields.filter((f) => isMeaningfulValue(f.value ?? f.normalized_value ?? f.normalizedValue)).length;
             // Flag tabs that are inapplicable for assignment/amendment docs.
@@ -3827,10 +3833,11 @@ export default function LeaseReview() {
             <ExtractionDebugPanel lease={leaseFull} />
           </TabsContent>
         )}
-
-        <TabsContent value="extraction_timeline" className="mt-4 space-y-4">
-          <ExtractionTimelinePanel uploadedFile={uploadedFile} uploadedFileId={resolvedSourceFileId} lease={leaseFull} />
-        </TabsContent>
+        {isSuperAdminUser && (
+          <TabsContent value="extraction_timeline" className="mt-4 space-y-4">
+            <ExtractionTimelinePanel uploadedFile={uploadedFile} uploadedFileId={resolvedSourceFileId} lease={leaseFull} />
+          </TabsContent>
+        )}
       </Tabs>
 
       {/* Side drawer for full field detail. */}
@@ -4225,25 +4232,6 @@ export default function LeaseReview() {
             </>
           ) : (
             <>
-              {!canApprove && approvalBlockers.length > 0 && (
-                <div className="min-w-[280px] max-w-3xl flex-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                  <div className="flex items-start gap-2">
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-                    <div className="min-w-0 space-y-1">
-                      <div className="font-semibold">Approval blocked</div>
-                      {approvalBlockers.slice(0, 3).map((blocker) => (
-                        <div key={blocker.kind} className="break-words leading-snug">
-                          <span className="font-medium">{blocker.title}</span>
-                          {blocker.detail ? <span className="ml-1 text-amber-800">{blocker.detail}</span> : null}
-                        </div>
-                      ))}
-                      {approvalBlockers.length > 3 ? (
-                        <div className="text-amber-800">+{approvalBlockers.length - 3} more blocker(s)</div>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              )}
               <div className="ml-auto flex flex-wrap items-center gap-2">
                 <Button
                   variant="outline"
