@@ -1598,9 +1598,17 @@ async function sendEmail(to: string, event: any, recipient: any) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
+    const errorMessage = payload?.message || payload?.error || "Failed to send email";
+    console.error("[notification-dispatch-v9] Resend email failed:", {
+      status: response.status,
+      to,
+      event_type: event?.event_type || null,
+      recipient_user_id: recipient?.userId || null,
+      error: errorMessage,
+    });
     return {
       status: "failed",
-      error_message: payload?.message || payload?.error || "Failed to send email",
+      error_message: errorMessage,
       provider_message_id: null,
     };
   }
@@ -1832,6 +1840,12 @@ async function dispatchBusinessEvent(req: Request, body: any) {
   const context = await fetchContext(supabaseAdmin, orgId);
   const recipients = resolveRecipients(event, policy, context);
   const notifications = [];
+  let emailSentCount = 0;
+  let emailFailedCount = 0;
+  let emailSkippedCount = 0;
+  let smsSentCount = 0;
+  let smsFailedCount = 0;
+  let smsSkippedCount = 0;
 
   await logAudit(supabaseAdmin, {
     action: "notification_event_created",
@@ -1869,6 +1883,24 @@ async function dispatchBusinessEvent(req: Request, body: any) {
       () => sendSms(phone, recipient.message),
     );
 
+    if (emailResult.status === "sent") emailSentCount += 1;
+    else if (emailResult.status === "failed") emailFailedCount += 1;
+    else if (emailResult.status === "skipped") emailSkippedCount += 1;
+
+    if (smsResult.status === "sent") smsSentCount += 1;
+    else if (smsResult.status === "failed") smsFailedCount += 1;
+    else if (smsResult.status === "skipped") smsSkippedCount += 1;
+
+    if (emailResult.status === "failed") {
+      console.error("[notification-dispatch-v9] email delivery failed:", {
+        event_type: eventType,
+        notification_id: notification.id,
+        recipient_user_id: recipient.userId || null,
+        external_recipient_id: recipient.id || null,
+        error: emailResult.error_message || null,
+      });
+    }
+
     await logAudit(supabaseAdmin, {
       action: "notification_recipient_dispatched",
       entity_id: notification.id,
@@ -1893,14 +1925,33 @@ async function dispatchBusinessEvent(req: Request, body: any) {
       external_recipient_id: recipient.id || null,
       email_status: emailResult.status,
       sms_status: smsResult.status,
+      email_error: emailResult.error_message || null,
+      sms_error: smsResult.error_message || null,
     });
   }
 
   return jsonResponse({
     schemaVersion: "notification-dispatch-response-v2",
     success: true,
+    warning: emailFailedCount > 0
+      ? `${emailFailedCount} email delivery${emailFailedCount === 1 ? "" : "ies"} failed. Check RESEND_API_KEY, verified sender domain, and Resend logs.`
+      : recipients.length === 0
+        ? "No notification recipients matched this event."
+        : null,
     event_type: eventType,
     recipient_count: recipients.length,
+    delivery_summary: {
+      email: {
+        sent: emailSentCount,
+        failed: emailFailedCount,
+        skipped: emailSkippedCount,
+      },
+      sms: {
+        sent: smsSentCount,
+        failed: smsFailedCount,
+        skipped: smsSkippedCount,
+      },
+    },
     notifications,
   });
 }
