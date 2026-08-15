@@ -103,6 +103,6 @@ Deno.test({
     assertStringIncludes(source, "sendDeliveryWithIdempotency");
     assertStringIncludes(source, "failed delivery retry disabled");
     assertStringIncludes(source, "external_delivery_allowed === false");
+    assertEquals(/await\s+createDelivery\s*\(/.test(source), false);
   },
 });
-
