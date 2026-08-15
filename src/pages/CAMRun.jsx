@@ -33,6 +33,7 @@ import {
 } from "@/services/moduleApprovalWorkflowBridge";
 import { createPageUrl } from "@/utils";
 import { buildCamActiveLeaseIdSet, filterCamActiveLeases, filterRowsToCamActiveLeases } from "@/lib/activeLease";
+import { readinessExceptionLabel } from "@/lib/camLabels";
 import PageHeader from "@/components/PageHeader";
 import ScopeSelector from "@/components/ScopeSelector";
 import SendForApprovalButton from "@/components/approvals/SendForApprovalButton";
@@ -56,6 +57,18 @@ function fmtCurrency(value) {
 function fmtDateTime(value) {
   if (!value) return "—";
   return new Date(value).toLocaleString();
+}
+
+function normalizeReadinessExceptions(readiness) {
+  const items = Array.isArray(readiness?.exceptions) ? readiness.exceptions : [];
+  return items.map((item, index) => ({
+    id: `readiness-${item.code || "exception"}-${item.entity_id || index}`,
+    severity: item.severity || "warning",
+    code: item.code || "READINESS_EXCEPTION",
+    message: readinessExceptionLabel(item.code, item.message),
+    resolution_status: "open",
+    source: "readiness",
+  }));
 }
 
 function StatusBadge({ status }) {
@@ -113,6 +126,7 @@ export default function CAMRun() {
     return next;
   });
   const [runMode, setRunMode] = useState("posting_eligible");
+  const [lastReadinessExceptions, setLastReadinessExceptions] = useState([]);
   const [approveDialogOpen, setApproveDialogOpen] = useState(false);
   const [camApprovalSignature, setCamApprovalSignature] = useState(null);
 
@@ -125,6 +139,9 @@ export default function CAMRun() {
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
+  const selectedScopeType = unitId ? "unit" : buildingId ? "building" : "property";
+  const selectedScopeId = unitId || buildingId || propertyId;
+
   const { data: leases = [] } = useOrgQuery("Lease");
   const activeLeases = useMemo(() => filterCamActiveLeases(leases), [leases]);
   const activeLeaseIds = useMemo(() => buildCamActiveLeaseIdSet(activeLeases.filter((lease) => {
@@ -180,19 +197,20 @@ export default function CAMRun() {
   });
 
   const { data: runs = [], refetch: refetchRuns } = useQuery({
-    queryKey: ["cam-run-list", propertyId, periodId],
+    queryKey: ["cam-run-list", selectedScopeType, selectedScopeId, periodId],
     queryFn: async () => {
       let query = supabase.from("cam_runs").select("*");
       if (periodId) {
         query = query.eq("recovery_period_id", periodId);
-      } else if (propertyId) {
-        query = query.eq("scope_id", propertyId);
+      }
+      if (selectedScopeId) {
+        query = query.eq("scope_type", selectedScopeType).eq("scope_id", selectedScopeId);
       }
       const { data, error } = await query.order("created_at", { ascending: false });
       if (error) throw error;
       return data || [];
     },
-    enabled: Boolean(propertyId) || true,
+    enabled: Boolean(selectedScopeId),
   });
 
   const activeRun = runs.find((r) => r.status !== "voided" && r.status !== "superseded") || runs[0] || null;
@@ -305,15 +323,17 @@ export default function CAMRun() {
   const calculateMutation = useMutation({
     mutationFn: () =>
       invokeEdgeFunction("run-cam-calculation-v2", {
-        property_id: propertyId, recovery_period_id: periodId, scope_type: "property", scope_id: propertyId,
+        property_id: propertyId, recovery_period_id: periodId, scope_type: selectedScopeType, scope_id: selectedScopeId,
         run_type: "standard", run_mode: runMode,
       }),
     onSuccess: (result) => {
       if (result?.status === "readiness_failed") {
-        toast.warning("Readiness check failed — view exceptions for details.");
+        setLastReadinessExceptions(normalizeReadinessExceptions(result?.readiness));
+        toast.warning("Readiness check failed - view exceptions for details.");
         notifyCamEvent("cam.review_required", result, "cam_calculation_readiness_failed");
       } else {
-        toast.success(result?.idempotent_rerun ? "Up to date — no changes since last calculation." : "Calculation complete.");
+        setLastReadinessExceptions([]);
+        toast.success(result?.idempotent_rerun ? "Up to date - no changes since last calculation." : "Calculation complete.");
         notifyCamEvent("cam.calculation_generated", result, "cam_calculation_generated");
       }
       refetchRuns();
@@ -422,8 +442,9 @@ export default function CAMRun() {
   const isApproved = activeRun?.status === "approved";
   const isPosted = activeRun?.status === "posted";
 
-  const blockingExceptions = exceptions.filter((e) => e.severity === "blocking" && e.resolution_status === "open");
-  const openExceptions = exceptions.filter((e) => e.resolution_status === "open");
+  const displayedExceptions = exceptions.length > 0 ? exceptions : (activeRun?.status === "readiness_failed" ? lastReadinessExceptions : []);
+  const blockingExceptions = displayedExceptions.filter((e) => e.severity === "blocking" && e.resolution_status === "open");
+  const openExceptions = displayedExceptions.filter((e) => e.resolution_status === "open");
 
   return (
     <div className="space-y-6 p-4 lg:p-6">
@@ -611,7 +632,7 @@ export default function CAMRun() {
           <TabsContent value="exceptions">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="text-base">Calculation Exceptions ({exceptions.length})</CardTitle>
+                <CardTitle className="text-base">Calculation Exceptions ({displayedExceptions.length})</CardTitle>
                 {activeRun && (
                   <Link to={`${createPageUrl("CAMExceptionReview")}?cam_run_id=${activeRun.id}`}>
                     <Button size="sm" variant="outline">Exception Review Page →</Button>
@@ -619,7 +640,7 @@ export default function CAMRun() {
                 )}
               </CardHeader>
               <CardContent>
-                {exceptions.length === 0 ? (
+                {displayedExceptions.length === 0 ? (
                   <p className="text-sm text-emerald-700 py-4 text-center">Zero exceptions recorded for this run.</p>
                 ) : (
                   <Table>
@@ -632,7 +653,7 @@ export default function CAMRun() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {exceptions.map((ex) => (
+                      {displayedExceptions.map((ex) => (
                         <TableRow key={ex.id}>
                           <TableCell>
                             <Badge className={`text-[10px] uppercase ${ex.severity === "blocking" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800"}`}>

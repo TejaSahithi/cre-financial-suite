@@ -66,6 +66,9 @@ BEGIN
       FROM public.lease_expense_rules r
      WHERE r.org_id = p_org_id AND r.property_id = p_property_id
        AND lower(COALESCE(r.approval_status, '')) = 'approved'
+       AND lower(COALESCE(r.cam_eligible, '')) = 'yes'
+       AND lower(COALESCE(r.recoverable_from_tenant, '')) IN ('yes', 'conditional')
+       AND lower(COALESCE(r.payment_treatment, '')) NOT IN ('tenant_direct_contract', 'not_applicable')
        AND NOT EXISTS (
          SELECT 1 FROM public.lease_recovery_policies p
           WHERE p.source_rule_id = r.id AND p.status <> 'superseded'

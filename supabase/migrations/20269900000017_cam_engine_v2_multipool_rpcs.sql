@@ -202,6 +202,34 @@ BEGIN
     RAISE EXCEPTION 'Only approved lease expense rules can be materialized into a recovery policy (rule % has approval_status=%)', p_rule_id, COALESCE(v_rule.approval_status, '(none)');
   END IF;
 
+  -- Lease expense rules include obligations that are important to review
+  -- but are not CAM recovery paths: tenant-direct utilities, COI/additional
+  -- insured language, landlord work, and explicit not-applicable rows. Those
+  -- must remain visible in Lease/Expense review without becoming active
+  -- recovery policies that block or distort CAM readiness.
+  IF lower(COALESCE(v_rule.cam_eligible, '')) IS DISTINCT FROM 'yes'
+     OR lower(COALESCE(v_rule.recoverable_from_tenant, '')) NOT IN ('yes', 'conditional')
+     OR lower(COALESCE(v_rule.payment_treatment, '')) IN ('tenant_direct_contract', 'not_applicable') THEN
+    UPDATE public.lease_recovery_policies
+       SET status = 'superseded',
+           effective_to = LEAST(COALESCE(effective_to, current_date), current_date),
+           updated_at = v_now,
+           notes = trim(COALESCE(notes, '') || CASE WHEN COALESCE(notes, '') = '' THEN '' ELSE E'\n' END || 'Superseded automatically: source lease expense rule is not a CAM recovery candidate.')
+     WHERE org_id = p_org_id
+       AND source_rule_id = p_rule_id
+       AND status <> 'superseded';
+
+    RETURN jsonb_build_object(
+      'skipped', true,
+      'skip_reason', 'not_cam_recovery_candidate',
+      'rule_id', p_rule_id,
+      'cam_eligible', v_rule.cam_eligible,
+      'recoverable_from_tenant', v_rule.recoverable_from_tenant,
+      'payment_treatment', v_rule.payment_treatment,
+      'superseded_existing_policy_count', COALESCE((SELECT count(*) FROM public.lease_recovery_policies WHERE org_id = p_org_id AND source_rule_id = p_rule_id AND status = 'superseded'), 0)
+    );
+  END IF;
+
   SELECT * INTO v_lease FROM public.leases WHERE id = v_rule.lease_id AND org_id = p_org_id;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Lease not found for this organization';

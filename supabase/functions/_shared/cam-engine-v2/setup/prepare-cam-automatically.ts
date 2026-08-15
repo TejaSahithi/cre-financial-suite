@@ -202,6 +202,8 @@ export async function prepareCamAutomatically(supabaseAdmin: any, params: Prepar
     .select("*")
     .eq("org_id", orgId)
     .eq("approval_status", "approved")
+    .eq("cam_eligible", "yes")
+    .in("recoverable_from_tenant", ["yes", "conditional"])
     .in("lease_id", approvedLeases.map((l: any) => l.id).length > 0 ? approvedLeases.map((l: any) => l.id) : ["00000000-0000-0000-0000-000000000000"]);
   if (approvedRulesError) throw new Error(`Failed to load lease expense rules: ${approvedRulesError.message}`);
 

@@ -170,6 +170,9 @@ BEGIN
     SELECT r.id
       FROM public.lease_expense_rules r
      WHERE r.org_id = p_org_id AND lower(COALESCE(r.approval_status, '')) = 'approved'
+       AND lower(COALESCE(r.cam_eligible, '')) = 'yes'
+       AND lower(COALESCE(r.recoverable_from_tenant, '')) IN ('yes', 'conditional')
+       AND lower(COALESCE(r.payment_treatment, '')) NOT IN ('tenant_direct_contract', 'not_applicable')
        AND r.lease_id IN (SELECT id FROM public.leases WHERE org_id = p_org_id AND property_id = p_property_id)
   LOOP
     IF p_dry_run THEN

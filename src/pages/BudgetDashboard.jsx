@@ -522,15 +522,20 @@ export default function BudgetDashboard() {
     const toastId = toast.loading("Sending budget review...");
 
     try {
-      // budget_id is the primary identifier (hardening PR) — see
-      // handleDetailedExport above for the same reasoning.
-      const exportData = await invokeFunctionWithFreshSession("export-data", {
-        export_type: "budget",
-        budget_id: budget.id,
-        format: "csv",
-      });
+      let downloadUrl = "";
+      if (budget?.id) {
+        try {
+          const exportData = await invokeFunctionWithFreshSession("export-data", {
+            export_type: "budget",
+            budget_id: budget.id,
+            format: "csv",
+          });
+          downloadUrl = exportData?.download_url || "";
+        } catch (exportErr) {
+          console.warn("[BudgetDashboard] Optional export attachment skipped:", exportErr?.message || exportErr);
+        }
+      }
 
-      const downloadUrl = exportData?.download_url || "";
       const revenue = toNumber(budget?.total_revenue);
       const expenses = toNumber(budget?.total_expenses);
       const cam = toNumber(budget?.cam_total);
@@ -561,7 +566,7 @@ export default function BudgetDashboard() {
       toast.success(`Budget review sent to ${recipients.length} stakeholder${recipients.length === 1 ? "" : "s"}`, { id: toastId });
     } catch (err) {
       console.error("[BudgetDashboard] Stakeholder email failed:", err);
-      toast.error(`Email failed: ${err.message}`, { id: toastId });
+      toast.error(`Email failed: ${err?.message || "Could not send email"}`, { id: toastId });
       throw err;
     }
   };

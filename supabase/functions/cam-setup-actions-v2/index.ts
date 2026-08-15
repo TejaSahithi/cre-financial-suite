@@ -321,15 +321,15 @@ Deno.serve(async (req: Request) => {
       // recovery_pool_lease_participants.status is CHECK-constrained to
       // ('active','ended') -- there is no 'removed' value. Excluding a
       // suggested/participating lease is represented as the participation
-      // window ending today, with the mandatory reason captured in notes
-      // (and mirrored to audit_logs) rather than a status value the schema
-      // doesn't support.
+      // window ending at the later of today or the row's effective_from date,
+      // with the mandatory reason captured in notes (and mirrored to audit_logs)
+      // rather than a status value the schema doesn't support.
       const participantId = requireUUID(body?.participant_id, "participant_id");
       const reason = requireString(body?.reason, "reason");
 
       const { data: participantRow, error: participantError } = await supabaseAdmin
         .from("recovery_pool_lease_participants")
-        .select("pool_id, lease_id")
+        .select("pool_id, lease_id, effective_from")
         .eq("id", participantId)
         .eq("org_id", orgId)
         .maybeSingle();
@@ -337,9 +337,12 @@ Deno.serve(async (req: Request) => {
       if (!participantRow) throw new Error("Participant not found for this organization");
 
       const today = new Date().toISOString().slice(0, 10);
+      const effectiveTo = participantRow.effective_from && participantRow.effective_from > today
+        ? participantRow.effective_from
+        : today;
       const { error } = await supabaseAdmin
         .from("recovery_pool_lease_participants")
-        .update({ status: "ended", effective_to: today, notes: reason, updated_at: new Date().toISOString() })
+        .update({ status: "ended", effective_to: effectiveTo, notes: reason, updated_at: new Date().toISOString() })
         .eq("id", participantId)
         .eq("org_id", orgId);
       if (error) throw new Error(error.message);
