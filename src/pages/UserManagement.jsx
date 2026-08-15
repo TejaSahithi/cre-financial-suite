@@ -113,9 +113,15 @@ async function invokeInviteUser(body) {
       if (ctx && typeof ctx.json === "function") {
         const body = await ctx.json();
         if (body?.error) detail = body.error;
+        if (body?.details) detail = `${detail}: ${body.details}`;
       }
     } catch {
-      /* ignore body-parse failures */
+      try {
+        const text = await result.error.context?.text?.();
+        if (text) detail = text;
+      } catch {
+        /* ignore body-parse failures */
+      }
     }
     throw new Error(detail);
   }
