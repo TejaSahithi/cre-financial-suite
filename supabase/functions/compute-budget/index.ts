@@ -247,6 +247,69 @@ function applyBudgetSnapshotFilter(query: any, orgId: string, resolvedScope: Res
 // _shared/budget-scope.ts, shared with export-data so both compute the
 // exact same underlying row set for a building/unit-scoped budget.
 
+function isMissingRevenueScopeColumn(error: any): boolean {
+  return /revenues\.(building_id|unit_id)\s+does not exist/i.test(error?.message || "");
+}
+
+async function fetchBudgetRevenues(
+  supabaseAdmin: any,
+  orgId: string,
+  propertyId: string,
+  fiscalYear: number,
+  resolvedScope: ResolvedBudgetScope,
+  buildingUnitIds: string[],
+  scopedLeaseIds: string[],
+): Promise<{ revenues: any[]; warning: string | null }> {
+  let revenueQuery = supabaseAdmin
+    .from("revenues")
+    .select("id, lease_id, type, amount, month, building_id, unit_id")
+    .eq("property_id", propertyId)
+    .eq("org_id", orgId)
+    .eq("fiscal_year", fiscalYear);
+  revenueQuery = applyBudgetScopeRowFilter(revenueQuery, resolvedScope, buildingUnitIds);
+
+  const scopedResult = await revenueQuery;
+  if (!scopedResult.error) {
+    return { revenues: scopedResult.data ?? [], warning: null };
+  }
+
+  if (!isMissingRevenueScopeColumn(scopedResult.error)) {
+    throw new Error(`Failed to fetch revenues: ${scopedResult.error.message}`);
+  }
+
+  console.warn(
+    `[compute-budget] revenues table does not expose hierarchy scope columns; ` +
+    `falling back to property/year revenue rows for ${resolvedScope.scope}-scope budget`,
+  );
+
+  const legacyResult = await supabaseAdmin
+    .from("revenues")
+    .select("id, lease_id, type, amount, month")
+    .eq("property_id", propertyId)
+    .eq("org_id", orgId)
+    .eq("fiscal_year", fiscalYear);
+
+  if (legacyResult.error) {
+    throw new Error(`Failed to fetch revenues: ${legacyResult.error.message}`);
+  }
+
+  const propertyRevenues = legacyResult.data ?? [];
+  if (resolvedScope.scope === "property") {
+    return {
+      revenues: propertyRevenues,
+      warning: "revenues table lacks building_id/unit_id columns; property-scope revenue fallback used",
+    };
+  }
+
+  const scopedLeaseSet = new Set(scopedLeaseIds.filter(Boolean));
+  const scopedRevenues = propertyRevenues.filter((row: any) => row.lease_id && scopedLeaseSet.has(row.lease_id));
+  return {
+    revenues: scopedRevenues,
+    warning:
+      "revenues table lacks building_id/unit_id columns; sub-property revenue fallback used lease_id matches only",
+  };
+}
+
 // =================================================================
 // Action: generate
 // =================================================================
@@ -459,18 +522,18 @@ async function handleGenerate(
     );
   }
 
-  // 2c. Other revenue from revenues table
-  let revenueQuery = supabaseAdmin
-    .from("revenues")
-    .select("type, amount, month")
-    .eq("property_id", propertyId)
-    .eq("org_id", orgId)
-    .eq("fiscal_year", fiscalYear);
-  revenueQuery = applyBudgetScopeRowFilter(revenueQuery, resolvedScope, buildingUnitIds);
-  const { data: revenues, error: revErr } = await revenueQuery;
-  if (revErr) {
-    throw new Error(`Failed to fetch revenues: ${revErr.message}`);
-  }
+  // 2c. Other revenue from revenues table. Some live/demo databases are
+  // still on the legacy revenues schema without building_id/unit_id columns;
+  // do not let optional other-income detail block budget generation.
+  const { revenues, warning: revenueScopeWarning } = await fetchBudgetRevenues(
+    supabaseAdmin,
+    orgId,
+    propertyId,
+    fiscalYear,
+    resolvedScope,
+    buildingUnitIds,
+    (leases ?? []).map((lease: any) => lease.id),
+  );
 
   let computedOtherIncomeFromRevenues = 0;
   for (const rev of revenues ?? []) {
@@ -644,6 +707,7 @@ async function handleGenerate(
       lease_count: (leases ?? []).length,
       expense_count: (expenses ?? []).length,
       revenue_count: (revenues ?? []).length,
+      revenue_scope_warning: revenueScopeWarning,
       readiness_snapshot: readinessSnapshot,
       _compute: {
         page_scope: ["BudgetDashboard", "CreateBudget"],
@@ -664,6 +728,7 @@ async function handleGenerate(
           cam: camSnapshot?.[0]?.id ?? null,
         },
         trigger_type: "manual",
+        warnings: revenueScopeWarning ? [revenueScopeWarning] : [],
       },
     },
     outputs: {

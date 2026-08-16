@@ -97,8 +97,10 @@ describe('delete_lease_cascade migration contract', () => {
       .filter(({ sql }) => sql.includes('CREATE OR REPLACE FUNCTION public.delete_lease_cascade'));
     const latestDefinition = definingMigrations.at(-1);
 
-    expect(latestDefinition?.file).toBe('20269900000082_fix_delete_lease_cascade_missing_legacy_cam_tables.sql');
+    expect(latestDefinition?.file).toBe('20269900000084_fix_delete_lease_cascade_extraction_runs_upload_fk.sql');
     expect(latestDefinition?.sql).not.toContain('cam_tenant_shares');
     expect(latestDefinition?.sql).toContain("to_regclass(format('public.%I', child_table))");
+    expect(latestDefinition?.sql).toContain("uploaded_file_id IN (SELECT id FROM _lease_delete_file_ids)");
+    expect(latestDefinition?.sql).toContain("('extraction_runs', 'org_id = $1 AND (id IN");
   });
 });
