@@ -139,8 +139,10 @@ export default function CAMRun() {
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
-  const selectedScopeType = unitId ? "unit" : buildingId ? "building" : "property";
-  const selectedScopeId = unitId || buildingId || propertyId;
+  const selectedUnitRecord = units.find((unit) => unit.id === unitId) || null;
+  const camRunBuildingId = buildingId || selectedUnitRecord?.building_id || "";
+  const camRunScopeType = camRunBuildingId ? "building" : "property";
+  const camRunScopeId = camRunBuildingId || propertyId;
 
   const { data: leases = [] } = useOrgQuery("Lease");
   const activeLeases = useMemo(() => filterCamActiveLeases(leases), [leases]);
@@ -197,20 +199,20 @@ export default function CAMRun() {
   });
 
   const { data: runs = [], refetch: refetchRuns } = useQuery({
-    queryKey: ["cam-run-list", selectedScopeType, selectedScopeId, periodId],
+    queryKey: ["cam-run-list", camRunScopeType, camRunScopeId, periodId],
     queryFn: async () => {
       let query = supabase.from("cam_runs").select("*");
       if (periodId) {
         query = query.eq("recovery_period_id", periodId);
       }
-      if (selectedScopeId) {
-        query = query.eq("scope_type", selectedScopeType).eq("scope_id", selectedScopeId);
+      if (camRunScopeId) {
+        query = query.eq("scope_type", camRunScopeType).eq("scope_id", camRunScopeId);
       }
       const { data, error } = await query.order("created_at", { ascending: false });
       if (error) throw error;
       return data || [];
     },
-    enabled: Boolean(selectedScopeId),
+    enabled: Boolean(camRunScopeId),
   });
 
   const activeRun = runs.find((r) => r.status !== "voided" && r.status !== "superseded") || runs[0] || null;
@@ -323,7 +325,7 @@ export default function CAMRun() {
   const calculateMutation = useMutation({
     mutationFn: () =>
       invokeEdgeFunction("run-cam-calculation-v2", {
-        property_id: propertyId, recovery_period_id: periodId, scope_type: selectedScopeType, scope_id: selectedScopeId,
+        property_id: propertyId, recovery_period_id: periodId, scope_type: camRunScopeType, scope_id: camRunScopeId,
         run_type: "standard", run_mode: runMode,
       }),
     onSuccess: (result) => {
