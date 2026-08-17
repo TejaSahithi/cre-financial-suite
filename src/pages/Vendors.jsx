@@ -19,6 +19,7 @@ import { downloadCSV } from "@/utils/index";
 import BulkImportModal from "@/components/property/BulkImportModal";
 import { toast } from "sonner";
 import { expenseMatchesVendor } from "@/lib/vendorMatch";
+import { buildCombinedVendors } from "@/lib/vendors/vendorList";
 import { checkVendorEligibility, listOperationalDomainRows, reviewVendorCredential, saveVendorCredential } from "@/services/leaseFinancialOperationsService";
 
 const CATEGORIES = ["maintenance","utilities","insurance","janitorial","landscaping","security","legal","accounting","construction","technology","other"];
@@ -119,40 +120,7 @@ export default function Vendors() {
     },
     onError: (error) => toast.error(`Eligibility check failed: ${error?.message || "Unknown error"}`),
   });
-  const combinedVendors = React.useMemo(() => {
-    const map = new Map();
-
-    // 1. Existing DB Vendors
-    (vendors || []).forEach((v) => {
-      if (v.name && v.name.trim()) {
-        map.set(v.name.trim().toLowerCase(), { ...v, isSynthetic: false });
-      }
-    });
-
-    // 2. Derive vendors from actual expenses (bulk import, manual add, invoice upload)
-    (expenses || []).forEach((e) => {
-      const vName = (e.vendor || e.vendor_name || "").trim();
-      if (!vName || vName === "-" || vName.toLowerCase() === "unassigned") return;
-      const key = vName.toLowerCase();
-      if (!map.has(key)) {
-        map.set(key, {
-          id: `exp_vendor_${key}`,
-          name: vName,
-          company: vName,
-          contact_name: "",
-          contact_email: "",
-          contact_phone: "",
-          category: e.category || "other",
-          payment_terms: "net_30",
-          status: "active",
-          notes: "Derived from actual expense records",
-          isSynthetic: true,
-        });
-      }
-    });
-
-    return Array.from(map.values());
-  }, [vendors, expenses]);
+  const combinedVendors = React.useMemo(() => buildCombinedVendors(vendors, expenses), [vendors, expenses]);
 
   // Auto-persist missing vendor records to DB in background
   React.useEffect(() => {
@@ -217,8 +185,10 @@ export default function Vendors() {
   });
 
   const totalSpend = enriched.reduce((s, v) => s + v.totalSpend, 0);
-  const avgSpendPerVendor = enriched.length > 0 ? totalSpend / enriched.length : 0;
-  const topVendor = [...enriched].sort((a, b) => b.totalSpend - a.totalSpend)[0];
+  const linkedVendors = enriched.filter((vendor) => vendor.expenseCount > 0);
+  const linkedVendorCount = linkedVendors.length;
+  const avgSpendPerVendor = linkedVendorCount > 0 ? totalSpend / linkedVendorCount : 0;
+  const topVendor = [...linkedVendors].sort((a, b) => b.totalSpend - a.totalSpend)[0];
 
   const openNew = () => { setEditItem(null); setForm({ name: "", company: "", contact_name: "", contact_email: "", contact_phone: "", category: "other", payment_terms: "net_30", notes: "" }); setShowDialog(true); };
   const openEdit = (v) => { setEditItem(v); setForm({ name: v.name, company: v.company || "", contact_name: v.contact_name || "", contact_email: v.contact_email || "", contact_phone: v.contact_phone || "", category: v.category || "other", payment_terms: v.payment_terms || "net_30", notes: v.notes || "" }); setShowDialog(true); };
@@ -264,7 +234,7 @@ export default function Vendors() {
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
-      <PageHeader icon={Truck} title="Vendor Management" subtitle={`${enriched.length} vendors - Linked to expense records`} iconColor="from-blue-700 to-blue-600">
+      <PageHeader icon={Truck} title="Vendor Management" subtitle={`${enriched.length} vendors - ${linkedVendorCount} linked to expense records`} iconColor="from-blue-700 to-blue-600">
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => downloadCSV(enriched, 'vendors.csv')}><Download className="w-3.5 h-3.5 mr-1 text-slate-500" />Export</Button>
           <Button variant="outline" size="sm" onClick={() => setShowImport(true)}><Upload className="w-3.5 h-3.5 mr-1" />Import</Button>
@@ -302,7 +272,7 @@ export default function Vendors() {
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <MetricCard label="Total Vendors" value={vendors.length} icon={Users} color="bg-blue-50 text-blue-600" />
+        <MetricCard label="Total Vendors" value={enriched.length} icon={Users} color="bg-blue-50 text-blue-600" sub={`${linkedVendorCount} linked to expenses`} />
         <MetricCard label="Total Spend" value={`$${(totalSpend / 1000).toFixed(0)}K`} icon={DollarSign} color="bg-emerald-50 text-emerald-600" sub="all linked expenses" />
         <MetricCard label="Avg. Spend/Vendor" value={`$${(avgSpendPerVendor / 1000).toFixed(1)}K`} icon={TrendingUp} color="bg-blue-50 text-blue-600" />
         <MetricCard label="Top Vendor" value={topVendor?.name || "-"} icon={Receipt} color="bg-amber-50 text-amber-600" sub={topVendor ? `$${(topVendor.totalSpend / 1000).toFixed(0)}K spend` : ""} />
