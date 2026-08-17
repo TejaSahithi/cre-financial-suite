@@ -323,11 +323,20 @@ export default function CAMRun() {
 
   // Calculation mutation
   const calculateMutation = useMutation({
-    mutationFn: () =>
-      invokeEdgeFunction("run-cam-calculation-v2", {
+    mutationFn: async () => {
+      try {
+        await invokeEdgeFunction("prepare-cam-automatically-v2", {
+          property_id: propertyId,
+          recovery_period_id: periodId,
+        });
+      } catch (error) {
+        console.warn("[CAMRun] prepare-cam-automatically-v2 preflight failed:", error?.message || error);
+      }
+      return invokeEdgeFunction("run-cam-calculation-v2", {
         property_id: propertyId, recovery_period_id: periodId, scope_type: camRunScopeType, scope_id: camRunScopeId,
         run_type: "standard", run_mode: runMode,
-      }),
+      });
+    },
     onSuccess: (result) => {
       if (result?.status === "readiness_failed") {
         setLastReadinessExceptions(normalizeReadinessExceptions(result?.readiness));

@@ -619,12 +619,21 @@ export default function CAMSetup() {
   // "Calculate CAM Preview" button is meant to show the real, authoritative
   // preview a reviewer would act on, not a relaxed draft simulation.
   const calculateMutation = useMutation({
-    mutationFn: () =>
-      invokeEdgeFunction("run-cam-calculation-v2", {
+    mutationFn: async () => {
+      try {
+        await invokeEdgeFunction("prepare-cam-automatically-v2", {
+          property_id: propertyId,
+          recovery_period_id: periodId,
+        });
+      } catch (error) {
+        console.warn("[CAMSetup] prepare-cam-automatically-v2 preflight failed:", error?.message || error);
+      }
+      return invokeEdgeFunction("run-cam-calculation-v2", {
         property_id: propertyId, recovery_period_id: periodId,
         scope_type: buildingId ? "building" : "property", scope_id: buildingId || propertyId,
         run_type: "standard", run_mode: "posting_eligible",
-      }),
+      });
+    },
     onSuccess: (result) => {
       if (result?.status === "readiness_failed") {
         toast.warning("Readiness check failed — see Advanced Readiness for details.");

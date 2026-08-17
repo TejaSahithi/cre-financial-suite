@@ -143,6 +143,129 @@ async function publishEligibleRulesToCam(
   return { published, alreadyPublished, notPublishable };
 }
 
+function leaseOverlapsPeriod(lease: any, periodStart: string, periodEnd: string): boolean {
+  const start = lease.commencement_date || lease.start_date;
+  const end = lease.expiration_date || lease.end_date || periodEnd;
+  if (!start) return false;
+  return start <= periodEnd && end >= periodStart;
+}
+
+function earliestLeaseStart(leases: any[], fallback: string): string {
+  return leases
+    .map((lease) => lease.commencement_date || lease.start_date)
+    .filter(Boolean)
+    .sort()[0] || fallback;
+}
+
+async function ensureOccupancyForScope(
+  supabaseAdmin: any,
+  {
+    orgId,
+    scopeType,
+    scopeId,
+    periodStart,
+    periodEnd,
+    effectiveFrom,
+    occupiedAreaSqft,
+    derivation,
+  }: {
+    orgId: string;
+    scopeType: "property" | "building";
+    scopeId: string;
+    periodStart: string;
+    periodEnd: string;
+    effectiveFrom: string;
+    occupiedAreaSqft: number | null;
+    derivation: string;
+  },
+) {
+  const { data: existing, error: existingError } = await supabaseAdmin
+    .from("space_occupancy_periods")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("scope_type", scopeType)
+    .eq("scope_id", scopeId)
+    .lte("effective_from", periodEnd)
+    .or(`effective_to.is.null,effective_to.gte.${periodStart}`)
+    .limit(1);
+  if (existingError) throw new Error(`Failed to inspect ${scopeType} occupancy: ${existingError.message}`);
+  if ((existing || []).length > 0) return "reused";
+
+  const { error: insertError } = await supabaseAdmin.from("space_occupancy_periods").insert({
+    org_id: orgId,
+    scope_type: scopeType,
+    scope_id: scopeId,
+    occupancy_status: "occupied",
+    occupied_area_sqft: occupiedAreaSqft,
+    effective_from: effectiveFrom,
+    source_type: "legacy_backfill",
+    backfill_confidence: 0.65,
+    backfill_derivation_method: derivation,
+    review_status: "needs_review",
+  });
+  if (insertError) {
+    if (/overlap|conflict|exclusion/i.test(insertError.message || "")) return "reused";
+    throw new Error(`Failed to create ${scopeType} occupancy: ${insertError.message}`);
+  }
+  return "created";
+}
+
+async function ensureAggregateOccupancyPeriods(
+  supabaseAdmin: any,
+  {
+    orgId,
+    propertyId,
+    period,
+    approvedLeases,
+  }: { orgId: string; propertyId: string; period: any; approvedLeases: any[] },
+) {
+  const periodStart = period.start_date;
+  const periodEnd = period.end_date;
+  const leasesInPeriod = (approvedLeases || []).filter((lease) => leaseOverlapsPeriod(lease, periodStart, periodEnd));
+  const result = { created: 0, reused: 0, skipped: 0 };
+  if (leasesInPeriod.length === 0) {
+    result.skipped += 1;
+    return result;
+  }
+
+  const propertyArea = leasesInPeriod.reduce((sum, lease) => sum + Number(lease.square_footage || 0), 0);
+  const propertyStatus = await ensureOccupancyForScope(supabaseAdmin, {
+    orgId,
+    scopeType: "property",
+    scopeId: propertyId,
+    periodStart,
+    periodEnd,
+    effectiveFrom: earliestLeaseStart(leasesInPeriod, periodStart),
+    occupiedAreaSqft: propertyArea > 0 ? propertyArea : null,
+    derivation: "Approved leases overlap selected recovery period; aggregate property occupancy backfilled so CAM readiness can evaluate gross-up inputs without a false missing-scope warning.",
+  });
+  result[propertyStatus] += 1;
+
+  const leasesByBuilding = new Map<string, any[]>();
+  for (const lease of leasesInPeriod) {
+    if (!lease.building_id) continue;
+    if (!leasesByBuilding.has(lease.building_id)) leasesByBuilding.set(lease.building_id, []);
+    leasesByBuilding.get(lease.building_id)!.push(lease);
+  }
+
+  for (const [buildingId, buildingLeases] of leasesByBuilding.entries()) {
+    const buildingArea = buildingLeases.reduce((sum, lease) => sum + Number(lease.square_footage || 0), 0);
+    const status = await ensureOccupancyForScope(supabaseAdmin, {
+      orgId,
+      scopeType: "building",
+      scopeId: buildingId,
+      periodStart,
+      periodEnd,
+      effectiveFrom: earliestLeaseStart(buildingLeases, periodStart),
+      occupiedAreaSqft: buildingArea > 0 ? buildingArea : null,
+      derivation: "Approved leases for this building overlap selected recovery period; aggregate building occupancy backfilled so building-scoped CAM readiness can evaluate gross-up inputs without a false missing-scope warning.",
+    });
+    result[status] += 1;
+  }
+
+  return result;
+}
+
 export async function prepareCamAutomatically(supabaseAdmin: any, params: PrepareParams) {
   const { orgId, propertyId, recoveryPeriodId, actorUserId, actorEmail } = params;
 
@@ -155,6 +278,8 @@ export async function prepareCamAutomatically(supabaseAdmin: any, params: Prepar
     .from("recovery_periods").select("*").eq("id", recoveryPeriodId).eq("org_id", orgId).maybeSingle();
   if (periodError) throw new Error(`Failed to load recovery period: ${periodError.message}`);
   if (!period) throw new Error("Recovery period not found for this organization");
+  const periodStart = period.start_date;
+  const periodEnd = period.end_date;
 
   // ---- Step 1: active approved leases for the property ----
   const { data: allLeases, error: leasesError } = await supabaseAdmin
@@ -187,6 +312,12 @@ export async function prepareCamAutomatically(supabaseAdmin: any, params: Prepar
     p_org_id: orgId, p_property_id: propertyId, p_dry_run: false, p_actor_user_id: actorUserId, p_actor_email: actorEmail,
   });
   if (backfillResult.error) throw new Error(`Backfill failed: ${backfillResult.error.message}`);
+  const aggregateOccupancyResult = await ensureAggregateOccupancyPeriods(supabaseAdmin, {
+    orgId,
+    propertyId,
+    period,
+    approvedLeases,
+  });
 
   const policyBackfillReport = backfillResult.data?.report?.recovery_policies_from_rules ?? null;
   const policiesMaterializedCount = policyBackfillReport?.created ?? 0;
@@ -236,8 +367,6 @@ export async function prepareCamAutomatically(supabaseAdmin: any, params: Prepar
     .eq("org_id", orgId).eq("property_id", propertyId).eq("publication_status", "published");
   if (expensesError) throw new Error(`Failed to load published expenses: ${expensesError.message}`);
 
-  const periodStart = period.start_date;
-  const periodEnd = period.end_date;
   const periodYear = new Date(`${periodStart}T00:00:00Z`).getUTCFullYear();
   function overlapsPeriod(exp: any): boolean {
     if (exp.service_period_start && exp.service_period_end) {
@@ -483,6 +612,7 @@ export async function prepareCamAutomatically(supabaseAdmin: any, params: Prepar
     counts,
     created: {
       backfill: backfillResult.data?.report ?? null,
+      aggregate_occupancy_periods: aggregateOccupancyResult,
       policies_materialized: policiesMaterializedCount,
       rules_published_to_cam: rulePublishResult.published,
       rules_already_published_to_cam: rulePublishResult.alreadyPublished,

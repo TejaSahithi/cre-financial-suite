@@ -37,6 +37,7 @@ import { assertPageAccess, assertPropertyAccess, getUserOrgId, verifyUser } from
 import { buildCamRunInputV2 } from "../_shared/cam-engine-v2/snapshot/build-cam-run-input.ts";
 import { runCamEngine } from "../_shared/cam-engine-v2/orchestrator/run-cam-engine.ts";
 import { validateCamRunOutput } from "../_shared/cam-engine-v2/validation/output-validation.ts";
+import { prepareCamAutomatically } from "../_shared/cam-engine-v2/setup/prepare-cam-automatically.ts";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -85,6 +86,21 @@ Deno.serve(async (req: Request) => {
     if (draftError) throw new Error(`Failed to create or load draft cam_run: ${draftError.message}`);
     const camRun = draftResult.run;
 
+    // Demo- and operations-safe source refresh: before the authoritative
+    // readiness snapshot, invoke the same idempotent preparation command the
+    // CAM Setup page exposes. This does not invent calculations or bypass
+    // readiness; it materializes already-approved lease rules, backfills
+    // supported premises/area/occupancy rows, and republishes eligible rules
+    // through the existing audited RPCs so the live snapshot sees the values
+    // users already approved in Lease Review and Expenses.
+    const preparation = await prepareCamAutomatically(supabaseAdmin, {
+      orgId,
+      propertyId,
+      recoveryPeriodId,
+      actorUserId: user.id,
+      actorEmail: user.email ?? "unknown@example.com",
+    });
+
     // ---- 3-4. Build and freeze the input snapshot (readiness re-check happens inside). ----
     const snapshot = await buildCamRunInputV2(supabaseAdmin, {
       orgId, propertyId, recoveryPeriodId, scopeType, scopeId, camRunId: camRun.id, runMode,
@@ -96,6 +112,11 @@ Deno.serve(async (req: Request) => {
       await supabaseAdmin.from("cam_runs").update({ status: "readiness_failed" }).eq("id", camRun.id).eq("org_id", orgId);
       return jsonResponse({
         run_id: camRun.id, status: "readiness_failed", ready: false, readiness: snapshot.readiness,
+        preparation: {
+          created: preparation.created,
+          counts: preparation.counts,
+          blocking: preparation.blocking,
+        },
         duration_ms: Date.now() - startedAt,
       }, 200);
     }
@@ -141,6 +162,11 @@ Deno.serve(async (req: Request) => {
       exceptions: allExceptions,
       lease_results_summary: output.lease_results.map((r) => ({ lease_id: r.lease_id, final_recovery: r.final_recovery, amount_due_credit: r.amount_due_credit })),
       pool_results_summary: output.pool_results.map((r) => ({ pool_id: r.pool_id, actual_amount: r.actual_amount, adjusted_pool: r.adjusted_pool })),
+      preparation: {
+        created: preparation.created,
+        counts: preparation.counts,
+        blocking: preparation.blocking,
+      },
       duration_ms: Date.now() - startedAt,
       engine_duration_ms: engineDurationMs,
     }, 200);
