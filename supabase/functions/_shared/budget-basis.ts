@@ -44,6 +44,17 @@ export const BUDGET_BASIS_ENGINE_TYPE = "budget_basis";
 export const BUDGET_BASIS_ENGINE_VERSION = "budget-basis.v1";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// A 1- or 2-month YTD run rate multiplied by 12 amplifies any single
+// unusual/one-off entry (a lump-sum payment, a data-entry mistake) into a
+// wildly wrong annual figure with no signal that it's low-confidence. Require
+// at least a quarter of actuals before trusting a YTD projection as the
+// baseline; thinner data falls through to the next rung (prior-year actual,
+// then existing approved budget, then no_data) instead of extrapolating.
+// ponytail: fixed 3-month threshold, not a statistical confidence bound —
+// revisit if a category with genuinely volatile monthly spend needs a
+// different minimum.
+const MIN_MONTHS_FOR_YTD_PROJECTION = 3;
+
 export interface CategoryInput {
   expense_category_id: string;
   assumption_percent?: number | null;
@@ -356,12 +367,14 @@ export async function buildBudgetBasisSnapshot(supabaseAdmin: any, params: Build
     // treatment as rung 1.
     const vendorContractAmount: number | null = null;
 
+    const ytdProjectionTooThin = currentYearForecast != null && monthsElapsed < MIN_MONTHS_FOR_YTD_PROJECTION;
+
     let baselineType = "no_data";
     let baselineAmount = 0;
     if (authoritativeForecast != null) {
       baselineType = "current_year_authoritative_forecast";
       baselineAmount = authoritativeForecast;
-    } else if (currentYearForecast != null) {
+    } else if (currentYearForecast != null && !ytdProjectionTooThin) {
       baselineType = "current_year_ytd_projected";
       baselineAmount = currentYearForecast;
     } else if (priorYearActual > 0) {
@@ -426,7 +439,11 @@ export async function buildBudgetBasisSnapshot(supabaseAdmin: any, params: Build
     const monthlyBudget = distributeMonthly(annualBudget);
 
     const explanationParts: string[] = [];
-    if (baselineType === "no_data") {
+    if (baselineType === "no_data" && ytdProjectionTooThin) {
+      explanationParts.push(
+        `${currentYear} YTD approved actuals of $${currentYearYtd.toLocaleString()} exist but span only ${monthsElapsed} month(s) — too thin to project to a full-year run rate (minimum ${MIN_MONTHS_FOR_YTD_PROJECTION}). No prior-year (${priorYear}) actual, approved ${fiscalYear} budget baseline, or manual amount available either.`,
+      );
+    } else if (baselineType === "no_data") {
       explanationParts.push(
         `No prior-year (${priorYear}) or current-year (${currentYear}) approved actuals, no approved ${fiscalYear} budget baseline, and no vendor/contract or manual amount supplied.`,
       );

@@ -155,6 +155,14 @@ Deno.test("APPLY_CAP: unrecognized cap_type blocks with CAP_TYPE_UNRECOGNIZED ra
   assertEquals(result.exceptions[0].code, "CAP_TYPE_UNRECOGNIZED");
 });
 
+Deno.test("APPLY_CAP: cap_type \"none\" is a real no-cap state, not CAP_TYPE_UNRECOGNIZED — passes through with no exception", () => {
+  const steps = [step({ step_type: "APPLY_CAP", parameters: { cap_type: "none" } })];
+  const result = runPolicySteps(steps, 1000, ctx({ controllableInputAmount: 1000 }));
+  assertEquals(result.finalAmount, 1000);
+  assertEquals(result.exceptions.length, 0);
+  assertEquals(result.lines[0].formula_code, "CAP_NONE");
+});
+
 Deno.test("Category-specific cap: only the pool/category this step targets is affected, independent of other pools' totals", () => {
   const capSteps = [step({ step_type: "APPLY_CAP", pool_id: "pool-A", parameters: { cap_type: "fixed_dollar", cap_amount: 500 } })];
   const resultA = runPolicySteps(capSteps, 2000, ctx({ poolId: "pool-A", controllableInputAmount: 2000 }));

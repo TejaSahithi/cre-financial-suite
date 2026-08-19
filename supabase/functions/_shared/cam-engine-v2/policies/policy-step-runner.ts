@@ -208,6 +208,16 @@ export function runPolicySteps(
           break;
         }
 
+        if (capType === "none") {
+          pushLine({
+            line_type: "CAP", category: null, formula_code: "CAP_NONE",
+            input_amount: before, output_amount: before, adjustment: 0,
+            policy_step_id: step.id,
+            explanation: "No cap configured for this recovery (cap_type \"none\") — passed through unmodified",
+          });
+          break;
+        }
+
         const history = ctx.priorCamHistory.filter((h) => h.lease_id === ctx.leaseId).sort((a, b) => a.fiscal_year - b.fiscal_year);
         const priorEntry = history[history.length - 1] ?? null;
 
@@ -349,11 +359,17 @@ export function runPolicySteps(
   return { finalAmount: running, lines, exceptions };
 }
 
-function normalizeCapType(raw: string): "fixed_dollar" | "noncumulative" | "cumulative" | "unrecognized" {
+function normalizeCapType(raw: string): "fixed_dollar" | "noncumulative" | "cumulative" | "none" | "unrecognized" {
   const v = raw.toLowerCase();
   if (["fixed_dollar", "fixed", "fixed_dollar_cap"].includes(v)) return "fixed_dollar";
   if (["noncumulative", "non_cumulative", "noncumulative_year_over_year"].includes(v)) return "noncumulative";
   if (["cumulative", "cumulative_compounding", "cumulative_carryforward"].includes(v)) return "cumulative";
+  // "none" is a real, standard value elsewhere in this codebase (extraction
+  // schema, lease-normalizer) meaning "no cap on this recovery" — not an
+  // unrecognized/garbage cap_type. An empty string means no APPLY_CAP step
+  // parameters were ever set, which is a real data gap, so that alone is
+  // NOT treated as "none".
+  if (["none", "no_cap", "uncapped"].includes(v)) return "none";
   return "unrecognized";
 }
 
